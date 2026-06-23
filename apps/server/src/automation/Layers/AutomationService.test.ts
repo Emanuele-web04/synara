@@ -17,7 +17,8 @@ import {
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
 import {
   GitCore,
@@ -1465,6 +1466,126 @@ layer("AutomationService", (it) => {
       assert.strictEqual(updatedDefinition?.enabled, false);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
       assert.include(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("records a timed-out stop check and keeps the heartbeat alive", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-timeout");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-timeout");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.99,
+        reason: "Should never be read because the evaluation hangs.",
+      };
+      // Hold the AI evaluation open so the only way out is the timeout.
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "Still working through the review.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "hung stop evaluation to start",
+      });
+
+      // Fire the 30s evaluation timeout via virtual time.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "timed-out stop evaluation",
+        predicate: (current) => {
+          const evaluatedRun = current.runs.find((entry) => entry.id === run.id);
+          return (
+            (evaluatedRun?.result?.completionEvaluation?.reason ?? "")
+              .toLowerCase()
+              .includes("timed out") &&
+            evaluatedRun?.result?.completionEvaluation?.stopMatched === false
+          );
+        },
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      // The hung check times out without retrying, the failure is visible, and the
+      // heartbeat stays enabled rather than being silently stopped.
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.include((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
+
+      evaluationGate.release();
+    }),
+  );
+
+  it.effect("records a stale stop check when the policy changes during a hung evaluation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-timeout-stale");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-timeout-stale");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.99,
+        reason: "Should never be read because the evaluation hangs.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "Still working through the review.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "hung stop evaluation to start",
+      });
+
+      // The user clears the completion policy while the provider call is still hung.
+      yield* service.update({ id: created.id, completionPolicy: { type: "none" } });
+      // When the 30s timeout fires it must record the stale-check result, not a live
+      // "timed out" warning for a policy the user already removed.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale timed-out stop evaluation",
+        predicate: (current) =>
+          current.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
+
+      evaluationGate.release();
     }),
   );
 

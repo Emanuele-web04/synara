@@ -51,6 +51,10 @@ const AUTOMATION_ERROR_MAX_CHARS = 4_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
 const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
 const AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY = 100;
+// Hard ceiling on a single AI stop-evaluation. With only a couple of evaluation
+// workers, a hung provider call would otherwise pin a worker indefinitely and
+// starve stop checks for every other heartbeat automation.
+const AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS = 30_000;
 
 interface AutomationCompletionEvaluationJob {
   readonly definition: AutomationDefinition;
@@ -1286,7 +1290,7 @@ export const AutomationServiceLive = Layer.effect(
         });
         const textGenerationInput =
           yield* resolveAutomationCompletionTextGenerationInput(definition);
-        const evaluationRaw = yield* textGeneration
+        const evaluationOption = yield* textGeneration
           .evaluateAutomationCompletion({
             cwd: project.workspaceRoot,
             automationName: definition.name,
@@ -1297,7 +1301,37 @@ export const AutomationServiceLive = Layer.effect(
             threadContext: runThreadContext || "(no run-scoped thread context)",
             ...textGenerationInput,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")),
+            Effect.timeoutOption(AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS),
+          );
+        if (Option.isNone(evaluationOption)) {
+          // Timed out. Reload the definition first: if the automation was edited, disabled,
+          // archived, or its policy changed while the provider call hung, record the same
+          // stale-check result the success path uses rather than surfacing a misleading live
+          // "Stop check timed out." warning for a policy the user already changed. Either way
+          // keep the heartbeat alive without retrying (a retry would risk another stuck worker).
+          const reason = normalizeAutomationCompletionReason("Stop check timed out.");
+          const timedOut = failedAutomationCompletionEvaluation(reason);
+          const stillCurrent = Option.isSome(yield* loadCurrentStopDefinition(definition, policy));
+          if (stillCurrent) {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: timedOut,
+              matched: false,
+              summary: reason,
+              severity: "warning",
+            });
+          } else {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: staleStopCheckEvaluation(timedOut),
+              matched: false,
+            });
+          }
+          return false;
+        }
+        const evaluationRaw = evaluationOption.value;
         const rawEvaluation = {
           stopMatched: evaluationRaw.stopMatched,
           confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
