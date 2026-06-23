@@ -111,6 +111,15 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
+// Recovery/reconcile failures arrive already wrapped by `toServiceError`, whose message
+// is the static wrapper string; the real failure (SQLite error, defect) is in `.cause`.
+// Prefer the underlying cause so the logged warning is actually useful.
+function recoveryErrorMessage(error: unknown): string {
+  return error instanceof AutomationServiceError && error.cause != null
+    ? errorMessage(error.cause)
+    : errorMessage(error);
+}
+
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
   return automationRunResultSummary(value, fallback);
 }
@@ -1575,7 +1584,16 @@ export const AutomationServiceLive = Layer.effect(
         Effect.flatMap((runs) =>
           Effect.forEach(
             runs,
-            (run) => reconcileActiveRun(run, isoNow()).pipe(Effect.catch(() => Effect.void)),
+            (run) =>
+              reconcileActiveRun(run, isoNow()).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("automation active-run reconcile failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: recoveryErrorMessage(error),
+                  }),
+                ),
+              ),
             { concurrency: 1 },
           ),
         ),
@@ -1597,7 +1615,13 @@ export const AutomationServiceLive = Layer.effect(
                 return interruptRunForRecovery(run, now).pipe(
                   Effect.mapError(toServiceError("Failed to recover automation run.")),
                   Effect.asVoid,
-                  Effect.catch(() => Effect.void),
+                  Effect.catch((error) =>
+                    Effect.logWarning("automation orphaned-run recovery failed", {
+                      automationId: run.automationId,
+                      runId: run.id,
+                      error: recoveryErrorMessage(error),
+                    }),
+                  ),
                 );
               }
               return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
@@ -1621,7 +1645,13 @@ export const AutomationServiceLive = Layer.effect(
                         ),
                       ),
                 ),
-                Effect.catch(() => Effect.void),
+                Effect.catch((error) =>
+                  Effect.logWarning("automation pending-run recovery failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: recoveryErrorMessage(error),
+                  }),
+                ),
               );
             },
             { concurrency: 1 },
@@ -2043,6 +2073,9 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to acquire automation scheduler lease.")));
         if (!acquired) {
+          // Another instance holds the scheduler lease. Expected under multi-instance;
+          // logged at debug so lease contention is observable without log noise.
+          yield* Effect.logDebug("automation scheduler lease not acquired", { ownerId });
           return [];
         }
 
