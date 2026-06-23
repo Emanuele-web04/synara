@@ -361,6 +361,11 @@ function isNewerTimestamp(candidate: string, existing: string): boolean {
   return candidate.localeCompare(existing) > 0;
 }
 
+// Snapshots are reconciliation data, so equal timestamps keep the live cache winner.
+function isSameOrNewerTimestamp(candidate: string, existing: string): boolean {
+  return candidate.localeCompare(existing) >= 0;
+}
+
 function mergeDefinitionsByUpdatedAt(
   snapshotDefinitions: readonly AutomationDefinition[],
   previousDefinitions: readonly AutomationDefinition[],
@@ -378,7 +383,7 @@ function mergeDefinitionsByUpdatedAt(
     const previousDefinition = previousById.get(snapshotDefinition.id);
     definitions.push(
       previousDefinition &&
-        isNewerTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
+        isSameOrNewerTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
         ? previousDefinition
         : snapshotDefinition,
     );
@@ -415,7 +420,7 @@ function mergeRunsByUpdatedAt(
     }
     const previousRun = previousById.get(snapshotRun.id);
     runs.push(
-      previousRun && isNewerTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
+      previousRun && isSameOrNewerTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
         ? previousRun
         : snapshotRun,
     );

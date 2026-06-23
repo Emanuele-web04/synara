@@ -467,7 +467,11 @@ export const AutomationServiceLive = Layer.effect(
       if (input.environment.envMode !== "worktree" || !path) {
         return Effect.void;
       }
-      return git
+      const expectedBranch = makeAutomationBranchName(input.definition, input.run.id);
+      // Only delete the branch minted for this not-yet-owned automation worktree.
+      const branch =
+        input.environment.associatedWorktreeBranch === expectedBranch ? expectedBranch : null;
+      const removeWorktree = git
         .removeWorktree({
           cwd: input.project.workspaceRoot,
           path,
@@ -485,6 +489,28 @@ export const AutomationServiceLive = Layer.effect(
           ),
           Effect.asVoid,
         );
+      const deleteBranch = branch
+        ? git
+            .deleteBranch({
+              cwd: input.project.workspaceRoot,
+              branch,
+              force: true,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("automation unattached branch cleanup failed", {
+                  automationId: input.definition.id,
+                  runId: input.run.id,
+                  branch,
+                  reason: input.reason,
+                  error: errorMessage(error),
+                }),
+              ),
+              Effect.asVoid,
+            )
+        : Effect.void;
+
+      return removeWorktree.pipe(Effect.flatMap(() => deleteBranch));
     };
 
     const requireDefinition = (id: AutomationId) =>

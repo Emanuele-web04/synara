@@ -552,7 +552,7 @@ describe("automation shared route helpers", () => {
     });
   });
 
-  it("applies equal-timestamp snapshot run updates", () => {
+  it("keeps cached run state when an equal-timestamp snapshot arrives later", () => {
     const firstRun = runWith({
       id: runId("run-snapshot-cache-equal"),
       result: { ...baseRun.result!, unread: true, archivedAt: null },
@@ -569,8 +569,8 @@ describe("automation shared route helpers", () => {
     );
 
     expect(afterSnapshot.runs.find((run) => run.id === snapshotRun.id)?.result).toMatchObject({
-      unread: false,
-      archivedAt: "2026-06-19T10:02:00.000Z",
+      unread: true,
+      archivedAt: null,
     });
   });
 
@@ -595,6 +595,27 @@ describe("automation shared route helpers", () => {
       afterLateLiveEvent.definitions.find((definition) => definition.id === newerDefinition.id)
         ?.name,
     ).toBe("New name");
+  });
+
+  it("keeps cached definition state when an equal-timestamp snapshot arrives later", () => {
+    const cachedDefinition = definitionWith({
+      id: automationId("automation-snapshot-cache-equal"),
+      name: "Updated name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotDefinition = definitionWith({
+      ...cachedDefinition,
+      name: "Older snapshot name",
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [cachedDefinition], runs: [] },
+      { type: "snapshot", definitions: [snapshotDefinition], runs: [] },
+    );
+
+    expect(
+      afterSnapshot.definitions.find((definition) => definition.id === cachedDefinition.id)?.name,
+    ).toBe("Updated name");
   });
 
   it("does not resurrect a deleted automation from a late snapshot", () => {

@@ -19,7 +19,11 @@ import {
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 
-import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import {
+  GitCore,
+  type GitCoreShape,
+  type GitDeleteBranchInput,
+} from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -55,6 +59,7 @@ const project: OrchestrationProjectShell = {
 const dispatchedCommands: OrchestrationCommand[] = [];
 const createdWorktrees: GitCreateWorktreeInput[] = [];
 const removedWorktrees: GitRemoveWorktreeInput[] = [];
+const deletedBranches: GitDeleteBranchInput[] = [];
 type CompletionEvaluationInputForTest = Parameters<
   TextGenerationShape["evaluateAutomationCompletion"]
 >[0];
@@ -91,6 +96,7 @@ function resetHarness() {
   dispatchedCommands.length = 0;
   createdWorktrees.length = 0;
   removedWorktrees.length = 0;
+  deletedBranches.length = 0;
   gitMode = "nonRepo";
   gitStatusHook = null;
   createWorktreeHook = null;
@@ -466,6 +472,10 @@ const gitCore = {
     Effect.sync(() => {
       removedWorktrees.push(input);
     }),
+  deleteBranch: (input: GitDeleteBranchInput) =>
+    Effect.sync(() => {
+      deletedBranches.push(input);
+    }),
 } as unknown as GitCoreShape;
 
 const layer = it.layer(
@@ -587,6 +597,13 @@ layer("AutomationService", (it) => {
           force: true,
         },
       ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktrees[0]?.newBranch,
+          force: true,
+        },
+      ]);
 
       const reloaded = yield* service.list({ projectId });
       const run = reloaded.runs.find((entry) => entry.automationId === created.id);
@@ -642,6 +659,13 @@ layer("AutomationService", (it) => {
           force: true,
         },
       ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktrees[0]?.newBranch,
+          force: true,
+        },
+      ]);
       assert.strictEqual(
         results.find((entry) => entry.run.automationId === automationId)?.run.status,
         "cancelled",
@@ -666,6 +690,7 @@ layer("AutomationService", (it) => {
       assert.match(error.message, /Failed to start automation turn/);
       assert.strictEqual(createdWorktrees.length, 1);
       assert.strictEqual(removedWorktrees.length, 0);
+      assert.strictEqual(deletedBranches.length, 0);
       assert.strictEqual(dispatchedCommands[0]?.type, "thread.create");
     }),
   );
