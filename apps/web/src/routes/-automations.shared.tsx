@@ -357,8 +357,8 @@ export function automationStatusDotClass(
 
 const deletedAutomationIdsInCache = new Set<string>();
 
-function isNewerOrEqualTimestamp(candidate: string, existing: string): boolean {
-  return candidate.localeCompare(existing) >= 0;
+function isNewerTimestamp(candidate: string, existing: string): boolean {
+  return candidate.localeCompare(existing) > 0;
 }
 
 function mergeDefinitionsByUpdatedAt(
@@ -378,7 +378,7 @@ function mergeDefinitionsByUpdatedAt(
     const previousDefinition = previousById.get(snapshotDefinition.id);
     definitions.push(
       previousDefinition &&
-        isNewerOrEqualTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
+        isNewerTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
         ? previousDefinition
         : snapshotDefinition,
     );
@@ -391,7 +391,7 @@ function upsertDefinitionByUpdatedAt(
   incoming: AutomationDefinition,
 ): AutomationDefinition[] {
   const existing = definitions.find((definition) => definition.id === incoming.id);
-  if (existing && isNewerOrEqualTimestamp(existing.updatedAt, incoming.updatedAt)) {
+  if (existing && isNewerTimestamp(existing.updatedAt, incoming.updatedAt)) {
     return [...definitions];
   }
   return existing
@@ -415,7 +415,7 @@ function mergeRunsByUpdatedAt(
     }
     const previousRun = previousById.get(snapshotRun.id);
     runs.push(
-      previousRun && isNewerOrEqualTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
+      previousRun && isNewerTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
         ? previousRun
         : snapshotRun,
     );
@@ -428,7 +428,7 @@ function upsertRunByUpdatedAt(
   incoming: AutomationRun,
 ): AutomationRun[] {
   const existing = runs.find((run) => run.id === incoming.id);
-  if (existing && isNewerOrEqualTimestamp(existing.updatedAt, incoming.updatedAt)) {
+  if (existing && isNewerTimestamp(existing.updatedAt, incoming.updatedAt)) {
     return [...runs];
   }
   return existing

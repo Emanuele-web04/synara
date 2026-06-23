@@ -530,6 +530,50 @@ describe("automation shared route helpers", () => {
     );
   });
 
+  it("applies equal-timestamp live run updates", () => {
+    const firstRun = runWith({
+      id: runId("run-live-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const followUpRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "run-upserted", run: followUpRun },
+    );
+
+    expect(afterLiveEvent.runs.find((run) => run.id === followUpRun.id)?.result).toMatchObject({
+      unread: false,
+      archivedAt: "2026-06-19T10:02:00.000Z",
+    });
+  });
+
+  it("applies equal-timestamp snapshot run updates", () => {
+    const firstRun = runWith({
+      id: runId("run-snapshot-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "snapshot", definitions: [baseDefinition], runs: [snapshotRun] },
+    );
+
+    expect(afterSnapshot.runs.find((run) => run.id === snapshotRun.id)?.result).toMatchObject({
+      unread: false,
+      archivedAt: "2026-06-19T10:02:00.000Z",
+    });
+  });
+
   it("keeps a newer definition update when an older live event arrives later", () => {
     const staleDefinition = definitionWith({
       id: automationId("automation-live-cache-race"),
