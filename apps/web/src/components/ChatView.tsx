@@ -4607,6 +4607,7 @@ export default function ChatView({
       pendingUserInputs.length === 0 &&
       !isComposerApprovalState,
     composerImagesRef,
+    composerFilesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft,
     scheduleComposerFocus,
@@ -6396,8 +6397,20 @@ export default function ChatView({
       pastedTexts: composerPastedTextsForSend,
     });
     let trimmedPromptForSend = trimmed;
+    const restoredQueuedPlanDraftSource =
+      queuedChatTurn === null &&
+      restoredQueuedSourceProposedPlanRef.current?.threadId === activeThread.id &&
+      composerPromptStillMatchesRestoredQueuedDraft(
+        restoredQueuedSourceProposedPlanRef.current.restoredPrompt,
+        promptForSend,
+      )
+        ? restoredQueuedSourceProposedPlanRef.current
+        : null;
     const isLivePlanFollowUpSubmission =
-      queuedChatTurn === null && showPlanFollowUpPrompt && activeProposedPlan !== null;
+      queuedChatTurn === null &&
+      restoredQueuedPlanDraftSource === null &&
+      showPlanFollowUpPrompt &&
+      activeProposedPlan !== null;
     const hasStructuredPlanFollowUpContent =
       composerImagesForSend.length > 0 ||
       composerFilesForSend.length > 0 ||
@@ -6461,9 +6474,7 @@ export default function ChatView({
     }
     const sourceProposedPlanForSend =
       queuedChatTurn?.sourceProposedPlan ??
-      (restoredQueuedSourceProposedPlanRef.current?.threadId === activeThread.id
-        ? restoredQueuedSourceProposedPlanRef.current.sourceProposedPlan
-        : undefined) ??
+      restoredQueuedPlanDraftSource?.sourceProposedPlan ??
       (isLivePlanFollowUpSubmission && activeProposedPlan && interactionModeForSend === "default"
         ? buildSourceProposedPlanReference({
             threadId: activeThread.id,
