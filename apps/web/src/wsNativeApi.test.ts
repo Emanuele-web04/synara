@@ -405,6 +405,30 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("subscribes to orchestration domain events only while listeners exist", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+
+    expect(
+      subscribeMock.mock.calls.filter(
+        ([channel]) => channel === ORCHESTRATION_WS_CHANNELS.domainEvent,
+      ),
+    ).toHaveLength(0);
+
+    const unsubscribe = api.orchestration.onDomainEvent(vi.fn());
+
+    const domainSubscriptions = subscribeMock.mock.calls.filter(
+      ([channel]) => channel === ORCHESTRATION_WS_CHANNELS.domainEvent,
+    );
+    expect(domainSubscriptions).toHaveLength(1);
+    expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(true);
+
+    unsubscribe();
+
+    expect(channelListeners.has(ORCHESTRATION_WS_CHANNELS.domainEvent)).toBe(false);
+  });
+
   it("forwards automation requests and events", async () => {
     requestMock.mockResolvedValue({ definitions: [], runs: [] });
     const { createWsNativeApi } = await import("./wsNativeApi");

@@ -425,16 +425,32 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
-  transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
-    const payload = message.data;
-    for (const listener of orchestrationDomainEventListeners) {
-      try {
-        listener(payload);
-      } catch {
-        // Swallow listener errors
-      }
+  let unsubscribeDomainEventTransport: (() => void) | null = null;
+  const subscribeDomainEventsIfNeeded = () => {
+    if (unsubscribeDomainEventTransport) {
+      return;
     }
-  });
+    unsubscribeDomainEventTransport = transport.subscribe(
+      ORCHESTRATION_WS_CHANNELS.domainEvent,
+      (message) => {
+        const payload = message.data;
+        for (const listener of orchestrationDomainEventListeners) {
+          try {
+            listener(payload);
+          } catch {
+            // Swallow listener errors
+          }
+        }
+      },
+    );
+  };
+  const unsubscribeDomainEventsIfIdle = () => {
+    if (orchestrationDomainEventListeners.size > 0 || !unsubscribeDomainEventTransport) {
+      return;
+    }
+    unsubscribeDomainEventTransport();
+    unsubscribeDomainEventTransport = null;
+  };
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.shellEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationShellEventListeners) {
@@ -737,8 +753,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request<void>(ORCHESTRATION_WS_METHODS.unsubscribeThread, input),
       onDomainEvent: (callback) => {
         orchestrationDomainEventListeners.add(callback);
+        subscribeDomainEventsIfNeeded();
         return () => {
           orchestrationDomainEventListeners.delete(callback);
+          unsubscribeDomainEventsIfIdle();
         };
       },
       onShellEvent: (callback) => {
@@ -957,8 +975,8 @@ export function createWsNativeApi(): NativeApi {
 
 // Browser-mode tests mount full app roots repeatedly in one page; reset the
 // singleton so each test gets a fresh WebSocket stream and cached push state.
-export function resetWsNativeApiForTest(): void {
-  instance?.transport.dispose();
+export async function resetWsNativeApiForTest(): Promise<void> {
+  const transport = instance?.transport ?? null;
   instance = null;
   welcomeListeners.clear();
   serverConfigUpdatedListeners.clear();
@@ -975,6 +993,9 @@ export function resetWsNativeApiForTest(): void {
   orchestrationThreadEventListeners.clear();
   fallbackBrowserStateListeners.clear();
   fallbackBrowserStates.clear();
+  if (transport) {
+    await transport.dispose();
+  }
 }
 
 export const __resetWsNativeApiForTests = resetWsNativeApiForTest;

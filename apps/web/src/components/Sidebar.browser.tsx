@@ -20,7 +20,10 @@ import { page } from "vitest/browser";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { createShellSnapshotFromFixtureSnapshot } from "../test/fixtureToShell";
-import { installRpcBridge } from "../test/wsRpcMockBridge";
+import {
+  installRpcBridge,
+  suppressKnownEffectRpcBrowserHarnessRejections,
+} from "../test/wsRpcMockBridge";
 import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useStore } from "../store";
 
@@ -283,7 +286,10 @@ async function mountApp(): Promise<{ cleanup: () => Promise<void> }> {
 }
 
 describe("Sidebar render gate", () => {
+  let cleanupHarnessRejectionSuppression: (() => void) | null = null;
+
   beforeAll(async () => {
+    cleanupHarnessRejectionSuppression = suppressKnownEffectRpcBrowserHarnessRejections();
     fixture = buildFixture();
     await worker.start({
       onUnhandledRequest: "bypass",
@@ -293,6 +299,8 @@ describe("Sidebar render gate", () => {
   });
 
   afterAll(async () => {
+    cleanupHarnessRejectionSuppression?.();
+    cleanupHarnessRejectionSuppression = null;
     await worker.stop();
   });
 
@@ -312,8 +320,8 @@ describe("Sidebar render gate", () => {
     });
   });
 
-  afterEach(() => {
-    __resetWsNativeApiForTests();
+  afterEach(async () => {
+    await __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 

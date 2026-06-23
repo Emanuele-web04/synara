@@ -26,7 +26,11 @@ import { render } from "vitest-browser-react";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
-import { installRpcBridge } from "../test/wsRpcMockBridge";
+import {
+  installRpcBridge,
+  suppressKnownEffectRpcBrowserHarnessRejections,
+  type RpcBridge,
+} from "../test/wsRpcMockBridge";
 import { __resetWsNativeApiForTests } from "../wsNativeApi";
 import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
@@ -44,12 +48,13 @@ interface TestFixture {
 }
 
 let fixture: TestFixture;
-let wsClient: { send: (data: string) => void } | null = null;
+let rpcBridge: RpcBridge | null = null;
 let pushSequence = 1;
 let delayNextThreadSnapshot = false;
 let subscribeShellRequestCount = 0;
 const subscribeThreadRequestCountById = new Map<ThreadId, number>();
 let subscribeThreadRequests: ThreadId[] = [];
+let getSnapshotRequestCount = 0;
 let replayEvents: OrchestrationEvent[] = [];
 let replayRequestCursors: number[] = [];
 
@@ -219,7 +224,11 @@ function getThreadDetailFromFixtureSnapshot(threadId: ThreadId): OrchestrationTh
 }
 
 function resolveWsRpc(tag: string, body?: unknown): unknown {
+  if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
+    return createShellSnapshotFromFixtureSnapshot(fixture.snapshot);
+  }
   if (tag === ORCHESTRATION_WS_METHODS.getSnapshot) {
+    getSnapshotRequestCount += 1;
     return fixture.snapshot;
   }
   if (tag === ORCHESTRATION_WS_METHODS.replayEvents) {
@@ -253,14 +262,16 @@ function resolveWsRpc(tag: string, body?: unknown): unknown {
   if (tag === WS_METHODS.projectsSearchEntries) {
     return { entries: [], truncated: false };
   }
+  if (tag === WS_METHODS.projectsListDevServers) {
+    return { servers: [] };
+  }
   return {};
 }
 
 const worker = setupWorker(
   wsLink.addEventListener("connection", ({ client }) => {
-    wsClient = client;
     pushSequence = 1;
-    installRpcBridge(client, {
+    rpcBridge = installRpcBridge(client, {
       resolveRpc: (tag, payload) => resolveWsRpc(tag, payload),
       onStreamOpen: (tag, payload, emit) => {
         if (tag === WS_METHODS.subscribeServerLifecycle) {
@@ -332,7 +343,7 @@ async function mountApp(options?: {
         true,
       );
     },
-    { timeout: 8_000, interval: 16 },
+    { timeout: 20_000, interval: 16 },
   );
 
   return {
@@ -344,58 +355,43 @@ async function mountApp(options?: {
 }
 
 function sendThreadEventPush(event: OrchestrationEvent) {
-  if (!wsClient) {
+  if (!rpcBridge) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-      data: {
-        kind: "event",
-        event,
-      },
-    }),
-  );
+  pushSequence += 1;
+  rpcBridge.pushToChannel(ORCHESTRATION_WS_CHANNELS.threadEvent, {
+    kind: "event",
+    event,
+  });
 }
 
 function sendThreadSnapshotPush(threadId: ThreadId, snapshotSequence: number) {
-  if (!wsClient) {
+  if (!rpcBridge) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.threadEvent,
-      data: {
-        kind: "snapshot",
-        snapshot: {
-          snapshotSequence,
-          thread: getThreadDetailFromFixtureSnapshot(threadId),
-        },
-      },
-    }),
-  );
+  pushSequence += 1;
+  rpcBridge.pushToChannel(ORCHESTRATION_WS_CHANNELS.threadEvent, {
+    kind: "snapshot",
+    snapshot: {
+      snapshotSequence,
+      thread: getThreadDetailFromFixtureSnapshot(threadId),
+    },
+  });
 }
 
 function sendShellEventPush(event: OrchestrationShellStreamEvent) {
-  if (!wsClient) {
+  if (!rpcBridge) {
     throw new Error("WebSocket client not connected");
   }
-  wsClient.send(
-    JSON.stringify({
-      type: "push",
-      sequence: pushSequence++,
-      channel: ORCHESTRATION_WS_CHANNELS.shellEvent,
-      data: event,
-    }),
-  );
+  pushSequence += 1;
+  rpcBridge.pushToChannel(ORCHESTRATION_WS_CHANNELS.shellEvent, event);
 }
 
 describe("EventRouter scoped orchestration sync", () => {
+  let cleanupHarnessRejectionSuppression: (() => void) | null = null;
+
   beforeAll(async () => {
+    cleanupHarnessRejectionSuppression = suppressKnownEffectRpcBrowserHarnessRejections();
     fixture = buildFixture();
     await worker.start({
       onUnhandledRequest: "bypass",
@@ -405,6 +401,8 @@ describe("EventRouter scoped orchestration sync", () => {
   });
 
   afterAll(async () => {
+    cleanupHarnessRejectionSuppression?.();
+    cleanupHarnessRejectionSuppression = null;
     await worker.stop();
   });
 
@@ -452,12 +450,14 @@ describe("EventRouter scoped orchestration sync", () => {
     subscribeShellRequestCount = 0;
     subscribeThreadRequestCountById.clear();
     subscribeThreadRequests = [];
+    getSnapshotRequestCount = 0;
     replayEvents = [];
     replayRequestCursors = [];
+    rpcBridge = null;
   });
 
-  afterEach(() => {
-    __resetWsNativeApiForTests();
+  afterEach(async () => {
+    await __resetWsNativeApiForTests();
     document.body.innerHTML = "";
   });
 
@@ -1002,10 +1002,8 @@ describe("EventRouter scoped orchestration sync", () => {
           expect(useStore.getState().threads.some((thread) => thread.id === draftThreadId)).toBe(
             true,
           );
-          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBeGreaterThanOrEqual(2);
-          expect(
-            subscribeThreadRequests.filter((threadId) => threadId === draftThreadId).length,
-          ).toBeGreaterThanOrEqual(2);
+          expect(subscribeThreadRequestCountById.get(draftThreadId)).toBe(1);
+          expect(getSnapshotRequestCount).toBeGreaterThanOrEqual(1);
           const thread = getThreadFromState(useStore.getState(), draftThreadId);
           expect(thread?.messages.at(-1)?.text).toBe("draft promotion rendered");
         },

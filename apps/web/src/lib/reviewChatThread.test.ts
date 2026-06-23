@@ -12,6 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { ReviewSidechatContextPayload } from "../components/review/reviewSidechatContext";
 import { createSidebarDisplayThreadsSelector } from "../storeSelectors";
+
+const retainThreadDetailSubscriptionMock = vi.hoisted(() =>
+  vi.fn((_threadId: ThreadId) => vi.fn()),
+);
+
+vi.mock("../threadDetailSubscriptionRetention", () => ({
+  retainThreadDetailSubscription: retainThreadDetailSubscriptionMock,
+}));
+
 import {
   buildReviewChatTarget,
   clearReviewChatThreadCacheForTests,
@@ -27,7 +36,6 @@ type ReviewChatTestApi = {
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
-    subscribeThread: (input: { threadId: ThreadId }) => Promise<void>;
   };
 };
 
@@ -49,6 +57,7 @@ const projectId = ProjectId.makeUnsafe("project-review-chat");
 afterEach(() => {
   useStore.setState(initialStoreState, true);
   clearReviewChatThreadCacheForTests();
+  retainThreadDetailSubscriptionMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -316,7 +325,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           });
         }),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -346,6 +354,11 @@ describe("reviewChatThread", () => {
     ]);
     expect(events.indexOf("thread.turn.start")).toBeGreaterThan(events.indexOf("thread.create"));
     expect(events.indexOf("shell-snapshot")).toBeGreaterThan(events.indexOf("thread.create"));
+    expect(retainThreadDetailSubscriptionMock).toHaveBeenCalledWith(createCommand?.threadId);
+    for (const result of retainThreadDetailSubscriptionMock.mock.results) {
+      const release = result.value;
+      expect(release).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("routes the review risks suggestion through native base-branch review", async () => {
@@ -363,7 +376,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           });
         }),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -397,7 +409,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -439,7 +450,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -486,7 +496,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -533,7 +542,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -588,7 +596,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -646,7 +653,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -699,7 +705,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -747,7 +752,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -777,7 +781,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -818,7 +821,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const payload = makePayload();
@@ -862,7 +864,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const payload = makePayload();
@@ -914,7 +915,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -968,7 +968,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1018,7 +1017,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1069,7 +1067,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1134,7 +1131,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1208,7 +1204,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1262,7 +1257,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1327,7 +1321,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1373,7 +1366,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const modelSelection = {
@@ -1418,7 +1410,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const modelSelection = {
@@ -1478,7 +1469,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const claudeModelSelection = {

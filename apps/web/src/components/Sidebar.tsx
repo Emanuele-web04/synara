@@ -31,7 +31,7 @@ import {
 } from "~/lib/icons";
 import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
-import { FiGitBranch, FiPlus } from "react-icons/fi";
+import { FiGitBranch, FiPlus, FiServer } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
 import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
 import { BsChat } from "react-icons/bs";
@@ -138,6 +138,7 @@ import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import type { RuntimeHeaderPresentation, RuntimeStatusTone } from "../lib/runtimePresentation";
 import { dispatchThreadRename } from "../lib/threadRename";
 import { quotePosixShellArgument } from "../lib/shellQuote";
 import { DEFAULT_THREAD_TERMINAL_ID, type SidebarThreadSummary, type Thread } from "../types";
@@ -562,21 +563,33 @@ function resolveWorktreeBadgeLabel(
 }
 
 type ThreadMetaChip = {
-  id: "handoff" | "fork" | "worktree";
+  id: "handoff" | "fork" | "worktree" | "runtime";
   tooltip: string;
   icon: ReactNode;
 };
 
+const RUNTIME_META_TONE_CLASS: Record<RuntimeStatusTone, string> = {
+  active: "text-sky-600 dark:text-sky-300/90",
+  pending: "text-amber-600 dark:text-amber-300/90",
+  idle: "text-muted-foreground/55",
+  terminal: "text-muted-foreground/55",
+  error: "text-destructive",
+};
+
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/disposable
- * badges because the "Sidechat:" title already identifies them.
+ * Priority lowest -> highest: handoff -> fork -> worktree -> runtime. Sidechats skip
+ * fork/disposable badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
-  >;
+    | "forkSourceThreadId"
+    | "sidechatSourceThreadId"
+    | "envMode"
+    | "worktreePath"
+    | "handoff"
+  > & { runtimePresentation?: RuntimeHeaderPresentation | null };
   includeHandoffBadge: boolean;
   /**
    * When the leading provider avatar already renders the source → target handoff
@@ -616,6 +629,21 @@ function resolveThreadRowMetaChips(input: {
       id: "worktree",
       tooltip: worktreeBadgeLabel,
       icon: <WorktreeBadgeGlyph className="text-muted-foreground/55" />,
+    });
+  }
+
+  const runtimePresentation = input.thread.runtimePresentation;
+  if (runtimePresentation?.show) {
+    chips.push({
+      id: "runtime",
+      tooltip: runtimePresentation.text,
+      icon: (
+        <SidebarGlyph
+          icon={FiServer}
+          variant="meta"
+          className={RUNTIME_META_TONE_CLASS[runtimePresentation.tone]}
+        />
+      ),
     });
   }
 

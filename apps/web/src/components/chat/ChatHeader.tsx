@@ -11,6 +11,7 @@ import {
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type OrchestrationThreadRuntime,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -64,6 +65,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { RuntimeStatusChip } from "./RuntimeStatusChip";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -98,6 +100,7 @@ interface ChatHeaderProps {
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
+  runtime: OrchestrationThreadRuntime | null | undefined;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -499,6 +502,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
+  runtime,
   gitCwd,
   diffTotals,
   showGitActions = true,
@@ -740,6 +744,7 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
                 </Tooltip>
               ) : null}
+              <RuntimeStatusChip runtime={runtime} threadId={activeThreadId} />
             </div>
           </div>
         </div>
@@ -838,7 +843,7 @@ export const ChatHeader = memo(function ChatHeader({
             controls for disposable threads (which never surface the panel). */}
         {environment && !isDisposableThread ? (
           <>
-            <EnvironmentToggle environment={environment} />
+            <EnvironmentToggle environment={environment} runtime={runtime} />
             {diffToggleControl}
           </>
         ) : (

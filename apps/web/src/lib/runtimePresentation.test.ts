@@ -46,12 +46,14 @@ describe("resolveRuntimeHeaderPresentation", () => {
     );
   });
 
-  it("renders 'Runtime: <provider> · <status>' for remote runtimes", () => {
+  it("renders explicit remote sandbox copy for remote runtimes", () => {
     const presentation = resolveRuntimeHeaderPresentation(
       makeRuntime({ provider: "daytona", status: "provisioning" }),
     );
     expect(presentation.show).toBe(true);
-    expect(presentation.text).toBe("Runtime: Daytona · Provisioning");
+    expect(presentation.label).toBe("Remote sandbox");
+    expect(presentation.detailLabel).toBe("Provisioning on Daytona");
+    expect(presentation.text).toBe("Remote sandbox: Provisioning on Daytona");
     expect(presentation.tone).toBe("pending");
   });
 });

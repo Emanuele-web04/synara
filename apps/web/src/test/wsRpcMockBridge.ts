@@ -6,10 +6,9 @@ import {
 } from "@t3tools/contracts";
 
 // Browser tests mock the WebSocket via msw's `ws.link`, but the production
-// transport speaks the Effect (effect-smol) raw RPC protocol over `layerJson`,
-// not the legacy `{ type: "push" }` / `{ id, result }` envelope the tests were
-// written against. This bridge translates between the two so the existing test
-// fixtures keep their high-level shape:
+// transport speaks the Effect (effect-smol) raw RPC protocol over `layerJson`.
+// This bridge keeps browser fixtures at the RPC method/channel level while
+// emitting only Effect RPC frames over the mocked socket:
 //
 //   - request decode: { _tag: "Request", id, tag, payload }
 //   - effect reply:   { _tag: "Exit", requestId, exit: { _tag: "Success", value } }
@@ -31,6 +30,8 @@ const STREAM_TAGS = new Set<string>([
   WS_METHODS.subscribeTerminalEvents,
   WS_METHODS.subscribeReviewUpdates,
   WS_METHODS.gitRunStackedAction,
+  WS_METHODS.subscribeProjectDevServerEvents,
+  WS_METHODS.subscribeAutomationEvents,
 ]);
 
 function channelToStreamTag(channel: string): string | null {
@@ -44,6 +45,10 @@ function channelToStreamTag(channel: string): string | null {
   if (channel === WS_CHANNELS.serverSettingsUpdated) return WS_METHODS.subscribeServerSettings;
   if (channel === WS_CHANNELS.terminalEvent) return WS_METHODS.subscribeTerminalEvents;
   if (channel === WS_CHANNELS.reviewUpdated) return WS_METHODS.subscribeReviewUpdates;
+  if (channel === WS_CHANNELS.projectDevServerEvent) {
+    return WS_METHODS.subscribeProjectDevServerEvents;
+  }
+  if (channel === WS_CHANNELS.automationEvent) return WS_METHODS.subscribeAutomationEvents;
   if (channel === WS_CHANNELS.gitActionProgress) return WS_METHODS.gitRunStackedAction;
   if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
     return WS_METHODS.subscribeOrchestrationDomainEvents;
@@ -76,17 +81,6 @@ interface DecodedRequest {
   readonly payload: unknown;
 }
 
-interface PushEnvelope {
-  readonly type: "push";
-  readonly channel: string;
-  readonly data: unknown;
-}
-
-interface ResultEnvelope {
-  readonly id: string;
-  readonly result: unknown;
-}
-
 type MockClient = {
   send(data: string): void;
   addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
@@ -106,23 +100,31 @@ export interface RpcBridge {
   pushToChannel(channel: string, data: unknown): void;
 }
 
-// Patches `client.send` so test code can keep emitting the legacy
-// `{ type: "push", channel, data }` and `{ id, result }` envelopes, and wires up
-// the request decoder. Returns a bridge for direct channel pushes.
+export function suppressKnownEffectRpcBrowserHarnessRejections(): () => void {
+  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+    if (String(event.reason).includes("Fiber.runLoop: Not a valid effect")) {
+      event.preventDefault();
+    }
+  };
+  window.addEventListener("unhandledrejection", onUnhandledRejection);
+  return () => window.removeEventListener("unhandledrejection", onUnhandledRejection);
+}
+
+// Wires the request decoder and returns a bridge for direct channel pushes.
 export function installRpcBridge(client: MockClient, handlers: RpcBridgeHandlers): RpcBridge {
   // requestId by stream tag (single-instance streams).
   const streamRequestIdByTag = new Map<string, string>();
   // requestId by threadId for per-thread subscriptions.
   const threadStreamRequestIdByThreadId = new Map<string, string>();
 
-  const rawSend = client.send.bind(client);
+  const sendToClient = client.send.bind(client);
 
   const sendChunk = (requestId: string, value: unknown): void => {
-    rawSend(JSON.stringify({ _tag: "Chunk", requestId, values: [value] }));
+    sendToClient(JSON.stringify({ _tag: "Chunk", requestId, values: [value] }));
   };
 
   const sendExit = (requestId: string, value: unknown): void => {
-    rawSend(
+    sendToClient(
       JSON.stringify({
         _tag: "Exit",
         requestId,
@@ -130,33 +132,6 @@ export function installRpcBridge(client: MockClient, handlers: RpcBridgeHandlers
       }),
     );
   };
-
-  client.send = ((data: string) => {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(data);
-    } catch {
-      rawSend(data);
-      return;
-    }
-    if (parsed && typeof parsed === "object" && (parsed as { type?: unknown }).type === "push") {
-      const push = parsed as PushEnvelope;
-      pushToChannel(push.channel, push.data);
-      return;
-    }
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "id" in parsed &&
-      "result" in parsed &&
-      !("_tag" in parsed)
-    ) {
-      const reply = parsed as ResultEnvelope;
-      sendExit(reply.id, reply.result);
-      return;
-    }
-    rawSend(data);
-  }) as MockClient["send"];
 
   function pushToChannel(channel: string, data: unknown): void {
     const tag = channelToStreamTag(channel);
@@ -184,7 +159,28 @@ export function installRpcBridge(client: MockClient, handlers: RpcBridgeHandlers
     if (!decoded || typeof decoded !== "object") return;
     const tagged = decoded as { _tag?: string };
     if (tagged._tag === "Ping") {
-      rawSend(JSON.stringify({ _tag: "Pong" }));
+      sendToClient(JSON.stringify({ _tag: "Pong" }));
+      return;
+    }
+    if (
+      tagged._tag === "Ack" ||
+      tagged._tag === "Pong" ||
+      tagged._tag === "Interrupt" ||
+      tagged._tag === "Eof"
+    ) {
+      const requestId = (decoded as { requestId?: unknown }).requestId;
+      if ((tagged._tag === "Interrupt" || tagged._tag === "Eof") && typeof requestId === "string") {
+        for (const [tag, streamRequestId] of streamRequestIdByTag) {
+          if (streamRequestId === requestId) {
+            streamRequestIdByTag.delete(tag);
+          }
+        }
+        for (const [threadId, streamRequestId] of threadStreamRequestIdByThreadId) {
+          if (streamRequestId === requestId) {
+            threadStreamRequestIdByThreadId.delete(threadId);
+          }
+        }
+      }
       return;
     }
     if (tagged._tag !== "Request") return;
@@ -207,5 +203,7 @@ export function installRpcBridge(client: MockClient, handlers: RpcBridgeHandlers
     sendExit(id, handlers.resolveRpc(tag, payload));
   });
 
-  return { pushToChannel };
+  return {
+    pushToChannel,
+  };
 }

@@ -35,7 +35,17 @@ const TONE_DOT_CLASS: Record<RuntimeStatusTone, string> = {
   error: "bg-destructive",
 };
 
-// Refresh re-pulls the read-model the client already owns. Stop/destroy/snapshot
+const TONE_CHIP_CLASS: Record<RuntimeStatusTone, string> = {
+  active: "border-sky-500/35 bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-200",
+  pending:
+    "border-amber-500/35 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-200",
+  idle: "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)]",
+  terminal:
+    "border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)]",
+  error: "border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15",
+};
+
+// Refresh re-pulls the shell projection the client already owns. Stop/destroy/snapshot
 // dispatch the `thread.runtime.action` client command, which the reactor routes
 // to ExecutionRuntimeService for the runtime's recorded provider.
 async function refreshRuntimeSnapshot(): Promise<void> {
@@ -43,8 +53,8 @@ async function refreshRuntimeSnapshot(): Promise<void> {
   if (!api) {
     return;
   }
-  const snapshot = await api.orchestration.getSnapshot();
-  useStore.getState().syncServerReadModel(snapshot);
+  const snapshot = await api.orchestration.getShellSnapshot();
+  useStore.getState().syncServerShellSnapshot(snapshot);
 }
 
 async function dispatchRuntimeLifecycleAction(
@@ -87,18 +97,22 @@ export function RuntimeStatusChip({ runtime, threadId, className }: RuntimeStatu
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         className={cn(
-          "inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] px-1.5 text-[10px] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-button-secondary-hover)]",
+          "inline-flex h-6 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-1.5 text-[10px] font-medium transition-colors",
+          TONE_CHIP_CLASS[presentation.tone],
           className,
         )}
         title={presentation.text}
+        aria-label={presentation.text}
       >
         <FiServer className="size-3 shrink-0" />
         <span
           className={cn("size-1.5 shrink-0 rounded-full", TONE_DOT_CLASS[presentation.tone])}
           aria-hidden
         />
-        <span className="truncate">{presentation.providerLabel}</span>
-        <span className="truncate opacity-70">{presentation.statusLabel}</span>
+        <span className="truncate">{presentation.label}</span>
+        <span className="hidden truncate font-normal opacity-75 sm:inline">
+          {presentation.statusLabel}
+        </span>
       </PopoverTrigger>
       <PopoverPopup
         align="end"
