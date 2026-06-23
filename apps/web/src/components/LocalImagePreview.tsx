@@ -7,11 +7,20 @@
 //        markdown variant (`GeneratedMarkdownImage`) composes the same hook and
 //        error card with its own inline frame/overlay rendering.
 
-import { type ImgHTMLAttributes, type MouseEvent, useEffect, useMemo, useState } from "react";
+import {
+  type ImgHTMLAttributes,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 
+import { downloadUrlAsBlob } from "~/lib/browserDownload";
 import { DownloadIcon, Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
 import { buildLocalImageUrl, localImageFileName } from "~/lib/localImageUrls";
 import { cn } from "~/lib/utils";
+import { toastManager } from "./ui/toast";
 
 export type LocalImagePreviewStatus = "loading" | "ready" | "error";
 
@@ -63,6 +72,35 @@ export function useLocalImagePreview(input: {
   return { previewUrl, downloadUrl, fileName, downloadName: fileName || "", status, imgProps };
 }
 
+// Handles local-image downloads imperatively so failed API responses surface as
+// toasts instead of replacing the whole desktop window with a 404 page.
+export function useLocalImageDownloadClick(input: {
+  downloadUrl: string;
+  downloadName: string;
+  errorTitle?: string | undefined;
+}) {
+  return useCallback(
+    (event: MouseEvent<HTMLElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void downloadUrlAsBlob({
+        url: input.downloadUrl,
+        filename: input.downloadName,
+      }).catch((error: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: input.errorTitle ?? "Could not download image",
+          description:
+            error instanceof Error
+              ? error.message
+              : "The file may have moved or be unavailable.",
+        });
+      });
+    },
+    [input.downloadName, input.downloadUrl, input.errorTitle],
+  );
+}
+
 // Span-only markup so the card stays valid inside markdown paragraphs.
 export function LocalImageErrorCard(props: {
   downloadUrl: string;
@@ -108,6 +146,7 @@ export function LocalImagePreview(props: {
     src: props.src,
     cwd: props.cwd,
   });
+  const handleDownloadClick = useLocalImageDownloadClick({ downloadUrl, downloadName });
 
   if (status === "error") {
     return (
@@ -115,6 +154,7 @@ export function LocalImagePreview(props: {
         downloadUrl={downloadUrl}
         downloadName={downloadName}
         className={props.className}
+        onDownloadClick={handleDownloadClick}
       />
     );
   }
@@ -134,6 +174,7 @@ export function LocalImagePreview(props: {
       <a
         href={downloadUrl}
         download={downloadName}
+        onClick={handleDownloadClick}
         className="local-image-preview__download"
         aria-label="Download image"
         title="Download"
