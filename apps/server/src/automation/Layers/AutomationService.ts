@@ -111,13 +111,24 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
-// Recovery/reconcile failures arrive already wrapped by `toServiceError`, whose message
-// is the static wrapper string; the real failure (SQLite error, defect) is in `.cause`.
-// Prefer the underlying cause so the logged warning is actually useful.
+// Recovery/reconcile failures arrive multiply wrapped: toServiceError ->
+// AutomationServiceError whose `.cause` is often a PersistenceSqlError whose own `.cause`
+// holds the real driver failure ("database is locked", a constraint, ...). Each layer's
+// own `message` is a generic wrapper string, so walk down the `.cause` chain to the root
+// and log that, otherwise the warning is unactionable. Bounded to avoid a cyclic cause.
 function recoveryErrorMessage(error: unknown): string {
-  return error instanceof AutomationServiceError && error.cause != null
-    ? errorMessage(error.cause)
-    : errorMessage(error);
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (current == null || typeof current !== "object" || !("cause" in current)) {
+      break;
+    }
+    const cause = (current as { readonly cause?: unknown }).cause;
+    if (cause == null) {
+      break;
+    }
+    current = cause;
+  }
+  return errorMessage(current);
 }
 
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
