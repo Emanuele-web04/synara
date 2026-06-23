@@ -74,6 +74,17 @@ import { RuntimeStatusChip } from "./RuntimeStatusChip";
  */
 const HEADER_COMPACT_BREAKPOINT = 700;
 
+function renderProviderIcon(provider: ProviderKind | null, className: string) {
+  return (
+    <ProviderIcon
+      provider={provider}
+      tone="header"
+      className={className}
+      fallback={<FiGitBranch className={className} />}
+    />
+  );
+}
+
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
   activeThreadTitle: string;
@@ -562,17 +573,6 @@ export const ChatHeader = memo(function ChatHeader({
     observer.observe(el);
     return () => observer.disconnect();
   }, [isSplitPane]);
-
-  const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
-    return (
-      <ProviderIcon
-        provider={provider}
-        tone="header"
-        className={className}
-        fallback={<FiGitBranch className={className} />}
-      />
-    );
-  };
 
   // The right-side diff toggle (the "open the diff on the right" affordance). It stays in
   // the header in both layouts — beside the Environment button when that is enabled, and

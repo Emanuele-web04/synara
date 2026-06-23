@@ -1359,10 +1359,7 @@ export default function ChatView({
   );
   const automationProjects = useStore((state) => state.projects);
   const automationThreads = useStore((state) => state.threads);
-  const {
-    data: automationData,
-    updateMutation: automationUpdateMutation,
-  } = useAutomations();
+  const { data: automationData, updateMutation: automationUpdateMutation } = useAutomations();
   const [automationDraftForm, setAutomationDraftForm] = useState<AutomationFormState | null>(null);
   const [automationEditingDefinition, setAutomationEditingDefinition] =
     useState<AutomationDefinition | null>(null);
@@ -3807,7 +3804,6 @@ export default function ChatView({
       removeThreadFromSplitViews,
       storeClearTerminalState,
       storeCloseTerminal,
-      syncServerShellSnapshot,
       settings.confirmTerminalTabClose,
       terminalState.entryPoint,
       terminalState.runningTerminalIds,

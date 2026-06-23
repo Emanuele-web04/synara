@@ -54,6 +54,10 @@ type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "threa
 const initialStoreState = useStore.getState();
 const projectId = ProjectId.makeUnsafe("project-review-chat");
 
+const rejectUnrequestedSessionEnsure = (): void => {
+  throw new Error("session ensure was not requested");
+};
+
 afterEach(() => {
   useStore.setState(initialStoreState, true);
   clearReviewChatThreadCacheForTests();
@@ -626,9 +630,7 @@ describe("reviewChatThread", () => {
       }),
     );
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1045,9 +1047,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1109,9 +1109,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1168,11 +1166,11 @@ describe("reviewChatThread", () => {
     });
     await expect(prewarm).resolves.toMatchObject({ status: "ready" });
 
-    const turnCommands = commands.filter(isThreadTurnStartCommand);
+    const turnCommand = commands.find(isThreadTurnStartCommand);
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
     expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
-    expect(turnCommands[0]?.threadId).toBe(selectedShellThreadId);
-    expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
+    expect(turnCommand?.threadId).toBe(selectedShellThreadId);
+    expect(turnCommand?.message.text).toContain("Summarize this PR");
     vi.useRealTimers();
   });
 
@@ -1182,9 +1180,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {

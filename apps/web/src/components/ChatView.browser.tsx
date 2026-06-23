@@ -1415,7 +1415,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
   });
 
   beforeEach(async () => {
-    resetWsNativeApiForTest();
+    await resetWsNativeApiForTest();
     await setViewport(DEFAULT_VIEWPORT);
     attachmentResponseDelayMs = 0;
     localStorage.clear();
@@ -1449,8 +1449,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
   });
 
-  afterEach(() => {
-    resetWsNativeApiForTest();
+  afterEach(async () => {
+    await resetWsNativeApiForTest();
     document.body.innerHTML = "";
   });
 

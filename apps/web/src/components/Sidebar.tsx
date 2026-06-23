@@ -584,11 +584,7 @@ const RUNTIME_META_TONE_CLASS: Record<RuntimeStatusTone, string> = {
 function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    | "forkSourceThreadId"
-    | "sidechatSourceThreadId"
-    | "envMode"
-    | "worktreePath"
-    | "handoff"
+    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
   > & { runtimePresentation?: RuntimeHeaderPresentation | null };
   includeHandoffBadge: boolean;
   /**
@@ -2824,7 +2820,6 @@ export default function Sidebar() {
       removeThreadFromSplitViews,
       clearTemporaryThread,
       sidebarThreads,
-      syncServerShellSnapshot,
       unpinThread,
     ],
   );
@@ -3143,8 +3138,7 @@ export default function Sidebar() {
 
       void reconcileDeletedThreadsFromClient({
         threadIds: successfullyDeletedIds,
-        removeDeletedThreadFromClientState:
-          useStore.getState().removeDeletedThreadFromClientState,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
       });
       removeFromSelection([...deletedIds]);
 

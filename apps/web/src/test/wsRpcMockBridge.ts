@@ -100,14 +100,16 @@ export interface RpcBridge {
   pushToChannel(channel: string, data: unknown): void;
 }
 
+function onKnownEffectRpcBrowserHarnessRejection(event: PromiseRejectionEvent): void {
+  if (String(event.reason).includes("Fiber.runLoop: Not a valid effect")) {
+    event.preventDefault();
+  }
+}
+
 export function suppressKnownEffectRpcBrowserHarnessRejections(): () => void {
-  const onUnhandledRejection = (event: PromiseRejectionEvent) => {
-    if (String(event.reason).includes("Fiber.runLoop: Not a valid effect")) {
-      event.preventDefault();
-    }
-  };
-  window.addEventListener("unhandledrejection", onUnhandledRejection);
-  return () => window.removeEventListener("unhandledrejection", onUnhandledRejection);
+  window.addEventListener("unhandledrejection", onKnownEffectRpcBrowserHarnessRejection);
+  return () =>
+    window.removeEventListener("unhandledrejection", onKnownEffectRpcBrowserHarnessRejection);
 }
 
 // Wires the request decoder and returns a bridge for direct channel pushes.

@@ -11,52 +11,52 @@ import {
   subscribeRetainedThreadDetailIdChanges,
 } from "./threadDetailSubscriptionRetention";
 
+function makeThreadSession(status: OrchestrationSessionStatus): ThreadSession {
+  return {
+    provider: "codex",
+    status:
+      status === "starting"
+        ? "connecting"
+        : status === "running"
+          ? "running"
+          : status === "error"
+            ? "error"
+            : "ready",
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    orchestrationStatus: status,
+  };
+}
+
+function makeSidebarThreadSummary(
+  threadId: ThreadId,
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    id: threadId,
+    projectId: "project-1" as never,
+    title: "Retained thread",
+    modelSelection: { provider: "codex", model: "gpt-5.4" },
+    interactionMode: "default",
+    envMode: "local",
+    branch: null,
+    worktreePath: null,
+    session: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    archivedAt: null,
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    latestTurn: null,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    hasLiveTailWork: false,
+    ...overrides,
+  };
+}
+
 describe("threadDetailSubscriptionRetention", () => {
   const initialStoreState = useStore.getState();
-
-  function makeThreadSession(status: OrchestrationSessionStatus): ThreadSession {
-    return {
-      provider: "codex",
-      status:
-        status === "starting"
-          ? "connecting"
-          : status === "running"
-            ? "running"
-            : status === "error"
-              ? "error"
-              : "ready",
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      orchestrationStatus: status,
-    };
-  }
-
-  function makeSidebarThreadSummary(
-    threadId: ThreadId,
-    overrides: Partial<SidebarThreadSummary> = {},
-  ): SidebarThreadSummary {
-    return {
-      id: threadId,
-      projectId: "project-1" as never,
-      title: "Retained thread",
-      modelSelection: { provider: "codex", model: "gpt-5.4" },
-      interactionMode: "default",
-      envMode: "local",
-      branch: null,
-      worktreePath: null,
-      session: null,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      archivedAt: null,
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      latestTurn: null,
-      latestUserMessageAt: null,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
-      hasLiveTailWork: false,
-      ...overrides,
-    };
-  }
 
   afterEach(() => {
     vi.useRealTimers();
