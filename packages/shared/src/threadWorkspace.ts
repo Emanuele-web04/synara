@@ -114,9 +114,13 @@ export function isScratchWorkspacePath(filePath: string): boolean {
 export function deriveAssociatedWorktreeMetadata(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  associatedWorktreePath?: string | null;
-  associatedWorktreeBranch?: string | null;
-  associatedWorktreeRef?: string | null;
+  // Checked with `!== undefined` below to distinguish "derive from worktreePath"
+  // (undefined) from "explicitly none" (null). The thread schema marks these
+  // Schema.optional, so the param type must admit an explicit undefined under
+  // exactOptionalPropertyTypes.
+  associatedWorktreePath?: string | null | undefined;
+  associatedWorktreeBranch?: string | null | undefined;
+  associatedWorktreeRef?: string | null | undefined;
 }): AssociatedWorktreeMetadata {
   return {
     associatedWorktreePath:
@@ -143,9 +147,10 @@ export function deriveAssociatedWorktreeMetadata(input: {
 export function deriveAssociatedWorktreeMetadataPatch(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  associatedWorktreePath?: string | null;
-  associatedWorktreeBranch?: string | null;
-  associatedWorktreeRef?: string | null;
+  // Same undefined-aware semantics as deriveAssociatedWorktreeMetadata above.
+  associatedWorktreePath?: string | null | undefined;
+  associatedWorktreeBranch?: string | null | undefined;
+  associatedWorktreeRef?: string | null | undefined;
 }): AssociatedWorktreeMetadataPatch {
   const patch: AssociatedWorktreeMetadataPatch = {};
 
