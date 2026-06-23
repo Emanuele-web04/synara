@@ -12,13 +12,18 @@ import {
   type AutomationCreateInput,
   type AutomationRun,
   type GitCreateWorktreeInput,
+  type GitRemoveWorktreeInput,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 
-import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import {
+  GitCore,
+  type GitCoreShape,
+  type GitDeleteBranchInput,
+} from "../../git/Services/GitCore.ts";
 import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -53,11 +58,14 @@ const project: OrchestrationProjectShell = {
 
 const dispatchedCommands: OrchestrationCommand[] = [];
 const createdWorktrees: GitCreateWorktreeInput[] = [];
+const removedWorktrees: GitRemoveWorktreeInput[] = [];
+const deletedBranches: GitDeleteBranchInput[] = [];
 type CompletionEvaluationInputForTest = Parameters<
   TextGenerationShape["evaluateAutomationCompletion"]
 >[0];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
+let createWorktreeHook: ((input: GitCreateWorktreeInput) => Effect.Effect<void>) | null = null;
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
@@ -87,8 +95,11 @@ let dispatchHook:
 function resetHarness() {
   dispatchedCommands.length = 0;
   createdWorktrees.length = 0;
+  removedWorktrees.length = 0;
+  deletedBranches.length = 0;
   gitMode = "nonRepo";
   gitStatusHook = null;
+  createWorktreeHook = null;
   threadShell = Option.none();
   threadDetail = Option.none();
   completionEvaluation = {
@@ -445,14 +456,25 @@ const gitCore = {
       };
     }),
   createWorktree: (input: GitCreateWorktreeInput) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       createdWorktrees.push(input);
+      if (createWorktreeHook) {
+        yield* createWorktreeHook(input);
+      }
       return {
         worktree: {
           path: "/tmp/automation-worktree",
           branch: input.newBranch ?? input.branch,
         },
       };
+    }),
+  removeWorktree: (input: GitRemoveWorktreeInput) =>
+    Effect.sync(() => {
+      removedWorktrees.push(input);
+    }),
+  deleteBranch: (input: GitDeleteBranchInput) =>
+    Effect.sync(() => {
+      deletedBranches.push(input);
     }),
 } as unknown as GitCoreShape;
 
@@ -553,6 +575,123 @@ layer("AutomationService", (it) => {
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
       assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+    }),
+  );
+
+  it.effect("cleans up a new worktree when standalone thread creation fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      failDispatchType = "thread.create";
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /Failed to create automation thread/);
+      assert.strictEqual(createdWorktrees.length, 1);
+      assert.deepStrictEqual(removedWorktrees, [
+        {
+          cwd: project.workspaceRoot,
+          path: "/tmp/automation-worktree",
+          force: true,
+        },
+      ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktrees[0]?.newBranch,
+          force: true,
+        },
+      ]);
+
+      const reloaded = yield* service.list({ projectId });
+      const run = reloaded.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(run?.status, "failed");
+    }),
+  );
+
+  it.effect("cleans up a new worktree when cancellation wins before thread creation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-cancel-after-worktree");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      createWorktreeHook = () =>
+        Effect.gen(function* () {
+          const runs = yield* repository
+            .listActiveRunsForDefinition({ automationId })
+            .pipe(Effect.orDie);
+          const run = runs.find((entry) => entry.automationId === automationId);
+          if (run) {
+            yield* repository
+              .cancelRun({
+                runId: run.id,
+                now: "2026-06-16T10:00:30.000Z",
+              })
+              .pipe(Effect.orDie);
+          }
+        });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(createdWorktrees.length, 1);
+      assert.deepStrictEqual(removedWorktrees, [
+        {
+          cwd: project.workspaceRoot,
+          path: "/tmp/automation-worktree",
+          force: true,
+        },
+      ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktrees[0]?.newBranch,
+          force: true,
+        },
+      ]);
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "cancelled",
+      );
+      assert.strictEqual(
+        dispatchedCommands.some((command) => command.type === "thread.create"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("keeps a worktree once standalone thread creation succeeds", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      failDispatchType = "thread.turn.start";
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /Failed to start automation turn/);
+      assert.strictEqual(createdWorktrees.length, 1);
+      assert.strictEqual(removedWorktrees.length, 0);
+      assert.strictEqual(deletedBranches.length, 0);
+      assert.strictEqual(dispatchedCommands[0]?.type, "thread.create");
     }),
   );
 

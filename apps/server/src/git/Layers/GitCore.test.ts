@@ -976,6 +976,22 @@ it.layer(TestLayer)("git integration", (it) => {
         expect(result._tag).toBe("Failure");
       }),
     );
+
+    it.effect("deletes an existing local branch", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        const core = yield* GitCore;
+        yield* initRepoWithCommit(tmp);
+        yield* core.createBranch({ cwd: tmp, branch: "feature/delete-me" });
+
+        yield* core.deleteBranch({ cwd: tmp, branch: "feature/delete-me", force: true });
+
+        const branches = yield* core.listBranches({ cwd: tmp });
+        expect(branches.branches.some((branch) => branch.name === "feature/delete-me")).toBe(
+          false,
+        );
+      }),
+    );
   });
 
   // ── renameGitBranch ──

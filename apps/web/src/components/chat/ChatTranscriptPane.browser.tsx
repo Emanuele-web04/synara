@@ -33,6 +33,7 @@ const TIMELINE_ENTRIES = [
 function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
   const [composerValue, setComposerValue] = useState("");
   const composerImagesRef = useRef<readonly []>([]);
+  const composerFilesRef = useRef<readonly []>([]);
   const composerAssistantSelectionsRef = useRef<readonly []>([]);
   const listRef = useRef<LegendListRef | null>(null);
   const {
@@ -50,6 +51,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
     threadId: "thread-transcript-perf",
     enabled: true,
     composerImagesRef,
+    composerFilesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft: () => true,
     scheduleComposerFocus: NOOP,

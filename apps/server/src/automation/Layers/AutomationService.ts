@@ -50,6 +50,7 @@ import {
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
 const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
+const AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY = 100;
 
 interface AutomationCompletionEvaluationJob {
   readonly definition: AutomationDefinition;
@@ -445,12 +446,72 @@ export const AutomationServiceLive = Layer.effect(
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
-    // Stop-condition AI calls can be slow; a dedicated queue keeps reconciliation responsive.
-    const completionEvaluationQueue = yield* Queue.unbounded<AutomationCompletionEvaluationJob>();
+    // Stop-condition AI calls can be slow; cap queued+active jobs and let DB
+    // reconciliation rediscover excess pending rows when worker capacity frees up.
+    const completionEvaluationQueue = yield* Queue.bounded<AutomationCompletionEvaluationJob>(
+      AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY,
+    );
     const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
       PubSub.publish(events, event).pipe(Effect.asVoid);
+
+    const cleanupUnattachedWorktree = (input: {
+      readonly definition: AutomationDefinition;
+      readonly run: AutomationRun;
+      readonly project: OrchestrationProjectShell;
+      readonly environment: ThreadEnvironment;
+      readonly reason: string;
+    }) => {
+      const path = input.environment.associatedWorktreePath;
+      if (input.environment.envMode !== "worktree" || !path) {
+        return Effect.void;
+      }
+      const expectedBranch = makeAutomationBranchName(input.definition, input.run.id);
+      // Only delete the branch minted for this not-yet-owned automation worktree.
+      const branch =
+        input.environment.associatedWorktreeBranch === expectedBranch ? expectedBranch : null;
+      const removeWorktree = git
+        .removeWorktree({
+          cwd: input.project.workspaceRoot,
+          path,
+          force: true,
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("automation unattached worktree cleanup failed", {
+              automationId: input.definition.id,
+              runId: input.run.id,
+              path,
+              reason: input.reason,
+              error: errorMessage(error),
+            }),
+          ),
+          Effect.asVoid,
+        );
+      const deleteBranch = branch
+        ? git
+            .deleteBranch({
+              cwd: input.project.workspaceRoot,
+              branch,
+              force: true,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("automation unattached branch cleanup failed", {
+                  automationId: input.definition.id,
+                  runId: input.run.id,
+                  branch,
+                  reason: input.reason,
+                  error: errorMessage(error),
+                }),
+              ),
+              Effect.asVoid,
+            )
+        : Effect.void;
+
+      return removeWorktree.pipe(Effect.flatMap(() => deleteBranch));
+    };
 
     const requireDefinition = (id: AutomationId) =>
       automationRepository.getDefinitionById({ id }).pipe(
@@ -850,6 +911,16 @@ export const AutomationServiceLive = Layer.effect(
         );
         yield* requireRunStillDispatching(
           "Automation run was cancelled before creating the automation thread.",
+        ).pipe(
+          Effect.catch((error) =>
+            cleanupUnattachedWorktree({
+              definition,
+              run,
+              project,
+              environment,
+              reason: "cancelled-before-thread-create",
+            }).pipe(Effect.flatMap(() => Effect.fail(error))),
+          ),
         );
 
         yield* orchestrationEngine
@@ -870,7 +941,18 @@ export const AutomationServiceLive = Layer.effect(
             associatedWorktreeRef: environment.associatedWorktreeRef,
             createdAt: now,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to create automation thread.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to create automation thread.")),
+            Effect.catch((error) =>
+              cleanupUnattachedWorktree({
+                definition,
+                run,
+                project,
+                environment,
+                reason: "thread-create-failed",
+              }).pipe(Effect.flatMap(() => Effect.fail(error))),
+            ),
+          );
 
         yield* requireRunStillDispatching(
           "Automation run was cancelled before starting the automation turn.",
@@ -1272,16 +1354,30 @@ export const AutomationServiceLive = Layer.effect(
     const enqueueCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
       Effect.sync(() => {
         if (queuedCompletionEvaluationRunIds.has(job.run.id)) {
-          return false;
+          return "duplicate" as const;
+        }
+        if (
+          queuedCompletionEvaluationRunIds.size >= AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY
+        ) {
+          return "full" as const;
         }
         queuedCompletionEvaluationRunIds.add(job.run.id);
-        return true;
+        return "queued" as const;
       }).pipe(
-        Effect.flatMap((shouldEnqueue) =>
-          shouldEnqueue
-            ? Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid)
-            : Effect.void,
-        ),
+        Effect.flatMap((state) => {
+          switch (state) {
+            case "duplicate":
+              return Effect.void;
+            case "full":
+              return Effect.logWarning("automation completion evaluation queue at capacity", {
+                automationId: job.definition.id,
+                runId: job.run.id,
+                capacity: AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY,
+              });
+            case "queued":
+              return Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid);
+          }
+        }),
       );
 
     const enqueueCompletionEvaluationForRun = (run: AutomationRun) => {
@@ -1342,7 +1438,18 @@ export const AutomationServiceLive = Layer.effect(
       );
 
     const completionEvaluationWorker = Effect.forever(
-      Queue.take(completionEvaluationQueue).pipe(Effect.flatMap(processCompletionEvaluationJob)),
+      Queue.take(completionEvaluationQueue).pipe(
+        Effect.flatMap(processCompletionEvaluationJob),
+        Effect.flatMap(() =>
+          enqueuePendingCompletionEvaluations().pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("automation pending stop evaluations could not be requeued", {
+                error: errorMessage(error),
+              }),
+            ),
+          ),
+        ),
+      ),
     );
 
     yield* Effect.forEach(

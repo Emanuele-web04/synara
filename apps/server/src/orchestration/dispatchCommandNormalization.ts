@@ -49,6 +49,7 @@ function persistBinaryAttachment(input: {
   readonly path: Path.Path;
   readonly maxBytes: number;
   readonly requireImageMime: boolean;
+  readonly trackAttachmentPath?: ((path: string) => void) | undefined;
 }): Effect.Effect<ChatAttachment, Error, never> {
   return Effect.gen(function* () {
     const parsed = parseBinaryAttachmentDataUrl(input.attachment.dataUrl);
@@ -103,6 +104,7 @@ function persistBinaryAttachment(input: {
         new Error(`Failed to resolve persisted path for '${input.attachment.name}'.`),
       );
     }
+    input.trackAttachmentPath?.(attachmentPath);
 
     yield* input.fileSystem
       .makeDirectory(input.path.dirname(attachmentPath), { recursive: true })
@@ -121,6 +123,18 @@ function persistBinaryAttachment(input: {
 
     return persistedAttachment;
   });
+}
+
+function removePersistedAttachmentPaths(input: {
+  readonly paths: ReadonlyArray<string>;
+  readonly fileSystem: FileSystem.FileSystem;
+}): Effect.Effect<void> {
+  return Effect.forEach(
+    input.paths,
+    (attachmentPath) =>
+      input.fileSystem.remove(attachmentPath, { force: true }).pipe(Effect.ignore),
+    { discard: true, concurrency: 1 },
+  );
 }
 
 export interface DispatchCommandNormalizerOptions<E> {
@@ -192,6 +206,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     }
     const turnStartCommand = input.command;
 
+    const writtenAttachmentPaths: string[] = [];
     const normalizedAttachments = yield* Effect.forEach(
       turnStartCommand.message.attachments,
       (attachment) =>
@@ -219,6 +234,7 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
               path: options.path,
               maxBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
               requireImageMime: true,
+              trackAttachmentPath: (attachmentPath) => writtenAttachmentPaths.push(attachmentPath),
             });
           }
 
@@ -230,9 +246,20 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
             path: options.path,
             maxBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
             requireImageMime: false,
+            trackAttachmentPath: (attachmentPath) => writtenAttachmentPaths.push(attachmentPath),
           });
         }),
       { concurrency: 1 },
+    ).pipe(
+      Effect.catch((error) =>
+        Effect.gen(function* () {
+          yield* removePersistedAttachmentPaths({
+            paths: writtenAttachmentPaths,
+            fileSystem: options.fileSystem,
+          });
+          return yield* Effect.fail(error);
+        }),
+      ),
     );
 
     return {

@@ -393,42 +393,8 @@ const makeAutomationRepository = Effect.gen(function* () {
             AND definitions.target_thread_id IS NOT NULL
             AND EXISTS (
               SELECT 1
-              FROM automation_runs runs
-              INNER JOIN automation_definitions pending_definitions
-                ON pending_definitions.automation_id = runs.automation_id
-              WHERE runs.thread_id = definitions.target_thread_id
-                AND runs.status = 'succeeded'
-                AND pending_definitions.enabled = 1
-                AND pending_definitions.archived_at IS NULL
-                AND pending_definitions.mode = 'heartbeat'
-                AND json_extract(
-                  pending_definitions.completion_policy_json,
-                  '$.type'
-                ) = 'ai-evaluated'
-                AND runs.finished_at IS NOT NULL
-                AND (
-                  json_extract(
-                    runs.permission_snapshot_json,
-                    '$.completionPolicyVersion'
-                  ) = pending_definitions.completion_policy_version
-                  OR (
-                    json_type(
-                      runs.permission_snapshot_json,
-                      '$.completionPolicyVersion'
-                    ) IS NULL
-                    AND COALESCE(runs.started_at, runs.created_at) >
-                      COALESCE(
-                        pending_definitions.completion_policy_updated_at,
-                        pending_definitions.updated_at,
-                        pending_definitions.created_at,
-                        '1970-01-01T00:00:00.000Z'
-                      )
-                  )
-                )
-                AND (
-                  runs.result_json IS NULL
-                  OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
-                )
+              FROM automation_pending_completion_evaluations pending
+              WHERE pending.thread_id = definitions.target_thread_id
             )
           )
         ORDER BY definitions.next_run_at ASC, definitions.automation_id ASC
@@ -846,33 +812,9 @@ const makeAutomationRepository = Effect.gen(function* () {
           runs.created_at AS "createdAt",
           runs.updated_at AS "updatedAt"
         FROM automation_runs runs
-        INNER JOIN automation_definitions definitions
-          ON definitions.automation_id = runs.automation_id
-        WHERE runs.status = 'succeeded'
-          AND definitions.enabled = 1
-          AND definitions.archived_at IS NULL
-          AND definitions.mode = 'heartbeat'
-          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
-          AND runs.finished_at IS NOT NULL
-          AND (
-            json_extract(runs.permission_snapshot_json, '$.completionPolicyVersion') =
-              definitions.completion_policy_version
-            OR (
-              json_type(runs.permission_snapshot_json, '$.completionPolicyVersion') IS NULL
-              AND COALESCE(runs.started_at, runs.created_at) >
-                COALESCE(
-                  definitions.completion_policy_updated_at,
-                  definitions.updated_at,
-                  definitions.created_at,
-                  '1970-01-01T00:00:00.000Z'
-                )
-            )
-          )
-          AND (
-            runs.result_json IS NULL
-            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
-          )
-        ORDER BY runs.finished_at ASC, runs.run_id ASC
+        INNER JOIN automation_pending_completion_evaluations pending
+          ON pending.run_id = runs.run_id
+        ORDER BY pending.finished_at ASC, pending.run_id ASC
         LIMIT ${limit}
       `,
   });
@@ -907,34 +849,8 @@ const makeAutomationRepository = Effect.gen(function* () {
     execute: ({ threadId }) =>
       sql`
         SELECT COUNT(*) AS "count"
-        FROM automation_runs runs
-        INNER JOIN automation_definitions definitions
-          ON definitions.automation_id = runs.automation_id
-        WHERE runs.thread_id = ${threadId}
-          AND runs.status = 'succeeded'
-          AND definitions.enabled = 1
-          AND definitions.archived_at IS NULL
-          AND definitions.mode = 'heartbeat'
-          AND json_extract(definitions.completion_policy_json, '$.type') = 'ai-evaluated'
-          AND runs.finished_at IS NOT NULL
-          AND (
-            json_extract(runs.permission_snapshot_json, '$.completionPolicyVersion') =
-              definitions.completion_policy_version
-            OR (
-              json_type(runs.permission_snapshot_json, '$.completionPolicyVersion') IS NULL
-              AND COALESCE(runs.started_at, runs.created_at) >
-                COALESCE(
-                  definitions.completion_policy_updated_at,
-                  definitions.updated_at,
-                  definitions.created_at,
-                  '1970-01-01T00:00:00.000Z'
-                )
-            )
-          )
-          AND (
-            runs.result_json IS NULL
-            OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
-          )
+        FROM automation_pending_completion_evaluations pending
+        WHERE pending.thread_id = ${threadId}
       `,
   });
 
@@ -987,42 +903,8 @@ const makeAutomationRepository = Effect.gen(function* () {
             AND definitions.target_thread_id IS NOT NULL
             AND EXISTS (
               SELECT 1
-              FROM automation_runs runs
-              INNER JOIN automation_definitions pending_definitions
-                ON pending_definitions.automation_id = runs.automation_id
-              WHERE runs.thread_id = definitions.target_thread_id
-                AND runs.status = 'succeeded'
-                AND pending_definitions.enabled = 1
-                AND pending_definitions.archived_at IS NULL
-                AND pending_definitions.mode = 'heartbeat'
-                AND json_extract(
-                  pending_definitions.completion_policy_json,
-                  '$.type'
-                ) = 'ai-evaluated'
-                AND runs.finished_at IS NOT NULL
-                AND (
-                  json_extract(
-                    runs.permission_snapshot_json,
-                    '$.completionPolicyVersion'
-                  ) = pending_definitions.completion_policy_version
-                  OR (
-                    json_type(
-                      runs.permission_snapshot_json,
-                      '$.completionPolicyVersion'
-                    ) IS NULL
-                    AND COALESCE(runs.started_at, runs.created_at) >
-                      COALESCE(
-                        pending_definitions.completion_policy_updated_at,
-                        pending_definitions.updated_at,
-                        pending_definitions.created_at,
-                        '1970-01-01T00:00:00.000Z'
-                      )
-                  )
-                )
-                AND (
-                  runs.result_json IS NULL
-                  OR json_type(runs.result_json, '$.completionEvaluation') IS NULL
-                )
+              FROM automation_pending_completion_evaluations pending
+              WHERE pending.thread_id = definitions.target_thread_id
             )
           )
         ORDER BY definitions.next_run_at ASC, definitions.automation_id ASC

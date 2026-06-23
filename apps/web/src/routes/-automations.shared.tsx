@@ -357,7 +357,12 @@ export function automationStatusDotClass(
 
 const deletedAutomationIdsInCache = new Set<string>();
 
-function isNewerOrEqualTimestamp(candidate: string, existing: string): boolean {
+function isNewerTimestamp(candidate: string, existing: string): boolean {
+  return candidate.localeCompare(existing) > 0;
+}
+
+// Snapshots are reconciliation data, so equal timestamps keep the live cache winner.
+function isSameOrNewerTimestamp(candidate: string, existing: string): boolean {
   return candidate.localeCompare(existing) >= 0;
 }
 
@@ -378,12 +383,25 @@ function mergeDefinitionsByUpdatedAt(
     const previousDefinition = previousById.get(snapshotDefinition.id);
     definitions.push(
       previousDefinition &&
-        isNewerOrEqualTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
+        isSameOrNewerTimestamp(previousDefinition.updatedAt, snapshotDefinition.updatedAt)
         ? previousDefinition
         : snapshotDefinition,
     );
   }
   return definitions;
+}
+
+function upsertDefinitionByUpdatedAt(
+  definitions: readonly AutomationDefinition[],
+  incoming: AutomationDefinition,
+): AutomationDefinition[] {
+  const existing = definitions.find((definition) => definition.id === incoming.id);
+  if (existing && isNewerTimestamp(existing.updatedAt, incoming.updatedAt)) {
+    return [...definitions];
+  }
+  return existing
+    ? definitions.map((definition) => (definition.id === incoming.id ? incoming : definition))
+    : [incoming, ...definitions];
 }
 
 function mergeRunsByUpdatedAt(
@@ -402,12 +420,25 @@ function mergeRunsByUpdatedAt(
     }
     const previousRun = previousById.get(snapshotRun.id);
     runs.push(
-      previousRun && isNewerOrEqualTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
+      previousRun && isSameOrNewerTimestamp(previousRun.updatedAt, snapshotRun.updatedAt)
         ? previousRun
         : snapshotRun,
     );
   }
   return runs;
+}
+
+function upsertRunByUpdatedAt(
+  runs: readonly AutomationRun[],
+  incoming: AutomationRun,
+): AutomationRun[] {
+  const existing = runs.find((run) => run.id === incoming.id);
+  if (existing && isNewerTimestamp(existing.updatedAt, incoming.updatedAt)) {
+    return [...runs];
+  }
+  return existing
+    ? runs.map((run) => (run.id === incoming.id ? incoming : run))
+    : [incoming, ...runs];
 }
 
 export function applyAutomationEvent(
@@ -425,13 +456,11 @@ export function applyAutomationEvent(
       };
     }
     case "definition-upserted": {
+      if (deletedAutomationIdsInCache.has(event.definition.id)) {
+        return base;
+      }
       deletedAutomationIdsInCache.delete(event.definition.id);
-      const exists = base.definitions.some((definition) => definition.id === event.definition.id);
-      const definitions = exists
-        ? base.definitions.map((definition) =>
-            definition.id === event.definition.id ? event.definition : definition,
-          )
-        : [event.definition, ...base.definitions];
+      const definitions = upsertDefinitionByUpdatedAt(base.definitions, event.definition);
       return { definitions, runs: base.runs };
     }
     case "definition-deleted":
@@ -444,10 +473,7 @@ export function applyAutomationEvent(
       if (deletedAutomationIdsInCache.has(event.run.automationId)) {
         return base;
       }
-      const exists = base.runs.some((run) => run.id === event.run.id);
-      const runs = exists
-        ? base.runs.map((run) => (run.id === event.run.id ? event.run : run))
-        : [event.run, ...base.runs];
+      const runs = upsertRunByUpdatedAt(base.runs, event.run);
       return { definitions: base.definitions, runs };
     }
   }
