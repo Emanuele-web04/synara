@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldResetComposerDropzoneAfterUnhandledFileDrop,
   shouldHandleComposerDropzoneFiles,
   splitComposerDropzoneFiles,
 } from "./useComposerDropzone";
@@ -32,5 +33,11 @@ describe("useComposerDropzone file capability helpers", () => {
     const files = splitComposerDropzoneFiles([generic]);
 
     expect(shouldHandleComposerDropzoneFiles(files, "reject")).toBe(true);
+  });
+
+  it("resets drag state for unusable file drops", () => {
+    const files = splitComposerDropzoneFiles([]);
+
+    expect(shouldResetComposerDropzoneAfterUnhandledFileDrop(files, "accept")).toBe(true);
   });
 });

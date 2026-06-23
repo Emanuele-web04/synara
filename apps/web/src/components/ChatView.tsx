@@ -821,6 +821,32 @@ interface ChatViewProps {
   onCloseThreadPane?: () => void;
 }
 
+function normalizeRestoredQueuedPrompt(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function composerPromptStillMatchesRestoredQueuedDraft(
+  restoredPrompt: string,
+  nextPrompt: string,
+): boolean {
+  const restored = normalizeRestoredQueuedPrompt(restoredPrompt);
+  const next = normalizeRestoredQueuedPrompt(nextPrompt);
+  if (next.length === 0) {
+    return false;
+  }
+  if (restored.length === 0) {
+    return true;
+  }
+  if (next.includes(restored)) {
+    return true;
+  }
+  if (next.length >= Math.min(16, restored.length) && restored.includes(next)) {
+    return true;
+  }
+  const probe = restored.slice(0, Math.min(48, restored.length));
+  return probe.length >= 16 && next.includes(probe);
+}
+
 export default function ChatView({
   threadId,
   paneScopeId = "single",
@@ -1135,6 +1161,7 @@ export default function ChatView({
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
   const restoredQueuedSourceProposedPlanRef = useRef<{
     threadId: ThreadId;
+    restoredPrompt: string;
     sourceProposedPlan: QueuedComposerChatTurn["sourceProposedPlan"];
   } | null>(null);
   const autoDispatchingQueuedTurnRef = useRef(false);
@@ -6235,7 +6262,11 @@ export default function ChatView({
       }
       restoredQueuedSourceProposedPlanRef.current =
         queuedTurn.kind === "chat" && queuedTurn.sourceProposedPlan
-          ? { threadId: activeThread.id, sourceProposedPlan: queuedTurn.sourceProposedPlan }
+          ? {
+              threadId: activeThread.id,
+              restoredPrompt: nextPrompt,
+              sourceProposedPlan: queuedTurn.sourceProposedPlan,
+            }
           : null;
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
@@ -6385,30 +6416,32 @@ export default function ChatView({
         promptForSend = followUp.text;
         interactionModeForSend = followUp.interactionMode;
         trimmedPromptForSend = followUp.text.trim();
-      } else if (hasLiveTurn && dispatchMode === "queue") {
+      } else {
+        if (hasLiveTurn && dispatchMode === "queue") {
+          clearComposerInput(activeThread.id);
+          enqueueQueuedComposerTurn(activeThread.id, {
+            id: randomUUID(),
+            kind: "plan-follow-up",
+            createdAt: new Date().toISOString(),
+            previewText: followUp.text.trim(),
+            text: followUp.text,
+            interactionMode: followUp.interactionMode,
+            selectedProvider,
+            selectedModel,
+            selectedPromptEffort,
+            modelSelection: selectedModelSelection,
+            ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+            runtimeMode,
+          });
+          return true;
+        }
         clearComposerInput(activeThread.id);
-        enqueueQueuedComposerTurn(activeThread.id, {
-          id: randomUUID(),
-          kind: "plan-follow-up",
-          createdAt: new Date().toISOString(),
-          previewText: followUp.text.trim(),
+        return onSubmitPlanFollowUp({
           text: followUp.text,
           interactionMode: followUp.interactionMode,
-          selectedProvider,
-          selectedModel,
-          selectedPromptEffort,
-          modelSelection: selectedModelSelection,
-          ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
-          runtimeMode,
+          dispatchMode,
         });
-        return true;
       }
-      clearComposerInput(activeThread.id);
-      return onSubmitPlanFollowUp({
-        text: followUp.text,
-        interactionMode: followUp.interactionMode,
-        dispatchMode,
-      });
     }
     const hasNoStructuredComposerContext =
       composerImagesForSend.length === 0 &&
@@ -8293,6 +8326,7 @@ export default function ChatView({
 
   const setComposerPromptValue = useCallback(
     (nextPrompt: string) => {
+      restoredQueuedSourceProposedPlanRef.current = null;
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
       const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
@@ -8308,6 +8342,7 @@ export default function ChatView({
 
   const clearComposerSlashDraft = useCallback(() => {
     promptRef.current = "";
+    restoredQueuedSourceProposedPlanRef.current = null;
     clearComposerDraftContent(threadId);
     setComposerHighlightedItemId(null);
     setComposerCursor(0);
@@ -8569,6 +8604,16 @@ export default function ChatView({
           cursorAdjacentToMention,
         );
         return;
+      }
+      const restoredQueuedSource = restoredQueuedSourceProposedPlanRef.current;
+      if (
+        restoredQueuedSource?.threadId === threadId &&
+        !composerPromptStillMatchesRestoredQueuedDraft(
+          restoredQueuedSource.restoredPrompt,
+          nextPrompt,
+        )
+      ) {
+        restoredQueuedSourceProposedPlanRef.current = null;
       }
       promptRef.current = nextPrompt;
       setPrompt(nextPrompt);
