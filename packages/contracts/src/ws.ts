@@ -74,6 +74,7 @@ import {
   ReviewRemoveCommentInput,
   ReviewReplyThreadInput,
   ReviewResolveThreadInput,
+  ReviewGenerateWalkthroughInput,
   ReviewRunAgentInput,
   ReviewSubmitInput,
   ReviewUpdateCommentInput,
@@ -199,6 +200,7 @@ export const WS_METHODS = {
   reviewUpdateThreadComment: "review.updateThreadComment",
   reviewDeleteThreadComment: "review.deleteThreadComment",
   reviewRunAgent: "review.runAgent",
+  reviewGenerateWalkthrough: "review.generateWalkthrough",
   reviewCheckProjectAccess: "review.checkProjectAccess",
   reviewListProjects: "review.listProjects",
   reviewGetProjectBoard: "review.getProjectBoard",
@@ -373,6 +375,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.reviewUpdateThreadComment, ReviewUpdateThreadCommentInput),
   tagRequestBody(WS_METHODS.reviewDeleteThreadComment, ReviewDeleteThreadCommentInput),
   tagRequestBody(WS_METHODS.reviewRunAgent, ReviewRunAgentInput),
+  tagRequestBody(WS_METHODS.reviewGenerateWalkthrough, ReviewGenerateWalkthroughInput),
   tagRequestBody(WS_METHODS.reviewCheckProjectAccess, ReviewCheckProjectAccessInput),
   tagRequestBody(WS_METHODS.reviewListProjects, ReviewListProjectsInput),
   tagRequestBody(WS_METHODS.reviewGetProjectBoard, ReviewGetProjectBoardInput),
@@ -512,7 +515,10 @@ export const WsPushAutomationEvent = makeWsPushSchema(
   WS_CHANNELS.automationEvent,
   AutomationStreamEvent,
 );
-export const WsPushReviewUpdated = makeWsPushSchema(WS_CHANNELS.reviewUpdated, ReviewUpdatedPayload);
+export const WsPushReviewUpdated = makeWsPushSchema(
+  WS_CHANNELS.reviewUpdated,
+  ReviewUpdatedPayload,
+);
 export const WsPushGitActionProgress = makeWsPushSchema(
   WS_CHANNELS.gitActionProgress,
   GitActionProgressEvent,

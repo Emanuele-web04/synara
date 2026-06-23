@@ -68,7 +68,7 @@ function ReviewIndexRouteView() {
   const [showEntry, setShowEntry] = useState(false);
   const [branchSource, setBranchSource] = useState<ReviewSourceRef | null>(null);
   const showWalkthroughPrototype = search.prototypeWalkthrough === true;
-  const walkthroughVariant = search.variant ?? "rail";
+  const walkthroughVariant = search.variant ?? "stage";
   const hasSelectedProject =
     resolvedCwd !== null && projects.some((project) => project.cwd === resolvedCwd);
 

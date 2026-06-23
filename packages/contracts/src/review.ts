@@ -367,6 +367,116 @@ export const ReviewAgentResult = Schema.Struct({
 });
 export type ReviewAgentResult = typeof ReviewAgentResult.Type;
 
+// ── PR Walkthrough — guided, chapter-by-chapter PR reading ───────────
+export const ReviewWalkthroughChapterStatus = Schema.Literals(["done", "active", "queued"]);
+export type ReviewWalkthroughChapterStatus = typeof ReviewWalkthroughChapterStatus.Type;
+
+export const ReviewFocusAreaType = Schema.Literals([
+  "security",
+  "breaking-change",
+  "high-complexity",
+  "data-integrity",
+  "new-pattern",
+  "architecture",
+  "performance",
+  "testing-gap",
+]);
+export type ReviewFocusAreaType = typeof ReviewFocusAreaType.Type;
+
+export const ReviewFocusAreaSeverity = Schema.Literals(["critical", "high", "medium", "info"]);
+export type ReviewFocusAreaSeverity = typeof ReviewFocusAreaSeverity.Type;
+
+export const ReviewComplexityLevel = Schema.Literals(["low", "medium", "high", "very-high"]);
+export type ReviewComplexityLevel = typeof ReviewComplexityLevel.Type;
+
+// A chapter anchors to one or more hunks by (filePath, oldStart); oldStart 0 marks an added file.
+export const ReviewHunkRef = Schema.Struct({
+  filePath: TrimmedNonEmptyStringSchema,
+  oldStart: NonNegativeInt,
+});
+export type ReviewHunkRef = typeof ReviewHunkRef.Type;
+
+export const ReviewWalkthroughChapter = Schema.Struct({
+  id: TrimmedNonEmptyStringSchema,
+  title: TrimmedNonEmptyStringSchema,
+  summary: TrimmedNonEmptyStringSchema,
+  intent: TrimmedNonEmptyStringSchema,
+  anchor: TrimmedNonEmptyStringSchema,
+  risk: ReviewFindingSeverity,
+  hunkRefs: Schema.Array(ReviewHunkRef),
+  files: Schema.Array(TrimmedNonEmptyStringSchema),
+  question: Schema.optional(TrimmedNonEmptyStringSchema),
+  status: ReviewWalkthroughChapterStatus,
+  findings: Schema.optional(Schema.Array(ReviewFinding)),
+});
+export type ReviewWalkthroughChapter = typeof ReviewWalkthroughChapter.Type;
+
+export const ReviewWalkthroughKeyChange = Schema.Struct({
+  summary: TrimmedNonEmptyStringSchema,
+  description: TrimmedNonEmptyStringSchema,
+});
+export type ReviewWalkthroughKeyChange = typeof ReviewWalkthroughKeyChange.Type;
+
+export const ReviewWalkthroughFocusArea = Schema.Struct({
+  type: ReviewFocusAreaType,
+  severity: ReviewFocusAreaSeverity,
+  title: TrimmedNonEmptyStringSchema,
+  description: TrimmedNonEmptyStringSchema,
+  locations: Schema.Array(TrimmedNonEmptyStringSchema),
+});
+export type ReviewWalkthroughFocusArea = typeof ReviewWalkthroughFocusArea.Type;
+
+export const ReviewWalkthroughComplexity = Schema.Struct({
+  level: ReviewComplexityLevel,
+  reasoning: TrimmedNonEmptyStringSchema,
+});
+export type ReviewWalkthroughComplexity = typeof ReviewWalkthroughComplexity.Type;
+
+export const ReviewWalkthroughPrologue = Schema.Struct({
+  motivation: Schema.optional(TrimmedNonEmptyStringSchema),
+  outcome: Schema.optional(TrimmedNonEmptyStringSchema),
+  keyChanges: Schema.Array(ReviewWalkthroughKeyChange),
+  focusAreas: Schema.Array(ReviewWalkthroughFocusArea),
+  complexity: ReviewWalkthroughComplexity,
+});
+export type ReviewWalkthroughPrologue = typeof ReviewWalkthroughPrologue.Type;
+
+export const ReviewWalkthrough = Schema.Struct({
+  prologue: ReviewWalkthroughPrologue,
+  chapters: Schema.Array(ReviewWalkthroughChapter),
+  reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
+  patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
+  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  generatedAt: Schema.optional(Schema.String),
+});
+export type ReviewWalkthrough = typeof ReviewWalkthrough.Type;
+
+// Generation reuses the shared git text-generation model settings (mirrors ReviewRunAgentInput).
+export const ReviewGenerateWalkthroughInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  source: ReviewSourceRef,
+  codexHomePath: Schema.optional(TrimmedNonEmptyStringSchema),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  modelSelection: Schema.optional(ModelSelection),
+  expectedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
+  expectedPatchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
+  ),
+});
+export type ReviewGenerateWalkthroughInput = typeof ReviewGenerateWalkthroughInput.Type;
+
+export const ReviewWalkthroughResult = Schema.Struct({
+  walkthrough: ReviewWalkthrough,
+  reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
+  patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
+  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  headMoved: Schema.optional(Schema.Boolean),
+  patchChanged: Schema.optional(Schema.Boolean),
+  warnings: Schema.optional(Schema.Array(Schema.String)),
+});
+export type ReviewWalkthroughResult = typeof ReviewWalkthroughResult.Type;
+
 // ── GitHub Project (Projects v2) team kanban ─────────────────────────
 
 export const ReviewProjectSummary = Schema.Struct({
@@ -740,6 +850,13 @@ export const ReviewUpdatedPayload = Schema.Union([
     repositoryId: ReviewRepositoryId,
     reference: ReviewPullRequestReference,
     data: ReviewChangesetResult,
+    fetchedAt: NonNegativeInt,
+  }),
+  Schema.TaggedStruct("pullRequestWalkthrough", {
+    cwd: TrimmedNonEmptyStringSchema,
+    repositoryId: ReviewRepositoryId,
+    reference: ReviewPullRequestReference,
+    data: ReviewWalkthrough,
     fetchedAt: NonNegativeInt,
   }),
   // Signal-only: no lane data (lanes are limit-keyed); the client refetches its board-lane query.
