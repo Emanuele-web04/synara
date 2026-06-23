@@ -1765,6 +1765,14 @@ export default function ChatView({
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+  const hasResolvedOpenCodeModelDiscovery =
+    (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
+      openCodeDynamicModelsQuery.data?.source === "opencode") &&
+    (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const openCodeModelDiscoveryPending =
+    openCodeModelDiscoveryEnabled &&
+    !hasResolvedOpenCodeModelDiscovery &&
+    (openCodeDynamicModelsQuery.isLoading || openCodeDynamicModelsQuery.isFetching);
   const hasResolvedPiModelDiscovery =
     piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
     (piDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -1966,22 +1974,29 @@ export default function ChatView({
       ? cursorModelDiscoveryPending
       : selectedProvider === "kilo"
         ? kiloModelDiscoveryPending
-        : selectedProvider === "pi"
-          ? piModelDiscoveryPending
-          : selectedProviderModelsQuery !== undefined &&
-            (selectedProviderModelsQuery.isLoading ||
-              (selectedProviderModelsQuery.isFetching &&
-                selectedProviderModelsQuery.data === undefined));
+        : selectedProvider === "opencode"
+          ? openCodeModelDiscoveryPending
+          : selectedProvider === "pi"
+            ? piModelDiscoveryPending
+            : selectedProviderModelsQuery !== undefined &&
+              (selectedProviderModelsQuery.isLoading ||
+                (selectedProviderModelsQuery.isFetching &&
+                  selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
-    selectedProvider === "cursor" || selectedProvider === "kilo" || selectedProvider === "pi";
+    selectedProvider === "cursor" ||
+    selectedProvider === "kilo" ||
+    selectedProvider === "opencode" ||
+    selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
       : selectedProvider === "kilo"
         ? kiloModelDiscoveryPending
-        : selectedProvider === "pi"
-          ? piModelDiscoveryPending
-          : false;
+        : selectedProvider === "opencode"
+          ? openCodeModelDiscoveryPending
+          : selectedProvider === "pi"
+            ? piModelDiscoveryPending
+            : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -8010,6 +8025,7 @@ export default function ChatView({
         loadingModelProviders={{
           cursor: cursorModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
+          opencode: openCodeModelDiscoveryPending,
           pi: piModelDiscoveryPending,
         }}
         hiddenProviders={settings.hiddenProviders}
@@ -8050,6 +8066,7 @@ export default function ChatView({
       loadingModelProviders={{
         cursor: cursorModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
+        opencode: openCodeModelDiscoveryPending,
         pi: piModelDiscoveryPending,
       }}
       hiddenProviders={settings.hiddenProviders}
