@@ -508,6 +508,9 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "deterministic",
       mode: "heartbeat",
+      // The schedule parsed deterministically, but name/prompt are LLM-rewritten, so the
+      // draft must still go through human review even though needsConfirmation was false.
+      requiresReview: true,
       intent: {
         name: "Generated",
         prompt: "Generated prompt",
@@ -674,10 +677,42 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "generated",
       mode: "heartbeat",
+      // High-confidence (0.93), thread-scoped, no stop policy: must still require human
+      // review rather than silently auto-creating a recurring background automation.
+      requiresReview: true,
       intent: {
         name: "Controlla disponibilita",
         cadenceLabel: "Every 6h",
       },
+    });
+  });
+
+  it("always requires review for generated intents, even high-confidence ones with no stop policy", () => {
+    // Safety invariant: an LLM-interpreted ("generated") intent must never auto-create.
+    // Only deterministic, explicitly-parsed intents may skip the confirmation dialog
+    // (e.g. the bounded-fast-loop case covered above, which keeps requiresReview false).
+    const resolved = resolveChatAutomationIntent({
+      deterministicIntent: null,
+      generatedIntent: {
+        isAutomation: true,
+        confidence: 0.99,
+        language: "en",
+        name: "Check the dashboard",
+        taskPrompt: "check the dashboard",
+        schedule: { type: "interval", everySeconds: 21_600 },
+        mode: "heartbeat",
+        completionPolicy: { type: "none" },
+        missingFields: [],
+        needsConfirmation: false,
+        reason: null,
+      },
+      defaultMode: "heartbeat",
+      executionScope: "thread",
+    });
+
+    expect(resolved).toMatchObject({
+      source: "generated",
+      requiresReview: true,
     });
   });
 
