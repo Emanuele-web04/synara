@@ -386,6 +386,19 @@ function mergeDefinitionsByUpdatedAt(
   return definitions;
 }
 
+function upsertDefinitionByUpdatedAt(
+  definitions: readonly AutomationDefinition[],
+  incoming: AutomationDefinition,
+): AutomationDefinition[] {
+  const existing = definitions.find((definition) => definition.id === incoming.id);
+  if (existing && isNewerOrEqualTimestamp(existing.updatedAt, incoming.updatedAt)) {
+    return [...definitions];
+  }
+  return existing
+    ? definitions.map((definition) => (definition.id === incoming.id ? incoming : definition))
+    : [incoming, ...definitions];
+}
+
 function mergeRunsByUpdatedAt(
   snapshotRuns: readonly AutomationRun[],
   previousRuns: readonly AutomationRun[],
@@ -410,6 +423,19 @@ function mergeRunsByUpdatedAt(
   return runs;
 }
 
+function upsertRunByUpdatedAt(
+  runs: readonly AutomationRun[],
+  incoming: AutomationRun,
+): AutomationRun[] {
+  const existing = runs.find((run) => run.id === incoming.id);
+  if (existing && isNewerOrEqualTimestamp(existing.updatedAt, incoming.updatedAt)) {
+    return [...runs];
+  }
+  return existing
+    ? runs.map((run) => (run.id === incoming.id ? incoming : run))
+    : [incoming, ...runs];
+}
+
 export function applyAutomationEvent(
   prev: AutomationListResult | undefined,
   event: AutomationStreamEvent,
@@ -425,13 +451,11 @@ export function applyAutomationEvent(
       };
     }
     case "definition-upserted": {
+      if (deletedAutomationIdsInCache.has(event.definition.id)) {
+        return base;
+      }
       deletedAutomationIdsInCache.delete(event.definition.id);
-      const exists = base.definitions.some((definition) => definition.id === event.definition.id);
-      const definitions = exists
-        ? base.definitions.map((definition) =>
-            definition.id === event.definition.id ? event.definition : definition,
-          )
-        : [event.definition, ...base.definitions];
+      const definitions = upsertDefinitionByUpdatedAt(base.definitions, event.definition);
       return { definitions, runs: base.runs };
     }
     case "definition-deleted":
@@ -444,10 +468,7 @@ export function applyAutomationEvent(
       if (deletedAutomationIdsInCache.has(event.run.automationId)) {
         return base;
       }
-      const exists = base.runs.some((run) => run.id === event.run.id);
-      const runs = exists
-        ? base.runs.map((run) => (run.id === event.run.id ? event.run : run))
-        : [event.run, ...base.runs];
+      const runs = upsertRunByUpdatedAt(base.runs, event.run);
       return { definitions: base.definitions, runs };
     }
   }

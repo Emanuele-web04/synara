@@ -508,6 +508,51 @@ describe("automation shared route helpers", () => {
     );
   });
 
+  it("keeps a newer run update when an older live event arrives later", () => {
+    const staleRun = runWith({
+      id: runId("run-live-cache-race"),
+      result: { ...baseRun.result!, unread: true },
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerRun = runWith({
+      ...staleRun,
+      result: { ...baseRun.result!, unread: false },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [newerRun] },
+      { type: "run-upserted", run: staleRun },
+    );
+
+    expect(afterLateLiveEvent.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
+      false,
+    );
+  });
+
+  it("keeps a newer definition update when an older live event arrives later", () => {
+    const staleDefinition = definitionWith({
+      id: automationId("automation-live-cache-race"),
+      name: "Old name",
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerDefinition = definitionWith({
+      ...staleDefinition,
+      name: "New name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [newerDefinition], runs: [] },
+      { type: "definition-upserted", definition: staleDefinition },
+    );
+
+    expect(
+      afterLateLiveEvent.definitions.find((definition) => definition.id === newerDefinition.id)
+        ?.name,
+    ).toBe("New name");
+  });
+
   it("does not resurrect a deleted automation from a late snapshot", () => {
     const deletedDefinition = definitionWith({
       id: automationId("automation-deleted-cache-race"),
