@@ -227,6 +227,51 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
+  it("replaces work rows when automation card fields are added", () => {
+    const firstRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+          },
+        ],
+      },
+    ];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+            automation: {
+              id: "automation-7",
+              name: "Watch Synara PR 231",
+              cadenceLabel: "Every 5m",
+            },
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
   it("replaces assistant rows when inline tool metadata becomes richer", () => {
     const assistantMessage = {
       id: MessageId.makeUnsafe("assistant-1"),

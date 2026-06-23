@@ -70,6 +70,15 @@ export interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  automation?: WorkLogAutomation;
+}
+
+// Created-automation rows render as a dedicated card (icon + name + cadence + Open)
+// instead of a plain tool-call line, so carry just the fields that card needs.
+export interface WorkLogAutomation {
+  id: string;
+  name: string;
+  cadenceLabel: string;
 }
 
 export const WORK_LOG_PRESENTATION_VERSION = 6;
@@ -794,6 +803,12 @@ function shouldKeepActivityForWorkLog(
     return true;
   }
 
+  // Created-automation milestones are thread-scoped and carry no provider turn id;
+  // keep them so the transcript card survives once the thread has turn-stamped messages.
+  if (activity.kind === "automation.created") {
+    return true;
+  }
+
   // An empty set means the transcript has no turn-stamped assistant messages
   // (e.g. providers that never supply turn ids); fall back to the legacy
   // latest-turn filter instead of hiding the whole work log.
@@ -845,6 +860,21 @@ function normalizeWorkLogTextForComparison(value: string | undefined): string {
     .toLowerCase()
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function extractWorkLogAutomation(
+  payload: Record<string, unknown> | null,
+): WorkLogAutomation | null {
+  if (!payload) {
+    return null;
+  }
+  const id = typeof payload.automationId === "string" ? payload.automationId : null;
+  const name = typeof payload.automationName === "string" ? payload.automationName : null;
+  if (!id || !name) {
+    return null;
+  }
+  const cadenceLabel = typeof payload.cadenceLabel === "string" ? payload.cadenceLabel : "";
+  return { id, name, cadenceLabel };
 }
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
@@ -910,6 +940,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const subagentAction = extractCollabAction(payload, subagents);
   if (subagentAction) {
     entry.subagentAction = subagentAction;
+  }
+  if (activity.kind === "automation.created") {
+    const automation = extractWorkLogAutomation(payload);
+    if (automation) {
+      entry.automation = automation;
+    }
   }
   const readableTitle =
     extractCollabActionTitle(payload) ??

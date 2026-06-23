@@ -55,6 +55,7 @@ import {
   ZapIcon,
 } from "~/lib/icons";
 import { Button } from "../ui/button";
+import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { DiffStatLabel } from "./DiffStatLabel";
@@ -244,6 +245,8 @@ interface MessagesTimelineProps {
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  /** Open an automation's detail page from a "created automation" transcript card. */
+  onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
@@ -294,6 +297,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
+  onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onEditUserMessage,
@@ -741,6 +745,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     onImageExpand={onImageExpand}
                     {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
+                    {...(onOpenAutomation ? { onOpenAutomation } : {})}
                   />
                 ))}
               </div>
@@ -1109,6 +1114,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               onImageExpand={onImageExpand}
                               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                               {...(onOpenThread ? { onOpenThread } : {})}
+                              {...(onOpenAutomation ? { onOpenAutomation } : {})}
                             />
                           ) : (
                             <div
@@ -1158,6 +1164,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           onOpenTurnDiff={onOpenTurnDiff}
                           {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                           {...(onOpenThread ? { onOpenThread } : {})}
+                          {...(onOpenAutomation ? { onOpenAutomation } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
                       ))}
@@ -1192,6 +1199,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         onImageExpand={onImageExpand}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenThread ? { onOpenThread } : {})}
+                        {...(onOpenAutomation ? { onOpenAutomation } : {})}
                       />
                     ))}
                   </div>
@@ -2244,6 +2252,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenAutomation?: (automationId: string) => void;
 }) {
   const {
     workEntry,
@@ -2257,6 +2266,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onOpenTurnDiff,
     onOpenAgentActivity,
     onOpenThread,
+    onOpenAutomation,
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
@@ -2293,6 +2303,24 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
+
+  // A created-automation row renders as its own card instead of a tool-call line.
+  // Kept after the lone hook above so the early return never changes hook order.
+  const automation = workEntry.automation;
+  if (automation) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <AutomationCreatedCard
+          name={automation.name}
+          cadenceLabel={automation.cadenceLabel}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
+        />
+      </div>
+    );
+  }
+
   const readFilePath =
     opener !== null &&
     !canOpenAgentActivity &&

@@ -548,6 +548,13 @@ function workLogSubagentsEqual(
   });
 }
 
+// Automation card fields are visible row content, so stale equality would freeze the transcript UI.
+function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
+}
+
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
@@ -566,7 +573,8 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.toolCallId === b.toolCallId &&
     stringArraysEqual(a.changedFiles, b.changedFiles) &&
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
-    workLogSubagentsEqual(a.subagents, b.subagents)
+    workLogSubagentsEqual(a.subagents, b.subagents) &&
+    workLogAutomationsEqual(a.automation, b.automation)
   );
 }
 

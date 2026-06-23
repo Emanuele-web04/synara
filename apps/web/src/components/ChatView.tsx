@@ -8845,6 +8845,15 @@ export default function ChatView({
     },
     [isEditorRail, navigate],
   );
+  const onOpenAutomation = useCallback(
+    (automationId: string) => {
+      void navigate({
+        to: "/automations/$automationId",
+        params: { automationId },
+      });
+    },
+    [navigate],
+  );
   const activeProjectIdForNewChat = activeProject?.id ?? null;
   const onNewEditorChat = useCallback(() => {
     if (!activeProjectIdForNewChat) {
@@ -9899,6 +9908,7 @@ export default function ChatView({
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}
                     onOpenThread={onNavigateToThread}
+                    onOpenAutomation={onOpenAutomation}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
                     onEditUserMessage={onEditUserMessage}
