@@ -54,6 +54,16 @@ export function shouldResetComposerDropzoneAfterUnhandledFileDrop(
   return !shouldHandleComposerDropzoneFiles(files, genericFiles);
 }
 
+export function shouldPreventDefaultForUnhandledFileDrop(
+  files: ComposerDropzoneFileSplit,
+  genericFiles: ComposerDropzoneGenericFileMode,
+): boolean {
+  return (
+    shouldResetComposerDropzoneAfterUnhandledFileDrop(files, genericFiles) &&
+    genericFiles !== "fallthrough"
+  );
+}
+
 function isComposerHandledDragForMode(
   dataTransfer: DataTransfer,
   genericFiles: ComposerDropzoneGenericFileMode,
@@ -181,6 +191,9 @@ export function useComposerDropzone(input: {
       }
       const splitFiles = splitComposerDropzoneFiles(event.dataTransfer.files);
       if (shouldResetComposerDropzoneAfterUnhandledFileDrop(splitFiles, fileSupport.genericFiles)) {
+        if (shouldPreventDefaultForUnhandledFileDrop(splitFiles, fileSupport.genericFiles)) {
+          event.preventDefault();
+        }
         resetComposerDragState();
         return;
       }

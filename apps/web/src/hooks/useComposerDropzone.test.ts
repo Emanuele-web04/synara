@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  shouldPreventDefaultForUnhandledFileDrop,
   shouldResetComposerDropzoneAfterUnhandledFileDrop,
   shouldHandleComposerDropzoneFiles,
   splitComposerDropzoneFiles,
@@ -39,5 +40,13 @@ describe("useComposerDropzone file capability helpers", () => {
     const files = splitComposerDropzoneFiles([]);
 
     expect(shouldResetComposerDropzoneAfterUnhandledFileDrop(files, "accept")).toBe(true);
+  });
+
+  it("prevents default for claimed unusable file drops", () => {
+    const files = splitComposerDropzoneFiles([]);
+
+    expect(shouldPreventDefaultForUnhandledFileDrop(files, "accept")).toBe(true);
+    expect(shouldPreventDefaultForUnhandledFileDrop(files, "reject")).toBe(true);
+    expect(shouldPreventDefaultForUnhandledFileDrop(files, "fallthrough")).toBe(false);
   });
 });
