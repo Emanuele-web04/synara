@@ -105,6 +105,9 @@ function makeModel(input: Omit<TestModelInput, "providerID"> & Pick<Model, "prov
 
 function createMockOpenCodeRuntime(options?: {
   readonly inventory?: OpenCodeInventory;
+  readonly inventoryError?: OpenCodeRuntimeError;
+  readonly connectError?: OpenCodeRuntimeError;
+  readonly cliModelsError?: OpenCodeRuntimeError;
   readonly cliModels?: ReadonlyArray<OpenCodeCliModelDescriptor>;
   readonly events?: AsyncIterable<unknown>;
   readonly prompt?: (input: Record<string, unknown>) => Promise<unknown>;
@@ -202,8 +205,11 @@ function createMockOpenCodeRuntime(options?: {
   const runtime: OpenCodeRuntimeShape = {
     startOpenCodeServerProcess: () => unexpectedOperation("startOpenCodeServerProcess"),
     connectToOpenCodeServer: (input) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         connectCalls.push(input);
+        if (options?.connectError) {
+          return yield* options.connectError;
+        }
         return {
           url: input.serverUrl ?? "http://127.0.0.1:4099",
           exitCode: null,
@@ -213,16 +219,21 @@ function createMockOpenCodeRuntime(options?: {
     runOpenCodeCommand: () => unexpectedOperation("runOpenCodeCommand"),
     createOpenCodeSdkClient,
     loadOpenCodeInventory: () =>
-      Effect.succeed(
-        options?.inventory ?? {
-          providerList: { connected: [], all: [], default: {} },
-          agents: [],
-          consoleState: null,
-        },
-      ),
+      options?.inventoryError
+        ? Effect.fail(options.inventoryError)
+        : Effect.succeed(
+            options?.inventory ?? {
+              providerList: { connected: [], all: [], default: {} },
+              agents: [],
+              consoleState: null,
+            },
+          ),
     listOpenCodeCliModels: (input) =>
-      Effect.sync(() => {
+      Effect.gen(function* () {
         cliModelCalls.push(input);
+        if (options?.cliModelsError) {
+          return yield* options.cliModelsError;
+        }
         return options?.cliModels ?? [];
       }),
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
@@ -1096,6 +1107,59 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
     expect(runtime.cliModelCalls).toHaveLength(1);
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
+  });
+
+  it("lists OpenCode CLI models when server inventory discovery fails", async () => {
+    const runtime = createMockOpenCodeRuntime({
+      connectError: new OpenCodeRuntimeError({
+        operation: "connectToOpenCodeServer",
+        detail: "OpenCode server failed to start.",
+      }),
+      cliModels: [
+        {
+          slug: "opencode/nemotron-3-ultra-free",
+          providerID: "opencode",
+          modelID: "nemotron-3-ultra-free",
+          name: "Nemotron 3 Ultra Free",
+          variants: [],
+          supportedReasoningEfforts: [],
+        },
+      ],
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+        return yield* listModels({
+          provider: "opencode",
+          binaryPath: "opencode",
+          cwd: "/repo/server-startup-fails",
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(result).toMatchObject({
+      source: "opencode-cli",
+      cached: false,
+    });
+    expect(result?.models.map((model) => model.slug)).toEqual(["opencode/nemotron-3-ultra-free"]);
+    expect(runtime.connectCalls).toHaveLength(1);
+    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/server-startup-fails" });
+    expect(runtime.cliModelCalls).toHaveLength(1);
+    expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/server-startup-fails" });
   });
 
   it("lists OpenCode agents from the active discovery cwd", async () => {

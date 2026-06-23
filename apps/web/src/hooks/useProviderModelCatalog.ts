@@ -169,6 +169,15 @@ export function useProviderModelCatalog(input: {
     kiloModelDiscoveryEnabled &&
     !hasResolvedKiloModelDiscovery &&
     (kiloDynamicModelsQuery.isLoading || kiloDynamicModelsQuery.isFetching);
+  const openCodeModelDiscoveryEnabled = selectedProvider === "opencode" || discoveryEnabled;
+  const hasResolvedOpenCodeModelDiscovery =
+    (openCodeDynamicModelsQuery.data?.source === "opencode-cli" ||
+      openCodeDynamicModelsQuery.data?.source === "opencode") &&
+    (openCodeDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const openCodeModelDiscoveryPending =
+    openCodeModelDiscoveryEnabled &&
+    !hasResolvedOpenCodeModelDiscovery &&
+    (openCodeDynamicModelsQuery.isLoading || openCodeDynamicModelsQuery.isFetching);
   const piModelDiscoveryEnabled = selectedProvider === "pi" || discoveryEnabled;
   const hasResolvedPiModelDiscovery =
     piDynamicModelsQuery.data?.source?.startsWith("pi.sdk") === true &&
@@ -263,9 +272,15 @@ export function useProviderModelCatalog(input: {
     () => ({
       cursor: cursorModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
+      opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
     }),
-    [cursorModelDiscoveryPending, kiloModelDiscoveryPending, piModelDiscoveryPending],
+    [
+      cursorModelDiscoveryPending,
+      kiloModelDiscoveryPending,
+      openCodeModelDiscoveryPending,
+      piModelDiscoveryPending,
+    ],
   );
 
   const runtimeModelsByProvider = useMemo<
