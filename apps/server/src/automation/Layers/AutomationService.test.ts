@@ -1109,6 +1109,72 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("does not resume a waiting-for-approval run from an unrelated newer turn", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-approval-ownership");
+      const automationTurnId = TurnId.makeUnsafe("turn-approval-owned");
+      const unrelatedTurnId = TurnId.makeUnsafe("turn-approval-unrelated");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      assert.isNotNull(run.messageId);
+
+      // The run's own turn is registered and running.
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        pendingMessageId: run.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      // Pending approval on the run's own turn -> waiting-for-approval.
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("running", automationTurnId),
+          hasPendingApprovals: true,
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "waiting-for-approval",
+      );
+
+      // An unrelated newer turn becomes the thread's latest and approvals clear. The run
+      // no longer owns the latest turn, so it must NOT be resumed back to running.
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("running", unrelatedTurnId),
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "waiting-for-approval",
+      );
+    }),
+  );
+
   it.effect("leaves a still-running turn untouched on reconcile", () =>
     Effect.gen(function* () {
       resetHarness();

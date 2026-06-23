@@ -1564,7 +1564,11 @@ export const AutomationServiceLive = Layer.effect(
             run.status === "waiting-for-approval" &&
             run.threadId &&
             run.messageId &&
-            run.turnStartCommandId
+            run.turnStartCommandId &&
+            // Only resume *our* run: if a later, foreign turn now owns the thread's
+            // pending input, flipping back to running would resurrect a run that no
+            // longer owns the turn (mirrors the entry guard above).
+            runTurnOwnsPendingInput(run, shell, turn)
           ) {
             const running = yield* automationRepository
               .markRunStarted({
