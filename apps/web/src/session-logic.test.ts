@@ -934,6 +934,42 @@ describe("deriveWorkLogEntries", () => {
     expect(unfiltered.map((entry) => entry.id)).toEqual(["turn-1", "turn-2"]);
   });
 
+  it("keeps created-automation milestones and exposes their card fields despite a null turn id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1",
+        turnId: "turn-1",
+        summary: "First tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "automation-created",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "automation.created",
+        summary: "Created automation: Watch Synara PR 231 - Every 5m",
+        tone: "info",
+        payload: {
+          source: "chat-composer",
+          automationId: "automation-7",
+          automationName: "Watch Synara PR 231",
+          cadenceLabel: "Every 5m",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+
+    const automationEntry = entries.find((entry) => entry.id === "automation-created");
+    expect(automationEntry).toBeDefined();
+    expect(automationEntry?.automation).toEqual({
+      id: "automation-7",
+      name: "Watch Synara PR 231",
+      cadenceLabel: "Every 5m",
+    });
+  });
+
   it("omits checkpoint captured info entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -1277,7 +1277,9 @@ const makeAutomationRepository = Effect.gen(function* () {
   const markRunCompletionResult: AutomationRepositoryShape["markRunCompletionResult"] = (input) =>
     markRunCompletionResultRow(input).pipe(
       Effect.mapError(toPersistenceSqlError("AutomationRepository.markRunCompletionResult:update")),
-      Effect.flatMap(() => requireRunById(input.id, "AutomationRepository.markRunCompletionResult")),
+      Effect.flatMap(() =>
+        requireRunById(input.id, "AutomationRepository.markRunCompletionResult"),
+      ),
     );
 
   const markRunInterrupted: AutomationRepositoryShape["markRunInterrupted"] = (input) =>

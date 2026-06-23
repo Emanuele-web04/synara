@@ -987,9 +987,7 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* core.deleteBranch({ cwd: tmp, branch: "feature/delete-me", force: true });
 
         const branches = yield* core.listBranches({ cwd: tmp });
-        expect(branches.branches.some((branch) => branch.name === "feature/delete-me")).toBe(
-          false,
-        );
+        expect(branches.branches.some((branch) => branch.name === "feature/delete-me")).toBe(false);
       }),
     );
   });

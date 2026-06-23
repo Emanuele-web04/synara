@@ -57,9 +57,7 @@ layer("automation migration", (it) => {
         "idx_automation_runs_thread",
         "idx_automation_runs_completion_eval",
       ]);
-      assert.includeMembers(yield* viewNames(sql), [
-        "automation_pending_completion_evaluations",
-      ]);
+      assert.includeMembers(yield* viewNames(sql), ["automation_pending_completion_evaluations"]);
       const policyColumns = yield* sql<{ readonly name: string }>`
         SELECT name FROM pragma_table_info('automation_definitions')
         WHERE name IN (
