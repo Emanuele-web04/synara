@@ -12,6 +12,15 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useStore } from "../store";
 import type { ReviewSidechatContextPayload } from "../components/review/reviewSidechatContext";
 import { createSidebarDisplayThreadsSelector } from "../storeSelectors";
+
+const retainThreadDetailSubscriptionMock = vi.hoisted(() =>
+  vi.fn((_threadId: ThreadId) => vi.fn()),
+);
+
+vi.mock("../threadDetailSubscriptionRetention", () => ({
+  retainThreadDetailSubscription: retainThreadDetailSubscriptionMock,
+}));
+
 import {
   buildReviewChatTarget,
   clearReviewChatThreadCacheForTests,
@@ -27,7 +36,6 @@ type ReviewChatTestApi = {
   orchestration: {
     dispatchCommand: (command: ClientOrchestrationCommand) => Promise<{ sequence: number }>;
     getShellSnapshot: () => Promise<OrchestrationShellSnapshot>;
-    subscribeThread: (input: { threadId: ThreadId }) => Promise<void>;
   };
 };
 
@@ -46,9 +54,14 @@ type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "threa
 const initialStoreState = useStore.getState();
 const projectId = ProjectId.makeUnsafe("project-review-chat");
 
+const rejectUnrequestedSessionEnsure = (): void => {
+  throw new Error("session ensure was not requested");
+};
+
 afterEach(() => {
   useStore.setState(initialStoreState, true);
   clearReviewChatThreadCacheForTests();
+  retainThreadDetailSubscriptionMock.mockClear();
   vi.restoreAllMocks();
 });
 
@@ -316,7 +329,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           });
         }),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -346,6 +358,11 @@ describe("reviewChatThread", () => {
     ]);
     expect(events.indexOf("thread.turn.start")).toBeGreaterThan(events.indexOf("thread.create"));
     expect(events.indexOf("shell-snapshot")).toBeGreaterThan(events.indexOf("thread.create"));
+    expect(retainThreadDetailSubscriptionMock).toHaveBeenCalledWith(createCommand?.threadId);
+    for (const result of retainThreadDetailSubscriptionMock.mock.results) {
+      const release = result.value;
+      expect(release).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("routes the review risks suggestion through native base-branch review", async () => {
@@ -363,7 +380,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           });
         }),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -397,7 +413,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -439,7 +454,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -486,7 +500,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -533,7 +546,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -588,7 +600,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -619,9 +630,7 @@ describe("reviewChatThread", () => {
       }),
     );
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -646,7 +655,6 @@ describe("reviewChatThread", () => {
             reviewChatTarget: target,
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -699,7 +707,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -747,7 +754,6 @@ describe("reviewChatThread", () => {
             createCommand: commands.find(isThreadCreateCommand),
           }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -777,7 +783,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -818,7 +823,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const payload = makePayload();
@@ -862,7 +866,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const payload = makePayload();
@@ -914,7 +917,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeReadyReviewChatSnapshot({ commands })),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -968,7 +970,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1018,7 +1019,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1047,9 +1047,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1069,7 +1067,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1112,9 +1109,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1134,7 +1129,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1172,11 +1166,11 @@ describe("reviewChatThread", () => {
     });
     await expect(prewarm).resolves.toMatchObject({ status: "ready" });
 
-    const turnCommands = commands.filter(isThreadTurnStartCommand);
+    const turnCommand = commands.find(isThreadTurnStartCommand);
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
     expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
-    expect(turnCommands[0]?.threadId).toBe(selectedShellThreadId);
-    expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
+    expect(turnCommand?.threadId).toBe(selectedShellThreadId);
+    expect(turnCommand?.message.text).toContain("Summarize this PR");
     vi.useRealTimers();
   });
 
@@ -1186,9 +1180,7 @@ describe("reviewChatThread", () => {
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
-    let resolveSessionEnsure: () => void = () => {
-      throw new Error("session ensure was not requested");
-    };
+    let resolveSessionEnsure: () => void = rejectUnrequestedSessionEnsure;
     const api: ReviewChatTestApi = {
       orchestration: {
         dispatchCommand: vi.fn(async (command) => {
@@ -1208,7 +1200,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1262,7 +1253,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1327,7 +1317,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
 
@@ -1373,7 +1362,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const modelSelection = {
@@ -1418,7 +1406,6 @@ describe("reviewChatThread", () => {
         getShellSnapshot: vi.fn(async () =>
           makeShellSnapshot({ existingThreadId, reviewChatTarget: target }),
         ),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const modelSelection = {
@@ -1478,7 +1465,6 @@ describe("reviewChatThread", () => {
           return { sequence: commands.length };
         }),
         getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
-        subscribeThread: vi.fn(async () => undefined),
       },
     };
     const claudeModelSelection = {

@@ -11,6 +11,7 @@ import {
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ThreadId,
+  type OrchestrationThreadRuntime,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -64,6 +65,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import { RuntimeStatusChip } from "./RuntimeStatusChip";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -71,6 +73,17 @@ import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/En
  * for any layout that narrows the chat column (split chat, right dock, small window).
  */
 const HEADER_COMPACT_BREAKPOINT = 700;
+
+function renderProviderIcon(provider: ProviderKind | null, className: string) {
+  return (
+    <ProviderIcon
+      provider={provider}
+      tone="header"
+      className={className}
+      fallback={<FiGitBranch className={className} />}
+    />
+  );
+}
 
 interface ChatHeaderProps {
   activeThreadId: ThreadId;
@@ -98,6 +111,7 @@ interface ChatHeaderProps {
   handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
+  runtime: OrchestrationThreadRuntime | null | undefined;
   gitCwd: string | null;
   diffTotals: RepoDiffTotals;
   showGitActions?: boolean;
@@ -499,6 +513,7 @@ export const ChatHeader = memo(function ChatHeader({
   handoffActionTargetProviders,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
+  runtime,
   gitCwd,
   diffTotals,
   showGitActions = true,
@@ -558,17 +573,6 @@ export const ChatHeader = memo(function ChatHeader({
     observer.observe(el);
     return () => observer.disconnect();
   }, [isSplitPane]);
-
-  const renderProviderIcon = (provider: ProviderKind | null, className: string) => {
-    return (
-      <ProviderIcon
-        provider={provider}
-        tone="header"
-        className={className}
-        fallback={<FiGitBranch className={className} />}
-      />
-    );
-  };
 
   // The right-side diff toggle (the "open the diff on the right" affordance). It stays in
   // the header in both layouts — beside the Environment button when that is enabled, and
@@ -740,6 +744,7 @@ export const ChatHeader = memo(function ChatHeader({
                   <TooltipPopup side="bottom">{handoffBadgeLabel}</TooltipPopup>
                 </Tooltip>
               ) : null}
+              <RuntimeStatusChip runtime={runtime} threadId={activeThreadId} />
             </div>
           </div>
         </div>
@@ -838,7 +843,7 @@ export const ChatHeader = memo(function ChatHeader({
             controls for disposable threads (which never surface the panel). */}
         {environment && !isDisposableThread ? (
           <>
-            <EnvironmentToggle environment={environment} />
+            <EnvironmentToggle environment={environment} runtime={runtime} />
             {diffToggleControl}
           </>
         ) : (

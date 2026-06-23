@@ -30,6 +30,7 @@ import type {
   RuntimeMode,
   ThreadEnvironmentMode,
 } from "@t3tools/contracts";
+import type { RuntimeHeaderPresentation } from "./lib/runtimePresentation";
 
 export type SessionPhase = "disconnected" | "connecting" | "ready" | "running";
 export const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
@@ -289,6 +290,7 @@ export interface SidebarThreadSummary {
   handoff?: ThreadHandoff | null;
   lastKnownPr?: OrchestrationThreadPullRequest | null;
   reviewChatTarget?: OrchestrationReviewChatTarget | null;
+  runtimePresentation?: RuntimeHeaderPresentation | null;
 }
 
 export interface ThreadSession {

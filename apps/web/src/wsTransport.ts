@@ -75,6 +75,14 @@ function makeProtocolLayer(url: string) {
   );
 }
 
+async function disposeRuntimeSession(
+  runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>,
+  clientScope: Scope.Closeable,
+): Promise<void> {
+  await runtime.runPromise(Scope.close(clientScope, Exit.void)).catch(() => undefined);
+  await runtime.dispose().catch(() => undefined);
+}
+
 function causeToError(cause: Cause.Cause<unknown>): Error {
   const error = Cause.squash(cause);
   return error instanceof Error ? error : new Error(String(error));
@@ -163,7 +171,11 @@ export class WsTransport {
     }
     if (method === ORCHESTRATION_WS_METHODS.subscribeThread) {
       const threadId = (params as { threadId: string }).threadId;
+      const streamKey = `orchestration.thread:${threadId}`;
       this.threadSubscriptions.set(threadId, params);
+      if (this.streamCleanups.has(streamKey)) {
+        return undefined as T;
+      }
       this.startThreadStream(client, threadId, params as never);
       return undefined as T;
     }
@@ -241,7 +253,7 @@ export class WsTransport {
     return this.state;
   }
 
-  dispose() {
+  async dispose(): Promise<void> {
     this.disposed = true;
     this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
@@ -252,12 +264,8 @@ export class WsTransport {
     void this.reconnectPromise?.catch(() => undefined);
     const runtime = this.runtime;
     const clientScope = this.clientScope;
-    void runtime
-      .runPromise(Scope.close(clientScope, Exit.void))
-      .catch(() => undefined)
-      .finally(() => {
-        runtime.dispose();
-      });
+    await Promise.resolve();
+    await disposeRuntimeSession(runtime, clientScope);
   }
 
   private createSession() {
@@ -301,12 +309,7 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    void oldRuntime
-      .runPromise(Scope.close(oldClientScope, Exit.void))
-      .catch(() => undefined)
-      .finally(() => {
-        oldRuntime.dispose();
-      });
+    void disposeRuntimeSession(oldRuntime, oldClientScope);
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -372,6 +375,9 @@ export class WsTransport {
   private startChannelStream(channel: WsPushChannel): void {
     void this.getClient()
       .then((client) => {
+        if (this.disposed || !this.listeners.has(channel)) {
+          return;
+        }
         const restartChannel = () => {
           if (this.listeners.has(channel)) {
             this.startChannelStream(channel);
@@ -472,7 +478,11 @@ export class WsTransport {
     const restartLifecycle = () => {
       if (!this.shouldKeepLifecycleStream()) return;
       void this.getClient()
-        .then((nextClient) => this.startLifecycleStream(nextClient))
+        .then((nextClient) => {
+          if (this.shouldKeepLifecycleStream()) {
+            this.startLifecycleStream(nextClient);
+          }
+        })
         .catch((error) => console.warn("WebSocket RPC lifecycle stream failed to restart", error));
     };
     this.startStream(
@@ -491,8 +501,15 @@ export class WsTransport {
 
   private startShellStream(client: RpcClientInstance): void {
     const restartShell = () => {
+      if (!this.shellSubscribed) {
+        return;
+      }
       void this.getClient()
-        .then((nextClient) => this.startShellStream(nextClient))
+        .then((nextClient) => {
+          if (this.shellSubscribed) {
+            this.startShellStream(nextClient);
+          }
+        })
         .catch((error) => console.warn("WebSocket RPC shell stream failed to restart", error));
     };
     this.startStream(
@@ -506,11 +523,20 @@ export class WsTransport {
 
   private startThreadStream(client: RpcClientInstance, threadId: string, input: unknown): void {
     const key = `orchestration.thread:${threadId}`;
-    this.stopStream(key);
+    if (this.streamCleanups.has(key)) {
+      return;
+    }
     this.stoppingStreams.delete(key);
     const restartThread = () => {
+      if (!this.threadSubscriptions.has(threadId)) {
+        return;
+      }
       void this.getClient()
-        .then((nextClient) => this.startThreadStream(nextClient, threadId, input))
+        .then((nextClient) => {
+          if (this.threadSubscriptions.has(threadId)) {
+            this.startThreadStream(nextClient, threadId, input);
+          }
+        })
         .catch((error) => console.warn("WebSocket RPC thread stream failed to restart", error));
     };
     this.startStream(

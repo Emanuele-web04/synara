@@ -64,8 +64,8 @@ import { dockTerminalThreadId } from "../lib/dockTerminalScope";
 import { TaskCompletionNotifications } from "../notifications/taskCompletion";
 import { useWorkspaceStore, workspaceThreadId } from "../workspaceStore";
 import {
-  subscribeRetainedThreadDetailIdChanges,
-  useRetainedThreadDetailIds,
+  subscribeLiveRetainedThreadDetailIdChanges,
+  useLiveRetainedThreadDetailIds,
 } from "../threadDetailSubscriptionRetention";
 import { getThreadFromState } from "../threadDerivation";
 import { useAppDensity } from "../hooks/useAppDensity";
@@ -97,6 +97,7 @@ import {
   shouldInvalidateGitQueriesForEvent,
   shouldInvalidateProviderQueriesForEvent,
 } from "./-rootEventInvalidation";
+import { resolveThreadSubscriptionTargets } from "./-eventRouterSubscriptions";
 
 const SHELL_SNAPSHOT_BOOTSTRAP_FALLBACK_DELAY_MS = 1_500;
 const THREAD_DETAIL_CATCHUP_INTERVAL_MS = 1_500;
@@ -779,30 +780,25 @@ function EventRouter() {
     }
     return routeThreadId ? [routeThreadId] : [];
   }, [activeSplitView, routeThreadId]);
-  const retainedThreadIds = useRetainedThreadDetailIds();
+  const retainedThreadIds = useLiveRetainedThreadDetailIds();
   const serverThreadIds = useMemo(
     () => new Set(serverThreads.map((thread) => thread.id)),
     [serverThreads],
   );
-  const subscribedThreadIds = useMemo(() => {
-    const nextThreadIds = new Set<ThreadId>();
-    for (const threadId of visibleThreadIds) {
-      // Visible draft routes need a detail subscription before their shell row exists.
-      // Otherwise fast provider responses can complete before the promoted thread is
-      // known to the shell list, leaving the chat detail stuck on its optimistic state.
-      nextThreadIds.add(threadId);
-    }
-    for (const threadId of retainedThreadIds) {
-      if (serverThreadIds.has(threadId)) {
-        nextThreadIds.add(threadId);
-      }
-    }
-    return [...nextThreadIds];
-  }, [retainedThreadIds, serverThreadIds, visibleThreadIds]);
+  const subscribedThreadIds = useMemo(
+    () =>
+      resolveThreadSubscriptionTargets({
+        visibleThreadIds,
+        retainedThreadIds,
+        serverThreadIds,
+      }),
+    [retainedThreadIds, serverThreadIds, visibleThreadIds],
+  );
   const workspacePagesRef = useRef(workspacePages);
   const pathnameRef = useRef(pathname);
   const handledBootstrapThreadIdRef = useRef<string | null>(null);
   const routeVisibleThreadIdsRef = useRef(visibleThreadIds);
+  const serverThreadIdsRef = useRef(serverThreadIds);
   const visibleThreadIdsRef = useRef(subscribedThreadIds);
   const reconcileThreadSubscriptionsRef = useRef<
     ((threadIds: readonly ThreadId[]) => Promise<void>) | null
@@ -811,6 +807,7 @@ function EventRouter() {
   workspacePagesRef.current = workspacePages;
   pathnameRef.current = pathname;
   routeVisibleThreadIdsRef.current = visibleThreadIds;
+  serverThreadIdsRef.current = serverThreadIds;
   visibleThreadIdsRef.current = subscribedThreadIds;
 
   useEffect(() => {
@@ -840,15 +837,30 @@ function EventRouter() {
     };
 
     // Draft routes can subscribe before the server thread exists. Once the shell
-    // row appears, explicitly request the first thread snapshot so buffered detail
-    // events can flush instead of waiting forever.
+    // row appears, explicitly pull the first thread snapshot so buffered detail
+    // events can flush without tearing down the live stream.
     const requestThreadSnapshot = async (threadId: ThreadId) => {
-      if (threadSnapshotSequenceById.has(threadId) || threadSnapshotRequestInFlight.has(threadId)) {
+      if (
+        disposed ||
+        threadSnapshotSequenceById.has(threadId) ||
+        threadSnapshotRequestInFlight.has(threadId)
+      ) {
         return;
       }
       threadSnapshotRequestInFlight.add(threadId);
       try {
-        await api.orchestration.subscribeThread({ threadId });
+        const snapshot = await api.orchestration.getSnapshot();
+        if (disposed || !subscribedThreadIds.has(threadId)) {
+          return;
+        }
+        const thread = snapshot.threads.find((candidate) => candidate.id === threadId);
+        if (!thread || thread.deletedAt !== null) {
+          return;
+        }
+        threadSnapshotSequenceById.set(threadId, snapshot.snapshotSequence);
+        syncServerThreadDetailHotPath(thread);
+        reconcilePromotedDraftFromThreadDetail(thread);
+        flushThreadBuffer(threadId, snapshot.snapshotSequence);
       } catch {
         // Keep the pending buffer intact and retry on the next shell/detail update.
       } finally {
@@ -918,13 +930,15 @@ function EventRouter() {
       return reconcileThreadSubscriptionsChain;
     };
 
-    const unsubscribeRetainedThreadIdChanges = subscribeRetainedThreadDetailIdChanges(
+    const unsubscribeRetainedThreadIdChanges = subscribeLiveRetainedThreadDetailIdChanges(
       (nextRetainedThreadIds) => {
-        const nextThreadIds = new Set(routeVisibleThreadIdsRef.current);
-        for (const threadId of nextRetainedThreadIds) {
-          nextThreadIds.add(threadId);
-        }
-        void enqueueThreadSubscriptionReconcile([...nextThreadIds]);
+        void enqueueThreadSubscriptionReconcile(
+          resolveThreadSubscriptionTargets({
+            visibleThreadIds: routeVisibleThreadIdsRef.current,
+            retainedThreadIds: nextRetainedThreadIds,
+            serverThreadIds: serverThreadIdsRef.current,
+          }),
+        );
       },
     );
 

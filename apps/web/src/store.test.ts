@@ -6,6 +6,7 @@ import {
   ApprovalRequestId,
   CheckpointRef,
   EventId,
+  ExecutionInstanceId,
   MessageId,
   OrchestrationProposedPlanId,
   ProjectId,
@@ -300,6 +301,47 @@ describe("store pure functions", () => {
     );
 
     expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+  });
+
+  it("projects remote runtime status into sidebar summaries during read model sync", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const runtime = {
+      threadId,
+      targetKind: "remote-runtime",
+      provider: "daytona",
+      role: "agent",
+      status: "running",
+      instance: {
+        id: ExecutionInstanceId.makeUnsafe("runtime-instance-1"),
+        provider: "daytona",
+        status: "running",
+        rootPath: "/workspace/project",
+        failureReason: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+      },
+      processes: [],
+      routes: [],
+      snapshots: [],
+      leases: [],
+      lastActivityAt: "2026-02-27T00:05:00.000Z",
+      updatedAt: "2026-02-27T00:05:00.000Z",
+    } satisfies NonNullable<OrchestrationReadModel["threads"][number]["runtime"]>;
+
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          runtime,
+        }),
+      ),
+    );
+
+    expect(next.sidebarThreadSummaryById[threadId]?.runtimePresentation).toMatchObject({
+      show: true,
+      text: "Remote sandbox: Running on Daytona",
+      tone: "active",
+    });
   });
 
   it("preserves message mention references from read-model snapshots", () => {
