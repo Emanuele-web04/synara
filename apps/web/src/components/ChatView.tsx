@@ -1133,6 +1133,8 @@ export default function ChatView({
   const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
+  const restoredQueuedSourceProposedPlanRef =
+    useRef<QueuedComposerChatTurn["sourceProposedPlan"]>(undefined);
   const autoDispatchingQueuedTurnRef = useRef(false);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
@@ -1418,23 +1420,28 @@ export default function ChatView({
     isFocusedPane && latestTurnLive && !diffEnvironmentPending && !resolvedDiffOpen
       ? GIT_WORKING_TREE_DIFF_LIVE_REFETCH_INTERVAL_MS
       : false;
-  const activeThreadAssociatedWorktree = useMemo(
-    () =>
-      deriveAssociatedWorktreeMetadata({
-        branch: activeThread?.branch ?? null,
-        worktreePath: activeThread?.worktreePath ?? null,
-        associatedWorktreePath: activeThread?.associatedWorktreePath ?? null,
-        associatedWorktreeBranch: activeThread?.associatedWorktreeBranch ?? null,
-        associatedWorktreeRef: activeThread?.associatedWorktreeRef ?? null,
-      }),
-    [
-      activeThread?.associatedWorktreeBranch,
-      activeThread?.associatedWorktreePath,
-      activeThread?.associatedWorktreeRef,
-      activeThread?.branch,
-      activeThread?.worktreePath,
-    ],
-  );
+  const activeThreadAssociatedWorktree = useMemo(() => {
+    const associatedWorktreeInput = {
+      branch: activeThread?.branch ?? null,
+      worktreePath: activeThread?.worktreePath ?? null,
+      ...(activeThread?.associatedWorktreePath !== undefined
+        ? { associatedWorktreePath: activeThread.associatedWorktreePath }
+        : {}),
+      ...(activeThread?.associatedWorktreeBranch !== undefined
+        ? { associatedWorktreeBranch: activeThread.associatedWorktreeBranch }
+        : {}),
+      ...(activeThread?.associatedWorktreeRef !== undefined
+        ? { associatedWorktreeRef: activeThread.associatedWorktreeRef }
+        : {}),
+    };
+    return deriveAssociatedWorktreeMetadata(associatedWorktreeInput);
+  }, [
+    activeThread?.associatedWorktreeBranch,
+    activeThread?.associatedWorktreePath,
+    activeThread?.associatedWorktreeRef,
+    activeThread?.branch,
+    activeThread?.worktreePath,
+  ]);
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -5782,6 +5789,7 @@ export default function ChatView({
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
       promptRef.current = "";
+      restoredQueuedSourceProposedPlanRef.current = undefined;
       clearComposerDraftContent(threadId);
       updateSelectedComposerSkills([]);
       updateSelectedComposerMentions([]);
@@ -6223,6 +6231,8 @@ export default function ChatView({
         updateSelectedComposerSkills([]);
         updateSelectedComposerMentions([]);
       }
+      restoredQueuedSourceProposedPlanRef.current =
+        queuedTurn.kind === "chat" ? queuedTurn.sourceProposedPlan : undefined;
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
@@ -6414,6 +6424,7 @@ export default function ChatView({
     }
     const sourceProposedPlanForSend =
       queuedChatTurn?.sourceProposedPlan ??
+      restoredQueuedSourceProposedPlanRef.current ??
       (isLivePlanFollowUpSubmission && activeProposedPlan && interactionModeForSend === "default"
         ? buildSourceProposedPlanReference({
             threadId: activeThread.id,
@@ -6843,6 +6854,9 @@ export default function ChatView({
     if (queuedChatTurn === null) {
       promptRef.current = "";
       clearComposerDraftContent(threadIdForSend, { preservePreviewUrls: true });
+      if (isLivePlanFollowUpSubmission) {
+        setComposerDraftInteractionMode(threadIdForSend, interactionModeForSend);
+      }
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
@@ -7016,6 +7030,9 @@ export default function ChatView({
       if (sourceProposedPlanForSend) {
         planSidebarDismissedForTurnRef.current = null;
         setPlanSidebarOpen(true);
+      }
+      if (queuedChatTurn === null) {
+        restoredQueuedSourceProposedPlanRef.current = undefined;
       }
     })().catch(async (err: unknown) => {
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
