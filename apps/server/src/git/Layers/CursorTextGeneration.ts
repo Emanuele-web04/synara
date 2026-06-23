@@ -23,6 +23,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
+  buildReviewFindingsPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
@@ -291,6 +292,37 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = Effect.fn(
+    "CursorTextGeneration.generateReviewFindings",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateReviewFindings",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson } = buildReviewFindingsPrompt({
+      patch: input.patch,
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+    const generated = yield* runCursorJson({
+      operation: "generateReviewFindings",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+
+    return {
+      summary: generated.summary.trim(),
+      findings: generated.findings,
+    };
+  });
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
     "CursorTextGeneration.generateBranchName",
   )(function* (input) {
@@ -433,6 +465,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,

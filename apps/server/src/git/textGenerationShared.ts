@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  ReviewFinding,
   ServerGenerateAutomationIntentResult,
   type AutomationMode,
   type ChatAttachment,
@@ -332,6 +333,37 @@ export function buildDiffSummaryPrompt(input: { readonly patch: string }) {
   };
 }
 
+export function buildReviewFindingsPrompt(input: {
+  readonly patch: string;
+  readonly prTitle?: string | undefined;
+  readonly prBody?: string | undefined;
+}) {
+  return {
+    prompt: [
+      "You are a senior code reviewer. Review the diff and return findings.",
+      "Return a JSON object with keys: summary, findings.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "Rules:",
+      "- summary is concise markdown describing the change and its overall risk",
+      "- findings is an array; each item has path, line, side, severity, title, message",
+      "- side is 'LEFT' (removed/old) or 'RIGHT' (added/new); prefer RIGHT for added lines",
+      "- line must be a real line number present in the diff for that path and side",
+      "- severity is one of: blocker, major, minor, nit",
+      "- only report issues directly supported by the diff; do not invent context",
+      "- return an empty findings array when nothing is worth flagging",
+      ...(input.prTitle ? ["", `PR title: ${input.prTitle}`] : []),
+      ...(input.prBody ? ["", "PR body:", limitSection(input.prBody, 8_000)] : []),
+      "",
+      "Diff patch:",
+      limitSection(input.patch, 50_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      summary: Schema.String,
+      findings: Schema.Array(ReviewFinding),
+    }),
+  };
+}
+
 export function buildThreadRecapPrompt(input: {
   readonly previousRecap?: string;
   readonly newMaterial: string;
@@ -418,7 +450,7 @@ export function buildAutomationIntentPrompt(input: {
       "- heartbeat means continue/report in the current thread on each run.",
       "- standalone means create independent scheduled runs.",
       "- Use the default unless the user clearly asks for the other behavior.",
-      "- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {\"type\":\"none\"}.",
+      '- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {"type":"none"}.',
       "",
       "User message:",
       limitSection(input.message, 16_000),
@@ -435,7 +467,7 @@ export function buildAutomationCompletionEvaluationPrompt(input: {
   readonly stopWhen: string;
   readonly runUserMessage: string;
   readonly runAssistantText: string;
-  readonly threadContext?: string;
+  readonly threadContext?: string | undefined;
 }) {
   return {
     prompt: [

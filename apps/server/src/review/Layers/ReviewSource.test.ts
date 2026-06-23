@@ -392,6 +392,9 @@ function makeLayer(options: {
     generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
     generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
     generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
+    generateAutomationIntent: () => unexpectedEffect("TextGeneration.generateAutomationIntent"),
+    evaluateAutomationCompletion: () =>
+      unexpectedEffect("TextGeneration.evaluateAutomationCompletion"),
   };
 
   const reviewSync: ReviewSyncShape = {
@@ -658,6 +661,9 @@ function makeSurfaceLayer(
     generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
     generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
     generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
+    generateAutomationIntent: () => unexpectedEffect("TextGeneration.generateAutomationIntent"),
+    evaluateAutomationCompletion: () =>
+      unexpectedEffect("TextGeneration.evaluateAutomationCompletion"),
   };
 
   const depsLayer = Layer.mergeAll(

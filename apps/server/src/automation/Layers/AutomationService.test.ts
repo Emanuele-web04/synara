@@ -242,7 +242,7 @@ function completeHeartbeatRun(input: {
         messageId,
         userText: input.userText ?? "Check whether the PR is ready.",
         assistantText: input.assistantText === undefined ? "The PR is ready." : input.assistantText,
-        extraMessages: input.extraMessages,
+        ...(input.extraMessages === undefined ? {} : { extraMessages: input.extraMessages }),
       }),
     );
   });
@@ -1250,7 +1250,9 @@ layer("AutomationService", (it) => {
       });
 
       const reconciled = yield* Effect.race(
-        service.reconcileThread({ threadId: targetThreadId }).pipe(Effect.as("reconciled" as const)),
+        service
+          .reconcileThread({ threadId: targetThreadId })
+          .pipe(Effect.as("reconciled" as const)),
         realDelay(50).pipe(Effect.as("timeout" as const)),
       );
       assert.strictEqual(reconciled, "reconciled");
@@ -1375,7 +1377,10 @@ layer("AutomationService", (it) => {
           listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
             ?.stopMatched === true,
       });
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, false);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        false,
+      );
     }),
   );
 
@@ -1420,8 +1425,7 @@ layer("AutomationService", (it) => {
         service,
         description: "stale-policy stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason ===
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
           "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
@@ -1487,8 +1491,7 @@ layer("AutomationService", (it) => {
         service,
         description: "stale-definition stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason ===
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
           "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
@@ -1597,8 +1600,8 @@ layer("AutomationService", (it) => {
         service,
         description: "missing-thread stop evaluation",
         predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.reason === "Stop check skipped because the target thread could not be found.",
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check skipped because the target thread could not be found.",
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
@@ -1691,10 +1694,12 @@ layer("AutomationService", (it) => {
           listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
             ?.stopMatched === false,
       });
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
       assert.strictEqual(
-        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-          ?.stopMatched,
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.stopMatched,
         false,
       );
       assert.strictEqual(
@@ -1803,14 +1808,14 @@ layer("AutomationService", (it) => {
         },
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
       assert.strictEqual(updatedRun?.result?.unread, false);
       assert.strictEqual(updatedRun?.result?.archivedAt, archived.run.result?.archivedAt);
-      assert.isAtLeast(
-        Date.parse(updatedRun?.updatedAt ?? ""),
-        Date.parse(archived.run.updatedAt),
-      );
+      assert.isAtLeast(Date.parse(updatedRun?.updatedAt ?? ""), Date.parse(archived.run.updatedAt));
     }),
   );
 
@@ -1851,7 +1856,10 @@ layer("AutomationService", (it) => {
             ?.confidence === 0.52,
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
       assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0.52);
       assert.strictEqual(
@@ -1861,44 +1869,52 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("keeps a heartbeat automation active and records history when stop evaluation fails", () =>
-    Effect.gen(function* () {
-      resetHarness();
-      const service = yield* AutomationService;
-      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
-      const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
-      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
-      completionEvaluationFailure = new Error("provider unavailable");
+  it.effect(
+    "keeps a heartbeat automation active and records history when stop evaluation fails",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        completionEvaluationFailure = new Error("provider unavailable");
 
-      const created = yield* service.create({
-        ...createInput("local"),
-        mode: "heartbeat",
-        targetThreadId,
-        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
-      });
-      const { run } = yield* service.runNow({ automationId: created.id });
-      yield* completeHeartbeatRun({
-        run,
-        threadId: targetThreadId,
-        turnId: automationTurnId,
-      });
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
 
-      yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* service.reconcileThread({ threadId: targetThreadId });
 
-      const listed = yield* waitForAutomationList({
-        service,
-        description: "failed stop evaluation",
-        predicate: (listed) =>
-          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
-            ?.confidence === 0,
-      });
-      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
-      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
-      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
-      assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
-      assert.include(updatedRun?.result?.completionEvaluation?.reason ?? "", "Stop check failed:");
-    }),
+        const listed = yield* waitForAutomationList({
+          service,
+          description: "failed stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+              ?.confidence === 0,
+        });
+        const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+        assert.strictEqual(
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+          true,
+        );
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+        assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
+        assert.include(
+          updatedRun?.result?.completionEvaluation?.reason ?? "",
+          "Stop check failed:",
+        );
+      }),
   );
 
   it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>
@@ -1930,7 +1946,10 @@ layer("AutomationService", (it) => {
 
       const listed = yield* service.list({ projectId });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
-      assert.strictEqual(listed.definitions.find((entry) => entry.id === created.id)?.enabled, true);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
       assert.isUndefined(updatedRun?.result?.completionEvaluation);
     }),
   );

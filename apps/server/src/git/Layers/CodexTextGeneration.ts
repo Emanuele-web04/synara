@@ -18,6 +18,7 @@ import {
   type BranchNameGenerationResult,
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
+  type ReviewFindingsGenerationResult,
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
   type ThreadRecapGenerationResult,
@@ -31,6 +32,7 @@ import {
   buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
+  buildReviewFindingsPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
@@ -513,6 +515,33 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = (input) => {
+    const { prompt, outputSchemaJson } = buildReviewFindingsPrompt({
+      patch: input.patch,
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateReviewFindings",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            summary: generated.summary.trim(),
+            findings: generated.findings,
+          }) satisfies ReviewFindingsGenerationResult,
+      ),
+    );
+  };
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
       const { imagePaths } = yield* materializeImageAttachments(
@@ -635,6 +664,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,

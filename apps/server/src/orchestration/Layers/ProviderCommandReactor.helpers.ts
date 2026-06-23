@@ -56,6 +56,9 @@ export function attachmentTitleSeed(attachment: ChatAttachment | undefined): str
   if (attachment.type === "image") {
     return attachment.name;
   }
+  if (attachment.type === "file") {
+    return attachment.name;
+  }
   return attachment.text.trim();
 }
 
