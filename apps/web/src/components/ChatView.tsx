@@ -1133,8 +1133,10 @@ export default function ChatView({
   const composerMenuOpenRef = useRef(false);
   const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
   const queuedComposerTurnsRef = useRef<QueuedComposerTurn[]>([]);
-  const restoredQueuedSourceProposedPlanRef =
-    useRef<QueuedComposerChatTurn["sourceProposedPlan"]>(undefined);
+  const restoredQueuedSourceProposedPlanRef = useRef<{
+    threadId: ThreadId;
+    sourceProposedPlan: QueuedComposerChatTurn["sourceProposedPlan"];
+  } | null>(null);
   const autoDispatchingQueuedTurnRef = useRef(false);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
@@ -5789,7 +5791,7 @@ export default function ChatView({
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
       promptRef.current = "";
-      restoredQueuedSourceProposedPlanRef.current = undefined;
+      restoredQueuedSourceProposedPlanRef.current = null;
       clearComposerDraftContent(threadId);
       updateSelectedComposerSkills([]);
       updateSelectedComposerMentions([]);
@@ -6232,7 +6234,9 @@ export default function ChatView({
         updateSelectedComposerMentions([]);
       }
       restoredQueuedSourceProposedPlanRef.current =
-        queuedTurn.kind === "chat" ? queuedTurn.sourceProposedPlan : undefined;
+        queuedTurn.kind === "chat" && queuedTurn.sourceProposedPlan
+          ? { threadId: activeThread.id, sourceProposedPlan: queuedTurn.sourceProposedPlan }
+          : null;
       setComposerDraftModelSelection(activeThread.id, queuedTurn.modelSelection);
       setComposerDraftRuntimeMode(activeThread.id, queuedTurn.runtimeMode);
       setComposerDraftInteractionMode(activeThread.id, queuedTurn.interactionMode);
@@ -6424,7 +6428,9 @@ export default function ChatView({
     }
     const sourceProposedPlanForSend =
       queuedChatTurn?.sourceProposedPlan ??
-      restoredQueuedSourceProposedPlanRef.current ??
+      (restoredQueuedSourceProposedPlanRef.current?.threadId === activeThread.id
+        ? restoredQueuedSourceProposedPlanRef.current.sourceProposedPlan
+        : undefined) ??
       (isLivePlanFollowUpSubmission && activeProposedPlan && interactionModeForSend === "default"
         ? buildSourceProposedPlanReference({
             threadId: activeThread.id,
@@ -7032,7 +7038,7 @@ export default function ChatView({
         setPlanSidebarOpen(true);
       }
       if (queuedChatTurn === null) {
-        restoredQueuedSourceProposedPlanRef.current = undefined;
+        restoredQueuedSourceProposedPlanRef.current = null;
       }
     })().catch(async (err: unknown) => {
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
