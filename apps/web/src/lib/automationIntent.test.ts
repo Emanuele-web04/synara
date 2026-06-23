@@ -508,6 +508,9 @@ describe("parseChatAutomationIntent", () => {
     expect(resolved).toMatchObject({
       source: "deterministic",
       mode: "heartbeat",
+      // The schedule parsed deterministically, but name/prompt are LLM-rewritten, so the
+      // draft must still go through human review even though needsConfirmation was false.
+      requiresReview: true,
       intent: {
         name: "Generated",
         prompt: "Generated prompt",

@@ -993,8 +993,13 @@ export function resolveChatAutomationIntent(input: {
       mode,
       source: "deterministic",
       requiresReview:
+        // Any LLM-influenced draft requires human review before creating: when the prompt
+        // is terse the generator rewrites name/prompt/maxIterations even though the schedule
+        // parsed deterministically (enrichment !== null), so the confirmation must not be
+        // skipped. Purely local parses keep their finer gating, including the deliberate
+        // bounded-fast-loop auto-submit (which skips generation, so enrichment stays null).
+        enrichment !== null ||
         resolvedExecutionScope !== "thread" ||
-        enrichmentNeedsConfirmation ||
         requiresCompletionPolicyReview(requestedMode, input.deterministicIntent.completionPolicy),
       generatedConfidence: enrichment ? (input.generatedIntent?.confidence ?? null) : null,
       generatedNeedsConfirmation: enrichmentNeedsConfirmation,
