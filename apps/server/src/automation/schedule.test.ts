@@ -99,7 +99,7 @@ describe("computeNextAutomationRunAt", () => {
     expect(wallClockInZone(next!, "America/New_York")).toBe("2026-03-09 02:30");
   });
 
-  it("fires a fall-back duplicate hour exactly once per day", () => {
+  it("fires a fall-back duplicate hour exactly once per day across both scheduling paths", () => {
     // America/New_York falls back 2026-11-01 02:00 -> 01:00, so 01:30 happens twice:
     // the first at 01:30 EDT (05:30Z) and the second at 01:30 EST (06:30Z). Assert the
     // exact UTC instant, not just the wall clock — both duplicates render "01:30" in the
