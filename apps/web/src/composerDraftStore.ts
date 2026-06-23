@@ -12,6 +12,8 @@ import {
   GROK_REASONING_EFFORT_OPTIONS,
   type GrokReasoningEffort,
   type ModelSlug,
+  OrchestrationProposedPlanId,
+  type OrchestrationLatestTurn,
   type PiThinkingLevel,
   ModelSelection,
   OrchestrationThreadPullRequest,
@@ -140,6 +142,7 @@ export interface QueuedComposerChatTurn {
   selectedPromptEffort: string | null;
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
+  sourceProposedPlan?: NonNullable<OrchestrationLatestTurn["sourceProposedPlan"]> | undefined;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   envMode: DraftThreadEnvMode;
@@ -206,6 +209,11 @@ const PersistedPastedTextDraft = Schema.Struct({
 });
 type PersistedPastedTextDraft = typeof PersistedPastedTextDraft.Type;
 
+const PersistedSourceProposedPlanReference = Schema.Struct({
+  threadId: ThreadId,
+  planId: OrchestrationProposedPlanId,
+});
+
 const PersistedQueuedComposerChatTurn = Schema.Struct({
   id: Schema.String,
   kind: Schema.Literal("chat"),
@@ -232,6 +240,7 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   selectedPromptEffort: Schema.NullOr(Schema.String),
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
+  sourceProposedPlan: Schema.optionalKey(PersistedSourceProposedPlanReference),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   envMode: DraftThreadEnvModeSchema,
@@ -525,7 +534,10 @@ export interface ComposerDraftStoreState {
     attachments: PersistedComposerImageAttachment[],
   ) => void;
   copyTransferableComposerState: (sourceThreadId: ThreadId, targetThreadId: ThreadId) => void;
-  clearComposerContent: (threadId: ThreadId) => void;
+  clearComposerContent: (
+    threadId: ThreadId,
+    options?: { readonly preservePreviewUrls?: boolean },
+  ) => void;
 }
 
 export interface EffectiveComposerModelState {
@@ -1475,6 +1487,15 @@ function revokeDraftPreviewUrls(draft: ComposerThreadDraftState | undefined): vo
   }
 }
 
+function revokeDraftComposerImagePreviewUrls(draft: ComposerThreadDraftState | undefined): void {
+  if (!draft) {
+    return;
+  }
+  for (const image of draft.images) {
+    revokeObjectPreviewUrl(image.previewUrl);
+  }
+}
+
 function normalizePersistedAttachment(value: unknown): PersistedComposerImageAttachment | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -1694,6 +1715,11 @@ function normalizePersistedQueuedTurns(
     )
       ? candidate.providerOptionsForDispatch
       : undefined;
+    const sourceProposedPlan = Schema.is(PersistedSourceProposedPlanReference)(
+      candidate.sourceProposedPlan,
+    )
+      ? candidate.sourceProposedPlan
+      : undefined;
     const runtimeMode =
       candidate.runtimeMode === "approval-required" || candidate.runtimeMode === "full-access"
         ? candidate.runtimeMode
@@ -1776,6 +1802,7 @@ function normalizePersistedQueuedTurns(
         selectedPromptEffort,
         modelSelection,
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+        ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
         interactionMode,
         envMode,
@@ -2180,6 +2207,9 @@ function partializeComposerDraftStoreState(
           modelSelection: queuedTurn.modelSelection,
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
+            : {}),
+          ...(queuedTurn.sourceProposedPlan
+            ? { sourceProposedPlan: queuedTurn.sourceProposedPlan }
             : {}),
           runtimeMode: queuedTurn.runtimeMode,
           interactionMode: queuedTurn.interactionMode,
@@ -3965,9 +3995,12 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           return { draftsByThreadId: nextDraftsByThreadId };
         });
       },
-      clearComposerContent: (threadId) => {
+      clearComposerContent: (threadId, options) => {
         if (threadId.length === 0) {
           return;
+        }
+        if (options?.preservePreviewUrls !== true) {
+          revokeDraftComposerImagePreviewUrls(get().draftsByThreadId[threadId]);
         }
         set((state) => {
           const current = state.draftsByThreadId[threadId];

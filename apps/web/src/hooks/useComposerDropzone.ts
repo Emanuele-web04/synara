@@ -14,17 +14,102 @@ export function isComposerHandledDrag(dataTransfer: DataTransfer): boolean {
   );
 }
 
+export interface ComposerDropzoneFileSplit {
+  readonly imageFiles: File[];
+  readonly genericFiles: File[];
+}
+
+export function splitComposerDropzoneFiles(files: Iterable<File>): ComposerDropzoneFileSplit {
+  const imageFiles: File[] = [];
+  const genericFiles: File[] = [];
+  for (const file of files) {
+    if (file.type.startsWith("image/")) {
+      imageFiles.push(file);
+    } else {
+      genericFiles.push(file);
+    }
+  }
+  return { imageFiles, genericFiles };
+}
+
+export type ComposerDropzoneGenericFileMode = "accept" | "reject" | "fallthrough";
+
+export function shouldHandleComposerDropzoneFiles(
+  files: ComposerDropzoneFileSplit,
+  genericFiles: ComposerDropzoneGenericFileMode,
+): boolean {
+  if (files.imageFiles.length > 0) {
+    return true;
+  }
+  if (files.genericFiles.length > 0) {
+    return genericFiles !== "fallthrough";
+  }
+  return false;
+}
+
+function isComposerHandledDragForMode(
+  dataTransfer: DataTransfer,
+  genericFiles: ComposerDropzoneGenericFileMode,
+): boolean {
+  if (dataTransfer.types.includes(CHAT_FILE_REFERENCE_DRAG_TYPE)) {
+    return true;
+  }
+  if (!dataTransfer.types.includes("Files")) {
+    return false;
+  }
+  if (genericFiles !== "fallthrough") {
+    return true;
+  }
+  const items = Array.from(dataTransfer.items);
+  if (items.length === 0) {
+    return true;
+  }
+  return items.some((item) => item.kind === "file" && item.type.startsWith("image/"));
+}
+
 export function useComposerDropzone(input: {
   readonly addImages: (files: readonly File[]) => void;
-  readonly addFiles?: ((files: readonly File[]) => void) | undefined;
+  readonly fileSupport:
+    | {
+        readonly genericFiles: "accept";
+        readonly addFiles: (files: readonly File[]) => void;
+      }
+    | {
+        readonly genericFiles: "reject";
+        readonly onUnsupportedFiles: (files: readonly File[]) => void;
+      }
+    | {
+        readonly genericFiles: "fallthrough";
+      };
   readonly appendReferenceText?: ((text: string) => void) | undefined;
   readonly focusComposer?: (() => void) | undefined;
   readonly dragDepthRef?: { current: number } | undefined;
   readonly setIsDragOverComposer: (dragging: boolean) => void;
 }) {
-  const { addImages, addFiles, appendReferenceText, focusComposer, setIsDragOverComposer } = input;
+  const { addImages, fileSupport, appendReferenceText, focusComposer, setIsDragOverComposer } =
+    input;
   const internalDragDepthRef = useRef(0);
   const dragDepthRef = input.dragDepthRef ?? internalDragDepthRef;
+
+  const handleSplitFiles = useCallback(
+    (files: ComposerDropzoneFileSplit): boolean => {
+      if (!shouldHandleComposerDropzoneFiles(files, fileSupport.genericFiles)) {
+        return false;
+      }
+      if (files.imageFiles.length > 0) {
+        addImages(files.imageFiles);
+      }
+      if (files.genericFiles.length > 0) {
+        if (fileSupport.genericFiles === "accept") {
+          fileSupport.addFiles(files.genericFiles);
+        } else if (fileSupport.genericFiles === "reject") {
+          fileSupport.onUnsupportedFiles(files.genericFiles);
+        }
+      }
+      return true;
+    },
+    [addImages, fileSupport],
+  );
 
   const resetComposerDragState = useCallback(() => {
     dragDepthRef.current = 0;
@@ -33,42 +118,35 @@ export function useComposerDropzone(input: {
 
   const onComposerPaste = useCallback(
     (event: ClipboardEvent<HTMLElement>) => {
-      const pastedFiles = Array.from(event.clipboardData.files);
-      const imageFiles = pastedFiles.filter((file) => file.type.startsWith("image/"));
-      const genericFiles = pastedFiles.filter((file) => !file.type.startsWith("image/"));
-      if (imageFiles.length === 0 && genericFiles.length === 0) {
-        return;
-      }
-      event.preventDefault();
-      addImages(imageFiles);
-      addFiles?.(genericFiles);
+      const handled = handleSplitFiles(splitComposerDropzoneFiles(event.clipboardData.files));
+      if (handled) event.preventDefault();
     },
-    [addFiles, addImages],
+    [handleSplitFiles],
   );
 
   const onComposerDragEnter = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!isComposerHandledDrag(event.dataTransfer)) return;
+      if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
       event.preventDefault();
       dragDepthRef.current += 1;
       setIsDragOverComposer(true);
     },
-    [dragDepthRef, setIsDragOverComposer],
+    [dragDepthRef, fileSupport.genericFiles, setIsDragOverComposer],
   );
 
   const onComposerDragOver = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!isComposerHandledDrag(event.dataTransfer)) return;
+      if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
       event.preventDefault();
       event.dataTransfer.dropEffect = "copy";
       setIsDragOverComposer(true);
     },
-    [setIsDragOverComposer],
+    [fileSupport.genericFiles, setIsDragOverComposer],
   );
 
   const onComposerDragLeave = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!isComposerHandledDrag(event.dataTransfer)) return;
+      if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
       event.preventDefault();
       const nextTarget = event.relatedTarget;
       if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
@@ -79,25 +157,37 @@ export function useComposerDropzone(input: {
         setIsDragOverComposer(false);
       }
     },
-    [dragDepthRef, setIsDragOverComposer],
+    [dragDepthRef, fileSupport.genericFiles, setIsDragOverComposer],
   );
 
   const onComposerDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!isComposerHandledDrag(event.dataTransfer)) return;
-      event.preventDefault();
-      resetComposerDragState();
       const referenceText = event.dataTransfer.getData(CHAT_FILE_REFERENCE_DRAG_TYPE);
       if (referenceText) {
+        event.preventDefault();
+        resetComposerDragState();
         appendReferenceText?.(referenceText);
         return;
       }
-      const droppedFiles = Array.from(event.dataTransfer.files);
-      addImages(droppedFiles.filter((file) => file.type.startsWith("image/")));
-      addFiles?.(droppedFiles.filter((file) => !file.type.startsWith("image/")));
+      if (!event.dataTransfer.types.includes("Files")) {
+        return;
+      }
+      const splitFiles = splitComposerDropzoneFiles(event.dataTransfer.files);
+      if (!shouldHandleComposerDropzoneFiles(splitFiles, fileSupport.genericFiles)) {
+        return;
+      }
+      event.preventDefault();
+      resetComposerDragState();
+      handleSplitFiles(splitFiles);
       focusComposer?.();
     },
-    [addFiles, addImages, appendReferenceText, focusComposer, resetComposerDragState],
+    [
+      appendReferenceText,
+      fileSupport.genericFiles,
+      focusComposer,
+      handleSplitFiles,
+      resetComposerDragState,
+    ],
   );
 
   return {

@@ -112,6 +112,10 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
       provider: "codex",
       model: "gpt-5",
     },
+    sourceProposedPlan: {
+      threadId: ThreadId.makeUnsafe("thread-source-plan"),
+      planId: "plan-1",
+    },
     runtimeMode: "full-access",
     interactionMode: "default",
     envMode: "local",
@@ -283,14 +287,28 @@ describe("composerDraftStore clearComposerContent", () => {
     URL.revokeObjectURL = originalRevokeObjectUrl;
   });
 
-  it("does not revoke blob preview URLs when clearing composer content", () => {
+  it("revokes blob preview URLs when clearing composer content", () => {
+    const first = makeImage({
+      id: "img-clear",
+      previewUrl: "blob:clear",
+    });
+    useComposerDraftStore.getState().addImage(threadId, first);
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:clear");
+  });
+
+  it("can preserve blob preview URLs for optimistic message handoff", () => {
     const first = makeImage({
       id: "img-optimistic",
       previewUrl: "blob:optimistic",
     });
     useComposerDraftStore.getState().addImage(threadId, first);
 
-    useComposerDraftStore.getState().clearComposerContent(threadId);
+    useComposerDraftStore.getState().clearComposerContent(threadId, { preservePreviewUrls: true });
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft).toBeUndefined();
@@ -1512,6 +1530,10 @@ describe("composerDraftStore queued follow-ups", () => {
         kind: "chat",
         prompt: "queued chat prompt",
         images: [{ name: "queued.png" }],
+        sourceProposedPlan: {
+          threadId: "thread-source-plan",
+          planId: "plan-1",
+        },
         terminalContexts: [{ text: "git status\nOn branch main" }],
       },
     ]);
