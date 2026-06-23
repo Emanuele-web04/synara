@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isComposerDropzoneInternalDragTransition,
   shouldPreventDefaultForUnhandledFileDrop,
   shouldResetComposerDropzoneAfterUnhandledFileDrop,
   shouldHandleComposerDropzoneFiles,
@@ -48,5 +49,17 @@ describe("useComposerDropzone file capability helpers", () => {
     expect(shouldPreventDefaultForUnhandledFileDrop(files, "accept")).toBe(true);
     expect(shouldPreventDefaultForUnhandledFileDrop(files, "reject")).toBe(true);
     expect(shouldPreventDefaultForUnhandledFileDrop(files, "fallthrough")).toBe(false);
+  });
+
+  it("identifies child drag transitions as internal to the dropzone", () => {
+    const child = {};
+    const outside = {};
+    const currentTarget = {
+      contains: (target: unknown) => target === child,
+    };
+
+    expect(isComposerDropzoneInternalDragTransition(currentTarget, child)).toBe(true);
+    expect(isComposerDropzoneInternalDragTransition(currentTarget, outside)).toBe(false);
+    expect(isComposerDropzoneInternalDragTransition(currentTarget, null)).toBe(false);
   });
 });

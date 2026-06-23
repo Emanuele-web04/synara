@@ -64,6 +64,31 @@ export function shouldPreventDefaultForUnhandledFileDrop(
   );
 }
 
+function hasContainsMethod(value: unknown): value is { contains: (target: unknown) => boolean } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "contains" in value &&
+    typeof (value as { contains?: unknown }).contains === "function"
+  );
+}
+
+// Drag events bubble through every child under the bound dropzone. Treat only
+// transitions across the dropzone boundary as state changes.
+export function isComposerDropzoneInternalDragTransition(
+  currentTarget: unknown,
+  relatedTarget: unknown,
+): boolean {
+  if (!relatedTarget || !hasContainsMethod(currentTarget)) {
+    return false;
+  }
+  try {
+    return currentTarget.contains(relatedTarget);
+  } catch {
+    return false;
+  }
+}
+
 function isComposerHandledDragForMode(
   dataTransfer: DataTransfer,
   genericFiles: ComposerDropzoneGenericFileMode,
@@ -145,7 +170,10 @@ export function useComposerDropzone(input: {
     (event: DragEvent<HTMLDivElement>) => {
       if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
       event.preventDefault();
-      dragDepthRef.current += 1;
+      if (isComposerDropzoneInternalDragTransition(event.currentTarget, event.relatedTarget)) {
+        return;
+      }
+      dragDepthRef.current = 1;
       setIsDragOverComposer(true);
     },
     [dragDepthRef, fileSupport.genericFiles, setIsDragOverComposer],
@@ -165,16 +193,12 @@ export function useComposerDropzone(input: {
     (event: DragEvent<HTMLDivElement>) => {
       if (!isComposerHandledDragForMode(event.dataTransfer, fileSupport.genericFiles)) return;
       event.preventDefault();
-      const nextTarget = event.relatedTarget;
-      if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) {
+      if (isComposerDropzoneInternalDragTransition(event.currentTarget, event.relatedTarget)) {
         return;
       }
-      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
-      if (dragDepthRef.current === 0) {
-        setIsDragOverComposer(false);
-      }
+      resetComposerDragState();
     },
-    [dragDepthRef, fileSupport.genericFiles, setIsDragOverComposer],
+    [fileSupport.genericFiles, resetComposerDragState],
   );
 
   const onComposerDrop = useCallback(

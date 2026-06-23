@@ -9215,15 +9215,10 @@ export default function ChatView({
                 composerProviderState.composerFrameClassName,
                 composerMenuOpen && !isComposerApprovalState && "overflow-visible",
               )}
-              onDragEnter={onComposerDragEnter}
-              onDragOver={onComposerDragOver}
-              onDragLeave={onComposerDragLeave}
-              onDrop={onComposerDrop}
             >
               <div
                 className={cn(
                   COMPOSER_INPUT_SURFACE_CLASS_NAME,
-                  isDragOverComposer ? "!bg-[var(--color-background-control)]" : "",
                   composerProviderState.composerSurfaceClassName,
                   composerMenuOpen && !isComposerApprovalState && "overflow-visible",
                 )}
@@ -9655,10 +9650,24 @@ export default function ChatView({
   return (
     <div
       className={cn(
-        "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+        "relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
         CHAT_BACKGROUND_CLASS_NAME,
       )}
+      onDragEnter={onComposerDragEnter}
+      onDragOver={onComposerDragOver}
+      onDragLeave={onComposerDragLeave}
+      onDrop={onComposerDrop}
     >
+      {/* Subtle accent tint over the whole pane while a file is dragged anywhere over it,
+          signalling that dropping it will attach the file to the composer. */}
+      <div
+        aria-hidden
+        className={cn(
+          "pointer-events-none absolute inset-0 z-50 transition-opacity duration-150",
+          "bg-info/8 ring-1 ring-inset ring-info/30",
+          isDragOverComposer ? "opacity-100" : "opacity-0",
+        )}
+      />
       {/* Top bar */}
       <header
         className={cn(
