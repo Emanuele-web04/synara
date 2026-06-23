@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.2.5 - 2026-06-24
+
+### Added
+
+- Added first-class Automations as a real Synara workspace surface, including contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar navigation, list/detail routes, Current/Paused views, inline detail editing, previous-run history, and triage actions.
+- Added automation scheduler and composer flows so saved prompts can run manually, once, on intervals, daily, on weekdays, weekly, or from cron-like schedules.
+- Added heartbeat automations that continue an existing target thread on each scheduled wake while preserving the normal provider/session/approval/worktree pipeline.
+- Added AI-evaluated heartbeat stop clauses through completion policies, natural-language stop conditions, completion-evaluation results, and visible stop reasons in run history.
+- Added a dedicated background queue for AI stop checks so slow or stuck completion evaluation does not block automation reconciliation.
+- Added timeout handling for stop evaluation, recording a visible warning result and keeping the heartbeat alive when the evaluator stalls.
+- Added automation recovery and scheduler observability for swallowed recovery failures and scheduler lease contention.
+- Added DST and long-downtime scheduler coverage for spring-forward gaps, fall-back duplicate hours, and coalesced missed interval runs.
+- Added generic chat file attachments alongside image attachments, with shared contracts, upload storage, composer paste/drop support, provider prompt projection, optimistic timeline rendering, Kanban dispatch, recap/bootstrap support, and reusable file attachment cards/chips.
+- Added automation cards in the chat transcript after automation creation, and added thread automation summaries in the Environment panel.
+- Added blob-based browser download handling for local image/generated markdown image downloads so failed local-image responses stay inside Synara instead of navigating the app window to an API error page.
+- Added OpenCode CLI-only model discovery fallback so the model picker can still discover available models when the managed server or inventory path fails.
+- Added profile skill usage counting coverage for retention-hidden threads and repeated slash/dollar skill invocations.
+
+### Changed
+
+- Bumped Synara release package versions to `0.2.5` across the server, desktop, web, and contracts packages.
+- Reworked automation UI toward a Codex-style surface, including the sidebar badge, Current/Paused list, centered detail layout, inline rail editing, schedule editing, target-thread display, max-iteration controls, stop-on-error handling, and previous-run actions.
+- Expanded automation composer parsing and review so explicit/generated prompts, schedule phrases, stop clauses, bounded fast loops, restored plan source metadata, queued plan follow-ups, and inline composer editing are handled consistently.
+- Made generated automation intents require confirmation before creation, while preserving deterministic local auto-submit behavior for explicitly parsed bounded fast loops.
+- Tightened automation cache updates by guarding live definition/run upserts with `updatedAt` and handling equal timestamps without letting stale events roll back newer cache rows.
+- Consolidated scheduler-critical SQL around pending completion evaluation and run listing, including a shared view and a bounded evaluation backlog.
+- Scoped OpenCode/Kilo server startup and CLI discovery to the request/session cwd, avoided cross-cwd warm server reuse, preserved OpenCode resume cwd, and stopped replacing file config with synthetic empty config content.
+- Treated omitted Claude interaction mode as the default/base permission so fresh threads do not inherit sticky plan mode from the previously active thread.
+- Preserved attachment-bearing plan follow-ups by routing them through the normal send path while keeping source plan metadata, including queued sends.
+- Made composer image blob URL ownership clearer by revoking on normal clears while preserving ownership for optimistic handoff.
+- Made composer dropzone generic-file support explicit and visibly rejected unsupported Kanban task files.
+- Kept Environment panel open/close preference stable across chat switches while defaulting constrained/floating chat layouts to a calmer closed panel.
+- Avoided full thread subscription for file previews and reused thread runtime workspace resolution so worktree-backed chat file/PDF links open in the correct right-dock preview root.
+- Included retention-hidden threads in profile stats while still excluding manually deleted threads and deleted projects.
+
+### Fixed
+
+- Fixed automation lifecycle bugs around crash replay, failed-run rollback, duplicate scheduled occurrences, in-flight guards, terminal run transitions, cancellation behavior, and failed update rollback.
+- Fixed automation worktree cleanup when standalone thread creation fails or cancellation wins before durable thread ownership exists.
+- Fixed automation approval-wait reconciliation so a heartbeat run re-checks turn ownership before leaving `waiting-for-approval`, avoiding resurrection after a different turn takes over the target thread.
+- Fixed a completion-evaluation race where a background stop check could clobber a user's archived/read state on the same automation run.
+- Fixed stale completion-evaluation results being accepted after an automation changed before evaluation finished.
+- Fixed automation review regressions around draft-thread promotion, restored source-thread metadata, source plan persistence, reruns, triage/detail actions, and provider start options.
+- Fixed local image downloads so failed `/api/local-image` responses cannot replace the desktop renderer with a plain `Not Found` page.
+- Fixed deleted chats staying visible by removing successful deletes from client projections immediately, adding client tombstones, and keeping archived bulk deletes responsive.
+- Fixed worktree-backed file/PDF previews from chat links so absolute paths under a materialized worktree do not fall back to the default editor/main surface.
+- Fixed OpenCode model discovery fallback so a failed server/inventory path no longer leaves the UI looking like only static GPT-5 is available.
+- Fixed OpenCode provider config and sticky plan-mode behavior around cwd-scoped discovery, resume cwd, and fresh-thread bootstrap.
+- Fixed attachment handling issues around attachment caps, server normalization rollback, unsupported files, plan follow-ups, image URL cleanup, and attachment drag/drop audit findings.
+- Fixed profile skill counts so repeated `/skill` or `$skill` tokens in one prompt count correctly without double-counting structured skill references.
+- Fixed release-blocking typecheck drift in automation worktree cleanup tests by asserting the created worktree branch before using it.
+- Fixed formatting drift in the automation service test and local image preview download error description.
+
+### Verification
+
+- `bun run fmt:check` initially failed on `apps/server/src/automation/Layers/AutomationService.test.ts` and `apps/web/src/components/LocalImagePreview.tsx`; after targeted `bunx oxfmt` formatting, `bun run fmt:check` passed.
+- `bun run lint` passed with 151 warnings, 0 errors.
+- `bun run typecheck` initially failed in `apps/server/src/automation/Layers/AutomationService.test.ts` because `createdWorktrees[0]?.newBranch` was `string | undefined` where `string` was expected. After tightening the test assertions, package-local `bun run --cwd apps/server typecheck` passed and full root `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing large web chunk/plugin timing warnings, the Astro `transformWithEsbuild` deprecation warning, and the desktop `tsdown.config.ts` typeless-module warning.
+- `bun run test` passed: 10 tasks successful in 6m53s. `@t3tools/web` passed 180 files / 2102 tests. `t3` passed 135 files with 1 skipped file, 1418 passed tests, and 6 skipped tests. The server suite was long-running but completed cleanly without a teardown stall.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.2.5`, and `npm run lint` passed.
+
 ## 0.2.41 - 2026-06-17
 
 ### Added

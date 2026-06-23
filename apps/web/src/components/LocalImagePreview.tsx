@@ -91,9 +91,7 @@ export function useLocalImageDownloadClick(input: {
           type: "error",
           title: input.errorTitle ?? "Could not download image",
           description:
-            error instanceof Error
-              ? error.message
-              : "The file may have moved or be unavailable.",
+            error instanceof Error ? error.message : "The file may have moved or be unavailable.",
         });
       });
     },

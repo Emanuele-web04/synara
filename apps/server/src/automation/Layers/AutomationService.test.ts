@@ -568,14 +568,20 @@ layer("AutomationService", (it) => {
       const threadCreate = dispatchedCommands[0];
 
       assert.strictEqual(createdWorktrees.length, 1);
-      assert.match(createdWorktrees[0]?.newBranch ?? "", /^automation\/nightly-maintenance\//);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
+      assert.match(createdWorktreeBranch, /^automation\/nightly-maintenance\//);
       assert.strictEqual(threadCreate?.type, "thread.create");
       if (threadCreate?.type !== "thread.create") {
         assert.fail("Expected thread.create command.");
       }
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
-      assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+      assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktreeBranch);
     }),
   );
 
@@ -591,6 +597,12 @@ layer("AutomationService", (it) => {
 
       assert.match(error.message, /Failed to create automation thread/);
       assert.strictEqual(createdWorktrees.length, 1);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
       assert.deepStrictEqual(removedWorktrees, [
         {
           cwd: project.workspaceRoot,
@@ -601,7 +613,7 @@ layer("AutomationService", (it) => {
       assert.deepStrictEqual(deletedBranches, [
         {
           cwd: project.workspaceRoot,
-          branch: createdWorktrees[0]?.newBranch,
+          branch: createdWorktreeBranch,
           force: true,
         },
       ]);
@@ -653,6 +665,12 @@ layer("AutomationService", (it) => {
       });
 
       assert.strictEqual(createdWorktrees.length, 1);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
       assert.deepStrictEqual(removedWorktrees, [
         {
           cwd: project.workspaceRoot,
@@ -663,7 +681,7 @@ layer("AutomationService", (it) => {
       assert.deepStrictEqual(deletedBranches, [
         {
           cwd: project.workspaceRoot,
-          branch: createdWorktrees[0]?.newBranch,
+          branch: createdWorktreeBranch,
           force: true,
         },
       ]);
@@ -1578,7 +1596,8 @@ layer("AutomationService", (it) => {
         service,
         description: "stale timed-out stop evaluation",
         predicate: (current) =>
-          current.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          current.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.reason ===
           "Stop check ignored because the automation changed before evaluation finished.",
       });
       const updatedRun = listed.runs.find((entry) => entry.id === run.id);
