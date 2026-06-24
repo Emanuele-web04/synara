@@ -222,6 +222,16 @@ describe("automationApprovalGaps", () => {
     expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
   });
 
+  it("requires local-checkout approval for standalone auto fallback", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "auto",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
+  });
+
   it("reports both blocking risks together", () => {
     const gaps = automationApprovalGaps({
       ...base,
