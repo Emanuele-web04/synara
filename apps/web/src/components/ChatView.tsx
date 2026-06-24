@@ -1452,6 +1452,15 @@ export default function ChatView({
   activeThreadIdRef.current = threadId;
   const pendingAutomationConversationRef = useRef(pendingAutomationConversation);
   pendingAutomationConversationRef.current = pendingAutomationConversation;
+  // Ephemeral setup bubbles are rendered as ordinary transcript messages, so persistent
+  // actions (pin, markers) must skip them — their ids vanish when setup ends and would
+  // otherwise leave orphaned side-panel entries.
+  const isPendingSetupBubbleId = useCallback(
+    (messageId: MessageId): boolean =>
+      pendingAutomationConversationRef.current?.bubbles.some((bubble) => bubble.id === messageId) ??
+      false,
+    [],
+  );
   // A composer-local automation setup belongs to the thread it began in; drop it when
   // the active thread changes so the prompt never leaks onto another conversation.
   useEffect(() => {
@@ -2637,6 +2646,16 @@ export default function ChatView({
     handleRenamePinnedMessage,
     handleNotesChange,
   } = usePinnedMessageActions({ activeThreadId, pinnedMessages });
+  const handleTogglePinMessageGuarded = useCallback(
+    (messageId: MessageId) => {
+      // Never pin an ephemeral automation-setup bubble; its id vanishes when setup ends.
+      if (isPendingSetupBubbleId(messageId)) {
+        return;
+      }
+      handleTogglePinMessage(messageId);
+    },
+    [handleTogglePinMessage, isPendingSetupBubbleId],
+  );
   const handleCopyProjectInstructionsToNotes = useCallback(() => {
     if (!activeThreadId) {
       return;
@@ -4700,6 +4719,12 @@ export default function ChatView({
         return;
       }
       const messageId = MessageId.makeUnsafe(pendingSelection.selection.assistantMessageId);
+      if (isPendingSetupBubbleId(messageId)) {
+        // Don't mark an ephemeral automation-setup bubble; it disappears when setup ends.
+        dismissTranscriptSelectionAction();
+        window.getSelection()?.removeAllRanges();
+        return;
+      }
       const message = timelineMessages.find((candidate) => candidate.id === messageId);
       if (!message) {
         toastManager.add({
@@ -4761,6 +4786,7 @@ export default function ChatView({
     [
       activeThreadId,
       dismissTranscriptSelectionAction,
+      isPendingSetupBubbleId,
       pendingTranscriptSelectionAction,
       threadMarkers,
       timelineMessages,
@@ -6566,6 +6592,9 @@ export default function ChatView({
     if (hasPromptOnlySendableContent) {
       const handledSlashCommand = await handleStandaloneSlashCommand(trimmedPromptForSend);
       if (handledSlashCommand) {
+        // A slash command (e.g. /clear) consumes the composer, so abandon any in-progress
+        // automation setup rather than leaving a stale banner/request behind.
+        setPendingAutomationConversation(null);
         return true;
       }
     }
@@ -10040,7 +10069,7 @@ export default function ChatView({
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
                     pinnedMessageIds={pinnedMessageIds}
-                    onTogglePinMessage={handleTogglePinMessage}
+                    onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

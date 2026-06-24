@@ -218,7 +218,16 @@ export async function resolveComposerAutomationRequest(input: {
     defaultMode: automationDefaultMode,
     executionScope: automationExecutionScope,
   });
-  if (!automationResolution) {
+  // The generator defaults an unspecified schedule to "manual", which would otherwise
+  // open a manual-automation review dialog for "create an automation to check the build"
+  // instead of asking "how often?". When generation reports the schedule as still
+  // missing, keep the conversational follow-up rather than accepting that default.
+  const generatedScheduleStillMissing =
+    automationResolution !== null &&
+    automationResolution.source === "generated" &&
+    (generatedAutomationIntent?.missingFields.includes("schedule") ?? false) &&
+    automationResolution.intent.schedule.type === "manual";
+  if (!automationResolution || generatedScheduleStillMissing) {
     return {
       type: "needs-clarification",
       // Strip trailing filler, then guarantee a parseable trigger survives so the next

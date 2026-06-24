@@ -553,6 +553,35 @@ describe("composerAutomation", () => {
     });
   });
 
+  it("asks how often instead of accepting a defaulted manual schedule", async () => {
+    // The generator extracts the task but reports the schedule as missing; it must not be
+    // silently accepted as a manual automation — the conversational "how often?" follow-up
+    // should fire for the common "create an automation to check the build" case.
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.92,
+      language: "en",
+      name: "Check the build",
+      taskPrompt: "Check the build.",
+      schedule: null,
+      mode: "heartbeat" as const,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const decision = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(decision).toMatchObject({
+      type: "needs-clarification",
+      missingFields: ["schedule"],
+    });
+  });
+
   it("keeps an explicit /automation setup parseable across follow-ups", async () => {
     const generateIntent = vi.fn(async () => ({
       isAutomation: true,
