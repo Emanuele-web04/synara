@@ -255,6 +255,24 @@ const waitUntil = (
     }
   });
 
+const waitUntilEffect = <E = never, R = never>(
+  predicate: () => Effect.Effect<boolean, E, R>,
+  timeoutMs = 500,
+  intervalMs = 20,
+  description = "condition",
+): Effect.Effect<void, E, R> =>
+  Effect.gen(function* () {
+    const deadline = Date.now() + timeoutMs;
+    let matched = yield* predicate();
+    while (!matched && Date.now() < deadline) {
+      yield* sleep(intervalMs);
+      matched = yield* predicate();
+    }
+    if (!matched) {
+      assert.fail(`Timed out waiting for ${description}`);
+    }
+  });
+
 function makeProviderServiceLayer(options?: Parameters<typeof makeProviderServiceLive>[0]) {
   const codex = makeFakeCodexAdapter();
   const claude = makeFakeCodexAdapter("claudeAgent");
@@ -1321,7 +1339,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
   );
 });
 
-const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 20 });
+const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
   it.effect("stops idle ready runtime using the persisted cursor when the live snapshot omits it", () =>
     Effect.gen(function* () {
@@ -1374,6 +1392,64 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         assert.equal(persistedAfter.value.status, "stopped");
         assert.deepEqual(persistedAfter.value.resumeCursor, session.resumeCursor);
       }
+    }),
+  );
+
+  it.effect("clears a pending idle stop before dispatching new turn work", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = asThreadId("thread-idle-new-turn");
+
+      idleCleanup.codex.stopSession.mockClear();
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      idleCleanup.codex.updateSession(threadId, (existing) => {
+        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
+        return withoutResumeCursor;
+      });
+      yield* idleCleanup.codex.waitForRuntimeSubscribers();
+      idleCleanup.codex.emit({
+        type: "turn.completed",
+        eventId: asEventId("runtime-idle-before-new-turn"),
+        provider: "codex",
+        createdAt: "2026-02-27T00:04:00.000Z",
+        threadId,
+        payload: { state: "completed" },
+      });
+
+      yield* waitUntilEffect(
+        () =>
+          runtimeRepository.getByThreadId({ threadId }).pipe(
+            Effect.map((runtime) => {
+              if (Option.isNone(runtime)) {
+                return false;
+              }
+              const payload = runtime.value.runtimePayload;
+              return (
+                payload !== null &&
+                typeof payload === "object" &&
+                !Array.isArray(payload) &&
+                (payload as Record<string, unknown>).lastRuntimeEvent === "turn.completed"
+              );
+            }),
+          ),
+        500,
+        20,
+        "runtime completion persistence",
+      );
+
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "new turn before idle stop",
+        attachments: [],
+      });
+      yield* sleep(150);
+
+      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 0);
     }),
   );
 });

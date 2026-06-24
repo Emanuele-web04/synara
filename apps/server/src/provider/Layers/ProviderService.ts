@@ -740,6 +740,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             "Either input text or at least one attachment is required",
           );
         }
+        clearRuntimeIdleTimer(input.threadId);
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.sendTurn",
@@ -786,6 +787,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             "Either input text or at least one attachment is required",
           );
         }
+        clearRuntimeIdleTimer(input.threadId);
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.steerTurn",
@@ -831,6 +833,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           payload: rawInput,
         });
 
+        clearRuntimeIdleTimer(input.threadId);
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
           operation: "ProviderService.startReview",
