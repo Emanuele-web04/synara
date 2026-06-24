@@ -1,4 +1,5 @@
 import type {
+  ReviewChangedFile,
   ReviewCheck,
   ReviewCommit,
   ReviewSourceRef,
@@ -40,12 +41,15 @@ import { ReviewSurface } from "./ReviewSurface";
 import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
+import { ReviewWalkthrough } from "./walkthrough/ReviewWalkthrough";
+import { WALKTHROUGH_ENABLED } from "./walkthrough/walkthroughFlag";
 
-type PrTab = "conversation" | "files" | "commits";
+type PrTab = "conversation" | "files" | "commits" | "walkthrough";
 
 const EMPTY_CHECKS: ReadonlyArray<ReviewCheck> = [];
 const EMPTY_COMMITS: ReadonlyArray<ReviewCommit> = [];
 const EMPTY_EVENTS: ReadonlyArray<ReviewTimelineEvent> = [];
+const EMPTY_FILES: ReadonlyArray<ReviewChangedFile> = [];
 
 function reviewConversationHydrationKey(input: {
   readonly cwd: string | null;
@@ -156,17 +160,20 @@ export function ReviewPrView(props: {
   }, [conversationHydrationKey, headerDetail]);
   const isSurfaceHydrationReady =
     readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
+  // The walkthrough tab needs the changeset too (for the patch + patchSignature
+  // that enable the generate query), so widen the fetch gate beyond Files.
+  const needsChangeset = tab === "files" || tab === "walkthrough";
   const surfaceQuery = useQuery({
     ...reviewLoadPullRequestSurfaceQueryOptions({
       cwd: props.cwd,
       reference: headerDetail ? props.reference : null,
       source: props.source,
       includeConversation: false,
-      includeChangeset: tab === "files",
+      includeChangeset: needsChangeset,
       queryClient,
     }),
     enabled:
-      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && tab === "files",
+      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && needsChangeset,
   });
   const overviewQuery = useQuery({
     ...reviewLoadPullRequestQueryOptions({
@@ -188,13 +195,14 @@ export function ReviewPrView(props: {
   });
   const overview = surfaceQuery.data?.overview ?? overviewQuery.data ?? null;
   const detail = overview?.detail ?? headerDetail;
+  const prBody = detail && detail.body.trim().length > 0 ? detail.body : null;
   const surfaceChangeset = surfaceQuery.data?.changeset;
   const changesetState = useMemo(
     () => ({
       data: surfaceChangeset,
       isLoading:
         detail !== null &&
-        tab === "files" &&
+        needsChangeset &&
         isSurfaceHydrationReady &&
         surfaceQuery.isLoading &&
         surfaceChangeset === undefined,
@@ -203,10 +211,10 @@ export function ReviewPrView(props: {
     [
       detail,
       isSurfaceHydrationReady,
+      needsChangeset,
       surfaceChangeset,
       surfaceQuery.error,
       surfaceQuery.isLoading,
-      tab,
     ],
   );
   const checks = overview?.checks ?? EMPTY_CHECKS;
@@ -354,6 +362,40 @@ export function ReviewPrView(props: {
                     changesetState={changesetState}
                   />
                 </main>
+              ) : tab === "walkthrough" ? (
+                <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                  <ReviewPrHeader
+                    detail={detail}
+                    variant="compact"
+                    contentClassName="px-4 sm:px-5"
+                    reviewAction={
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
+                        title="Back to pull request overview"
+                        aria-label="Back to pull request overview"
+                        onClick={() => setTab("conversation")}
+                      >
+                        <ArrowLeftIcon className="size-3.5" />
+                        <span className="hidden lg:inline">Overview</span>
+                      </Button>
+                    }
+                  />
+                  <ReviewWalkthrough
+                    cwd={props.cwd}
+                    reference={props.reference}
+                    source={props.source}
+                    target={changesetState.data?.target ?? null}
+                    patch={changesetState.data?.patch}
+                    files={changesetState.data?.files ?? EMPTY_FILES}
+                    patchSignature={changesetState.data?.patchSignature ?? null}
+                    expectedHeadSha={changesetState.data?.headSha ?? null}
+                    title={detail.title}
+                    body={prBody}
+                  />
+                </main>
               ) : (
                 <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
                   <ReviewPrHeader
@@ -365,6 +407,12 @@ export function ReviewPrView(props: {
                     onOverview={() => setTab("conversation")}
                     commitsActive={tab === "commits"}
                     onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
+                    {...(WALKTHROUGH_ENABLED
+                      ? {
+                          onWalkthrough: () => setTab("walkthrough"),
+                          walkthroughActive: false,
+                        }
+                      : {})}
                   />
                   {tab === "commits" ? (
                     <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>
