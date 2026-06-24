@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
+  automationApprovalGaps,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   warningIdsForAcknowledgedRisks,
@@ -189,5 +190,132 @@ describe("automation draft warnings", () => {
 
     expect(warnings.map((warning) => warning.id)).not.toContain("local-checkout");
     expect(warnings.map((warning) => warning.id)).not.toContain("worktree-cleanup");
+  });
+});
+
+describe("automationApprovalGaps", () => {
+  const base = {
+    schedule: { type: "daily" as const, timeOfDay: "09:00" },
+    mode: "standalone" as const,
+    runtimeMode: "approval-required" as const,
+    worktreeMode: "worktree" as const,
+    prompt: "Check the build.",
+  };
+
+  it("requires full-access approval when unacknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
+  });
+
+  it("requires local-checkout approval for a local worktree", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
+  });
+
+  it("reports both blocking risks together", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("clears the banner once the risks are acknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: ["full-access", "local-checkout"],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required worktree automation", () => {
+    const gaps = automationApprovalGaps({ ...base, acknowledgedRisks: [] });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
+  it("does not block a heartbeat on local-checkout but persists it on approve", () => {
+    // Heartbeat reuses the target thread (no local env), so local-checkout never blocks the
+    // run. It is still persisted on approve so automation.update accepts a local heartbeat.
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      mode: "heartbeat",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required local heartbeat", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      mode: "heartbeat",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
+  it("does not block an auto worktree but covers its fallback on approve", () => {
+    // worktreeMode "auto" is not a definite blocker, so the banner stays full-access only and
+    // Run now is not disabled for it. But approving persists local-checkout too, so the
+    // runtime worktree-creation fallback is covered once the user has approved.
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required auto automation", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
+  it("surfaces and persists the fast-loop risk when approving for another blocker", () => {
+    // fast-interval never blocks a run on its own, but when the banner is already shown for a
+    // run blocker, approving also persists fast-interval (or automation.update would reject
+    // the sub-minute schedule). It is therefore surfaced too, so consent is transparent.
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+    });
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "fast-recurring-interval"]),
+    );
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
   });
 });
