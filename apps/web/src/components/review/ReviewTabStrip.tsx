@@ -54,7 +54,7 @@ export function ReviewTabStrip(props: {
         aria-label={props["aria-label"]}
         aria-orientation="horizontal"
         onKeyDown={moveFocus}
-        className="flex min-w-0 items-center gap-1 overflow-x-auto"
+        className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto py-2"
       >
         {props.tabs.map((tab) => {
           const active = tab.id === props.value;
