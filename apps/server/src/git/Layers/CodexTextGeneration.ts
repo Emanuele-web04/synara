@@ -19,6 +19,7 @@ import {
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
   type ReviewFindingsGenerationResult,
+  type WalkthroughGenerationResult,
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
   type ThreadRecapGenerationResult,
@@ -33,6 +34,7 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildReviewFindingsPrompt,
+  buildWalkthroughPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
@@ -542,6 +544,34 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     );
   };
 
+  const generateWalkthrough: TextGenerationShape["generateWalkthrough"] = (input) => {
+    const { prompt, outputSchemaJson } = buildWalkthroughPrompt({
+      patch: input.patch,
+      ...(input.hunksSummary ? { hunksSummary: input.hunksSummary } : {}),
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateWalkthrough",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            prologue: generated.prologue,
+            chapters: generated.chapters,
+          }) satisfies WalkthroughGenerationResult,
+      ),
+    );
+  };
+
   const generateBranchName: TextGenerationShape["generateBranchName"] = (input) => {
     return Effect.gen(function* () {
       const { imagePaths } = yield* materializeImageAttachments(
@@ -665,6 +695,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generatePrContent,
     generateDiffSummary,
     generateReviewFindings,
+    generateWalkthrough,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,

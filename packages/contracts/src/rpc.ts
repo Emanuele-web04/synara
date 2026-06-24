@@ -98,6 +98,8 @@ import {
   ReviewRemoveCommentInput,
   ReviewRemoveCommentResult,
   ReviewRunAgentInput,
+  ReviewGenerateWalkthroughInput,
+  ReviewWalkthroughResult,
   ReviewSubmitInput,
   ReviewSubmitResult,
   ReviewUpdateCommentInput,
@@ -632,6 +634,12 @@ export const WsReviewRunAgentRpc = Rpc.make(WS_METHODS.reviewRunAgent, {
   error: WsRpcError,
 });
 
+export const WsReviewGenerateWalkthroughRpc = Rpc.make(WS_METHODS.reviewGenerateWalkthrough, {
+  payload: ReviewGenerateWalkthroughInput,
+  success: ReviewWalkthroughResult,
+  error: WsRpcError,
+});
+
 export const WsReviewCheckProjectAccessRpc = Rpc.make(WS_METHODS.reviewCheckProjectAccess, {
   payload: ReviewCheckProjectAccessInput,
   success: ReviewProjectAccessResult,
@@ -1036,6 +1044,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsReviewUpdateThreadCommentRpc,
   WsReviewDeleteThreadCommentRpc,
   WsReviewRunAgentRpc,
+  WsReviewGenerateWalkthroughRpc,
   WsReviewCheckProjectAccessRpc,
   WsReviewListProjectsRpc,
   WsReviewGetProjectBoardRpc,

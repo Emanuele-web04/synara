@@ -39,6 +39,7 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildReviewFindingsPrompt,
+  buildWalkthroughPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
@@ -581,6 +582,38 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateWalkthrough: TextGenerationShape["generateWalkthrough"] = Effect.fn(
+      `${config.serviceName}.generateWalkthrough`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateWalkthrough",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildWalkthroughPrompt({
+        patch: input.patch,
+        ...(input.hunksSummary ? { hunksSummary: input.hunksSummary } : {}),
+        ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+        ...(input.prBody ? { prBody: input.prBody } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateWalkthrough",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+
+      return {
+        prologue: generated.prologue,
+        chapters: generated.chapters,
+      };
+    });
+
     const generateBranchName: TextGenerationShape["generateBranchName"] = Effect.fn(
       `${config.serviceName}.generateBranchName`,
     )(function* (input) {
@@ -726,6 +759,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generatePrContent,
       generateDiffSummary,
       generateReviewFindings,
+      generateWalkthrough,
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,

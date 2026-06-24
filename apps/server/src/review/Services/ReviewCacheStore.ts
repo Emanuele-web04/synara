@@ -3,6 +3,7 @@ import type {
   ReviewConversationResult,
   ReviewListPullRequestsResult,
   ReviewPullRequestOverview,
+  ReviewWalkthrough,
 } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
@@ -45,6 +46,10 @@ export interface ReviewCacheDiffKey extends ReviewCachePullRequestKey {
   readonly headSha: string;
 }
 
+export interface ReviewCacheWalkthroughKey extends ReviewCachePullRequestKey {
+  readonly patchSignature: string;
+}
+
 export interface ReviewCacheStoreShape {
   readonly getPullRequestList: (
     input: ReviewCacheListKey,
@@ -85,6 +90,19 @@ export interface ReviewCacheStoreShape {
       readonly headSha: string;
     },
   ) => Effect.Effect<void, PersistenceSqlError>;
+  readonly getPullRequestWalkthrough: (
+    input: ReviewCacheWalkthroughKey,
+  ) => Effect.Effect<
+    Option.Option<ReviewWalkthrough>,
+    PersistenceSqlError | PersistenceDecodeError
+  >;
+  readonly upsertPullRequestWalkthrough: (input: {
+    readonly repositoryId: string;
+    readonly reference: string;
+    readonly patchSignature: string;
+    readonly data: ReviewWalkthrough;
+    readonly fetchedAt: number;
+  }) => Effect.Effect<void, PersistenceSqlError>;
 }
 
 export class ReviewCacheStore extends ServiceMap.Service<ReviewCacheStore, ReviewCacheStoreShape>()(

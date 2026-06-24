@@ -892,6 +892,8 @@ export const makeWsRpcLayer = () =>
           rpcEffect(reviewSubmission.deleteThreadComment(input), "Failed to delete review comment"),
         [WS_METHODS.reviewRunAgent]: (input) =>
           rpcEffect(reviewSource.runAgentReview(input), "Failed to run agent review"),
+        [WS_METHODS.reviewGenerateWalkthrough]: (input) =>
+          rpcEffect(reviewSource.generateWalkthrough(input), "Failed to generate walkthrough"),
         [WS_METHODS.reviewCheckProjectAccess]: (input) =>
           rpcEffect(reviewSource.checkProjectAccess(input), "Failed to check project access"),
         [WS_METHODS.reviewListProjects]: (input) =>

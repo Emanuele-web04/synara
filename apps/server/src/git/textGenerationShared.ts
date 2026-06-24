@@ -2,6 +2,8 @@ import { Effect, Schema } from "effect";
 import {
   DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ReviewFinding,
+  ReviewWalkthroughChapter,
+  ReviewWalkthroughPrologue,
   ServerGenerateAutomationIntentResult,
   type AutomationMode,
   type ChatAttachment,
@@ -360,6 +362,59 @@ export function buildReviewFindingsPrompt(input: {
     outputSchemaJson: Schema.Struct({
       summary: Schema.String,
       findings: Schema.Array(ReviewFinding),
+    }),
+  };
+}
+
+export function buildWalkthroughPrompt(input: {
+  readonly patch: string;
+  readonly hunksSummary?: string | undefined;
+  readonly prTitle?: string | undefined;
+  readonly prBody?: string | undefined;
+}) {
+  return {
+    prompt: [
+      "You write a guided walkthrough of a pull request for a reviewer who does not know this code.",
+      "Return a JSON object with keys: prologue, chapters.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "",
+      "Chapters cluster the diff's hunks into a coherent reading order:",
+      "- group hunks by causal relationship; changes that set up or enable later changes belong together",
+      "- order chapters foundation-first (types, schemas, utilities), then core logic, then integration and tests",
+      "- each chapter has: id (e.g. 'chapter-1'), title (action-oriented verb phrase, <= 8 words),",
+      "  summary (2-3 sentences on what it enables and why), intent (one sentence on why it matters),",
+      "  anchor (short label, e.g. 'parser + stage generator'), risk (one of: blocker, major, minor, nit),",
+      "  hunkRefs (array of {filePath, oldStart} taken from the hunk list below),",
+      "  files (the distinct file paths covered by this chapter), status (use 'queued'),",
+      "  question (optional: one judgment-call question only a human can answer; omit when there is none)",
+      "- every hunk in the list below MUST appear in exactly one chapter's hunkRefs; never omit or duplicate a hunk",
+      "",
+      "Prologue orients the reviewer before the chapters:",
+      "- motivation: one sentence a non-engineer understands (what was broken/missing), or omit",
+      "- outcome: one sentence a non-engineer understands (what is better now), or omit",
+      "- keyChanges: 2-5 items, each {summary (6-10 words, outcome-focused), description (10-15 words)}",
+      "- focusAreas: 1-5 items, each {type, severity, title (3-5 words), description (why flagged + a check), locations (file paths)}",
+      "  type is one of: security, breaking-change, high-complexity, data-integrity, new-pattern, architecture, performance, testing-gap",
+      "  severity is one of: critical, high, medium, info",
+      "- complexity: {level (one of: low, medium, high, very-high), reasoning}",
+      "",
+      "Talk like a coworker, not a changelog. Describe only what the diff supports; do not invent context.",
+      ...(input.prTitle ? ["", `PR title: ${input.prTitle}`] : []),
+      ...(input.prBody ? ["", "PR body:", limitSection(input.prBody, 8_000)] : []),
+      ...(input.hunksSummary
+        ? [
+            "",
+            "Hunks (filePath | oldStart), each must land in exactly one chapter:",
+            input.hunksSummary,
+          ]
+        : []),
+      "",
+      "Diff patch:",
+      limitSection(input.patch, 50_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      prologue: ReviewWalkthroughPrologue,
+      chapters: Schema.Array(ReviewWalkthroughChapter),
     }),
   };
 }

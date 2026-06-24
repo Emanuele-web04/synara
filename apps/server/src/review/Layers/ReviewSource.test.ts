@@ -372,6 +372,8 @@ function makeLayer(options: {
       unexpected("ReviewCacheStore.upsertPullRequestConversation"),
     getPullRequestChangeset: () => unexpected("ReviewCacheStore.getPullRequestChangeset"),
     upsertPullRequestChangeset: () => unexpected("ReviewCacheStore.upsertPullRequestChangeset"),
+    getPullRequestWalkthrough: () => unexpected("ReviewCacheStore.getPullRequestWalkthrough"),
+    upsertPullRequestWalkthrough: () => unexpected("ReviewCacheStore.upsertPullRequestWalkthrough"),
   };
 
   const gitManager: GitManagerShape = {
@@ -389,6 +391,7 @@ function makeLayer(options: {
     generatePrContent: () => unexpectedEffect("TextGeneration.generatePrContent"),
     generateDiffSummary: () => unexpectedEffect("TextGeneration.generateDiffSummary"),
     generateReviewFindings: () => unexpectedEffect("TextGeneration.generateReviewFindings"),
+    generateWalkthrough: () => unexpectedEffect("TextGeneration.generateWalkthrough"),
     generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
     generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
     generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
@@ -641,6 +644,8 @@ function makeSurfaceLayer(
     upsertPullRequestConversation: () => Effect.void,
     getPullRequestChangeset: () => unexpected("ReviewCacheStore.getPullRequestChangeset"),
     upsertPullRequestChangeset: () => unexpected("ReviewCacheStore.upsertPullRequestChangeset"),
+    getPullRequestWalkthrough: () => unexpected("ReviewCacheStore.getPullRequestWalkthrough"),
+    upsertPullRequestWalkthrough: () => unexpected("ReviewCacheStore.upsertPullRequestWalkthrough"),
   };
 
   const gitManager: GitManagerShape = {
@@ -658,6 +663,7 @@ function makeSurfaceLayer(
     generatePrContent: () => unexpectedEffect("TextGeneration.generatePrContent"),
     generateDiffSummary: () => unexpectedEffect("TextGeneration.generateDiffSummary"),
     generateReviewFindings: () => unexpectedEffect("TextGeneration.generateReviewFindings"),
+    generateWalkthrough: () => unexpectedEffect("TextGeneration.generateWalkthrough"),
     generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
     generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
     generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
