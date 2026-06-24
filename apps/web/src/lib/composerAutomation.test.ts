@@ -7,6 +7,7 @@ import type { ModelSelection, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  automationClarificationPrompt,
   buildComposerAutomationDraft,
   resolveComposerAutomationRequest,
 } from "./composerAutomation";
@@ -403,5 +404,472 @@ describe("composerAutomation", () => {
       "worktree-cleanup",
     ]);
     expect(Array.from(draft.acknowledgedWarningIds)).toEqual([]);
+  });
+
+  it("asks for clarification when an automation request is missing its task and schedule", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: null,
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["taskPrompt" as const, "schedule" as const],
+      needsConfirmation: false,
+      reason: "Tell me what to automate.",
+    }));
+
+    const decision = await resolveComposerAutomationRequest({
+      message: "could you create an automation for me?",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+
+    expect(generateIntent).toHaveBeenCalledTimes(1);
+    expect(decision).toMatchObject({
+      type: "needs-clarification",
+      // The accumulated request is the cleaned invocation (politeness, "?", and "for me"
+      // filler stripped), so folding the next reply never re-parses scaffolding as the task.
+      automationMessage: "create an automation",
+      missingFields: ["taskPrompt", "schedule"],
+      reason: "Tell me what to automate.",
+    });
+  });
+
+  it("resolves to an automation once the follow-up supplies the schedule", async () => {
+    // First turn: a task with no cadence cannot be created yet.
+    const incompleteGeneration = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: null,
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: incompleteGeneration,
+    });
+    expect(first.type).toBe("needs-clarification");
+
+    // Second turn: the composer folds the reply back into the original request. The
+    // deterministic parser now finds the schedule, so the automation resolves even
+    // though optional enrichment generation fails.
+    const failingEnrichment = vi.fn(async () => {
+      throw new Error("enrichment is optional once the schedule parses deterministically");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build\nevery 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: failingEnrichment,
+    });
+    expect(combined).toMatchObject({
+      type: "automation",
+      resolution: {
+        source: "deterministic",
+        intent: {
+          schedule: { type: "interval", everySeconds: 21_600 },
+        },
+      },
+    });
+  });
+
+  it("does not leak creation scaffolding into the task prompt across turns", async () => {
+    const offline = vi.fn(async () => {
+      throw new Error("deterministic parse should cover the combined request");
+    });
+    // Mirrors ChatView folding the cleaned, filler-stripped automationMessage
+    // ("create an automation") with the user's follow-up answer.
+    const decision = await resolveComposerAutomationRequest({
+      message: "create an automation\ncheck the build every 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(decision.type).toBe("automation");
+    if (decision.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(decision.resolution.intent.prompt).toBe("check the build");
+    expect(decision.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 21_600,
+    });
+  });
+
+  it("strips possessive creation filler before the task across turns", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: "Check build",
+      taskPrompt: "Check the build.",
+      schedule: null,
+      mode: "heartbeat" as const,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "create an automation for me to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(first).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "create an automation to check the build",
+    });
+
+    const offline = vi.fn(async () => {
+      throw new Error("deterministic parse should cover the combined request");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build\nevery 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(combined.type).toBe("automation");
+    if (combined.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(combined.resolution.intent.prompt).toBe("check the build");
+    expect(combined.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 21_600,
+    });
+
+    const withoutConnector = await resolveComposerAutomationRequest({
+      message: "create an automation for me check the build\nevery 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(withoutConnector.type).toBe("automation");
+    if (withoutConnector.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(withoutConnector.resolution.intent.prompt).toBe("check the build");
+
+    const scheduledTask = await resolveComposerAutomationRequest({
+      message: "schedule a task for me to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(scheduledTask).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "schedule a task to check the build",
+    });
+
+    const scheduledTaskCombined = await resolveComposerAutomationRequest({
+      message: "schedule a task to check the build\nevery 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(scheduledTaskCombined.type).toBe("automation");
+    if (scheduledTaskCombined.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(scheduledTaskCombined.resolution.intent.prompt).toBe("check the build");
+
+    const usSubject = await resolveComposerAutomationRequest({
+      message: "create an automation for US outages every hour",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(usSubject.type).toBe("automation");
+    if (usSubject.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(usSubject.resolution.intent.prompt).toBe("US outages");
+    expect(usSubject.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 3600,
+    });
+
+    const metricsSubject = await resolveComposerAutomationRequest({
+      message: "create an automation for metrics every hour",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(metricsSubject.type).toBe("automation");
+    if (metricsSubject.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(metricsSubject.resolution.intent.prompt).toBe("metrics");
+    expect(metricsSubject.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 3600,
+    });
+
+    const leadingBareCadence = await resolveComposerAutomationRequest({
+      message: "every hour check metrics",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(leadingBareCadence.type).toBe("automation");
+    if (leadingBareCadence.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(leadingBareCadence.resolution.intent.prompt).toBe("check metrics");
+    expect(leadingBareCadence.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 3600,
+    });
+
+    const punctuatedFiller = await resolveComposerAutomationRequest({
+      message: "create an automation for me!",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(punctuatedFiller).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "create an automation",
+    });
+
+    const punctuatedCombined = await resolveComposerAutomationRequest({
+      message: "create an automation\ncheck the build every 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(punctuatedCombined.type).toBe("automation");
+    if (punctuatedCombined.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(punctuatedCombined.resolution.intent.prompt).toBe("check the build");
+  });
+
+  it("strips Italian possessive creation filler before the task across turns", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "it",
+      name: "Controlla build",
+      taskPrompt: "Controlla la build.",
+      schedule: null,
+      mode: "heartbeat" as const,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "crea un'automazione per me che controlla la build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(first).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "crea un'automazione che controlla la build",
+    });
+
+    const offline = vi.fn(async () => {
+      throw new Error("deterministic parse should cover the combined request");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "crea un'automazione che controlla la build\nogni 6 ore",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(combined.type).toBe("automation");
+    if (combined.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(combined.resolution.intent.prompt).toBe("controlla la build");
+    expect(combined.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 21_600,
+    });
+
+    const mercatoSubject = await resolveComposerAutomationRequest({
+      message: "crea un'automazione per mercato ogni ora",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(mercatoSubject.type).toBe("automation");
+    if (mercatoSubject.type !== "automation") {
+      throw new Error("Expected automation decision");
+    }
+    expect(mercatoSubject.resolution.intent.prompt).toBe("mercato");
+    expect(mercatoSubject.resolution.intent.schedule).toMatchObject({
+      type: "interval",
+      everySeconds: 3600,
+    });
+  });
+
+  it("keeps 'please' as task content when generation is unavailable", async () => {
+    // Generation fails, so the deterministic invocation is carried forward. "please" must
+    // survive (it is real task content here), unlike "for me" possessive filler.
+    const offline = vi.fn(async () => {
+      throw new Error("generation unavailable");
+    });
+    const decision = await resolveComposerAutomationRequest({
+      message: "create an automation to remind me to say please",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(decision.type).toBe("needs-clarification");
+    if (decision.type !== "needs-clarification") {
+      throw new Error("Expected needs-clarification decision");
+    }
+    expect(decision.automationMessage).toContain("say please");
+  });
+
+  describe("automationClarificationPrompt", () => {
+    it("asks for both the task and cadence when the task is missing", () => {
+      expect(automationClarificationPrompt(["taskPrompt", "schedule"])).toContain(
+        "what should this automation do",
+      );
+    });
+
+    it("asks only for the cadence when just the schedule is missing", () => {
+      const prompt = automationClarificationPrompt(["schedule"]);
+      expect(prompt).toContain("How often");
+      expect(prompt).not.toContain("what should this automation do");
+    });
+
+    it("asks only for the task when the cadence is already known", () => {
+      const prompt = automationClarificationPrompt(["taskPrompt"]);
+      expect(prompt).toContain("What should this automation do");
+      expect(prompt).not.toContain("How often");
+    });
+
+    it("asks for task and cadence when nothing was reported, so setup can recover", () => {
+      // Empty missingFields (generation timed out/failed) must not loop on cadence for a
+      // bare request that has no task yet.
+      expect(automationClarificationPrompt([])).toContain("what should this automation do");
+    });
+  });
+
+  it("asks how often instead of accepting a defaulted manual schedule", async () => {
+    // The generator extracts the task but reports the schedule as missing; it must not be
+    // silently accepted as a manual automation — the conversational "how often?" follow-up
+    // should fire for the common "create an automation to check the build" case.
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.92,
+      language: "en",
+      name: "Check the build",
+      taskPrompt: "Check the build.",
+      schedule: null,
+      mode: "heartbeat" as const,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const decision = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    expect(decision).toMatchObject({
+      type: "needs-clarification",
+      missingFields: ["schedule"],
+    });
+  });
+
+  it("keeps an explicit /automation setup parseable across follow-ups", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: { type: "interval" as const, everySeconds: 21_600 },
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["taskPrompt" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "/automation every 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+    // The marker is stripped, so the carry-forward re-seeds a creation scaffold instead
+    // of leaving a cadence-only fragment that the next turn could not re-detect.
+    expect(first).toMatchObject({
+      type: "needs-clarification",
+      automationMessage: "create an automation every 6 hours",
+    });
+
+    const offline = vi.fn(async () => {
+      throw new Error("deterministic parse should cover the combined request");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "create an automation every 6 hours\ncheck the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(combined).toMatchObject({
+      type: "automation",
+      resolution: {
+        intent: {
+          prompt: "check the build",
+          schedule: { type: "interval", everySeconds: 21_600 },
+        },
+      },
+    });
+
+    const dailyWithTaskOrdinal = await resolveComposerAutomationRequest({
+      message: "/automation every day check every second item in the queue",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(dailyWithTaskOrdinal).toMatchObject({
+      type: "automation",
+      resolution: {
+        intent: {
+          prompt: "check every second item in the queue",
+          schedule: { type: "daily", timeOfDay: "09:00" },
+        },
+      },
+    });
+
+    const leadingOrdinalWithDailyCadence = await resolveComposerAutomationRequest({
+      message: "/automation every second item in the queue daily",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: offline,
+    });
+    expect(leadingOrdinalWithDailyCadence).toMatchObject({
+      type: "automation",
+      resolution: {
+        intent: {
+          prompt: "every second item in the queue",
+          schedule: { type: "daily", timeOfDay: "09:00" },
+        },
+      },
+    });
   });
 });

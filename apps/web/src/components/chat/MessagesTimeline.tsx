@@ -234,6 +234,8 @@ interface MessagesTimelineProps {
   controllerRef?: RefObject<MessagesTimelineController | null>;
   /** Message ids currently pinned for the active thread (drives the footer pin toggle state). */
   pinnedMessageIds?: ReadonlySet<MessageId>;
+  /** Excludes transient rows from persistent pin affordances. */
+  canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
@@ -288,6 +290,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   listRef,
   controllerRef,
   pinnedMessageIds,
+  canPinMessage,
   onTogglePinMessage,
   threadMarkers = [],
   timelineEntries,
@@ -1036,10 +1039,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             streaming: row.assistantCopyStreaming,
           });
           const messagePinned = pinnedMessageIds?.has(row.message.id) ?? false;
+          const messageCanPin = canPinMessage?.(row.message.id) ?? true;
           // Offer the pin toggle wherever copy is offered (a complete, terminal answer);
           // keep it visible for an already-pinned message so it can always be unpinned.
           const showPinToggle =
-            Boolean(onTogglePinMessage) && (assistantCopyState.visible || messagePinned);
+            messageCanPin &&
+            Boolean(onTogglePinMessage) &&
+            (assistantCopyState.visible || messagePinned);
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [

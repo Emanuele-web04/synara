@@ -43,6 +43,7 @@ interface UseTranscriptAssistantSelectionActionOptions {
   addComposerAssistantSelectionToDraft: (
     selection: ComposerAssistantSelectionAttachment,
   ) => boolean;
+  canReferenceAssistantSelection?: (selection: TranscriptAssistantSelection) => boolean;
   scheduleComposerFocus: () => void;
   onMessagesClickCaptureBase: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerDownBase: PointerEventHandler<HTMLDivElement>;
@@ -65,6 +66,7 @@ export function useTranscriptAssistantSelectionAction(
     composerFilesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft,
+    canReferenceAssistantSelection,
     scheduleComposerFocus,
     onMessagesClickCaptureBase,
     onMessagesPointerDownBase,
@@ -162,7 +164,11 @@ export function useTranscriptAssistantSelectionAction(
         }
 
         const selectionState = readTranscriptAssistantSelection({ container });
-        if (!selectionState) {
+        if (
+          !selectionState ||
+          (canReferenceAssistantSelection &&
+            !canReferenceAssistantSelection(selectionState.selection))
+        ) {
           setPendingTranscriptSelectionAction(null);
           return;
         }
@@ -179,12 +185,21 @@ export function useTranscriptAssistantSelectionAction(
         });
       });
     },
-    [enabled],
+    [canReferenceAssistantSelection, enabled],
   );
 
   const commitTranscriptAssistantSelection = useCallback(() => {
     const pendingSelection = pendingTranscriptSelectionAction;
     if (!pendingSelection) {
+      return;
+    }
+
+    if (
+      canReferenceAssistantSelection &&
+      !canReferenceAssistantSelection(pendingSelection.selection)
+    ) {
+      setPendingTranscriptSelectionAction(null);
+      window.getSelection()?.removeAllRanges();
       return;
     }
 
@@ -222,6 +237,7 @@ export function useTranscriptAssistantSelectionAction(
     }
   }, [
     addComposerAssistantSelectionToDraft,
+    canReferenceAssistantSelection,
     composerAssistantSelectionsRef,
     composerFilesRef,
     composerImagesRef,

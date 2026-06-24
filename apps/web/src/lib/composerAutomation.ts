@@ -9,6 +9,7 @@ import type {
   AutomationMode,
   ModelSelection,
   ProjectId,
+  ServerAutomationIntentMissingField,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ThreadId,
@@ -30,6 +31,7 @@ import {
 } from "./automationDraft";
 import {
   detectChatAutomationExecutionScope,
+  ensureAutomationConversationScaffold,
   extractChatAutomationInvocation,
   extractPlainChatAutomationCreationInvocation,
   parseChatAutomationInvocation,
@@ -49,7 +51,16 @@ const DEFAULT_GENERATE_INTENT_TIMEOUT_MS = 1_500;
 export type ComposerAutomationRequestDecision =
   | { readonly type: "normal-chat" }
   | {
-      readonly type: "missing-schedule";
+      // The message reads as an automation request but is missing required fields
+      // (a task and/or a schedule). ChatView turns this into a conversational
+      // follow-up instead of dropping the message: it asks for what's missing and
+      // folds the user's next reply back in before re-resolving. `automationMessage`
+      // is the cleaned invocation (politeness/creation scaffold stripped) so the
+      // accumulated request never re-parses "could you create an automation for me?"
+      // scaffolding as task content.
+      readonly type: "needs-clarification";
+      readonly automationMessage: string;
+      readonly missingFields: readonly ServerAutomationIntentMissingField[];
       readonly reason: string | null;
     }
   | {
@@ -68,6 +79,46 @@ export interface ComposerAutomationDraftDecision {
   };
   readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
   readonly needsDraftReview: boolean;
+}
+
+// Possessive "for me" filler carries no task content, but once a follow-up answer
+// is folded onto the accumulated request it would survive into the parsed prompt
+// (e.g. "for me check the build"). Strip it while keeping "please", which can be
+// real task content ("say please").
+function stripTrailingAutomationFiller(message: string): string {
+  return message
+    .replace(/[.!?。！？]+\s*$/u, "")
+    .replace(/\b(automation|task|job|check|monitor|reminder)\s+for\s+(?:me|myself)\s+/iu, "$1 ")
+    .replace(/\b(automazione|task|controllo|monitoraggio)\s+per\s+(?:me|noi)\s+/iu, "$1 ")
+    .replace(/\s+(?:for\s+(?:me|myself)|per\s+(?:me|noi))\s*$/iu, "")
+    .trim();
+}
+
+// Builds the follow-up question shown when an automation request is missing required
+// fields. Falls back to asking for a schedule (the dominant missing field) when the
+// generator could not report what was missing.
+export function automationClarificationPrompt(
+  missingFields: readonly ServerAutomationIntentMissingField[],
+): string {
+  // When the generator could not say what was missing (timeout/failure on a bare
+  // request), ask for both task and schedule so setup can still recover instead of
+  // looping on a cadence-only question that a bare "create an automation" can't answer.
+  const fields: readonly ServerAutomationIntentMissingField[] =
+    missingFields.length > 0 ? missingFields : ["taskPrompt", "schedule"];
+  const needsTask = fields.includes("taskPrompt");
+  const needsSchedule = fields.includes("schedule");
+  if (needsTask && needsSchedule) {
+    return 'Sure, what should this automation do, and how often should it run? For example: "every weekday at 9am, summarize my open PRs."';
+  }
+  if (needsTask) {
+    // Cadence is already known, so asking for it again risks the user repeating it and
+    // leaving a duplicate schedule phrase in the saved task.
+    return "What should this automation do? For example: summarize my open PRs, or check the build.";
+  }
+  if (needsSchedule) {
+    return "How often should this automation run? For example: every 6 hours, weekdays at 9am, or daily at 18:00.";
+  }
+  return "A couple more details: what should this automation do, and how often should it run?";
 }
 
 // ─── ENTRY POINT ─────────────────────────────────────────────
@@ -168,9 +219,24 @@ export async function resolveComposerAutomationRequest(input: {
     defaultMode: automationDefaultMode,
     executionScope: automationExecutionScope,
   });
-  if (!automationResolution) {
+  // The generator defaults an unspecified schedule to "manual", which would otherwise
+  // open a manual-automation review dialog for "create an automation to check the build"
+  // instead of asking "how often?". When generation reports the schedule as still
+  // missing, keep the conversational follow-up rather than accepting that default.
+  const generatedScheduleStillMissing =
+    automationResolution !== null &&
+    automationResolution.source === "generated" &&
+    (generatedAutomationIntent?.missingFields.includes("schedule") ?? false) &&
+    automationResolution.intent.schedule.type === "manual";
+  if (!automationResolution || generatedScheduleStillMissing) {
     return {
-      type: "missing-schedule",
+      type: "needs-clarification",
+      // Strip trailing filler, then guarantee a parseable trigger survives so the next
+      // folded reply still resolves as an automation (markers/cadence-only would not).
+      automationMessage: ensureAutomationConversationScaffold(
+        stripTrailingAutomationFiller(automationMessage),
+      ),
+      missingFields: generatedAutomationIntent?.missingFields ?? [],
       reason: generatedAutomationIntent?.reason ?? null,
     };
   }
