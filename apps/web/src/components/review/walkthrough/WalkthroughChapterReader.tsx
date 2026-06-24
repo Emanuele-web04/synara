@@ -48,8 +48,8 @@ export function WalkthroughChapterReader(props: {
   const hiddenFindings = findings.length - visibleFindings.length;
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-7 sm:px-7">
-      <div>
+    <div className="w-full px-5 py-7 sm:px-7">
+      <div className="mx-auto max-w-3xl">
         <div className="flex items-start justify-between gap-3 border-b border-border/40 pb-4">
           <div className="flex min-w-0 flex-1 items-start gap-2.5">
             <span
@@ -126,7 +126,7 @@ export function WalkthroughChapterReader(props: {
       </div>
 
       {findings.length > 0 ? (
-        <section className="mt-10">
+        <section className="mx-auto mt-10 max-w-3xl">
           <h3 className="mb-2 flex items-center gap-1.5 border-b border-border/40 pb-2 text-[15px] font-semibold text-foreground">
             <CircleAlertIcon className="size-3.5 text-destructive" />
             Findings
@@ -156,7 +156,7 @@ export function WalkthroughChapterReader(props: {
 
       <nav
         aria-label="Chapter navigation"
-        className="mt-10 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-4"
+        className="mx-auto mt-10 flex max-w-3xl flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-4"
       >
         <Button
           size="sm"
