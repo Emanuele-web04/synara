@@ -60,8 +60,11 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 1_024;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(60);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 1_024;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(60);
+const BUFFERED_TOOL_OUTPUT_BY_KEY_CACHE_CAPACITY = 2_048;
+const BUFFERED_TOOL_OUTPUT_BY_KEY_TTL = Duration.minutes(60);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const MAX_BUFFERED_PROPOSED_PLAN_CHARS = 64_000;
+const MAX_BUFFERED_TOOL_OUTPUT_CHARS = 24_000;
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
@@ -86,6 +89,11 @@ type RuntimeIngestionInput =
     };
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
+type ToolOutputStreamKind = "command_output" | "file_change_output";
+type BufferedToolOutput = {
+  readonly text: string;
+  readonly truncated: boolean;
+};
 type ProviderDiffPlaceholder = {
   readonly checkpointRef: CheckpointRef;
   readonly checkpointTurnCount: number;
@@ -246,6 +254,75 @@ export function appendCappedBufferedText(existing: string, delta: string, limit:
     0,
     normalizedLimit - BUFFERED_TEXT_TRUNCATION_MARKER.length,
   )}${BUFFERED_TEXT_TRUNCATION_MARKER}`;
+}
+
+function toolOutputStreamKind(
+  event: ProviderRuntimeEvent,
+): ToolOutputStreamKind | undefined {
+  if (event.type !== "content.delta") {
+    return undefined;
+  }
+  return event.payload.streamKind === "command_output" ||
+    event.payload.streamKind === "file_change_output"
+    ? event.payload.streamKind
+    : undefined;
+}
+
+function toolOutputBufferKey(event: ProviderRuntimeEvent): string | null {
+  if (!event.itemId) {
+    return null;
+  }
+  return [event.threadId, event.turnId ?? "no-turn", event.itemId].join(":");
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function mergeBufferedToolOutputData(
+  data: unknown,
+  bufferedOutput: BufferedToolOutput,
+): Record<string, unknown> {
+  const baseData = isJsonObject(data) ? data : {};
+  const existingRawOutput = isJsonObject(baseData.rawOutput)
+    ? baseData.rawOutput
+    : typeof baseData.rawOutput === "string" && baseData.rawOutput.trim().length > 0
+      ? { output: baseData.rawOutput }
+      : {};
+  const hasStructuredOutput =
+    hasNonEmptyString(existingRawOutput.output) ||
+    hasNonEmptyString(existingRawOutput.stdout) ||
+    hasNonEmptyString(existingRawOutput.stderr);
+  return {
+    ...baseData,
+    rawOutput: {
+      ...existingRawOutput,
+      ...(hasStructuredOutput ? {} : { output: bufferedOutput.text }),
+      ...(bufferedOutput.truncated ? { truncated: true } : {}),
+    },
+  };
+}
+
+function withBufferedToolOutputData(
+  event: ProviderRuntimeEvent,
+  bufferedOutput: BufferedToolOutput | undefined,
+): ProviderRuntimeEvent {
+  if (!bufferedOutput) {
+    return event;
+  }
+  if (event.type !== "item.updated" && event.type !== "item.completed") {
+    return event;
+  }
+  if (event.payload.itemType !== "command_execution" && event.payload.itemType !== "file_change") {
+    return event;
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      data: mergeBufferedToolOutputData(event.payload.data, bufferedOutput),
+    },
+  } as ProviderRuntimeEvent;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -1215,6 +1292,11 @@ const make = Effect.gen(function* () {
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
+  const bufferedToolOutputByKey = yield* Cache.make<string, BufferedToolOutput | undefined>({
+    capacity: BUFFERED_TOOL_OUTPUT_BY_KEY_CACHE_CAPACITY,
+    timeToLive: BUFFERED_TOOL_OUTPUT_BY_KEY_TTL,
+    lookup: () => Effect.succeed(undefined),
+  });
   const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
 
   const getThreadDetail = Effect.fnUntraced(function* (
@@ -1390,6 +1472,37 @@ const make = Effect.gen(function* () {
 
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
+
+  const appendBufferedToolOutput = (key: string, delta: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.flatMap((existingEntry) => {
+        const existing = Option.getOrUndefined(existingEntry);
+        const existingText = existing?.text ?? "";
+        const truncated = existingText.length + delta.length > MAX_BUFFERED_TOOL_OUTPUT_CHARS;
+        return Cache.set(bufferedToolOutputByKey, key, {
+          text: appendCappedBufferedText(
+            existingText,
+            delta,
+            MAX_BUFFERED_TOOL_OUTPUT_CHARS,
+          ),
+          truncated: existing?.truncated === true || truncated,
+        });
+      }),
+    );
+
+  const getBufferedToolOutput = (key: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.map((existingEntry) => Option.getOrUndefined(existingEntry)),
+    );
+
+  const takeBufferedToolOutput = (key: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.flatMap((existingEntry) =>
+        Cache.invalidate(bufferedToolOutputByKey, key).pipe(
+          Effect.as(Option.getOrUndefined(existingEntry)),
+        ),
+      ),
+    );
 
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
@@ -2150,6 +2263,17 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const toolOutputKind = toolOutputStreamKind(event);
+      const toolOutputKey = toolOutputBufferKey(event);
+      if (
+        toolOutputKind &&
+        toolOutputKey &&
+        event.type === "content.delta" &&
+        event.payload.delta.length > 0
+      ) {
+        yield* appendBufferedToolOutput(toolOutputKey, event.payload.delta);
+      }
+
       const assistantDelta =
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
@@ -2441,7 +2565,13 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event);
+      const activityEvent =
+        event.type === "item.completed" && toolOutputKey
+          ? withBufferedToolOutputData(event, yield* takeBufferedToolOutput(toolOutputKey))
+          : event.type === "item.updated" && toolOutputKey
+            ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
+            : event;
+      const activities = runtimeEventToActivities(activityEvent);
       yield* Effect.forEach(activities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",

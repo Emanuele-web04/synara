@@ -555,6 +555,57 @@ function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry[
   return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
 }
 
+function workLogToolOutputsEqual(
+  a: NonNullable<WorkLogEntry["toolDetails"]>["output"],
+  b: NonNullable<WorkLogEntry["toolDetails"]>["output"],
+) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.output === b.output &&
+    a.stdout === b.stdout &&
+    a.stderr === b.stderr &&
+    a.exitCode === b.exitCode &&
+    a.truncated === b.truncated
+  );
+}
+
+function workLogToolEditsEqual(
+  left: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
+  right: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
+) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((edit, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      edit.path === other.path &&
+      edit.oldText === other.oldText &&
+      edit.newText === other.newText
+    );
+  });
+}
+
+function workLogToolDetailsEqual(
+  a: WorkLogEntry["toolDetails"],
+  b: WorkLogEntry["toolDetails"],
+) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.title === b.title &&
+    a.command === b.command &&
+    a.diff === b.diff &&
+    a.content === b.content &&
+    stringArraysEqual(a.files, b.files) &&
+    workLogToolOutputsEqual(a.output, b.output) &&
+    workLogToolEditsEqual(a.edits, b.edits)
+  );
+}
+
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
@@ -574,7 +625,8 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     stringArraysEqual(a.changedFiles, b.changedFiles) &&
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
     workLogSubagentsEqual(a.subagents, b.subagents) &&
-    workLogAutomationsEqual(a.automation, b.automation)
+    workLogAutomationsEqual(a.automation, b.automation) &&
+    workLogToolDetailsEqual(a.toolDetails, b.toolDetails)
   );
 }
 

@@ -121,6 +121,7 @@ export function isGenericToolTitle(value: string): boolean {
     normalized === "ran command" ||
     normalized === "running command" ||
     normalized === "command execution" ||
+    normalized === "file change" ||
     normalized === "find" ||
     normalized === "read file"
   );

@@ -23,6 +23,11 @@ import {
   isGenericToolTitle,
   normalizeCompactToolLabel,
 } from "./lib/toolCallLabel";
+import {
+  deriveWorkLogToolDetails,
+  mergeWorkLogToolDetails,
+  type WorkLogToolDetails,
+} from "./lib/toolCallDetails";
 import { isStalePendingRequestFailureDetail } from "./lib/pendingInteraction";
 import { stripProposedPlanBlocksFromText } from "./proposedPlan";
 
@@ -66,6 +71,7 @@ export interface WorkLogEntry {
   toolTitle?: string;
   toolName?: string;
   toolCallId?: string;
+  toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   subagents?: ReadonlyArray<WorkLogSubagent>;
@@ -968,6 +974,20 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   ) {
     delete entry.detail;
   }
+  const toolDetails = deriveWorkLogToolDetails({
+    payload,
+    itemType,
+    requestKind,
+    command: entry.command,
+    rawCommand: entry.rawCommand,
+    detail: entry.detail,
+    changedFiles: entry.changedFiles ?? changedFiles,
+    label: entry.label,
+    toolTitle: entry.toolTitle,
+  });
+  if (toolDetails) {
+    entry.toolDetails = toolDetails;
+  }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
     entry.collapseKey = collapseKey;
@@ -1135,6 +1155,7 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const turnId = next.turnId ?? previous.turnId;
   return {
     ...previous,
@@ -1153,6 +1174,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(toolDetails ? { toolDetails } : {}),
   };
 }
 
