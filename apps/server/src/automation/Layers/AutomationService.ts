@@ -302,7 +302,9 @@ function effectiveMinimumIntervalSeconds(input: {
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
+  readonly schedule?: AutomationDefinition["schedule"];
   readonly acknowledgedRisks: readonly string[];
+  readonly now?: string;
 }): string | null {
   const acknowledgedRisks = new Set(input.acknowledgedRisks);
   if (input.runtimeMode === "full-access" && !acknowledgedRisks.has("full-access")) {
@@ -310,6 +312,16 @@ function riskAcknowledgementError(input: {
   }
   if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
     return "Automation local checkout mode requires an explicit acknowledgement.";
+  }
+  if (input.schedule !== undefined && input.now !== undefined) {
+    const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+    if (
+      spacingSeconds !== null &&
+      spacingSeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
+      !acknowledgedRisks.has("fast-interval")
+    ) {
+      return "Automation fast interval mode requires an explicit acknowledgement.";
+    }
   }
   return null;
 }
@@ -677,7 +689,9 @@ export const AutomationServiceLive = Layer.effect(
     const validateRiskAcknowledgements = (input: {
       readonly runtimeMode: AutomationDefinition["runtimeMode"];
       readonly worktreeMode: AutomationDefinition["worktreeMode"];
+      readonly schedule?: AutomationDefinition["schedule"];
       readonly acknowledgedRisks: readonly string[];
+      readonly now?: string;
     }) => {
       const message = riskAcknowledgementError(input);
       return message
@@ -2018,7 +2032,9 @@ export const AutomationServiceLive = Layer.effect(
         yield* validateRiskAcknowledgements({
           runtimeMode: definition.runtimeMode,
           worktreeMode: definition.worktreeMode,
+          schedule: definition.schedule,
           acknowledgedRisks: definition.acknowledgedRisks,
+          now,
         });
         // Heartbeat automations continue a single shared thread, so a manual run must not
         // race a scheduled (or earlier manual) run that is still in flight. Standalone
@@ -2154,7 +2170,9 @@ export const AutomationServiceLive = Layer.effect(
         const riskBlockReason = riskAcknowledgementError({
           runtimeMode: definition.runtimeMode,
           worktreeMode: definition.worktreeMode,
+          schedule: definition.schedule,
           acknowledgedRisks: definition.acknowledgedRisks,
+          now,
         });
         if (riskBlockReason !== null) {
           const { run, inserted } = yield* createPendingRun(

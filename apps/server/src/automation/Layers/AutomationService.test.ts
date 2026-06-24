@@ -879,6 +879,43 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("blocks due scheduled fast intervals until acknowledged", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-due-unapproved-fast-interval");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 30 },
+          acknowledgedRisks: [],
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const listed = yield* service.list({ projectId });
+
+      assert.strictEqual(results.length, 0);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      assert.strictEqual(
+        listed.definitions.find((definition) => definition.id === automationId)?.nextRunAt,
+        "2026-06-16T10:00:30.000Z",
+      );
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "skipped",
+      );
+    }),
+  );
+
   it.effect("advances blocked scheduled automations so later eligible definitions can run", () =>
     Effect.gen(function* () {
       resetHarness();
