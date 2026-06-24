@@ -13,11 +13,6 @@ import {
 import { PanelStateMessage } from "../components/chat/PanelStateMessage";
 import { ReviewBoard } from "../components/review/ReviewBoard";
 import { ReviewRouteChrome } from "../components/review/ReviewRouteChrome";
-import {
-  ReviewWalkthroughPrototype,
-  type WalkthroughPrototypeVariant,
-  WALKTHROUGH_PROTOTYPE_VARIANTS,
-} from "../components/review/ReviewWalkthroughPrototype";
 import { useReviewCwd } from "../components/review/useReviewCwd";
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
@@ -37,8 +32,6 @@ const ReviewSurface = lazy(() =>
 
 export interface ReviewIndexSearch {
   cwd?: string | undefined;
-  prototypeWalkthrough?: boolean | undefined;
-  variant?: WalkthroughPrototypeVariant | undefined;
 }
 
 function normalizeSearchString(value: unknown): string | undefined {
@@ -49,26 +42,12 @@ function normalizeSearchString(value: unknown): string | undefined {
   return normalized.length > 0 ? normalized : undefined;
 }
 
-function normalizeSearchBoolean(value: unknown): boolean | undefined {
-  return value === true || value === "true" || value === "1" || value === 1 ? true : undefined;
-}
-
-function isWalkthroughVariant(value: string): value is WalkthroughPrototypeVariant {
-  return WALKTHROUGH_PROTOTYPE_VARIANTS.some((variant) => variant.id === value);
-}
-
-function normalizeWalkthroughVariant(value: unknown): WalkthroughPrototypeVariant | undefined {
-  return typeof value === "string" && isWalkthroughVariant(value) ? value : undefined;
-}
-
 function ReviewIndexRouteView() {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const { resolvedCwd, projects, selectedProjectName } = useReviewCwd(search.cwd);
   const [showEntry, setShowEntry] = useState(false);
   const [branchSource, setBranchSource] = useState<ReviewSourceRef | null>(null);
-  const showWalkthroughPrototype = search.prototypeWalkthrough === true;
-  const walkthroughVariant = search.variant ?? "stage";
   const hasSelectedProject =
     resolvedCwd !== null && projects.some((project) => project.cwd === resolvedCwd);
 
@@ -108,27 +87,7 @@ function ReviewIndexRouteView() {
             });
           }}
         >
-          {showWalkthroughPrototype ? (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-8 shrink-0 rounded-xl px-2.5 text-[11px]"
-              onClick={() => {
-                void navigate({
-                  to: "/review",
-                  replace: true,
-                  search: (previous) => ({
-                    ...previous,
-                    prototypeWalkthrough: undefined,
-                    variant: undefined,
-                  }),
-                });
-              }}
-            >
-              Review board
-            </Button>
-          ) : branchSource ? (
+          {branchSource ? (
             <Button
               type="button"
               size="sm"
@@ -152,18 +111,7 @@ function ReviewIndexRouteView() {
           )}
         </ReviewRouteChrome>
 
-        {showWalkthroughPrototype ? (
-          <ReviewWalkthroughPrototype
-            variant={walkthroughVariant}
-            onVariantChange={(variant) => {
-              void navigate({
-                to: "/review",
-                replace: true,
-                search: (previous) => ({ ...previous, prototypeWalkthrough: true, variant }),
-              });
-            }}
-          />
-        ) : branchSource ? (
+        {branchSource ? (
           <Suspense
             fallback={
               <PanelStateMessage density="compact" fill="flex">
@@ -194,8 +142,6 @@ function ReviewIndexRouteView() {
 export const Route = createFileRoute("/_chat/review/")({
   validateSearch: (search): ReviewIndexSearch => ({
     cwd: normalizeSearchString(search.cwd),
-    prototypeWalkthrough: normalizeSearchBoolean(search.prototypeWalkthrough),
-    variant: normalizeWalkthroughVariant(search.variant),
   }),
   component: ReviewIndexRouteView,
 });
