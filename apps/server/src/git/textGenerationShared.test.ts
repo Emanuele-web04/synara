@@ -3,13 +3,40 @@
 // Layer: Server git utility test
 // Depends on: Effect schema decoding and automation completion prompt schemas.
 
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
   buildAutomationCompletionEvaluationPrompt,
+  buildWalkthroughPrompt,
   decodeStructuredTextGenerationOutput,
+  stripNullOptionalFields,
+  toJsonSchemaObject,
 } from "./textGenerationShared.ts";
+
+// OpenAI strict structured-output mode rejects a schema whose object `required` omits any
+// property, or that uses `allOf`. Assert the codex-bound JSON Schema satisfies both, recursively.
+function assertStrict(node: unknown, path: string): void {
+  if (Array.isArray(node)) {
+    node.forEach((entry, index) => assertStrict(entry, `${path}[${String(index)}]`));
+    return;
+  }
+  if (node === null || typeof node !== "object") {
+    return;
+  }
+  const record = node as Record<string, unknown>;
+  expect(record, `allOf must not appear at ${path}`).not.toHaveProperty("allOf");
+  const properties = record["properties"];
+  if (record["type"] === "object" && properties !== null && typeof properties === "object") {
+    const required = Array.isArray(record["required"]) ? (record["required"] as string[]) : [];
+    expect(required.toSorted(), `required must list every property at ${path}`).toEqual(
+      Object.keys(properties as Record<string, unknown>).toSorted(),
+    );
+  }
+  for (const [, value] of Object.entries(record)) {
+    assertStrict(value, path);
+  }
+}
 
 describe("textGenerationShared", () => {
   it("accepts out-of-range automation completion confidence for downstream clamping", async () => {
@@ -39,5 +66,40 @@ describe("textGenerationShared", () => {
       confidence: 1.2,
       reason: "The run says the PR is ready.",
     });
+  });
+});
+
+describe("toJsonSchemaObject (OpenAI strict mode)", () => {
+  it("marks every object property required and drops allOf for optional + constrained fields", () => {
+    const schema = Schema.Struct({
+      title: Schema.String,
+      note: Schema.optional(Schema.String),
+      count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+      nested: Schema.Struct({ flag: Schema.optional(Schema.Boolean) }),
+    });
+    assertStrict(toJsonSchemaObject(schema), "$");
+  });
+
+  it("produces a strict schema for the real walkthrough output (regression: missing 'motivation')", () => {
+    const { outputSchemaJson } = buildWalkthroughPrompt({ patch: "" });
+    assertStrict(toJsonSchemaObject(outputSchemaJson), "$");
+  });
+});
+
+describe("stripNullOptionalFields", () => {
+  it("drops null values for optional keys but keeps explicit NullOr nulls", () => {
+    const schema = Schema.Struct({
+      kept: Schema.String,
+      optional: Schema.optional(Schema.String),
+      nullable: Schema.NullOr(Schema.String),
+    });
+    const result = stripNullOptionalFields(schema, {
+      kept: "x",
+      optional: null,
+      nullable: null,
+    }) as Record<string, unknown>;
+    expect(result).not.toHaveProperty("optional");
+    expect(result["kept"]).toBe("x");
+    expect(result["nullable"]).toBeNull();
   });
 });
