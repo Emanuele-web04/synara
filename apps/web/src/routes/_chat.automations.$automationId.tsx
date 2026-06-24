@@ -485,7 +485,9 @@ function AutomationDetailView() {
               <AutomationApprovalBanner
                 warnings={approvalGaps.warnings}
                 busy={approvalBusy}
-                onApprove={() => void approveAutomationRisks()}
+                // Swallow the rejection here; the mutation's onError already toasts. Without
+                // this, void-ing the rejected promise would surface an unhandled rejection.
+                onApprove={() => void approveAutomationRisks().catch(() => undefined)}
                 onApproveAndRun={() => void handleApproveAndRunNow()}
               />
               <DetailGroup title="Status">
