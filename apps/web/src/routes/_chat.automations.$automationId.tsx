@@ -29,6 +29,7 @@ import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavig
 import { Button } from "~/components/ui/button";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
+  automationApprovalGaps,
   hasBlockingAutomationDraftWarnings,
   warningIdsForAcknowledgedRisks,
   type AutomationDraftWarning,
@@ -55,6 +56,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import {
   type AutomationFormState,
+  AutomationApprovalBanner,
   AutomationDialog,
   AutomationModelPicker,
   acknowledgedRiskIdsForFormWarnings,
@@ -256,6 +258,39 @@ function AutomationDetailView() {
   const patch = (input: Omit<AutomationUpdateInput, "id">) =>
     updateMutation.mutate({ id: definition.id, ...input });
 
+  // One-time risk approval surfaced at the top of the panel when an already-created
+  // automation still needs it (e.g. created via the API). Persists on the automation.
+  const approvalGaps = automationApprovalGaps({
+    schedule: definition.schedule,
+    mode: definition.mode,
+    runtimeMode: definition.runtimeMode,
+    worktreeMode: definition.worktreeMode,
+    prompt: definition.prompt,
+    acknowledgedRisks: definition.acknowledgedRisks,
+    enabled: definition.enabled,
+    maxIterations: definition.maxIterations,
+  });
+  const approveAutomationRisks = () =>
+    // Records consent only, persisting the full required risk set so the update validates.
+    // Pause/resume stays a separate, explicit action so approving never silently re-enables
+    // an automation the user deliberately paused.
+    updateMutation.mutateAsync({
+      id: definition.id,
+      acknowledgedRisks: approvalGaps.acknowledgedRisks,
+      ...(approvalGaps.maxIterations !== undefined
+        ? { maxIterations: approvalGaps.maxIterations }
+        : {}),
+    });
+  const handleApproveAndRunNow = async () => {
+    try {
+      await approveAutomationRisks();
+    } catch {
+      return; // update failed; the mutation already surfaced the error toast
+    }
+    runNowMutation.mutate(definition);
+  };
+  const approvalBusy = updateMutation.isPending || runNowMutation.isPending;
+
   // Applying a new model selection (model swap or a capability tweak) refreshes the saved
   // provider start options the same way the model picker does, then patches both at once.
   const applyModelSelection = (nextModelSelection: ModelSelection) => {
@@ -430,7 +465,17 @@ function AutomationDetailView() {
                   type="button"
                   size="sm"
                   className="ml-1.5"
-                  disabled={runNowMutation.isPending}
+                  disabled={
+                    runNowMutation.isPending ||
+                    // Stay disabled while an approval update is in flight: the cache merges
+                    // acknowledgedRisks optimistically, so warnings clears before the server
+                    // persists and a run dispatched in that window hits the old definition.
+                    updateMutation.isPending ||
+                    approvalGaps.warnings.length > 0
+                  }
+                  title={
+                    approvalGaps.warnings.length > 0 ? "Approve the automation first" : undefined
+                  }
                   onClick={() => runNowMutation.mutate(definition)}
                 >
                   <CentralIcon name="play" className="size-4" />
@@ -442,6 +487,14 @@ function AutomationDetailView() {
 
           <div className="min-h-0 flex-1 overflow-y-auto border-l border-[var(--app-surface-divider)]">
             <div className="flex flex-col gap-6 px-4 py-8">
+              <AutomationApprovalBanner
+                warnings={approvalGaps.warnings}
+                busy={approvalBusy}
+                // Swallow the rejection here; the mutation's onError already toasts. Without
+                // this, void-ing the rejected promise would surface an unhandled rejection.
+                onApprove={() => void approveAutomationRisks().catch(() => undefined)}
+                onApproveAndRun={() => void handleApproveAndRunNow()}
+              />
               <DetailGroup title="Status">
                 <DetailRow label="Status">
                   <StatusValue>

@@ -37,7 +37,7 @@ export interface AutomationDraftWarning {
   readonly requiresAcknowledgement: boolean;
 }
 
-type AutomationAcknowledgedRiskId = "full-access" | "local-checkout" | "fast-interval";
+export type AutomationAcknowledgedRiskId = "full-access" | "local-checkout" | "fast-interval";
 
 export interface AutomationCreationDraft {
   readonly source: AutomationCreationDraftSource;
@@ -151,6 +151,69 @@ export function buildAutomationDraftWarnings(input: {
     });
   }
   return warnings;
+}
+
+function warningIdsRequiringAcknowledgement(
+  warnings: readonly AutomationDraftWarning[],
+): ReadonlySet<AutomationDraftWarningId> {
+  return new Set(
+    warnings.filter((warning) => warning.requiresAcknowledgement).map((warning) => warning.id),
+  );
+}
+
+// Computes the approval an existing automation still needs before it can run.
+// `warnings` are the visible risks that the approval will persist, and `acknowledgedRisks`
+// is the full risk set to save: every risk the config requires, merged with existing
+// acknowledgements. Sub-minute schedules may also need a capped maxIterations patch so the
+// acknowledgement-only update passes the server's active-schedule validation.
+export function automationApprovalGaps(input: {
+  readonly schedule: AutomationSchedule;
+  readonly mode: AutomationMode;
+  readonly runtimeMode: RuntimeMode;
+  readonly worktreeMode: AutomationWorktreeMode;
+  readonly prompt: string;
+  readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
+  readonly enabled?: boolean;
+  readonly maxIterations?: number | null;
+}): {
+  readonly warnings: readonly AutomationDraftWarning[];
+  readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
+  readonly maxIterations?: number;
+} {
+  const allWarnings = buildAutomationDraftWarnings({
+    schedule: input.schedule,
+    mode: input.mode,
+    runtimeMode: input.runtimeMode,
+    worktreeMode: input.worktreeMode,
+    hasEphemeralContext: false,
+    generatedConfidence: null,
+    generatedNeedsConfirmation: false,
+    prompt: input.prompt,
+  });
+  const requiredWarningIds = warningIdsRequiringAcknowledgement(allWarnings);
+  const acknowledgedWarningIds = warningIdsForAcknowledgedRisks(input.acknowledgedRisks);
+  const warnings = allWarnings.filter(
+    (warning) =>
+      warning.requiresAcknowledgement &&
+      requiredWarningIds.has(warning.id) &&
+      !acknowledgedWarningIds.has(warning.id),
+  );
+  const acknowledgedRisks = Array.from(
+    new Set([
+      ...input.acknowledgedRisks,
+      ...acknowledgedRiskIdsForDraft(allWarnings, requiredWarningIds),
+    ]),
+  );
+  const maxIterations =
+    input.enabled === true &&
+    input.schedule.type === "interval" &&
+    input.schedule.everySeconds < 60 &&
+    (input.maxIterations === null ||
+      (input.maxIterations ?? DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS) >
+        DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS)
+      ? DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS
+      : undefined;
+  return { warnings, acknowledgedRisks, maxIterations };
 }
 
 export function acknowledgedRiskIdsForDraft(

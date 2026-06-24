@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import {
   acknowledgedWarningIdsForAutomaticChatAutomation,
   acknowledgedRiskIdsForDraft,
+  automationApprovalGaps,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
   warningIdsForAcknowledgedRisks,
@@ -189,5 +190,113 @@ describe("automation draft warnings", () => {
 
     expect(warnings.map((warning) => warning.id)).not.toContain("local-checkout");
     expect(warnings.map((warning) => warning.id)).not.toContain("worktree-cleanup");
+  });
+});
+
+describe("automationApprovalGaps", () => {
+  const base = {
+    schedule: { type: "daily" as const, timeOfDay: "09:00" },
+    mode: "standalone" as const,
+    runtimeMode: "approval-required" as const,
+    worktreeMode: "worktree" as const,
+    prompt: "Check the build.",
+  };
+
+  it("requires full-access approval when unacknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
+  });
+
+  it("requires local-checkout approval for a local worktree", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
+  });
+
+  it("requires local-checkout approval for standalone auto fallback", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "auto",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
+  });
+
+  it("reports both blocking risks together", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: [],
+    });
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("clears the banner once the risks are acknowledged", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "local",
+      acknowledgedRisks: ["full-access", "local-checkout"],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required worktree automation", () => {
+    const gaps = automationApprovalGaps({ ...base, acknowledgedRisks: [] });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
+  it("shows fast interval approval when it will be persisted", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual([
+      "fast-recurring-interval",
+      "full-access",
+    ]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
+  });
+
+  it("caps enabled legacy fast intervals when approving", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+      enabled: true,
+      maxIterations: null,
+    });
+    expect(gaps.maxIterations).toBe(10);
+  });
+
+  it("keeps an existing compliant fast interval cap", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      runtimeMode: "full-access",
+      acknowledgedRisks: [],
+      enabled: true,
+      maxIterations: 3,
+    });
+    expect(gaps.maxIterations).toBeUndefined();
   });
 });
