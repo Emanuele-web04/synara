@@ -161,9 +161,13 @@ const RUN_BLOCKING_WARNING_IDS: ReadonlySet<AutomationDraftWarningId> = new Set(
   "local-checkout",
 ]);
 
-// Computes the approval an existing automation still needs before it can run: the
-// run-blocking risks it carries that have not yet been acknowledged. Returns the missing
-// warnings (for display) and the risk ids to persist. Empty when nothing is required.
+// Computes the approval an existing automation still needs before it can run.
+// `warnings` are the run-blocking risks that have not been acknowledged — they drive the
+// approval banner (empty means no approval needed). `acknowledgedRisks` is the full set to
+// persist when approving: every risk the config requires, merged with what is already
+// acknowledged. It includes fast-interval when the schedule is sub-minute, because
+// automation.update revalidates the whole definition and rejects such a schedule unless
+// fast-interval is acknowledged — so a banner approval would otherwise fail to save.
 export function automationApprovalGaps(input: {
   readonly schedule: AutomationSchedule;
   readonly mode: AutomationMode;
@@ -173,10 +177,10 @@ export function automationApprovalGaps(input: {
   readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
 }): {
   readonly warnings: readonly AutomationDraftWarning[];
-  readonly risks: readonly AutomationAcknowledgedRiskId[];
+  readonly acknowledgedRisks: readonly AutomationAcknowledgedRiskId[];
 } {
   const acknowledged = new Set(input.acknowledgedRisks);
-  const warnings = buildAutomationDraftWarnings({
+  const requiredWarnings = buildAutomationDraftWarnings({
     schedule: input.schedule,
     mode: input.mode,
     runtimeMode: input.runtimeMode,
@@ -185,17 +189,23 @@ export function automationApprovalGaps(input: {
     generatedConfidence: null,
     generatedNeedsConfirmation: false,
     prompt: input.prompt,
-  }).filter(
+  }).filter((warning) => warning.requiresAcknowledgement);
+  const warnings = requiredWarnings.filter(
     (warning) =>
-      warning.requiresAcknowledgement &&
       RUN_BLOCKING_WARNING_IDS.has(warning.id) &&
       // full-access and local-checkout warning ids map 1:1 to their risk ids.
       !acknowledged.has(warning.id as AutomationAcknowledgedRiskId),
   );
-  return {
-    warnings,
-    risks: warnings.map((warning) => warning.id as AutomationAcknowledgedRiskId),
-  };
+  const acknowledgedRisks = Array.from(
+    new Set([
+      ...input.acknowledgedRisks,
+      ...acknowledgedRiskIdsForDraft(
+        requiredWarnings,
+        new Set(requiredWarnings.map((warning) => warning.id)),
+      ),
+    ]),
+  );
+  return { warnings, acknowledgedRisks };
 }
 
 export function acknowledgedRiskIdsForDraft(

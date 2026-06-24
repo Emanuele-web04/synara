@@ -208,8 +208,8 @@ describe("automationApprovalGaps", () => {
       runtimeMode: "full-access",
       acknowledgedRisks: [],
     });
-    expect(gaps.risks).toEqual(["full-access"]);
     expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
   });
 
   it("requires local-checkout approval for a local worktree", () => {
@@ -218,7 +218,8 @@ describe("automationApprovalGaps", () => {
       worktreeMode: "local",
       acknowledgedRisks: [],
     });
-    expect(gaps.risks).toEqual(["local-checkout"]);
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
   });
 
   it("reports both blocking risks together", () => {
@@ -228,34 +229,40 @@ describe("automationApprovalGaps", () => {
       worktreeMode: "local",
       acknowledgedRisks: [],
     });
-    expect(new Set(gaps.risks)).toEqual(new Set(["full-access", "local-checkout"]));
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
-  it("clears once the risks are acknowledged", () => {
+  it("clears the banner once the risks are acknowledged", () => {
     const gaps = automationApprovalGaps({
       ...base,
       runtimeMode: "full-access",
       worktreeMode: "local",
       acknowledgedRisks: ["full-access", "local-checkout"],
     });
-    expect(gaps.risks).toEqual([]);
     expect(gaps.warnings).toEqual([]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
   it("needs no approval for an approval-required worktree automation", () => {
     const gaps = automationApprovalGaps({ ...base, acknowledgedRisks: [] });
-    expect(gaps.risks).toEqual([]);
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
-  it("does not treat a fast interval as a run blocker", () => {
-    // fast-interval only caps cadence; it never blocks a run, so an otherwise-approved
-    // automation needs no approval even with a sub-minute interval.
+  it("does not show a fast interval as a run blocker but persists it on approve", () => {
+    // fast-interval never blocks a run, so it is not in the banner warnings. But it must be
+    // persisted alongside full-access, or automation.update would reject the sub-minute
+    // schedule and the one-click approval would fail to save.
     const gaps = automationApprovalGaps({
       ...base,
       schedule: { type: "interval", everySeconds: 15 },
       runtimeMode: "full-access",
-      acknowledgedRisks: ["full-access"],
+      acknowledgedRisks: [],
     });
-    expect(gaps.risks).toEqual([]);
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
   });
 });

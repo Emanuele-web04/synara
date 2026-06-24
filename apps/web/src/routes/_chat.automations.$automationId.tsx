@@ -268,14 +268,14 @@ function AutomationDetailView() {
     prompt: definition.prompt,
     acknowledgedRisks: definition.acknowledgedRisks,
   });
-  const approveAutomationRisks = () => {
-    const acknowledgedRisks = Array.from(
-      new Set([...definition.acknowledgedRisks, ...approvalGaps.risks]),
-    );
-    // Records consent only. Pause/resume stays a separate, explicit action so approving
-    // never silently re-enables an automation the user deliberately paused.
-    return updateMutation.mutateAsync({ id: definition.id, acknowledgedRisks });
-  };
+  const approveAutomationRisks = () =>
+    // Records consent only, persisting the full required risk set so the update validates.
+    // Pause/resume stays a separate, explicit action so approving never silently re-enables
+    // an automation the user deliberately paused.
+    updateMutation.mutateAsync({
+      id: definition.id,
+      acknowledgedRisks: approvalGaps.acknowledgedRisks,
+    });
   const handleApproveAndRunNow = async () => {
     try {
       await approveAutomationRisks();
@@ -460,7 +460,14 @@ function AutomationDetailView() {
                   type="button"
                   size="sm"
                   className="ml-1.5"
-                  disabled={runNowMutation.isPending || approvalGaps.warnings.length > 0}
+                  disabled={
+                    runNowMutation.isPending ||
+                    // Stay disabled while an approval update is in flight: the cache merges
+                    // acknowledgedRisks optimistically, so warnings clears before the server
+                    // persists and a run dispatched in that window hits the old definition.
+                    updateMutation.isPending ||
+                    approvalGaps.warnings.length > 0
+                  }
                   title={
                     approvalGaps.warnings.length > 0 ? "Approve the automation first" : undefined
                   }
