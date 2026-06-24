@@ -1,0 +1,172 @@
+// FILE: windowsProcess.ts
+// Purpose: Prepares Windows child-process launches without Node's `shell: true`.
+// Layer: Shared Node runtime utility
+// Exports: command resolution plus safe spawn/spawnSync argument preparation.
+
+import { spawnSync } from "node:child_process";
+import * as Path from "node:path";
+
+type SpawnSyncLike = (
+  command: string,
+  args: ReadonlyArray<string>,
+  options: {
+    cwd?: string;
+    env?: NodeJS.ProcessEnv;
+    encoding: "utf8";
+    shell: false;
+    stdio: ["ignore", "pipe", "ignore"];
+    timeout: number;
+    windowsHide: true;
+  },
+) => { stdout?: string | null; status?: number | null; error?: Error | undefined };
+
+export interface WindowsSafeProcessInput {
+  readonly platform?: NodeJS.Platform;
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly spawnSync?: SpawnSyncLike;
+}
+
+export interface WindowsSafeProcessCommand {
+  readonly command: string;
+  readonly args: string[];
+  readonly shell: false;
+  readonly windowsHide?: true;
+}
+
+const WINDOWS_BATCH_EXTENSION_PATTERN = /\.(?:cmd|bat)$/i;
+const WINDOWS_PATH_SEPARATOR_PATTERN = /[\\/]/;
+const WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN = /[\r\n]/;
+const WINDOWS_BATCH_CARET_ESCAPE_PATTERN = /[&|<>()^"!]/g;
+const WHERE_TIMEOUT_MS = 2_000;
+
+function trimNonEmpty(value: string | null | undefined): string | null {
+  const trimmed = value?.trim() ?? "";
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+export function resolveWindowsSystemRoot(env: NodeJS.ProcessEnv = process.env): string {
+  return trimNonEmpty(env.SystemRoot) ?? trimNonEmpty(env.SYSTEMROOT) ?? "C:\\Windows";
+}
+
+export function resolveWindowsComSpec(env: NodeJS.ProcessEnv = process.env): string {
+  return (
+    trimNonEmpty(env.ComSpec) ??
+    trimNonEmpty(env.COMSPEC) ??
+    Path.win32.join(resolveWindowsSystemRoot(env), "System32", "cmd.exe")
+  );
+}
+
+function resolveWindowsWhereExe(env: NodeJS.ProcessEnv = process.env): string {
+  return Path.win32.join(resolveWindowsSystemRoot(env), "System32", "where.exe");
+}
+
+export function isWindowsBatchCommand(command: string): boolean {
+  return WINDOWS_BATCH_EXTENSION_PATTERN.test(command);
+}
+
+function quoteWindowsBatchToken(token: string, label: string): string {
+  if (WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN.test(token)) {
+    throw new Error(
+      `Cannot safely execute Windows batch ${label} containing line breaks.`,
+    );
+  }
+  const escaped = token
+    .replace(/%/g, "%%")
+    .replace(WINDOWS_BATCH_CARET_ESCAPE_PATTERN, (match) => `^${match}`);
+  return `"${escaped}"`;
+}
+
+export function buildWindowsBatchCommandArgs(
+  command: string,
+  args: ReadonlyArray<string>,
+): string[] {
+  const commandLine = [
+    quoteWindowsBatchToken(command, "command"),
+    ...args.map((arg) => quoteWindowsBatchToken(arg, "argument")),
+  ].join(" ");
+  return ["/d", "/s", "/v:off", "/c", commandLine];
+}
+
+function isPathLikeCommand(command: string): boolean {
+  return WINDOWS_PATH_SEPARATOR_PATTERN.test(command) || Path.win32.isAbsolute(command);
+}
+
+function hasWindowsExecutableExtension(command: string): boolean {
+  return Path.win32.extname(command).length > 0;
+}
+
+function isFromCurrentDirectory(candidate: string, cwd: string | undefined): boolean {
+  if (!cwd) {
+    return false;
+  }
+  const candidateDir = Path.win32.resolve(Path.win32.dirname(candidate)).toLowerCase();
+  const currentDir = Path.win32.resolve(cwd).toLowerCase();
+  return candidateDir === currentDir;
+}
+
+// Resolve PATH/PATHEXT commands through where.exe so `.cmd` shims can be wrapped
+// explicitly. We skip current-directory hits to avoid restoring shell-style CWD
+// command hijacking.
+export function resolveWindowsCommandPath(
+  command: string,
+  input: WindowsSafeProcessInput = {},
+): string {
+  const pathLikeCommand = isPathLikeCommand(command);
+  if (pathLikeCommand && hasWindowsExecutableExtension(command)) {
+    return command;
+  }
+
+  const env = input.env ?? process.env;
+  const cwd = input.cwd ?? process.cwd();
+  const result = (input.spawnSync ?? spawnSync)(resolveWindowsWhereExe(env), [command], {
+    cwd,
+    env,
+    encoding: "utf8",
+    shell: false,
+    stdio: ["ignore", "pipe", "ignore"],
+    timeout: WHERE_TIMEOUT_MS,
+    windowsHide: true,
+  });
+  if (result.error || result.status !== 0) {
+    return command;
+  }
+
+  const candidates = (result.stdout ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (pathLikeCommand) {
+    return candidates[0] ?? command;
+  }
+  return candidates.find((candidate) => !isFromCurrentDirectory(candidate, cwd)) ?? command;
+}
+
+export function prepareWindowsSafeProcess(
+  command: string,
+  args: ReadonlyArray<string>,
+  input: WindowsSafeProcessInput = {},
+): WindowsSafeProcessCommand {
+  const platform = input.platform ?? process.platform;
+  if (platform !== "win32") {
+    return { command, args: [...args], shell: false };
+  }
+
+  const env = input.env ?? process.env;
+  const resolvedCommand = resolveWindowsCommandPath(command, input);
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return {
+      command: resolvedCommand,
+      args: [...args],
+      shell: false,
+      windowsHide: true,
+    };
+  }
+
+  return {
+    command: resolveWindowsComSpec(env),
+    args: buildWindowsBatchCommandArgs(resolvedCommand, args),
+    shell: false,
+    windowsHide: true,
+  };
+}

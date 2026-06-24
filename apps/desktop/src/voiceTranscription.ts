@@ -11,6 +11,7 @@ import type {
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 export const SERVER_TRANSCRIBE_VOICE_CHANNEL = "desktop:server-transcribe-voice";
 
@@ -81,11 +82,16 @@ async function resolveDesktopVoiceAuth(
   cwd: string,
 ): Promise<{ token: string; transcriptionUrl: string }> {
   return new Promise((resolve, reject) => {
-    const child = ChildProcess.spawn("codex", ["app-server"], {
+    const prepared = prepareWindowsSafeProcess("codex", ["app-server"], {
+      cwd,
+      env: process.env,
+    });
+    const child = ChildProcess.spawn(prepared.command, prepared.args, {
       cwd,
       env: process.env,
       stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
+      shell: prepared.shell,
+      windowsHide: prepared.windowsHide,
     });
 
     let settled = false;

@@ -13,6 +13,7 @@ import {
   GEMINI_3_MODEL_CAPABILITIES,
   geminiCapabilitiesForModel,
 } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
@@ -242,10 +243,16 @@ export const probeGeminiCapabilities = (input: {
   Effect.tryPromise(
     () =>
       new Promise<GeminiCapabilityProbeResult>((resolve) => {
-        const child = spawn(input.binaryPath, ["--acp"], {
+        const env = buildGeminiProbeEnv();
+        const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--acp"], {
           cwd: input.cwd,
-          env: buildGeminiProbeEnv(),
-          shell: process.platform === "win32",
+          env,
+        });
+        const child = spawn(prepared.command, prepared.args, {
+          cwd: input.cwd,
+          env,
+          shell: prepared.shell,
+          windowsHide: prepared.windowsHide,
           stdio: ["pipe", "pipe", "pipe"],
         });
 

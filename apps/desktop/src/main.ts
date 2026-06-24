@@ -35,7 +35,7 @@ import type {
   DesktopUpdateActionResult,
   DesktopUpdateState,
 } from "@t3tools/contracts";
-import { autoUpdater, CancellationToken } from "electron-updater";
+import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
@@ -51,6 +51,7 @@ import {
   installResumableUpdateDownloader,
   type ResumableDownloaderTarget,
 } from "./resumableUpdateDownload";
+import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
@@ -1702,6 +1703,7 @@ function configureAutoUpdater(): void {
     return;
   }
   updaterConfigured = true;
+  hardenElectronUpdater({ BaseUpdater }, autoUpdater);
   configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
   if (configuredGitHubUpdateSource !== null) {
     // The updater itself uses app-update.yml; this URL is only the human fallback.

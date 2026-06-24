@@ -20,6 +20,7 @@ import type {
 import { ServerProviderUpdateError } from "@t3tools/contracts";
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -708,8 +709,9 @@ const runProviderCommand = (
 ) =>
   Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const command = ChildProcess.make(executable, [...args], {
-      shell: process.platform === "win32",
+    const prepared = prepareWindowsSafeProcess(executable, args, { env });
+    const command = ChildProcess.make(prepared.command, prepared.args, {
+      shell: prepared.shell,
       env,
     });
 
@@ -2212,9 +2214,10 @@ export const ProviderHealthLive = Layer.effect(
       readonly command: string;
       readonly args: ReadonlyArray<string>;
     }) {
+      const prepared = prepareWindowsSafeProcess(input.command, input.args, { env: process.env });
       const child = yield* spawner.spawn(
-        ChildProcess.make(input.command, [...input.args], {
-          shell: process.platform === "win32",
+        ChildProcess.make(prepared.command, prepared.args, {
+          shell: prepared.shell,
           env: process.env,
         }),
       );

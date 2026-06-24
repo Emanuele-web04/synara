@@ -7,6 +7,7 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
@@ -301,31 +302,34 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
+        const env = buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath });
+        const args = [
+          "exec",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "--config",
+          'approval_policy="never"',
+          "-s",
+          "read-only",
+          "--model",
+          resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+          "--config",
+          `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
+          "--output-schema",
+          schemaPath,
+          "--output-last-message",
+          outputPath,
+          ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
+          "-",
+        ];
+        const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
         const command = ChildProcess.make(
-          codexBinaryPath,
-          [
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--config",
-            'approval_policy="never"',
-            "-s",
-            "read-only",
-            "--model",
-            resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-            "--config",
-            `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
-            "--output-schema",
-            schemaPath,
-            "--output-last-message",
-            outputPath,
-            ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
-            "-",
-          ],
+          prepared.command,
+          prepared.args,
           {
             cwd,
-            env: buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
-            shell: process.platform === "win32",
+            env,
+            shell: prepared.shell,
             stdin: {
               stream: Stream.make(new TextEncoder().encode(prompt)),
             },

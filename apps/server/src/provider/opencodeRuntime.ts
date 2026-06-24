@@ -39,6 +39,7 @@ import * as Semaphore from "effect/Semaphore";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { NetService } from "@t3tools/shared/Net";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { isWindowsShellCommandMissingResult } from "../shell-command-detection.ts";
 
 const DEFAULT_OPENCODE_SERVER_TIMEOUT_MS = 20_000;
@@ -831,9 +832,13 @@ const makeOpenCodeRuntime = Effect.gen(function* () {
 
   const runOpenCodeCommand: OpenCodeRuntimeShape["runOpenCodeCommand"] = (input) =>
     Effect.gen(function* () {
+      const prepared = prepareWindowsSafeProcess(input.binaryPath, input.args, {
+        cwd: input.cwd,
+        env: process.env,
+      });
       const child = yield* spawner.spawn(
-        ChildProcess.make(input.binaryPath, [...input.args], {
-          shell: process.platform === "win32",
+        ChildProcess.make(prepared.command, prepared.args, {
+          shell: prepared.shell,
           ...(input.cwd ? { cwd: input.cwd } : {}),
           env: process.env,
         }),
