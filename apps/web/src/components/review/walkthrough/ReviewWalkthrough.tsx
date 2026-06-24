@@ -12,8 +12,9 @@ import type { ReactElement } from "react";
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
 import { getRenderablePatch, resolveFileDiffPath } from "~/lib/diffRendering";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
-import { GitPullRequestIcon, Loader2Icon, SparklesIcon } from "~/lib/icons";
+import { GitPullRequestIcon, Loader2Icon, RefreshCwIcon, SparklesIcon } from "~/lib/icons";
 import { useTheme } from "~/hooks/useTheme";
+import { Button } from "../../ui/button";
 import { DiffWorkerPoolProvider } from "../../DiffWorkerPoolProvider";
 import { EmptyState } from "../reviewPrimitives";
 import { useReviewViewedFiles } from "../reviewViewedFiles";
@@ -31,6 +32,8 @@ export function ReviewWalkthrough(props: {
   files: readonly ReviewChangedFile[];
   patchSignature: string | null;
   expectedHeadSha: string | null;
+  changesetError: unknown;
+  changesetLoading: boolean;
   title: string;
   body: string | null;
 }): ReactElement {
@@ -50,6 +53,8 @@ function ReviewWalkthroughInner(props: {
   files: readonly ReviewChangedFile[];
   patchSignature: string | null;
   expectedHeadSha: string | null;
+  changesetError: unknown;
+  changesetLoading: boolean;
   title: string;
   body: string | null;
 }): ReactElement {
@@ -89,7 +94,8 @@ function ReviewWalkthroughInner(props: {
     return map;
   }, [props.patch]);
 
-  const walkthrough = walkthroughQuery.data ?? null;
+  const result = walkthroughQuery.data ?? null;
+  const walkthrough = result?.walkthrough ?? null;
   const chapters = walkthrough?.chapters ?? [];
 
   const allFilePaths = useMemo(() => props.files.map((file) => file.path), [props.files]);
@@ -110,6 +116,26 @@ function ReviewWalkthroughInner(props: {
     });
   };
 
+  if (props.changesetError) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <EmptyState icon={<GitPullRequestIcon />} title="Walkthrough unavailable">
+          {rpcErrorMessage(props.changesetError) ??
+            "Could not load the changeset for this walkthrough."}
+        </EmptyState>
+      </div>
+    );
+  }
+
+  if (props.changesetLoading) {
+    return (
+      <WalkthroughCenter>
+        <Loader2Icon className="size-4 animate-spin" />
+        Generating walkthrough…
+      </WalkthroughCenter>
+    );
+  }
+
   if (walkthroughQuery.isLoading) {
     return (
       <WalkthroughCenter>
@@ -122,8 +148,28 @@ function ReviewWalkthroughInner(props: {
   if (walkthroughQuery.isError) {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center">
-        <EmptyState icon={<GitPullRequestIcon />} title="Walkthrough unavailable">
+        <EmptyState icon={<SparklesIcon />} title="Walkthrough unavailable">
           {rpcErrorMessage(walkthroughQuery.error) ?? "Could not generate the walkthrough."}
+        </EmptyState>
+      </div>
+    );
+  }
+
+  if (result?.headMoved || result?.patchChanged) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center">
+        <EmptyState
+          icon={<GitPullRequestIcon />}
+          title="Pull request changed"
+          action={
+            <Button size="sm" variant="outline" onClick={() => void walkthroughQuery.refetch()}>
+              <RefreshCwIcon className="size-3.5" />
+              Regenerate
+            </Button>
+          }
+        >
+          {result.warnings?.[0] ??
+            "The diff moved since this walkthrough was generated. Regenerate it to continue."}
         </EmptyState>
       </div>
     );
@@ -133,7 +179,7 @@ function ReviewWalkthroughInner(props: {
     return (
       <div className="flex min-h-0 flex-1 items-center justify-center">
         <EmptyState icon={<SparklesIcon />} title="No chapters yet">
-          This pull request did not produce a chapter-by-chapter walkthrough.
+          This change did not produce a chapter-by-chapter walkthrough.
         </EmptyState>
       </div>
     );

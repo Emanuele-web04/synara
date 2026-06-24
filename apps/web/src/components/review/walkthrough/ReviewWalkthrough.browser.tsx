@@ -91,6 +91,8 @@ describe("ReviewWalkthrough", () => {
           files={[]}
           patchSignature="sig123"
           expectedHeadSha="abc123"
+          changesetError={null}
+          changesetLoading={false}
           title="Add PR walkthroughs to the review interface"
           body="Prototype a guided review path."
         />
@@ -138,6 +140,8 @@ describe("ReviewWalkthrough", () => {
           files={[]}
           patchSignature={null}
           expectedHeadSha={null}
+          changesetError={null}
+          changesetLoading={false}
           title="Add PR walkthroughs"
           body={null}
         />

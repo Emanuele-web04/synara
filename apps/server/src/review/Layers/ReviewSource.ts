@@ -1758,12 +1758,17 @@ const makeReviewSource = Effect.gen(function* () {
         }
 
         const repositoryId = reference !== undefined ? yield* resolveRepositoryId(input.cwd) : null;
-        if (repositoryId !== null && reference !== undefined) {
+        const walkthroughTokenIdentity =
+          repositoryId !== null && reference !== undefined
+            ? yield* readCacheTokenIdentity(input.cwd)
+            : null;
+        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
           const cached = yield* cacheStore
             .getPullRequestWalkthrough({
               repositoryId,
               reference,
               patchSignature: currentPatchSignature,
+              tokenIdentity: walkthroughTokenIdentity,
             })
             .pipe(Effect.catch(() => Effect.succeed(Option.none())));
           if (Option.isSome(cached)) {
@@ -1826,13 +1831,14 @@ const makeReviewSource = Effect.gen(function* () {
           generatedAt,
         };
 
-        if (repositoryId !== null && reference !== undefined) {
+        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
           const fetchedAt = yield* cacheWriteClock;
           yield* cacheStore
             .upsertPullRequestWalkthrough({
               repositoryId,
               reference,
               patchSignature: currentPatchSignature,
+              tokenIdentity: walkthroughTokenIdentity,
               data: walkthrough,
               fetchedAt,
             })

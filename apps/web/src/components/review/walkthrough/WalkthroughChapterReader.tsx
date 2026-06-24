@@ -1,6 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type { ReviewFinding, ReviewWalkthroughChapter } from "@t3tools/contracts";
 import type { ReactElement } from "react";
+import { useState } from "react";
 
 import { FileDiffCard, FileDiffSurface } from "../../chat/FileDiffView";
 import {
@@ -8,12 +9,17 @@ import {
   CheckIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
+  ChevronUpIcon,
   InfoIcon,
   MessageCircleIcon,
 } from "~/lib/icons";
+import { resolveFileDiffPath } from "~/lib/diffRendering";
 import { Button } from "../../ui/button";
 import { EmptyState, ReviewPill, severityPill } from "../reviewPrimitives";
 import { ProgressRing, ViewedToggle } from "./walkthroughPrimitives";
+
+const MAX_DIFFS = 50;
+const MAX_FINDINGS = 50;
 
 export function WalkthroughChapterReader(props: {
   chapter: ReviewWalkthroughChapter;
@@ -32,6 +38,13 @@ export function WalkthroughChapterReader(props: {
   const { chapter } = props;
   const viewedCount = chapter.files.filter((path) => props.viewedPaths.has(path)).length;
   const findings = chapter.findings ?? [];
+
+  const [showAllDiffs, setShowAllDiffs] = useState(false);
+  const [showAllFindings, setShowAllFindings] = useState(false);
+  const visibleDiffs = showAllDiffs ? props.fileDiffs : props.fileDiffs.slice(0, MAX_DIFFS);
+  const visibleFindings = showAllFindings ? findings : findings.slice(0, MAX_FINDINGS);
+  const hiddenDiffs = props.fileDiffs.length - visibleDiffs.length;
+  const hiddenFindings = findings.length - visibleFindings.length;
 
   return (
     <div className="px-4 py-4 sm:px-5">
@@ -55,7 +68,7 @@ export function WalkthroughChapterReader(props: {
       <div className="mt-4">
         {props.fileDiffs.length > 0 ? (
           <FileDiffSurface className="space-y-3">
-            {props.fileDiffs.map((fileDiff) => (
+            {visibleDiffs.map((fileDiff) => (
               <ChapterFileDiff
                 key={fileDiff.cacheKey ?? fileDiff.name}
                 fileDiff={fileDiff}
@@ -66,10 +79,20 @@ export function WalkthroughChapterReader(props: {
                 onToggleViewed={props.onToggleViewed}
               />
             ))}
+            {hiddenDiffs > 0 ? (
+              <button
+                type="button"
+                className="w-full rounded-lg border border-dashed border-border/45 px-3 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                aria-label={`Show ${hiddenDiffs} more files`}
+                onClick={() => setShowAllDiffs(true)}
+              >
+                Show {hiddenDiffs} more files
+              </button>
+            ) : null}
           </FileDiffSurface>
         ) : (
-          <EmptyState icon={<InfoIcon />} title="No diff to show">
-            This chapter has no renderable file changes in the current patch.
+          <EmptyState icon={<InfoIcon />} title="No file changes">
+            This chapter has no file changes to show.
           </EmptyState>
         )}
       </div>
@@ -81,12 +104,25 @@ export function WalkthroughChapterReader(props: {
             Findings
           </div>
           <div className="space-y-2.5">
-            {findings.map((finding) => (
+            {visibleFindings.map((finding) => (
               <ChapterFindingCard
-                key={finding.id ?? `${finding.path}:${finding.line}:${finding.title}`}
+                key={
+                  finding.id ??
+                  `${finding.path}:${finding.line}:${finding.title}:${finding.message}`
+                }
                 finding={finding}
               />
             ))}
+            {hiddenFindings > 0 ? (
+              <button
+                type="button"
+                className="w-full rounded-lg border border-dashed border-border/45 px-3 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+                aria-label={`Show ${hiddenFindings} more findings`}
+                onClick={() => setShowAllFindings(true)}
+              >
+                Show {hiddenFindings} more findings
+              </button>
+            ) : null}
           </div>
         </section>
       ) : null}
@@ -98,7 +134,11 @@ export function WalkthroughChapterReader(props: {
           className="rounded-full px-3 text-[12px]"
           onClick={props.onNavigatePrevious}
         >
-          <ChevronLeftIcon className="size-3.5" />
+          {props.index <= 0 ? (
+            <ChevronUpIcon className="size-3.5" />
+          ) : (
+            <ChevronLeftIcon className="size-3.5" />
+          )}
           {props.index <= 0 ? "Overview" : "Previous"}
         </Button>
         <Button
@@ -108,7 +148,7 @@ export function WalkthroughChapterReader(props: {
           onClick={props.onToggleComplete}
         >
           <CheckIcon className="size-3.5" />
-          {props.completed ? "Reviewed" : "Mark reviewed"}
+          {props.completed ? "Reviewed" : "Mark as reviewed"}
         </Button>
         <Button
           size="sm"
@@ -154,9 +194,7 @@ function JudgmentCallout(props: { question: string }): ReactElement {
           <MessageCircleIcon className="size-3.5" />
         </span>
         <div className="min-w-0">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-info-foreground">
-            Judgment call
-          </div>
+          <div className="text-[11px] font-semibold text-info-foreground">Judgment call</div>
           <p className="mt-1 text-[13px] leading-5 text-foreground">{props.question}</p>
         </div>
       </div>
@@ -198,7 +236,7 @@ function ChapterFindingCard(props: { finding: ReviewFinding }): ReactElement {
       <div className="flex min-w-0 flex-wrap items-center gap-1.5">
         <ReviewPill tone={severity.tone}>{severity.label}</ReviewPill>
         <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
-          {finding.path}:L{finding.line}
+          {finding.path}:{finding.line}
         </span>
       </div>
       <h4 className="mt-2 text-[13px] font-semibold leading-5 text-foreground">{finding.title}</h4>
@@ -207,13 +245,10 @@ function ChapterFindingCard(props: { finding: ReviewFinding }): ReactElement {
   );
 }
 
-// Match a parsed file diff back to a chapter file path so the viewed toggle can
-// key off the same identity the rail and ProgressRing use.
 function resolveDiffPathForToggle(
   fileDiff: FileDiffMetadata,
   chapterFiles: readonly string[],
 ): string | null {
-  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
-  const stripped = raw.startsWith("a/") || raw.startsWith("b/") ? raw.slice(2) : raw;
-  return chapterFiles.find((file) => file === stripped) ?? null;
+  const path = resolveFileDiffPath(fileDiff);
+  return chapterFiles.includes(path) ? path : null;
 }

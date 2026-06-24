@@ -4,14 +4,18 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
+  yield* sql`DROP TABLE IF EXISTS review_walkthroughs`;
+  yield* sql`DROP TABLE IF EXISTS review_cache_pr_walkthrough`;
+
   yield* sql`
-    CREATE TABLE IF NOT EXISTS review_cache_pr_walkthrough (
+    CREATE TABLE review_cache_pr_walkthrough (
       repository_id TEXT NOT NULL,
       reference TEXT NOT NULL,
       patch_signature TEXT NOT NULL,
+      token_identity TEXT NOT NULL,
       payload_json TEXT NOT NULL,
       fetched_at INTEGER NOT NULL,
-      PRIMARY KEY (repository_id, reference, patch_signature)
+      PRIMARY KEY (repository_id, reference, patch_signature, token_identity)
     )
   `;
 

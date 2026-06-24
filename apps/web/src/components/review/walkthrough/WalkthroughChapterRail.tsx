@@ -1,7 +1,8 @@
 import type { ReviewChangedFile, ReviewWalkthroughChapter } from "@t3tools/contracts";
 import type { ReactElement } from "react";
+import { useMemo } from "react";
 
-import { DiffStat } from "../../chat/DiffStatLabel";
+import { DiffStat, hasNonZeroStat } from "../../chat/DiffStatLabel";
 import { ChevronRightIcon, EyeIcon, GitPullRequestIcon, SparklesIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { splitRepoRelativePath } from "~/lib/diffRendering";
@@ -9,10 +10,10 @@ import { splitRepoRelativePath } from "~/lib/diffRendering";
 export type WalkthroughReading = "overview" | string;
 
 function chapterDiffStat(
-  chapter: ReviewWalkthroughChapter,
+  files: readonly string[],
   filesByPath: ReadonlyMap<string, ReviewChangedFile>,
 ): { additions: number; deletions: number } {
-  return chapter.files.reduce(
+  return files.reduce(
     (totals, path) => {
       const file = filesByPath.get(path);
       return {
@@ -82,10 +83,11 @@ function WalkthroughChapterRailItem(props: {
   viewedPaths: ReadonlySet<string>;
   onOpen: () => void;
 }): ReactElement {
-  const { chapter } = props;
-  const stat = chapterDiffStat(chapter, props.filesByPath);
-  const visibleFiles = chapter.files.slice(0, 3);
-  const remaining = chapter.files.length - visibleFiles.length;
+  const { chapter, filesByPath } = props;
+  const uniqueFiles = useMemo(() => [...new Set(chapter.files)], [chapter.files]);
+  const stat = useMemo(() => chapterDiffStat(uniqueFiles, filesByPath), [uniqueFiles, filesByPath]);
+  const visibleFiles = uniqueFiles.slice(0, 3);
+  const remaining = uniqueFiles.length - visibleFiles.length;
   return (
     <button
       type="button"
@@ -105,9 +107,17 @@ function WalkthroughChapterRailItem(props: {
         </span>
         <span className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
           <span>
-            {chapter.files.length} {chapter.files.length === 1 ? "file" : "files"}
+            {uniqueFiles.length} {uniqueFiles.length === 1 ? "file" : "files"}
           </span>
-          <DiffStat additions={stat.additions} deletions={stat.deletions} className="text-[11px]" />
+          {hasNonZeroStat(stat) ? (
+            <DiffStat
+              additions={stat.additions}
+              deletions={stat.deletions}
+              className="text-[11px]"
+            />
+          ) : (
+            <span className="text-muted-foreground/70">no line changes</span>
+          )}
         </span>
         <span className="mt-1.5 flex flex-col gap-0.5">
           {visibleFiles.map((path) => {
@@ -134,7 +144,7 @@ function WalkthroughChapterRailItem(props: {
           ) : null}
         </span>
         <span className="mt-2 inline-flex items-center gap-0.5 text-[11px] font-medium text-info-foreground">
-          Read explanation
+          Explanation
           <ChevronRightIcon className="size-3" />
         </span>
       </span>

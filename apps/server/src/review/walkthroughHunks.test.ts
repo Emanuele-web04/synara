@@ -44,7 +44,7 @@ function chapter(overrides: Partial<ReviewWalkthroughChapter>): ReviewWalkthroug
 describe("formatHunksSummary", () => {
   it("lists every hunk as 'path | oldStart'", () => {
     expect(formatHunksSummary(FILES)).toBe(
-      ["src/a.ts | 1", "src/a.ts | 20", "src/b.ts | 5"].join("\n"),
+      ['"src/a.ts" | 1', '"src/a.ts" | 20', '"src/b.ts" | 5'].join("\n"),
     );
   });
 });
@@ -86,6 +86,18 @@ describe("reconcileChapterCoverage", () => {
     ]);
     expect(result.warnings.some((w) => w.includes("duplicate"))).toBe(true);
     expect(result.chapters.find((c) => c.id === "chapter-2")).toBeUndefined();
+  });
+
+  it("warns when a file has no textual hunks (binary, pure rename, or mode-only)", () => {
+    const renamePatch = [
+      "diff --git a/old/name.ts b/new/name.ts",
+      "similarity index 100%",
+      "rename from old/name.ts",
+      "rename to new/name.ts",
+    ].join("\n");
+    const renameFiles = parseUnifiedDiffHunks(renamePatch);
+    const result = reconcileChapterCoverage(renameFiles, []);
+    expect(result.warnings.some((w) => w.includes("has no textual hunks"))).toBe(true);
   });
 
   it("sweeps uncovered hunks into a trailing 'Other changes' chapter", () => {

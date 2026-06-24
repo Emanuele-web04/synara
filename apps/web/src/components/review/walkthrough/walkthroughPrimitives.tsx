@@ -60,6 +60,13 @@ const COMPLEXITY_LABEL: Record<ReviewComplexityLevel, string> = {
   "very-high": "Very high",
 };
 
+const SEVERITY_LABEL: Record<ReviewFocusAreaSeverity, string> = {
+  critical: "Critical",
+  high: "High",
+  medium: "Medium",
+  info: "Info",
+};
+
 export function ComplexityMeter(props: {
   level: ReviewComplexityLevel;
   reasoning: string;
@@ -110,7 +117,7 @@ export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): Reac
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
             <span className="text-[13px] font-semibold text-foreground">{props.area.title}</span>
             <ReviewPill tone={focusAreaSeverityTone(props.area.severity)}>
-              {props.area.severity}
+              {SEVERITY_LABEL[props.area.severity]}
             </ReviewPill>
             <ReviewPill tone="muted">{meta.label}</ReviewPill>
           </div>
@@ -119,9 +126,9 @@ export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): Reac
           </p>
           {props.area.locations.length > 0 ? (
             <div className="mt-1.5 flex flex-wrap gap-1.5">
-              {props.area.locations.map((location) => (
+              {props.area.locations.map((location, index) => (
                 <span
-                  key={location}
+                  key={`${index}-${location}`}
                   className="max-w-full truncate font-mono text-[10px] text-muted-foreground"
                 >
                   {location}
@@ -135,7 +142,12 @@ export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): Reac
   );
 }
 
-export function ProgressRing(props: { viewed: number; total: number }): ReactElement {
+export function ProgressRing(props: {
+  viewed: number;
+  total: number;
+  unit?: string;
+}): ReactElement {
+  const unit = props.unit ?? "files";
   const complete = props.total > 0 && props.viewed >= props.total;
   return (
     <span className="flex shrink-0 items-center gap-1.5 text-[12px] text-muted-foreground tabular-nums">
@@ -147,7 +159,7 @@ export function ProgressRing(props: { viewed: number; total: number }): ReactEle
           className="inline-block size-3.5 rounded-full border-[1.5px] border-muted-foreground/50"
         />
       )}
-      <span aria-label={`${props.viewed} of ${props.total} files viewed`}>
+      <span aria-label={`${props.viewed} of ${props.total} ${unit} viewed`}>
         {props.viewed}/{props.total}
       </span>
     </span>
@@ -173,7 +185,7 @@ export function ViewedToggle(props: { viewed: boolean; onToggle: () => void }): 
       >
         {props.viewed ? <CheckIcon className="size-2.5" /> : null}
       </span>
-      {props.viewed ? "Viewed" : "Mark as viewed"}
+      {props.viewed ? "Mark as unviewed" : "Mark as viewed"}
     </button>
   );
 }
@@ -242,6 +254,12 @@ export function focusAreaTypeMeta(type: ReviewFocusAreaType): {
     case "new-pattern":
       return {
         label: "New pattern",
+        icon: <InfoIcon className="size-3.5" />,
+        iconClassName: "bg-muted text-muted-foreground",
+      };
+    default:
+      return {
+        label: type,
         icon: <InfoIcon className="size-3.5" />,
         iconClassName: "bg-muted text-muted-foreground",
       };

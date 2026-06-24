@@ -31,6 +31,44 @@ const ADDED = [
   "+export const y = 2;",
 ].join("\n");
 
+const QUOTED_SPACE = [
+  'diff --git "a/src/foo bar.ts" "b/src/foo bar.ts"',
+  "index 1111111..2222222 100644",
+  '--- "a/src/foo bar.ts"',
+  '+++ "b/src/foo bar.ts"',
+  "@@ -1 +1 @@",
+  "-old",
+  "+new",
+].join("\n");
+
+const QUOTED_DELETED = [
+  'diff --git "a/src/gone file.ts" "b/src/gone file.ts"',
+  "deleted file mode 100644",
+  "index 1111111..0000000 100644",
+  '--- "a/src/gone file.ts"',
+  "+++ /dev/null",
+  "@@ -1,2 +0,0 @@",
+  "-line one",
+  "-line two",
+].join("\n");
+
+const PATH_WITH_B_SLASH = [
+  "diff --git a/lib b/util.ts b/lib b/util.ts",
+  "index 1111111..2222222 100644",
+  "--- a/lib b/util.ts",
+  "+++ b/lib b/util.ts",
+  "@@ -1 +1 @@",
+  "-old",
+  "+new",
+].join("\n");
+
+const COPIED = [
+  "diff --git a/src/orig.ts b/src/copy.ts",
+  "similarity index 100%",
+  "copy from src/orig.ts",
+  "copy to src/copy.ts",
+].join("\n");
+
 describe("parseUnifiedDiffHunks", () => {
   it("returns [] for empty input", () => {
     expect(parseUnifiedDiffHunks("")).toEqual([]);
@@ -66,6 +104,47 @@ describe("parseUnifiedDiffHunks", () => {
     const files = parseUnifiedDiffHunks(`${MODIFIED}\n${ADDED}`);
     expect(files.map((f) => f.path)).toEqual(["src/app.ts", "src/new.ts"]);
   });
+
+  it("unquotes a quoted modified path", () => {
+    const [file] = parseUnifiedDiffHunks(QUOTED_SPACE);
+    expect(file?.path).toBe("src/foo bar.ts");
+    expect(file?.oldPath).toBe("src/foo bar.ts");
+    expect(file?.hunks).toHaveLength(1);
+  });
+
+  it("recovers a quoted deleted file's path from the --- line", () => {
+    const [file] = parseUnifiedDiffHunks(QUOTED_DELETED);
+    expect(file?.path).toBe("src/gone file.ts");
+    expect(file?.oldPath).toBe("src/gone file.ts");
+    expect(file?.status).toBe("deleted");
+    expect(file?.hunks).toHaveLength(1);
+  });
+
+  it("resolves a path containing ' b/' via the +++/--- lines", () => {
+    const [file] = parseUnifiedDiffHunks(PATH_WITH_B_SLASH);
+    expect(file?.path).toBe("lib b/util.ts");
+    expect(file?.oldPath).toBe("lib b/util.ts");
+    expect(file?.hunks).toHaveLength(1);
+  });
+
+  it("detects copied files via copy from/copy to", () => {
+    const [file] = parseUnifiedDiffHunks(COPIED);
+    expect(file?.path).toBe("src/copy.ts");
+    expect(file?.oldPath).toBe("src/orig.ts");
+    expect(file?.status).toBe("copied");
+  });
+
+  it("skips hunks with out-of-range header numbers", () => {
+    const patch = [
+      "diff --git a/x b/x",
+      "--- a/x",
+      "+++ b/x",
+      "@@ -99999999999999999999 +1 @@",
+      "-old",
+      "+new",
+    ].join("\n");
+    expect(parseUnifiedDiffHunks(patch)[0]?.hunks).toHaveLength(0);
+  });
 });
 
 describe("subPatchForHunks", () => {
@@ -90,5 +169,10 @@ describe("subPatchForHunks", () => {
 
   it("returns empty string when no refs match", () => {
     expect(subPatchForHunks(MODIFIED, [{ filePath: "nope.ts", oldStart: 1 }])).toBe("");
+  });
+
+  it("terminates the emitted patch with a trailing newline", () => {
+    const sub = subPatchForHunks(MODIFIED, [{ filePath: "src/app.ts", oldStart: 20 }]);
+    expect(sub.endsWith("\n")).toBe(true);
   });
 });

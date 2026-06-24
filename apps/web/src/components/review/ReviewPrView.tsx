@@ -138,7 +138,7 @@ export function ReviewPrView(props: {
   useEffect(() => {
     setTab("conversation");
     setSelectedFilePath(null);
-  }, [props.reference, sourceKey]);
+  }, [props.cwd, props.reference, sourceKey]);
   const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(null);
   useEffect(() => {
     setReadySurfaceHydrationKey(null);
@@ -160,8 +160,8 @@ export function ReviewPrView(props: {
   }, [conversationHydrationKey, headerDetail]);
   const isSurfaceHydrationReady =
     readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
-  // The walkthrough tab needs the changeset too (for the patch + patchSignature
-  // that enable the generate query), so widen the fetch gate beyond Files.
+  // The walkthrough tab needs the changeset too: ReviewWalkthrough takes patch +
+  // patchSignature, so widen the fetch gate beyond Files.
   const needsChangeset = tab === "files" || tab === "walkthrough";
   const surfaceQuery = useQuery({
     ...reviewLoadPullRequestSurfaceQueryOptions({
@@ -313,6 +313,20 @@ export function ReviewPrView(props: {
         }
       });
   }, [reviewChatPrewarmKey]);
+  const backToOverviewButton = (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
+      title="Back to pull request overview"
+      aria-label="Back to pull request overview"
+      onClick={() => setTab("conversation")}
+    >
+      <ArrowLeftIcon className="size-3.5" />
+      <span className="hidden lg:inline">Overview</span>
+    </Button>
+  );
   const reviewAction =
     tab === "files" ? (
       <ReviewSubmitBar
@@ -323,21 +337,7 @@ export function ReviewPrView(props: {
         expectedHeadSha={changesetState.data?.headSha ?? null}
       />
     ) : undefined;
-  const navigationAction =
-    tab === "files" ? (
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
-        title="Back to pull request overview"
-        aria-label="Back to pull request overview"
-        onClick={() => setTab("conversation")}
-      >
-        <ArrowLeftIcon className="size-3.5" />
-        <span className="hidden lg:inline">Overview</span>
-      </Button>
-    ) : undefined;
+  const navigationAction = tab === "files" ? backToOverviewButton : undefined;
   const updateSidebarCollapsed = (collapsed: boolean) => {
     setSidebarCollapsed(collapsed);
     saveSidebarCollapsed(collapsed);
@@ -368,20 +368,7 @@ export function ReviewPrView(props: {
                     detail={detail}
                     variant="compact"
                     contentClassName="px-4 sm:px-5"
-                    reviewAction={
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
-                        title="Back to pull request overview"
-                        aria-label="Back to pull request overview"
-                        onClick={() => setTab("conversation")}
-                      >
-                        <ArrowLeftIcon className="size-3.5" />
-                        <span className="hidden lg:inline">Overview</span>
-                      </Button>
-                    }
+                    reviewAction={backToOverviewButton}
                   />
                   <ReviewWalkthrough
                     cwd={props.cwd}
@@ -392,6 +379,8 @@ export function ReviewPrView(props: {
                     files={changesetState.data?.files ?? EMPTY_FILES}
                     patchSignature={changesetState.data?.patchSignature ?? null}
                     expectedHeadSha={changesetState.data?.headSha ?? null}
+                    changesetError={changesetState.error}
+                    changesetLoading={changesetState.isLoading}
                     title={detail.title}
                     body={prBody}
                   />

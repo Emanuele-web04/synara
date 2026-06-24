@@ -41,7 +41,31 @@ interface MutableFile {
   hunks: MutableHunk[];
 }
 
-function stripPathPrefix(value: string): string {
+function unquoteGitPath(value: string): string {
+  if (!value.startsWith('"') || !value.endsWith('"')) return value;
+  const inner = value.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < inner.length; i++) {
+    const ch = inner[i];
+    if (ch !== "\\") {
+      bytes.push(...new TextEncoder().encode(ch));
+      continue;
+    }
+    const next = inner[++i];
+    if (next === "t") bytes.push(9);
+    else if (next === "n") bytes.push(10);
+    else if (next === "r") bytes.push(13);
+    else if (next !== undefined && next >= "0" && next <= "7") {
+      const oct = inner.slice(i, i + 3);
+      i += oct.length - 1;
+      bytes.push(parseInt(oct, 8) & 0xff);
+    } else bytes.push(...new TextEncoder().encode(next ?? ""));
+  }
+  return new TextDecoder().decode(new Uint8Array(bytes));
+}
+
+function stripPathPrefix(raw: string): string {
+  const value = unquoteGitPath(raw);
   if (value === "/dev/null") return value;
   if (value.startsWith("a/") || value.startsWith("b/")) {
     return value.slice(2);
@@ -87,10 +111,9 @@ export function parseUnifiedDiffHunks(patch: string): ParsedFileDiff[] {
   for (const line of patch.split("\n")) {
     if (line.startsWith("diff --git ")) {
       flushFile();
-      const match = /^diff --git a\/(.+) b\/(.+)$/.exec(line);
       file = {
-        path: match?.[2] ?? "",
-        oldPath: match?.[1] ?? null,
+        path: "",
+        oldPath: null,
         status: "modified",
         headerLines: [line],
         hunks: [],
@@ -102,14 +125,24 @@ export function parseUnifiedDiffHunks(patch: string): ParsedFileDiff[] {
     const hunkMatch = HUNK_HEADER.exec(line);
     if (hunkMatch) {
       flushHunk();
-      hunk = {
-        oldStart: Number(hunkMatch[1]),
-        oldLines: hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2]),
-        newStart: Number(hunkMatch[3]),
-        newLines: hunkMatch[4] === undefined ? 1 : Number(hunkMatch[4]),
-        header: line,
-        lines: [],
-      };
+      const oldStart = Number(hunkMatch[1]);
+      const oldLines = hunkMatch[2] === undefined ? 1 : Number(hunkMatch[2]);
+      const newStart = Number(hunkMatch[3]);
+      const newLines = hunkMatch[4] === undefined ? 1 : Number(hunkMatch[4]);
+      const valid =
+        Number.isSafeInteger(oldStart) &&
+        oldStart >= 0 &&
+        Number.isSafeInteger(oldLines) &&
+        oldLines >= 0 &&
+        Number.isSafeInteger(newStart) &&
+        newStart >= 0 &&
+        Number.isSafeInteger(newLines) &&
+        newLines >= 0;
+      if (!valid) {
+        hunk = null;
+        continue;
+      }
+      hunk = { oldStart, oldLines, newStart, newLines, header: line, lines: [] };
       continue;
     }
 
@@ -125,10 +158,22 @@ export function parseUnifiedDiffHunks(patch: string): ParsedFileDiff[] {
       file.status = "deleted";
     } else if (line.startsWith("rename from ")) {
       file.status = "renamed";
-      file.oldPath = line.slice("rename from ".length).trim();
+      file.oldPath = unquoteGitPath(line.slice("rename from ".length).trim());
     } else if (line.startsWith("rename to ")) {
       file.status = "renamed";
-      file.path = line.slice("rename to ".length).trim();
+      file.path = unquoteGitPath(line.slice("rename to ".length).trim());
+    } else if (line.startsWith("copy from ")) {
+      file.status = "copied";
+      file.oldPath = unquoteGitPath(line.slice("copy from ".length).trim());
+    } else if (line.startsWith("copy to ")) {
+      file.status = "copied";
+      file.path = unquoteGitPath(line.slice("copy to ".length).trim());
+    } else if (line.startsWith("--- ")) {
+      const src = stripPathPrefix(line.slice(4).trim());
+      if (src !== "/dev/null" && src.length > 0) {
+        file.oldPath = src;
+        if (file.path.length === 0) file.path = src;
+      }
     } else if (line.startsWith("+++ ")) {
       const target = stripPathPrefix(line.slice(4).trim());
       if (target !== "/dev/null" && target.length > 0) {
@@ -142,7 +187,7 @@ export function parseUnifiedDiffHunks(patch: string): ParsedFileDiff[] {
 }
 
 // Reconstruct a minimal valid unified patch containing only the referenced hunks,
-// preserving file order and each file's preamble so it renders standalone.
+// preserving file order and each file's header lines so it renders standalone.
 export function subPatchForHunks(patch: string, refs: readonly HunkRef[]): string {
   const wanted = new Map<string, Set<number>>();
   for (const ref of refs) {
@@ -162,5 +207,5 @@ export function subPatchForHunks(patch: string, refs: readonly HunkRef[]): strin
       out.push(entry.header, ...entry.lines);
     }
   }
-  return out.join("\n");
+  return out.length > 0 ? `${out.join("\n")}\n` : "";
 }

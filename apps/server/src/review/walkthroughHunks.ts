@@ -2,14 +2,18 @@ import type { ReviewHunkRef, ReviewWalkthroughChapter } from "@t3tools/contracts
 
 import type { ParsedFileDiff } from "./parseUnifiedDiffHunks.ts";
 
-const hunkKey = (filePath: string, oldStart: number): string => `${filePath}::${String(oldStart)}`;
+const hunkKey = ({ filePath, oldStart }: { filePath: string; oldStart: number }): string =>
+  `${filePath}::${String(oldStart)}`;
+
+const formatHunkRef = (filePath: string, oldStart: number): string =>
+  `${JSON.stringify(filePath)} | ${String(oldStart)}`;
 
 // Explicit anchor list fed to the agent so chapters reference real (filePath, oldStart) hunks.
 export function formatHunksSummary(files: ReadonlyArray<ParsedFileDiff>): string {
   const lines: string[] = [];
   for (const file of files) {
     for (const hunk of file.hunks) {
-      lines.push(`${file.path} | ${String(hunk.oldStart)}`);
+      lines.push(formatHunkRef(file.path, hunk.oldStart));
     }
   }
   return lines.join("\n");
@@ -22,33 +26,40 @@ export function reconcileChapterCoverage(
   files: ReadonlyArray<ParsedFileDiff>,
   chapters: ReadonlyArray<ReviewWalkthroughChapter>,
 ): { chapters: ReviewWalkthroughChapter[]; warnings: string[] } {
+  const warnings: string[] = [];
   const allHunks = new Map<string, ReviewHunkRef>();
   for (const file of files) {
     for (const hunk of file.hunks) {
-      allHunks.set(hunkKey(file.path, hunk.oldStart), {
+      allHunks.set(hunkKey({ filePath: file.path, oldStart: hunk.oldStart }), {
         filePath: file.path,
         oldStart: hunk.oldStart,
       });
     }
+    // Files that parse with no textual hunks (binary, pure rename, mode-only) can never
+    // reach allHunks/uncovered/"Other changes", so flag them so coverage stays honest.
+    if (file.hunks.length === 0) {
+      warnings.push(
+        `File ${file.path} (${file.status}) has no textual hunks (e.g. binary, pure rename, or mode-only change) and is not represented in any chapter.`,
+      );
+    }
   }
 
-  const warnings: string[] = [];
   const seen = new Set<string>();
   const cleaned: ReviewWalkthroughChapter[] = [];
 
   for (const chapter of chapters) {
     const keptRefs: ReviewHunkRef[] = [];
     for (const ref of chapter.hunkRefs) {
-      const key = hunkKey(ref.filePath, ref.oldStart);
+      const key = hunkKey(ref);
       if (!allHunks.has(key)) {
         warnings.push(
-          `Dropped hunk ${ref.filePath}:${String(ref.oldStart)} from "${chapter.title}" (not in diff).`,
+          `Dropped hunk ${formatHunkRef(ref.filePath, ref.oldStart)} from "${chapter.title}" (not in diff).`,
         );
         continue;
       }
       if (seen.has(key)) {
         warnings.push(
-          `Dropped duplicate hunk ${ref.filePath}:${String(ref.oldStart)} from "${chapter.title}".`,
+          `Dropped duplicate hunk ${formatHunkRef(ref.filePath, ref.oldStart)} from "${chapter.title}".`,
         );
         continue;
       }
@@ -61,6 +72,7 @@ export function reconcileChapterCoverage(
     }
     cleaned.push({
       ...chapter,
+      status: "queued",
       hunkRefs: keptRefs,
       files: [...new Set(keptRefs.map((ref) => ref.filePath))],
     });

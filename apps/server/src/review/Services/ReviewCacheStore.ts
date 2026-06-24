@@ -48,6 +48,7 @@ export interface ReviewCacheDiffKey extends ReviewCachePullRequestKey {
 
 export interface ReviewCacheWalkthroughKey extends ReviewCachePullRequestKey {
   readonly patchSignature: string;
+  readonly tokenIdentity: string;
 }
 
 export interface ReviewCacheStoreShape {
@@ -100,6 +101,7 @@ export interface ReviewCacheStoreShape {
     readonly repositoryId: string;
     readonly reference: string;
     readonly patchSignature: string;
+    readonly tokenIdentity: string;
     readonly data: ReviewWalkthrough;
     readonly fetchedAt: number;
   }) => Effect.Effect<void, PersistenceSqlError>;

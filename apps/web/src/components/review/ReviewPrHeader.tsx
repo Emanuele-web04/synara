@@ -352,7 +352,7 @@ export function ReviewPrHeader(props: {
               aria-pressed={props.commitsActive}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                props.commitsActive && "text-foreground",
+                props.commitsActive && "bg-muted/60 px-1.5 font-medium text-foreground",
               )}
             >
               {commitStat}
@@ -387,10 +387,10 @@ export function ReviewPrHeader(props: {
                 aria-pressed={props.walkthroughActive}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                  props.walkthroughActive && "text-foreground",
+                  props.walkthroughActive && "bg-muted/60 px-1.5 font-medium text-foreground",
                 )}
               >
-                <SparklesIcon className="size-3.5 opacity-75" />
+                <SparklesIcon className="size-3.5 opacity-70" />
                 Walkthrough
               </button>
             </>

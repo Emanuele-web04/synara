@@ -5,6 +5,8 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderStartOptions } from "./orchestration";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
+const BoundedText = (max: number) => TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(max));
+const TextGenerationModelSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256));
 const ReviewPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const ReviewRepositoryId = TrimmedNonEmptyStringSchema;
@@ -346,7 +348,7 @@ export const ReviewRunAgentInput = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   expectedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   expectedPatchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
+  textGenerationModel: Schema.optional(TextGenerationModelSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
 });
@@ -398,52 +400,68 @@ export type ReviewHunkRef = typeof ReviewHunkRef.Type;
 
 export const ReviewWalkthroughChapter = Schema.Struct({
   id: TrimmedNonEmptyStringSchema,
-  title: TrimmedNonEmptyStringSchema,
-  summary: TrimmedNonEmptyStringSchema,
-  intent: TrimmedNonEmptyStringSchema,
-  anchor: TrimmedNonEmptyStringSchema,
+  title: BoundedText(300),
+  summary: BoundedText(4_000),
+  intent: BoundedText(4_000),
+  // Short human-readable label shown under the chapter title (e.g. "parser + stage generator"); not a location — see hunkRefs for that.
+  anchor: BoundedText(300),
+  // Chapter risk uses the finding-severity scale (blocker/major/minor/nit), distinct from ReviewFocusAreaSeverity used by focus areas.
   risk: ReviewFindingSeverity,
-  hunkRefs: Schema.Array(ReviewHunkRef),
-  files: Schema.Array(TrimmedNonEmptyStringSchema),
-  question: Schema.optional(TrimmedNonEmptyStringSchema),
+  hunkRefs: Schema.Array(ReviewHunkRef).check(Schema.isMaxLength(200)),
+  files: Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMaxLength(200)),
+  question: Schema.optional(BoundedText(2_000)),
   status: ReviewWalkthroughChapterStatus,
-  findings: Schema.optional(Schema.Array(ReviewFinding)),
+  findings: Schema.optional(Schema.Array(ReviewFinding).check(Schema.isMaxLength(100))),
 });
 export type ReviewWalkthroughChapter = typeof ReviewWalkthroughChapter.Type;
 
+const UniqueChapterIds = Schema.makeFilter<readonly ReviewWalkthroughChapter[]>(
+  (chapters) =>
+    new Set(chapters.map((chapter) => chapter.id)).size === chapters.length ||
+    "walkthrough chapter ids must be unique",
+  { title: "uniqueChapterIds" },
+);
+
 export const ReviewWalkthroughKeyChange = Schema.Struct({
-  summary: TrimmedNonEmptyStringSchema,
-  description: TrimmedNonEmptyStringSchema,
+  summary: BoundedText(500),
+  description: BoundedText(4_000),
 });
 export type ReviewWalkthroughKeyChange = typeof ReviewWalkthroughKeyChange.Type;
 
 export const ReviewWalkthroughFocusArea = Schema.Struct({
   type: ReviewFocusAreaType,
   severity: ReviewFocusAreaSeverity,
-  title: TrimmedNonEmptyStringSchema,
-  description: TrimmedNonEmptyStringSchema,
-  locations: Schema.Array(TrimmedNonEmptyStringSchema),
+  title: BoundedText(300),
+  description: BoundedText(4_000),
+  locations: Schema.Array(BoundedText(500)).check(Schema.isMaxLength(50)),
 });
 export type ReviewWalkthroughFocusArea = typeof ReviewWalkthroughFocusArea.Type;
 
 export const ReviewWalkthroughComplexity = Schema.Struct({
   level: ReviewComplexityLevel,
-  reasoning: TrimmedNonEmptyStringSchema,
+  reasoning: BoundedText(4_000),
 });
 export type ReviewWalkthroughComplexity = typeof ReviewWalkthroughComplexity.Type;
 
 export const ReviewWalkthroughPrologue = Schema.Struct({
-  motivation: Schema.optional(TrimmedNonEmptyStringSchema),
-  outcome: Schema.optional(TrimmedNonEmptyStringSchema),
-  keyChanges: Schema.Array(ReviewWalkthroughKeyChange),
-  focusAreas: Schema.Array(ReviewWalkthroughFocusArea),
+  motivation: Schema.optional(BoundedText(4_000)),
+  outcome: Schema.optional(BoundedText(4_000)),
+  keyChanges: Schema.Array(ReviewWalkthroughKeyChange).check(Schema.isMaxLength(50)),
+  focusAreas: Schema.Array(ReviewWalkthroughFocusArea).check(Schema.isMaxLength(50)),
   complexity: ReviewWalkthroughComplexity,
 });
 export type ReviewWalkthroughPrologue = typeof ReviewWalkthroughPrologue.Type;
 
 export const ReviewWalkthrough = Schema.Struct({
   prologue: ReviewWalkthroughPrologue,
-  chapters: Schema.Array(ReviewWalkthroughChapter),
+  chapters: Schema.Array(ReviewWalkthroughChapter).check(Schema.isMaxLength(50), UniqueChapterIds),
+  coverage: Schema.optional(
+    Schema.Struct({
+      totalHunks: NonNegativeInt,
+      coveredHunks: NonNegativeInt,
+      truncated: Schema.Boolean,
+    }),
+  ),
   reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
   patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
@@ -460,7 +478,7 @@ export const ReviewGenerateWalkthroughInput = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   expectedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   expectedPatchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
+  textGenerationModel: Schema.optional(TextGenerationModelSchema).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
   ),
 });
