@@ -10,6 +10,7 @@ import {
   TriangleAlertIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import ChatMarkdown from "../../ChatMarkdown";
 import { Button } from "../../ui/button";
 import { ComplexityMeter, FocusAreaCard, ProseCard, SectionHeading } from "./walkthroughPrimitives";
 
@@ -17,6 +18,7 @@ export function WalkthroughPrologue(props: {
   prologue: ReviewWalkthroughPrologue;
   title: string;
   body: string | null;
+  cwd: string | null;
   canStart: boolean;
   onStart: () => void;
 }): ReactElement {
@@ -38,8 +40,13 @@ export function WalkthroughPrologue(props: {
       >
         {props.title}
       </h2>
-      {props.body ? (
-        <p className="mt-3 max-w-2xl text-[14px] leading-6 text-muted-foreground">{props.body}</p>
+      {props.body && props.body.trim().length > 0 ? (
+        <ChatMarkdown
+          text={props.body}
+          cwd={props.cwd ?? undefined}
+          allowHtml
+          className="chat-markdown mt-3 max-w-2xl text-[13px] text-muted-foreground"
+        />
       ) : null}
 
       {prologue.motivation || prologue.outcome ? (

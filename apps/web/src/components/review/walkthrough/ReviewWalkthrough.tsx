@@ -220,6 +220,7 @@ function ReviewWalkthroughInner(props: {
                 prologue={walkthrough.prologue}
                 title={props.title}
                 body={props.body}
+                cwd={props.cwd}
                 canStart={chapters.length > 0}
                 onStart={() => setReading(chapters[0]!.id)}
               />
