@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.5 - 2026-06-24
+## 0.3.0 - 2026-06-24
 
 ### Added
 
@@ -20,7 +20,7 @@
 
 ### Changed
 
-- Bumped Synara release package versions to `0.2.5` across the server, desktop, web, and contracts packages.
+- Bumped Synara release package versions to `0.3.0` across the server, desktop, web, and contracts packages.
 - Reworked automation UI toward a Codex-style surface, including the sidebar badge, Current/Paused list, centered detail layout, inline rail editing, schedule editing, target-thread display, max-iteration controls, stop-on-error handling, and previous-run actions.
 - Expanded automation composer parsing and review so explicit/generated prompts, schedule phrases, stop clauses, bounded fast loops, restored plan source metadata, queued plan follow-ups, and inline composer editing are handled consistently.
 - Made generated automation intents require confirmation before creation, while preserving deterministic local auto-submit behavior for explicitly parsed bounded fast loops.
@@ -55,13 +55,13 @@
 
 ### Verification
 
-- `bun run fmt:check` initially failed on `apps/server/src/automation/Layers/AutomationService.test.ts` and `apps/web/src/components/LocalImagePreview.tsx`; after targeted `bunx oxfmt` formatting, `bun run fmt:check` passed.
+- `bun run fmt:check` passed.
 - `bun run lint` passed with 151 warnings, 0 errors.
-- `bun run typecheck` initially failed in `apps/server/src/automation/Layers/AutomationService.test.ts` because `createdWorktrees[0]?.newBranch` was `string | undefined` where `string` was expected. After tightening the test assertions, package-local `bun run --cwd apps/server typecheck` passed and full root `bun run typecheck` passed with the existing TS44 informational JSON messages.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
 - `bun run release:smoke` passed and refreshed install/lockfile state.
 - `bun run build` passed. The build still reports existing large web chunk/plugin timing warnings, the Astro `transformWithEsbuild` deprecation warning, and the desktop `tsdown.config.ts` typeless-module warning.
-- `bun run test` passed: 10 tasks successful in 6m53s. `@t3tools/web` passed 180 files / 2102 tests. `t3` passed 135 files with 1 skipped file, 1418 passed tests, and 6 skipped tests. The server suite was long-running but completed cleanly without a teardown stall.
-- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.2.5`, and `npm run lint` passed.
+- `bun run test` passed: 10 tasks successful in 8m53s. `@t3tools/web` passed 180 files / 2102 tests. `t3` passed 135 files with 1 skipped file, 1418 passed tests, and 6 skipped tests. The server suite was long-running but completed cleanly without a teardown stall.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.0`, and `npm run lint` passed.
 
 ## 0.2.41 - 2026-06-17
 

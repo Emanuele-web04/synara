@@ -22,7 +22,7 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    version: "0.2.5",
+    version: "0.3.0",
     date: "Jun 24",
     features: [
       {
