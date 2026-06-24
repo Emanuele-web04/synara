@@ -14,7 +14,7 @@ export function ReviewChecks(props: { checks: ReadonlyArray<ReviewCheck> }) {
   }
 
   return (
-    <ul className="mx-auto my-4 flex w-full max-w-5xl flex-col divide-y divide-border/60 overflow-hidden rounded-[1.35rem] border border-border/70 bg-card/88 shadow-sm">
+    <ul className="my-4 flex w-full flex-col divide-y divide-border/60 overflow-hidden rounded-2xl border border-border/70 bg-card/88 shadow-sm">
       {props.checks.map((check, index) => (
         <li
           key={`${check.name}:${index}`}

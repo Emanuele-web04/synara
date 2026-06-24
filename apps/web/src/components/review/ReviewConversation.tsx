@@ -88,7 +88,7 @@ function CommentCard(props: {
           text={props.body}
           cwd={props.cwd ?? undefined}
           allowHtml
-          className="chat-markdown text-[13px]"
+          className="chat-markdown max-w-[68ch] text-[13px]"
         />
       ) : null}
     </article>
@@ -107,7 +107,7 @@ function SummaryCard(props: { body: string; cwd: string | null }) {
         text={props.body.trim().length > 0 ? props.body : "_No description provided._"}
         cwd={props.cwd ?? undefined}
         allowHtml
-        className="chat-markdown text-[13px] leading-relaxed"
+        className="chat-markdown max-w-[68ch] text-[13px] leading-relaxed"
       />
     </article>
   );
@@ -346,12 +346,7 @@ export function ReviewConversation(props: {
   const hasTimelineEvents = props.events.length > 0;
 
   return (
-    <div
-      className={cn(
-        "mx-auto flex w-full max-w-[64rem] flex-col gap-3 px-5 py-4 2xl:max-w-[70rem]",
-        props.className,
-      )}
-    >
+    <div className={cn("flex w-full flex-col gap-3 py-4", props.className)}>
       <SummaryCard body={detail.body} cwd={props.cwd} />
 
       <div className="px-1 text-[11px] text-muted-foreground">
