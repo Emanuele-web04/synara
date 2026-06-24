@@ -807,6 +807,185 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("blocks an unacknowledged full-access run at dispatch and records a failed run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fullaccess-runnow");
+      // Inserted directly (e.g. via the API/DB), bypassing create-time validation.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: { ...createInput("worktree"), runtimeMode: "full-access", acknowledgedRisks: [] },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /full-access/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("blocks an unacknowledged full-access automation on the scheduler", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fullaccess-scheduled");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          runtimeMode: "full-access",
+          acknowledgedRisks: [],
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("dispatches an acknowledged full-access automation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("auto"),
+        runtimeMode: "full-access",
+        acknowledgedRisks: ["full-access", "local-checkout"],
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      assert.isTrue(dispatchedCommands.some((command) => command.type === "thread.create"));
+    }),
+  );
+
+  it.effect("blocks an unacknowledged standalone local checkout at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-local-dispatch");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: { ...createInput("worktree"), worktreeMode: "local", acknowledgedRisks: [] },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("requires local-checkout acknowledgement for a local heartbeat", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("local-heartbeat-ack-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      // A heartbeat reuses its target thread, but that thread can itself be on the local
+      // checkout, so `worktreeMode: "local"` must still require the acknowledgement.
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          acknowledgedRisks: [],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+    }),
+  );
+
+  it.effect("blocks an unacknowledged fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-dispatch");
+      // Sub-minute schedule inserted directly, bypassing validateSchedulePolicy.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          acknowledgedRisks: [],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /at least \d+ seconds apart/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("blocks an acknowledged but uncapped fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-uncapped");
+      // Acknowledged sub-minute schedule with the iteration cap removed, inserted around the
+      // create/update policy that enforces the ack + cap as a pair.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          maxIterations: null,
+          acknowledgedRisks: ["fast-interval"],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
   it.effect("runs due scheduled automations once and advances the next run", () =>
     Effect.gen(function* () {
       resetHarness();
