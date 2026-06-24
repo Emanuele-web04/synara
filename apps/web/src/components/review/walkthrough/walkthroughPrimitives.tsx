@@ -22,7 +22,7 @@ import { ReviewPill, type ReviewPillTone } from "../reviewPrimitives";
 
 export function SectionHeading(props: { icon: ReactNode; title: string }): ReactElement {
   return (
-    <div className="flex items-center gap-2 border-b border-border/35 pb-2 text-foreground">
+    <div className="flex items-center gap-2 border-b border-border/40 pb-2 text-foreground">
       <span className="text-muted-foreground">{props.icon}</span>
       <h2 className="text-[15px] font-semibold">{props.title}</h2>
     </div>
@@ -36,17 +36,19 @@ export function ProseCard(props: {
   children: ReactNode;
 }): ReactElement {
   return (
-    <div className="rounded-lg border border-border/35 bg-background px-3.5 py-3">
+    <div className="rounded-[0.625rem] border border-border/70 bg-card px-4 py-3.5">
       <div
         className={cn(
-          "flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide",
+          "flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide",
           props.tone === "success" ? "text-success-foreground" : "text-info-foreground",
         )}
       >
-        {props.icon}
+        <span>{props.icon}</span>
         {props.label}
       </div>
-      <p className="mt-1.5 text-[13px] leading-6 text-foreground">{props.children}</p>
+      <p className="mt-1.5 break-words text-[12px] leading-5 text-muted-foreground">
+        {props.children}
+      </p>
     </div>
   );
 }
@@ -73,13 +75,13 @@ export function ComplexityMeter(props: {
 }): ReactElement {
   const filled = COMPLEXITY_ORDER.indexOf(props.level) + 1;
   return (
-    <div className="mt-3 rounded-lg border border-border/35 bg-background px-3.5 py-3">
+    <div className="rounded-[0.625rem] border border-border/70 bg-card px-4 py-3.5">
       <div className="flex flex-wrap items-center gap-2">
         <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           <ChartBarIcon className="size-3.5" />
           Complexity
         </span>
-        <span className="text-[12px] font-semibold text-foreground">
+        <span className="text-[14px] font-semibold text-foreground">
           {COMPLEXITY_LABEL[props.level]}
         </span>
         <span className="flex items-center gap-1" aria-hidden="true">
@@ -87,8 +89,8 @@ export function ComplexityMeter(props: {
             <span
               key={level}
               className={cn(
-                "h-1.5 w-7 rounded-full",
-                index < filled ? "bg-foreground/70" : "bg-muted",
+                "h-1.5 w-7 rounded-full transition-colors duration-200 motion-reduce:transition-none",
+                index < filled ? "bg-muted-foreground" : "bg-muted",
               )}
             />
           ))}
@@ -102,7 +104,7 @@ export function ComplexityMeter(props: {
 export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): ReactElement {
   const meta = focusAreaTypeMeta(props.area.type);
   return (
-    <div className="rounded-lg border border-border/40 bg-background px-3.5 py-3">
+    <div className="rounded-[0.625rem] border border-border/70 bg-card px-3.5 py-3">
       <div className="flex min-w-0 items-start gap-2.5">
         <span
           aria-hidden="true"
@@ -115,7 +117,7 @@ export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): Reac
         </span>
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-            <span className="text-[13px] font-semibold text-foreground">{props.area.title}</span>
+            <span className="text-[14px] font-semibold text-foreground">{props.area.title}</span>
             <ReviewPill tone={focusAreaSeverityTone(props.area.severity)}>
               {SEVERITY_LABEL[props.area.severity]}
             </ReviewPill>
@@ -125,11 +127,11 @@ export function FocusAreaCard(props: { area: ReviewWalkthroughFocusArea }): Reac
             {props.area.description}
           </p>
           {props.area.locations.length > 0 ? (
-            <div className="mt-1.5 flex flex-wrap gap-1.5">
+            <div className="mt-1.5 flex min-w-0 flex-wrap gap-1.5">
               {props.area.locations.map((location, index) => (
                 <span
                   key={`${index}-${location}`}
-                  className="max-w-full truncate font-mono text-[10px] text-muted-foreground"
+                  className="block min-w-0 max-w-full truncate font-mono text-[11px] text-muted-foreground tabular-nums"
                 >
                   {location}
                 </span>
@@ -156,11 +158,16 @@ export function ProgressRing(props: {
       ) : (
         <span
           aria-hidden="true"
-          className="inline-block size-3.5 rounded-full border-[1.5px] border-muted-foreground/50"
+          className="inline-block size-3.5 rounded-full border-[1.5px] border-muted-foreground/70"
         />
       )}
-      <span aria-label={`${props.viewed} of ${props.total} ${unit} viewed`}>
-        {props.viewed}/{props.total}
+      <span
+        role="img"
+        aria-label={`${props.viewed} of ${props.total} ${unit} viewed${complete ? ", complete" : ""}`}
+      >
+        <span aria-hidden="true" className={cn(complete && "text-success-foreground")}>
+          {props.viewed}/{props.total}
+        </span>
       </span>
     </span>
   );
@@ -171,15 +178,16 @@ export function ViewedToggle(props: { viewed: boolean; onToggle: () => void }): 
     <button
       type="button"
       onClick={props.onToggle}
+      aria-label="Mark file as viewed"
       aria-pressed={props.viewed}
-      className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/45 px-2 py-1 text-[11px] text-muted-foreground outline-none transition-[background-color,border-color] duration-150 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+      className="flex shrink-0 items-center gap-1.5 rounded-md border border-border/40 px-2 py-1 text-[11px] text-muted-foreground outline-none transition-[background-color,border-color] duration-150 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
     >
       <span
         aria-hidden="true"
         className={cn(
           "grid size-3.5 place-items-center rounded-[3px] border",
           props.viewed
-            ? "border-success-foreground/40 bg-success/20 text-success-foreground"
+            ? "border-success-foreground bg-success-foreground text-background"
             : "border-border/60",
         )}
       >

@@ -26,7 +26,7 @@ export function WalkthroughPrologue(props: {
         <SparklesIcon className="size-3.5" />
         Overview
       </div>
-      <h1 className="mt-2 text-balance text-[26px] font-semibold leading-8 text-foreground">
+      <h1 className="mt-2 text-balance text-[26px] font-semibold leading-7 text-foreground">
         {props.title}
       </h1>
       {props.body ? (
@@ -36,14 +36,14 @@ export function WalkthroughPrologue(props: {
       {prologue.motivation || prologue.outcome ? (
         <div className="mt-6 grid gap-3 sm:grid-cols-2">
           {prologue.motivation ? (
-            <ProseCard icon={<InfoIcon className="size-3.5" />} label="Why this change" tone="info">
+            <ProseCard icon={<InfoIcon className="size-3.5" />} label="Motivation" tone="info">
               {prologue.motivation}
             </ProseCard>
           ) : null}
           {prologue.outcome ? (
             <ProseCard
               icon={<CircleCheckIcon className="size-3.5" />}
-              label="What's better now"
+              label="Outcome"
               tone="success"
             >
               {prologue.outcome}
@@ -52,15 +52,10 @@ export function WalkthroughPrologue(props: {
         </div>
       ) : null}
 
-      <ComplexityMeter
-        level={prologue.complexity.level}
-        reasoning={prologue.complexity.reasoning}
-      />
-
       {prologue.keyChanges.length > 0 ? (
-        <section className="mt-8">
+        <section className="mt-10">
           <SectionHeading icon={<ListChecksIcon className="size-4" />} title="Key changes" />
-          <ul className="mt-3 space-y-2.5">
+          <ul className="mt-3 space-y-3">
             {prologue.keyChanges.map((change) => (
               <li key={change.summary} className="flex min-w-0 items-start gap-2.5">
                 <span
@@ -68,7 +63,7 @@ export function WalkthroughPrologue(props: {
                   className="mt-1.5 size-1.5 shrink-0 rounded-full bg-foreground/45"
                 />
                 <span className="min-w-0">
-                  <span className="text-[13px] font-medium text-foreground">{change.summary}</span>
+                  <span className="text-[14px] font-medium text-foreground">{change.summary}</span>
                   <span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
                     {change.description}
                   </span>
@@ -80,7 +75,7 @@ export function WalkthroughPrologue(props: {
       ) : null}
 
       {prologue.focusAreas.length > 0 ? (
-        <section className="mt-8">
+        <section className="mt-10">
           <SectionHeading
             icon={<TriangleAlertIcon className="size-4" />}
             title="Where to look closely"
@@ -93,12 +88,19 @@ export function WalkthroughPrologue(props: {
         </section>
       ) : null}
 
+      <div className="mt-10">
+        <ComplexityMeter
+          level={prologue.complexity.level}
+          reasoning={prologue.complexity.reasoning}
+        />
+      </div>
+
       {props.canStart ? (
-        <div className="mt-9 flex justify-end border-t border-border/35 pt-5">
+        <div className="mt-10 flex justify-end border-t border-border/40 pt-5">
           <Button
             size="sm"
             variant="prominent"
-            className="px-3.5 text-[12px]"
+            className="px-3.5 text-[12px] transition-transform duration-150 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
             onClick={props.onStart}
           >
             Start reading

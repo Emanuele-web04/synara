@@ -11,17 +11,14 @@ import type { ReactElement } from "react";
 
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
 import { getRenderablePatch, resolveFileDiffPath } from "~/lib/diffRendering";
-import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
-import { GitPullRequestIcon, Loader2Icon, RefreshCwIcon, SparklesIcon } from "~/lib/icons";
 import { useTheme } from "~/hooks/useTheme";
-import { Button } from "../../ui/button";
 import { DiffWorkerPoolProvider } from "../../DiffWorkerPoolProvider";
-import { EmptyState } from "../reviewPrimitives";
 import { useReviewViewedFiles } from "../reviewViewedFiles";
 import { WalkthroughChapterRail, type WalkthroughReading } from "./WalkthroughChapterRail";
 import { WalkthroughChapterReader } from "./WalkthroughChapterReader";
 import { WalkthroughControls } from "./WalkthroughControls";
 import { WalkthroughPrologue } from "./WalkthroughPrologue";
+import { renderWalkthroughStatus } from "./WalkthroughStates";
 
 export function ReviewWalkthrough(props: {
   cwd: string | null;
@@ -57,10 +54,14 @@ function ReviewWalkthroughInner(props: {
   changesetLoading: boolean;
   title: string;
   body: string | null;
-}): ReactElement {
+}): ReactElement | null {
   const { resolvedTheme } = useTheme();
   const [reading, setReading] = useState<WalkthroughReading>("overview");
-  const [diffStyle, setDiffStyle] = useState<"unified" | "split">("split");
+  const [diffStyle, setDiffStyle] = useState<"unified" | "split">(() =>
+    typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches
+      ? "split"
+      : "unified",
+  );
   const [completedChapterIds, setCompletedChapterIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
@@ -116,73 +117,23 @@ function ReviewWalkthroughInner(props: {
     });
   };
 
-  if (props.changesetError) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <EmptyState icon={<GitPullRequestIcon />} title="Walkthrough unavailable">
-          {rpcErrorMessage(props.changesetError) ??
-            "Could not load the changeset for this walkthrough."}
-        </EmptyState>
-      </div>
-    );
+  const status = renderWalkthroughStatus({
+    changesetError: props.changesetError,
+    changesetLoading: props.changesetLoading,
+    queryLoading: walkthroughQuery.isLoading,
+    queryError: walkthroughQuery.error,
+    isError: walkthroughQuery.isError,
+    headMoved: Boolean(result?.headMoved || result?.patchChanged),
+    movedWarning: result?.warnings?.[0] ?? null,
+    isEmpty: !walkthrough || chapters.length === 0,
+    isFetching: walkthroughQuery.isFetching,
+    onRetry: () => void walkthroughQuery.refetch(),
+  });
+  if (status) {
+    return status;
   }
-
-  if (props.changesetLoading) {
-    return (
-      <WalkthroughCenter>
-        <Loader2Icon className="size-4 animate-spin" />
-        Generating walkthrough…
-      </WalkthroughCenter>
-    );
-  }
-
-  if (walkthroughQuery.isLoading) {
-    return (
-      <WalkthroughCenter>
-        <Loader2Icon className="size-4 animate-spin" />
-        Generating walkthrough…
-      </WalkthroughCenter>
-    );
-  }
-
-  if (walkthroughQuery.isError) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <EmptyState icon={<SparklesIcon />} title="Walkthrough unavailable">
-          {rpcErrorMessage(walkthroughQuery.error) ?? "Could not generate the walkthrough."}
-        </EmptyState>
-      </div>
-    );
-  }
-
-  if (result?.headMoved || result?.patchChanged) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <EmptyState
-          icon={<GitPullRequestIcon />}
-          title="Pull request changed"
-          action={
-            <Button size="sm" variant="outline" onClick={() => void walkthroughQuery.refetch()}>
-              <RefreshCwIcon className="size-3.5" />
-              Regenerate
-            </Button>
-          }
-        >
-          {result.warnings?.[0] ??
-            "The diff moved since this walkthrough was generated. Regenerate it to continue."}
-        </EmptyState>
-      </div>
-    );
-  }
-
-  if (!walkthrough || chapters.length === 0) {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <EmptyState icon={<SparklesIcon />} title="No chapters yet">
-          This change did not produce a chapter-by-chapter walkthrough.
-        </EmptyState>
-      </div>
-    );
+  if (!walkthrough) {
+    return null;
   }
 
   const activeIndex = activeChapter
@@ -196,13 +147,16 @@ function ReviewWalkthroughInner(props: {
   };
 
   return (
-    <main className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
       <WalkthroughControls
         diffStyle={diffStyle}
         onToggleDiffStyle={() => setDiffStyle((value) => (value === "split" ? "unified" : "split"))}
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)] xl:overflow-hidden">
-        <section className="order-2 min-h-0 overflow-y-auto bg-background xl:order-1">
+        <section
+          aria-label="Walkthrough reader"
+          className="order-2 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto bg-background xl:order-1"
+        >
           {activeChapter && activeIndex >= 0 ? (
             <WalkthroughChapterReader
               chapter={activeChapter}
@@ -230,7 +184,10 @@ function ReviewWalkthroughInner(props: {
             />
           )}
         </section>
-        <aside className="order-1 max-h-[42vh] overflow-y-auto border-b border-border/35 bg-[var(--color-background-surface)] xl:order-2 xl:max-h-none xl:overflow-visible xl:border-b-0 xl:border-l">
+        <aside
+          aria-label="Walkthrough navigation"
+          className="order-1 max-h-[38vh] overflow-y-auto overscroll-contain border-b border-border/40 bg-[var(--color-background-surface)] sm:max-h-[42vh] xl:order-2 xl:max-h-none xl:overflow-visible xl:border-b-0 xl:border-l"
+        >
           <WalkthroughChapterRail
             chapters={chapters}
             reading={reading}
@@ -241,14 +198,6 @@ function ReviewWalkthroughInner(props: {
           />
         </aside>
       </div>
-    </main>
-  );
-}
-
-function WalkthroughCenter(props: { children: React.ReactNode }): ReactElement {
-  return (
-    <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-6 text-center text-[12px] text-muted-foreground">
-      {props.children}
     </div>
   );
 }

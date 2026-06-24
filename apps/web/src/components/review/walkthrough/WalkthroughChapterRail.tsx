@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useMemo } from "react";
 
 import { DiffStat, hasNonZeroStat } from "../../chat/DiffStatLabel";
-import { ChevronRightIcon, EyeIcon, GitPullRequestIcon, SparklesIcon } from "~/lib/icons";
+import { EyeIcon, GitPullRequestIcon, SparklesIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { splitRepoRelativePath } from "~/lib/diffRendering";
 
@@ -34,41 +34,44 @@ export function WalkthroughChapterRail(props: {
   onOpenChapter: (chapter: ReviewWalkthroughChapter) => void;
 }): ReactElement {
   return (
-    <nav aria-label="Changes in PR" className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1.5 border-b border-border/35 px-4 py-3">
+    <nav aria-label="Changes" className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center gap-1.5 border-b border-border/40 px-4 py-3">
         <GitPullRequestIcon className="size-3.5 text-muted-foreground" />
-        <h2 className="text-[13px] font-semibold text-foreground">Changes in PR</h2>
+        <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          Changes
+        </h2>
       </div>
-      <div className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-2">
-        <button
-          type="button"
-          aria-current={props.reading === "overview" ? "true" : undefined}
-          onClick={props.onOpenOverview}
-          className={cn(
-            "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-            props.reading === "overview" ? "bg-muted/45" : "hover:bg-muted/15",
-          )}
-        >
-          <span className="grid size-5 shrink-0 place-items-center rounded bg-muted/40 text-muted-foreground">
-            <SparklesIcon className="size-3" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block text-[12px] font-medium text-foreground">Overview</span>
-            <span className="block text-[11px] text-muted-foreground">
-              Summary &amp; focus areas
+      <div role="list" className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-2">
+        <div role="listitem">
+          <button
+            type="button"
+            aria-current={props.reading === "overview" ? "true" : undefined}
+            onClick={props.onOpenOverview}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100",
+              props.reading === "overview" ? "bg-muted/60" : "hover:bg-muted/30",
+            )}
+          >
+            <span className="grid size-5 shrink-0 place-items-center rounded bg-muted text-muted-foreground">
+              <SparklesIcon className="size-3" />
             </span>
-          </span>
-        </button>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[12px] font-medium text-foreground">Overview</span>
+              <span className="block text-[11px] leading-4 text-muted-foreground">Summary and what to watch</span>
+            </span>
+          </button>
+        </div>
         {props.chapters.map((chapter, index) => (
-          <WalkthroughChapterRailItem
-            key={chapter.id}
-            chapter={chapter}
-            index={index}
-            active={props.reading === chapter.id}
-            filesByPath={props.filesByPath}
-            viewedPaths={props.viewedPaths}
-            onOpen={() => props.onOpenChapter(chapter)}
-          />
+          <div role="listitem" key={chapter.id}>
+            <WalkthroughChapterRailItem
+              chapter={chapter}
+              index={index}
+              active={props.reading === chapter.id}
+              filesByPath={props.filesByPath}
+              viewedPaths={props.viewedPaths}
+              onOpen={() => props.onOpenChapter(chapter)}
+            />
+          </div>
         ))}
       </div>
     </nav>
@@ -92,20 +95,32 @@ function WalkthroughChapterRailItem(props: {
     <button
       type="button"
       aria-current={props.active ? "true" : undefined}
+      aria-label={`Chapter ${props.index + 1}: ${chapter.title}`}
       onClick={props.onOpen}
       className={cn(
-        "flex w-full min-w-0 gap-2.5 rounded-lg px-2.5 py-2.5 text-left outline-none transition-[background-color] duration-150 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-        props.active ? "bg-muted/45" : "hover:bg-muted/15",
+        "flex w-full min-w-0 gap-2.5 rounded-lg px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100",
+        props.active ? "bg-muted/60" : "hover:bg-muted/30",
       )}
     >
-      <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded bg-muted/40 font-mono text-[11px] leading-none tabular-nums text-foreground">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 grid size-5 shrink-0 place-items-center rounded font-mono text-[11px] leading-none tabular-nums",
+          props.active ? "bg-foreground text-background" : "bg-muted text-foreground",
+        )}
+      >
         {props.index + 1}
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-[12px] font-medium text-foreground">
+        <span
+          className={cn(
+            "block truncate text-[12px] text-foreground",
+            props.active ? "font-semibold" : "font-medium",
+          )}
+        >
           {chapter.title}
         </span>
-        <span className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+        <span className="mt-1 flex items-center gap-2 text-[11px] leading-4 text-muted-foreground">
           <span>
             {uniqueFiles.length} {uniqueFiles.length === 1 ? "file" : "files"}
           </span>
@@ -116,36 +131,37 @@ function WalkthroughChapterRailItem(props: {
               className="text-[11px]"
             />
           ) : (
-            <span className="text-muted-foreground/70">no line changes</span>
+            <span className="text-muted-foreground">no line changes</span>
           )}
         </span>
-        <span className="mt-1.5 flex flex-col gap-0.5">
+        <span className="mt-2 flex flex-col gap-1">
           {visibleFiles.map((path) => {
             const parts = splitRepoRelativePath(path);
             const viewed = props.viewedPaths.has(path);
             return (
               <span key={path} className="flex min-w-0 items-center gap-1.5">
-                <span className="min-w-0 truncate font-mono text-[11px] text-foreground">
+                <span className="min-w-0 max-w-[55%] truncate font-mono text-[11px] font-medium text-foreground">
                   {parts.name}
                 </span>
                 {parts.dir ? (
-                  <span className="min-w-0 truncate font-mono text-[10px] text-muted-foreground">
+                  <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
                     {parts.dir}
                   </span>
                 ) : null}
-                {viewed ? <EyeIcon className="size-3 shrink-0 text-muted-foreground/70" /> : null}
+                {viewed ? (
+                  <>
+                    <span className="sr-only">viewed</span>
+                    <EyeIcon className="size-3 shrink-0 text-muted-foreground" />
+                  </>
+                ) : null}
               </span>
             );
           })}
           {remaining > 0 ? (
-            <span className="font-mono text-[10px] text-muted-foreground/80">
+            <span className="font-mono text-[11px] text-muted-foreground">
               +{remaining} more {remaining === 1 ? "file" : "files"}
             </span>
           ) : null}
-        </span>
-        <span className="mt-2 inline-flex items-center gap-0.5 text-[11px] font-medium text-info-foreground">
-          Explanation
-          <ChevronRightIcon className="size-3" />
         </span>
       </span>
     </button>
