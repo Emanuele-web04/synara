@@ -46,7 +46,9 @@ export interface DeriveWorkLogToolDetailsInput {
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
 }
 
 function asTrimmedString(value: unknown): string | null {
@@ -314,9 +316,7 @@ function collectEditEntries(value: unknown, target: WorkLogToolEditDetails[]) {
   }
 }
 
-function dedupeEditEntries(
-  edits: ReadonlyArray<WorkLogToolEditDetails>,
-): WorkLogToolEditDetails[] {
+function dedupeEditEntries(edits: ReadonlyArray<WorkLogToolEditDetails>): WorkLogToolEditDetails[] {
   const seen = new Set<string>();
   const deduped: WorkLogToolEditDetails[] = [];
   for (const edit of edits) {
@@ -446,11 +446,11 @@ export function mergeWorkLogToolDetails(
   return {
     kind: right.kind,
     title: right.title || left.title,
-    ...(right.command ?? left.command ? { command: right.command ?? left.command } : {}),
+    ...((right.command ?? left.command) ? { command: right.command ?? left.command } : {}),
     ...(output ? { output } : {}),
-    ...(right.diff ?? left.diff ? { diff: right.diff ?? left.diff } : {}),
-    ...(right.content ?? left.content ? { content: right.content ?? left.content } : {}),
-    ...(right.edits ?? left.edits ? { edits: right.edits ?? left.edits } : {}),
+    ...((right.diff ?? left.diff) ? { diff: right.diff ?? left.diff } : {}),
+    ...((right.content ?? left.content) ? { content: right.content ?? left.content } : {}),
+    ...((right.edits ?? left.edits) ? { edits: right.edits ?? left.edits } : {}),
     ...(files ? { files } : {}),
   };
 }
