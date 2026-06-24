@@ -6,7 +6,7 @@ import type {
   ReviewWalkthroughChapter,
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
@@ -56,6 +56,7 @@ function ReviewWalkthroughInner(props: {
   body: string | null;
 }): ReactElement | null {
   const { resolvedTheme } = useTheme();
+  const readerSectionRef = useRef<HTMLElement>(null);
   const [reading, setReading] = useState<WalkthroughReading>("overview");
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">(() =>
     typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches
@@ -146,6 +147,21 @@ function ReviewWalkthroughInner(props: {
     setReading(chapter.id);
   };
 
+  const onReadingViewMount = (node: HTMLDivElement | null): void => {
+    if (!node) {
+      return;
+    }
+    readerSectionRef.current?.scrollTo({ top: 0, behavior: "auto" });
+    const fromControl = document.activeElement?.closest(
+      "[aria-label='Walkthrough navigation'], [aria-label='Chapter navigation']",
+    );
+    if (fromControl) {
+      return;
+    }
+    const heading = node.querySelector<HTMLElement>("[tabindex='-1'], h1, h2");
+    heading?.focus({ preventScroll: true });
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
       <WalkthroughControls
@@ -154,35 +170,42 @@ function ReviewWalkthroughInner(props: {
       />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)] xl:overflow-hidden">
         <section
+          ref={readerSectionRef}
           aria-label="Walkthrough reader"
           className="order-2 min-h-0 min-w-0 overflow-x-hidden overflow-y-auto bg-background xl:order-1"
         >
-          {activeChapter && activeIndex >= 0 ? (
-            <WalkthroughChapterReader
-              chapter={activeChapter}
-              index={activeIndex}
-              total={chapters.length}
-              fileDiffs={chapterFileDiffs(activeChapter, fileDiffsByPath)}
-              theme={resolvedTheme}
-              diffStyle={diffStyle}
-              completed={completedChapterIds.has(activeChapter.id)}
-              viewedPaths={viewedPaths}
-              onToggleViewed={toggleViewed}
-              onToggleComplete={() => toggleComplete(activeChapter.id)}
-              onNavigatePrevious={() =>
-                setReading(activeIndex <= 0 ? "overview" : chapters[activeIndex - 1]!.id)
-              }
-              onNavigateNext={nextChapter ? () => setReading(nextChapter.id) : null}
-            />
-          ) : (
-            <WalkthroughPrologue
-              prologue={walkthrough.prologue}
-              title={props.title}
-              body={props.body}
-              canStart={chapters.length > 0}
-              onStart={() => setReading(chapters[0]!.id)}
-            />
-          )}
+          <div
+            key={activeChapter?.id ?? "overview"}
+            ref={onReadingViewMount}
+            className="animate-in fade-in duration-200 ease-out motion-reduce:animate-none"
+          >
+            {activeChapter && activeIndex >= 0 ? (
+              <WalkthroughChapterReader
+                chapter={activeChapter}
+                index={activeIndex}
+                total={chapters.length}
+                fileDiffs={chapterFileDiffs(activeChapter, fileDiffsByPath)}
+                theme={resolvedTheme}
+                diffStyle={diffStyle}
+                completed={completedChapterIds.has(activeChapter.id)}
+                viewedPaths={viewedPaths}
+                onToggleViewed={toggleViewed}
+                onToggleComplete={() => toggleComplete(activeChapter.id)}
+                onNavigatePrevious={() =>
+                  setReading(activeIndex <= 0 ? "overview" : chapters[activeIndex - 1]!.id)
+                }
+                onNavigateNext={nextChapter ? () => setReading(nextChapter.id) : null}
+              />
+            ) : (
+              <WalkthroughPrologue
+                prologue={walkthrough.prologue}
+                title={props.title}
+                body={props.body}
+                canStart={chapters.length > 0}
+                onStart={() => setReading(chapters[0]!.id)}
+              />
+            )}
+          </div>
         </section>
         <aside
           aria-label="Walkthrough navigation"

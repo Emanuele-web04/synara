@@ -10,9 +10,9 @@ export function WalkthroughLoading(props: { title: string; detail?: string }): R
     <div
       role="status"
       aria-live="polite"
-      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center"
+      className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-6 text-center animate-in fade-in duration-200 ease-out motion-reduce:animate-none"
     >
-      <Loader2Icon className="size-4 animate-spin text-muted-foreground" />
+      <Loader2Icon className="size-4 animate-spin text-muted-foreground motion-reduce:animate-none" />
       <p className="text-[13px] font-medium text-foreground">{props.title}</p>
       {props.detail ? (
         <p className="max-w-xs text-pretty text-[12px] text-muted-foreground">{props.detail}</p>
@@ -27,7 +27,7 @@ function WalkthroughMessage(props: {
   children: ReactNode;
 }): ReactElement {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center">
+    <div className="flex min-h-0 flex-1 items-center justify-center animate-in fade-in duration-200 ease-out motion-reduce:animate-none">
       <EmptyState icon={props.icon} title={props.title}>
         {props.children}
       </EmptyState>
@@ -45,14 +45,14 @@ function WalkthroughRetry(props: {
   onRetry: () => void;
 }): ReactElement {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center">
+    <div className="flex min-h-0 flex-1 items-center justify-center animate-in fade-in duration-200 ease-out motion-reduce:animate-none">
       <EmptyState
         icon={props.icon}
         title={props.title}
         action={
           <Button size="sm" variant="outline" disabled={props.busy} onClick={props.onRetry}>
             {props.busy ? (
-              <Loader2Icon className="size-3.5 animate-spin" />
+              <Loader2Icon className="size-3.5 animate-spin motion-reduce:animate-none" />
             ) : (
               <RefreshCwIcon className="size-3.5" />
             )}

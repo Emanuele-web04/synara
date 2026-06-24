@@ -16,12 +16,19 @@ export function WalkthroughControls(props: {
         aria-label="Toggle split or unified diff"
         onClick={props.onToggleDiffStyle}
         className={cn(
-          "inline-flex h-7 items-center gap-1.5 rounded-md border border-border/40 bg-background px-2.5 text-[12px] text-foreground outline-none transition-[background-color,border-color,transform] duration-150 hover:bg-muted/20 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
+          "group inline-flex h-7 items-center gap-1.5 rounded-md border border-border/40 bg-background px-2.5 text-[12px] text-foreground outline-none transition-[background-color,border-color,transform] duration-150 ease-out hover:border-border hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
           isSplit ? "bg-muted/40" : "",
         )}
       >
-        {isSplit ? "Split" : "Unified"}
-        <ChevronsUpDownIcon className="size-3 text-muted-foreground" />
+        <span className="inline-block min-w-[2.75rem] text-left">
+          {isSplit ? "Split" : "Unified"}
+        </span>
+        <ChevronsUpDownIcon
+          className={cn(
+            "size-3 text-muted-foreground transition-[transform,color] duration-150 ease-out group-active:scale-90 motion-reduce:transition-none motion-reduce:group-active:scale-100",
+            isSplit && "rotate-90",
+          )}
+        />
       </button>
     </div>
   );
