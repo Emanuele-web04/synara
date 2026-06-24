@@ -48,13 +48,13 @@ export function WalkthroughChapterReader(props: {
   const hiddenFindings = findings.length - visibleFindings.length;
 
   return (
-    <div className="px-4 py-5 sm:px-6 sm:py-6">
+    <div className="mx-auto w-full max-w-3xl px-5 py-7 sm:px-7">
       <div>
         <div className="flex items-start justify-between gap-3 border-b border-border/40 pb-4">
           <div className="flex min-w-0 flex-1 items-start gap-2.5">
             <span
               aria-hidden="true"
-              className="mt-0.5 grid size-6 shrink-0 place-items-center rounded bg-muted font-mono text-[12px] leading-none tabular-nums text-foreground"
+              className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md bg-muted font-mono text-[12px] leading-none tabular-nums text-foreground"
             >
               {props.index + 1}
             </span>
@@ -62,7 +62,7 @@ export function WalkthroughChapterReader(props: {
               <h2
                 tabIndex={-1}
                 data-walkthrough-heading
-                className="text-balance break-words [overflow-wrap:anywhere] rounded-sm text-[18px] font-semibold leading-7 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="text-balance break-words [overflow-wrap:anywhere] rounded-sm text-[20px] font-semibold leading-7 tracking-[-0.01em] text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
               >
                 {chapter.title}
               </h2>
@@ -81,7 +81,7 @@ export function WalkthroughChapterReader(props: {
         <ChapterExplanation chapter={chapter} />
       </div>
 
-      <div className="mt-8">
+      <div className="mt-10">
         {props.fileDiffs.length > 0 ? (
           <FileDiffSurface className="space-y-3">
             <div className="space-y-3">
@@ -118,18 +118,19 @@ export function WalkthroughChapterReader(props: {
             ) : null}
           </FileDiffSurface>
         ) : (
-          <div className="flex items-center gap-2 rounded-[0.625rem] border border-border/70 bg-card px-3.5 py-3 text-[12px] leading-5 text-muted-foreground">
-            <InfoIcon className="size-3.5 shrink-0" />
-            <span>This chapter explains context rather than a specific diff.</span>
+          <div className="flex items-start gap-2.5 rounded-[0.625rem] border border-border/60 bg-muted/30 px-4 py-3 text-[12px] leading-5 text-muted-foreground">
+            <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-info-foreground" />
+            <span>No diff in this chapter. It sets up context for the changes that follow.</span>
           </div>
         )}
       </div>
 
       {findings.length > 0 ? (
-        <section className="mt-6">
-          <h3 className="mb-2 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <CircleAlertIcon className="size-3.5" />
+        <section className="mt-10">
+          <h3 className="mb-2 flex items-center gap-1.5 border-b border-border/40 pb-2 text-[15px] font-semibold text-foreground">
+            <CircleAlertIcon className="size-3.5 text-destructive" />
             Findings
+            <span className="tabular-nums text-muted-foreground">{findings.length}</span>
           </h3>
           <div className="space-y-3">
             {visibleFindings.map((finding) => (
@@ -155,12 +156,12 @@ export function WalkthroughChapterReader(props: {
 
       <nav
         aria-label="Chapter navigation"
-        className="mt-8 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-4"
+        className="mt-10 flex flex-wrap items-center justify-between gap-2 border-t border-border/40 pt-4"
       >
         <Button
           size="sm"
           variant="outline"
-          className="rounded-full px-3 text-[12px] transition-[background-color,border-color,transform] duration-150 ease-out hover:bg-muted/30 active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
+          className="rounded-full px-3 text-[12px] transition-[background-color,border-color,transform] duration-150 ease-out hover:border-border hover:bg-muted active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
           aria-label={props.index <= 0 ? "Back to overview" : "Previous chapter"}
           onClick={props.onNavigatePrevious}
         >
@@ -174,7 +175,11 @@ export function WalkthroughChapterReader(props: {
         <Button
           size="sm"
           variant={props.completed ? "outline" : "prominent"}
-          className="order-last w-full rounded-full px-3 text-[12px] transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100 sm:order-none sm:w-auto"
+          className={cn(
+            "order-last w-full rounded-full px-3 text-[12px] transition-[background-color,border-color,color] duration-150 ease-out sm:order-none sm:w-auto",
+            props.completed &&
+              "border-success-foreground/40 bg-success/10 text-success-foreground hover:bg-success/16",
+          )}
           aria-pressed={props.completed}
           onClick={props.onToggleComplete}
         >
@@ -193,7 +198,7 @@ export function WalkthroughChapterReader(props: {
         <Button
           size="sm"
           variant="outline"
-          className="rounded-full px-3 text-[12px] transition-[background-color,border-color,transform] duration-150 ease-out hover:bg-muted/30 active:scale-[0.98] disabled:opacity-50 disabled:hover:bg-transparent disabled:active:scale-100 motion-reduce:transition-none motion-reduce:active:scale-100"
+          className="rounded-full px-3 text-[12px] transition-[background-color,border-color,transform] duration-150 ease-out hover:border-border hover:bg-muted active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
           aria-label={props.onNavigateNext ? "Next chapter" : "No more chapters"}
           disabled={props.onNavigateNext === null}
           onClick={() => props.onNavigateNext?.()}
@@ -217,7 +222,7 @@ function ShowMoreButton(props: {
     <button
       type="button"
       className={cn(
-        "w-full rounded-[0.625rem] border border-dashed border-border/40 px-3 py-2 text-[12px] font-medium text-muted-foreground outline-none transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-border hover:bg-muted/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
+        "w-full rounded-[0.625rem] border border-dashed border-border/70 px-3 py-2 text-[12px] font-medium text-muted-foreground outline-none transition-[background-color,border-color,color,transform] duration-150 ease-out hover:border-border hover:bg-muted/30 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
         props.className,
       )}
       aria-label={`Show ${props.count} more ${label}`}
@@ -233,18 +238,14 @@ function ChapterExplanation(props: { chapter: ReviewWalkthroughChapter }): React
   return (
     <div className="mt-4 space-y-3">
       {chapter.summary ? (
-        <p className="max-w-2xl text-pretty break-words text-[14px] leading-6 text-foreground">
+        <p className="max-w-[68ch] text-pretty break-words text-[15px] leading-7 text-foreground/85">
           {chapter.summary}
         </p>
       ) : null}
       {chapter.intent ? (
-        <div>
-          <h3 className="mb-1 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            <InfoIcon className="size-3.5" />
-            Why it matters
-          </h3>
-          <p className="text-pretty text-[13px] leading-5 text-foreground">{chapter.intent}</p>
-        </div>
+        <p className="max-w-[68ch] text-pretty text-[13px] font-medium leading-5 text-foreground">
+          {chapter.intent}
+        </p>
       ) : null}
       {chapter.question ? <JudgmentCallout question={chapter.question} /> : null}
     </div>

@@ -443,9 +443,10 @@
   --app-sidebar-surface: color-mix(in srgb, var(--card) 64%, transparent);
   --background: oklch(0.985 0.003 60);
   --foreground: oklch(0.27 0.006 60);
-  --card: oklch(0.992 0.003 60);
+  --card: oklch(0.985 0.003 60);
   --card-foreground: oklch(0.27 0.006 60);
-  --popover: oklch(0.998 0.0025 60);
+  --shadow-card: 0 1px 2px -1px oklch(0.27 0.006 60 / 0.06);
+  --popover: oklch(0.985 0.003 60);
   --popover-foreground: oklch(0.27 0.006 60);
   --primary: oklch(0.255 0.006 60);
   --primary-foreground: oklch(0.99 0.003 60);
@@ -486,10 +487,11 @@
 
   @variant dark {
     color-scheme: dark;
-    --background: oklch(0.17 0.004 60);
+    --background: oklch(0.155 0.004 60);
     --foreground: oklch(0.94 0.004 60);
     --card: oklch(0.205 0.005 60);
     --card-foreground: oklch(0.94 0.004 60);
+    --shadow-card: none;
     --popover: oklch(0.235 0.005 60);
     --popover-foreground: oklch(0.94 0.004 60);
     --primary: oklch(0.94 0.004 60);

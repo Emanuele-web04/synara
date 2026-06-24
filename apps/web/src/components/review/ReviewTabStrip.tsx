@@ -75,23 +75,18 @@ export function ReviewTabStrip(props: {
               data-active={active || undefined}
               onClick={() => props.onValueChange(tab.id)}
               className={cn(
-                "inline-flex items-center gap-1 whitespace-nowrap rounded-lg font-medium outline-none",
-                "transition-[background-color,box-shadow,color,transform] duration-150 ease-out motion-reduce:transition-none",
-                "focus-visible:ring-2 focus-visible:ring-ring",
+                "inline-flex items-center gap-1 whitespace-nowrap rounded-[0.625rem] font-medium outline-none",
+                "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
+                "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                 size === "roomy" ? "h-8 px-3 text-[13px]" : "h-6 px-2.5 text-[12px]",
                 active
-                  ? "bg-card text-foreground shadow-sm ring-1 ring-border/60"
-                  : "text-muted-foreground hover:bg-foreground/[0.04] hover:text-foreground active:scale-[0.98] motion-reduce:active:scale-100",
+                  ? "bg-muted text-foreground active:scale-[0.98] motion-reduce:active:scale-100"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground active:scale-[0.98] motion-reduce:active:scale-100",
               )}
             >
               <span>{tab.label}</span>
               {tab.count != null && tab.count > 0 ? (
-                <span
-                  className={cn(
-                    "tabular-nums text-[11px] font-normal leading-none",
-                    active ? "text-muted-foreground" : "text-muted-foreground/55",
-                  )}
-                >
+                <span className="tabular-nums text-[11px] font-medium leading-none text-muted-foreground">
                   {tab.count}
                 </span>
               ) : null}

@@ -35,9 +35,9 @@ export function WalkthroughChapterRail(props: {
 }): ReactElement {
   return (
     <nav aria-label="Changes" className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-1.5 border-b border-border/40 px-4 py-3">
+      <div className="flex items-center gap-1.5 border-b border-border/40 px-[1.125rem] py-3">
         <GitPullRequestIcon className="size-3.5 text-muted-foreground" />
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
           Changes
         </span>
       </div>
@@ -51,14 +51,14 @@ export function WalkthroughChapterRail(props: {
             aria-current={props.reading === "overview" ? "step" : undefined}
             onClick={props.onOpenOverview}
             className={cn(
-              "flex w-full items-center gap-2 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
-              props.reading === "overview" ? "bg-muted/60 hover:bg-muted/70" : "hover:bg-muted/30",
+              "relative flex w-full items-center gap-2 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:min-h-11 motion-reduce:transition-none motion-reduce:active:scale-100",
+              props.reading === "overview" ? "bg-muted hover:bg-muted/80" : "hover:bg-muted/40",
             )}
           >
-            <span className="relative isolate grid size-5 shrink-0 place-items-center overflow-hidden rounded bg-muted">
+            <span className="relative isolate grid size-5 shrink-0 place-items-center overflow-hidden rounded-md bg-muted">
               <span
                 className={cn(
-                  "absolute inset-0 rounded bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                  "absolute inset-0 rounded-md bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
                   props.reading === "overview" ? "opacity-100" : "opacity-0",
                 )}
               />
@@ -72,14 +72,13 @@ export function WalkthroughChapterRail(props: {
             <span className="min-w-0 flex-1">
               <span
                 className={cn(
-                  "block text-[12px] font-medium transition-colors duration-150 ease-out motion-reduce:transition-none",
-                  props.reading === "overview" ? "text-foreground" : "text-foreground/80",
+                  "block text-[12px] transition-colors duration-150 ease-out motion-reduce:transition-none",
+                  props.reading === "overview"
+                    ? "font-semibold text-foreground"
+                    : "font-medium text-muted-foreground",
                 )}
               >
                 Overview
-              </span>
-              <span className="block text-[11px] leading-4 text-muted-foreground">
-                Summary and what to watch
               </span>
             </span>
           </button>
@@ -121,17 +120,17 @@ function WalkthroughChapterRailItem(props: {
       aria-label={`Chapter ${props.index + 1}: ${chapter.title}`}
       onClick={props.onOpen}
       className={cn(
-        "flex w-full min-w-0 gap-2.5 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
-        props.active ? "bg-muted/60 hover:bg-muted/70" : "hover:bg-muted/30",
+        "relative flex w-full min-w-0 gap-2.5 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] pointer-coarse:after:absolute pointer-coarse:after:inset-0 pointer-coarse:after:min-h-11 motion-reduce:transition-none motion-reduce:active:scale-100",
+        props.active ? "bg-muted hover:bg-muted/80" : "hover:bg-muted/40",
       )}
     >
       <span
         aria-hidden="true"
-        className="relative isolate mt-0.5 grid size-5 shrink-0 place-items-center overflow-hidden rounded bg-muted font-mono text-[11px] leading-none tabular-nums"
+        className="relative isolate mt-0.5 grid size-5 shrink-0 place-items-center overflow-hidden rounded-md bg-muted font-mono text-[11px] leading-none tabular-nums"
       >
         <span
           className={cn(
-            "absolute inset-0 rounded bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            "absolute inset-0 rounded-md bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
             props.active ? "opacity-100" : "opacity-0",
           )}
         />
@@ -143,8 +142,8 @@ function WalkthroughChapterRailItem(props: {
         <span
           title={chapter.title}
           className={cn(
-            "block truncate text-[12px] font-medium transition-colors duration-150 ease-out motion-reduce:transition-none",
-            props.active ? "text-foreground" : "text-foreground/80",
+            "block truncate text-[12px] transition-colors duration-150 ease-out motion-reduce:transition-none",
+            props.active ? "font-semibold text-foreground" : "font-medium text-muted-foreground",
           )}
         >
           {chapter.title}
@@ -198,7 +197,7 @@ function WalkthroughChapterRailItem(props: {
               );
             })}
             {remaining > 0 ? (
-              <span className="font-mono text-[11px] text-muted-foreground">
+              <span className="font-mono text-[11px] tabular-nums text-muted-foreground">
                 +{remaining} more {remaining === 1 ? "file" : "files"}
               </span>
             ) : null}

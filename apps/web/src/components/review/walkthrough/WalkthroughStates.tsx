@@ -21,6 +21,36 @@ export function WalkthroughLoading(props: { title: string; detail?: string }): R
   );
 }
 
+function WalkthroughGenerating(props: { title: string; detail: string }): ReactElement {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="min-h-0 flex-1 overflow-hidden animate-in fade-in duration-200 ease-out motion-reduce:animate-none"
+    >
+      <span className="sr-only">
+        {props.title}. {props.detail}
+      </span>
+      <div
+        aria-hidden="true"
+        className="mx-auto w-full max-w-3xl px-5 py-7 animate-pulse motion-reduce:animate-none sm:px-7"
+      >
+        <div className="h-2 w-20 rounded-full bg-muted/60" />
+        <div className="mt-4 h-6 w-3/5 rounded-md bg-muted/60" />
+        <div className="mt-5 space-y-2.5">
+          <div className="h-3 w-full rounded-full bg-muted/50" />
+          <div className="h-3 w-[92%] rounded-full bg-muted/50" />
+          <div className="h-3 w-3/4 rounded-full bg-muted/50" />
+        </div>
+        <div className="mt-8 space-y-2">
+          <div className="h-12 rounded-[0.625rem] border border-border/60 bg-muted/30" />
+          <div className="h-12 rounded-[0.625rem] border border-border/60 bg-muted/30" />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function WalkthroughMessage(props: {
   icon: ReactElement;
   title: string;
@@ -93,7 +123,7 @@ export function renderWalkthroughStatus(args: {
 
   if (args.queryLoading) {
     return (
-      <WalkthroughLoading
+      <WalkthroughGenerating
         title="Generating walkthrough"
         detail="Reading the diff to break it into chapters"
       />

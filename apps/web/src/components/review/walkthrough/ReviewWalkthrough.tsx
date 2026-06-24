@@ -174,7 +174,7 @@ function ReviewWalkthroughInner(props: {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div data-walkthrough-controls>
         <WalkthroughControls
           diffStyle={diffStyle}
@@ -228,9 +228,9 @@ function ReviewWalkthroughInner(props: {
           </div>
         </section>
         <aside
-          aria-label="Walkthrough navigation"
+          aria-label="Walkthrough chapters"
           data-walkthrough-rail
-          className="order-1 max-h-[38vh] overflow-y-auto overscroll-contain border-b border-border/40 bg-[var(--color-background-surface)] sm:max-h-[42vh] xl:order-2 xl:max-h-none xl:overflow-visible xl:border-b-0 xl:border-l"
+          className="order-1 max-h-[38vh] overflow-y-auto overscroll-contain border-b border-border/40 bg-background sm:max-h-[42vh] xl:order-2 xl:max-h-none xl:overflow-visible xl:border-b-0 xl:border-l"
         >
           <WalkthroughChapterRail
             chapters={chapters}
