@@ -42,7 +42,6 @@ import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 import { ReviewWalkthrough } from "./walkthrough/ReviewWalkthrough";
-import { WALKTHROUGH_ENABLED } from "./walkthrough/walkthroughFlag";
 
 type PrTab = "conversation" | "files" | "commits" | "walkthrough";
 
@@ -396,12 +395,8 @@ export function ReviewPrView(props: {
                     onOverview={() => setTab("conversation")}
                     commitsActive={tab === "commits"}
                     onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
-                    {...(WALKTHROUGH_ENABLED
-                      ? {
-                          onWalkthrough: () => setTab("walkthrough"),
-                          walkthroughActive: false,
-                        }
-                      : {})}
+                    onWalkthrough={() => setTab("walkthrough")}
+                    walkthroughActive={false}
                   />
                   {tab === "commits" ? (
                     <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>
