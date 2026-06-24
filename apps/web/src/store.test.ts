@@ -3036,9 +3036,6 @@ describe("store read model sync", () => {
         updatedAt: "2026-02-27T00:00:30.000Z",
         handoff: null,
         session: null,
-        activities: [],
-        proposedPlans: [],
-        checkpoints: [],
       }),
     );
     expect(afterStaleSnapshot.threads).toHaveLength(0);
@@ -3100,9 +3097,6 @@ describe("store read model sync", () => {
         updatedAt: "2026-02-27T00:00:30.000Z",
         handoff: null,
         session: null,
-        activities: [],
-        proposedPlans: [],
-        checkpoints: [],
       }),
     );
 
@@ -3152,9 +3146,6 @@ describe("store read model sync", () => {
         updatedAt: "2026-02-27T00:00:30.000Z",
         handoff: null,
         session: null,
-        activities: [],
-        proposedPlans: [],
-        checkpoints: [],
       }),
     );
 

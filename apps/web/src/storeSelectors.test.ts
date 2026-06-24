@@ -126,7 +126,7 @@ describe("thread shell route selectors", () => {
     const threadShellById = {
       [threadIdA]: {
         ...shellA,
-        envMode: "worktree",
+        envMode: "worktree" as const,
         worktreePath: "/repo/.worktrees/feature",
       },
     };

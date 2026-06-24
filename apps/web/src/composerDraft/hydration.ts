@@ -84,9 +84,11 @@ export function hydrateQueuedTurnsFromPersisted(
       return {
         ...queuedTurn,
         images: hydrateImagesFromPersisted(queuedTurn.images),
+        files: [],
         assistantSelections: normalizeAssistantSelections(queuedTurn.assistantSelections ?? []),
         terminalContexts: normalizeTerminalContextsForThread(threadId, queuedTurn.terminalContexts),
         fileComments: hydrateFileCommentsFromPersisted(queuedTurn.fileComments),
+        pastedTexts: [],
         skills: [...queuedTurn.skills],
         mentions: [...queuedTurn.mentions],
       };
@@ -119,10 +121,12 @@ export function toHydratedThreadDraft(
   return {
     prompt: persistedDraft.prompt,
     images: hydrateImagesFromPersisted(persistedDraft.attachments),
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [...persistedDraft.attachments],
     assistantSelections: normalizeAssistantSelections(persistedDraft.assistantSelections ?? []),
     fileComments: hydrateFileCommentsFromPersisted(persistedDraft.fileComments),
+    pastedTexts: [],
     skills: [...(persistedDraft.skills ?? [])],
     mentions: [...(persistedDraft.mentions ?? [])],
     terminalContexts:

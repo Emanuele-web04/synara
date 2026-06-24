@@ -2242,6 +2242,7 @@ function SingleChatSurface(props: {
           shouldAcceptWidth={shouldAcceptDockWidth}
           addMenuKinds={RIGHT_DOCK_ADD_MENU_KINDS}
           motionKey={props.threadId}
+          storageKey="synara:right-dock-width:v1"
           activePaneRuntimeMode={activePaneRuntimeMode}
           {...(paneLabelOverrides ? { paneLabelOverrides } : {})}
           onSelectPane={handleSelectDockPane}

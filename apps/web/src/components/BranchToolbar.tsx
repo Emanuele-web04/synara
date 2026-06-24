@@ -477,7 +477,7 @@ export default function BranchToolbar({
                     icon={<FiServer className={ENV_MENU_ICON_CLASS_NAME} />}
                     label={EXECUTION_TARGET_LABELS["remote-runtime"]}
                     selected={remoteTargetSelected}
-                    onSelect={remoteTargetSelected ? undefined : selectRemoteTarget}
+                    {...(remoteTargetSelected ? {} : { onSelect: selectRemoteTarget })}
                   />
                 ) : null}
                 {canHandoffToWorktree && onHandoffToWorktree ? (

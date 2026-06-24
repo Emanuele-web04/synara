@@ -720,6 +720,7 @@ describe("shouldRenderTerminalWorkspace", () => {
   it("renders the workspace shell before the active project has hydrated", () => {
     expect(
       shouldRenderTerminalWorkspace({
+        activeProjectExists: true,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
@@ -729,12 +730,14 @@ describe("shouldRenderTerminalWorkspace", () => {
   it("renders only for an open workspace terminal", () => {
     expect(
       shouldRenderTerminalWorkspace({
+        activeProjectExists: true,
         presentationMode: "workspace",
         terminalOpen: true,
       }),
     ).toBe(true);
     expect(
       shouldRenderTerminalWorkspace({
+        activeProjectExists: true,
         presentationMode: "drawer",
         terminalOpen: true,
       }),

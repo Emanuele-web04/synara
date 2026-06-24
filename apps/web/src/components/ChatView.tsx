@@ -1994,26 +1994,9 @@ export default function ChatView({
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = isLocalConnecting || phase === "connecting";
-  // User messages intentionally have no turn id; assistant messages are the stable
-  // bridge for deciding which historical work can fold into visible replies.
-  const workLogVisibleTurnIds = useMemo(() => {
-    const turnIds = new Set<TurnId>();
-    for (const message of activeThread?.messages ?? []) {
-      if (message.turnId) {
-        turnIds.add(message.turnId);
-      }
-    }
-    if (activeLatestTurn?.turnId) {
-      turnIds.add(activeLatestTurn.turnId);
-    }
-    return turnIds;
-  }, [activeLatestTurn?.turnId, activeThread?.messages]);
   const rawWorkLogEntries = useMemo(
-    () =>
-      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
-        visibleTurnIds: workLogVisibleTurnIds,
-      }),
-    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
+    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
+    [activeLatestTurn?.turnId, threadActivities],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),
@@ -3284,6 +3267,7 @@ export default function ChatView({
     (activeTerminalGroup ? collectTerminalIdsFromLayout(activeTerminalGroup.layout).length : 0) >=
     MAX_TERMINALS_PER_GROUP;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: activeProject !== null,
     presentationMode: terminalState.presentationMode,
     terminalOpen: terminalState.terminalOpen,
   });
@@ -7827,18 +7811,15 @@ export default function ChatView({
         onPromptChange={setPromptFromTraits}
         open={isTraitsPickerOpen}
         onOpenChange={handleTraitsPickerOpenChange}
-        onSelectionCommitted={scheduleComposerFocus}
+        onSelectionComplete={scheduleComposerFocus}
         shortcutLabel={traitsPickerShortcutLabel}
-        hideLabel={!composerFooterControlsPlan.showTraitsLabel}
       />
     </>
   ) : (
     <ComposerModelEffortPicker
       compact={isComposerFooterCompact}
-      hideModelLabel={!composerFooterControlsPlan.showModelLabel}
-      hideStatusLabel={!composerFooterControlsPlan.showTraitsLabel}
       provider={selectedProvider}
-      model={selectedModelForPickerWithCustomFallback}
+      model={selectedModelForPickerWithCustomFallback as ModelSlug}
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
