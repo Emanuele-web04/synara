@@ -9,6 +9,7 @@ import type {
   AutomationMode,
   ModelSelection,
   ProjectId,
+  ServerAutomationIntentMissingField,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ThreadId,
@@ -49,7 +50,12 @@ const DEFAULT_GENERATE_INTENT_TIMEOUT_MS = 1_500;
 export type ComposerAutomationRequestDecision =
   | { readonly type: "normal-chat" }
   | {
-      readonly type: "missing-schedule";
+      // The message reads as an automation request but is missing required fields
+      // (a task and/or a schedule). ChatView turns this into a conversational
+      // follow-up instead of dropping the message: it keeps the raw text, asks for
+      // what's missing, and folds the user's next reply back in before re-resolving.
+      readonly type: "needs-clarification";
+      readonly missingFields: readonly ServerAutomationIntentMissingField[];
       readonly reason: string | null;
     }
   | {
@@ -68,6 +74,23 @@ export interface ComposerAutomationDraftDecision {
   };
   readonly acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>;
   readonly needsDraftReview: boolean;
+}
+
+// Builds the follow-up question shown when an automation request is missing required
+// fields. Falls back to asking for a schedule (the dominant missing field) when the
+// generator could not report what was missing.
+export function automationClarificationPrompt(
+  missingFields: readonly ServerAutomationIntentMissingField[],
+): string {
+  const fields: readonly ServerAutomationIntentMissingField[] =
+    missingFields.length > 0 ? missingFields : ["schedule"];
+  if (fields.includes("taskPrompt")) {
+    return 'Sure, what should this automation do, and how often should it run? For example: "every weekday at 9am, summarize my open PRs."';
+  }
+  if (fields.includes("schedule")) {
+    return "How often should this automation run? For example: every 6 hours, weekdays at 9am, or daily at 18:00.";
+  }
+  return "A couple more details: what should this automation do, and how often should it run?";
 }
 
 // ─── ENTRY POINT ─────────────────────────────────────────────
@@ -170,7 +193,8 @@ export async function resolveComposerAutomationRequest(input: {
   });
   if (!automationResolution) {
     return {
-      type: "missing-schedule",
+      type: "needs-clarification",
+      missingFields: generatedAutomationIntent?.missingFields ?? [],
       reason: generatedAutomationIntent?.reason ?? null,
     };
   }

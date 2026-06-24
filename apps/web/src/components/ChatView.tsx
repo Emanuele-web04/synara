@@ -127,6 +127,7 @@ import {
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
 import { extractChatAutomationInvocation } from "../lib/automationIntent";
 import {
+  automationClarificationPrompt,
   buildComposerAutomationDraft,
   resolveComposerAutomationRequest,
 } from "../lib/composerAutomation";
@@ -1421,6 +1422,18 @@ export default function ChatView({
   const [automationDraftOpen, setAutomationDraftOpen] = useState(false);
   const [isAutomationDraftSubmitting, setIsAutomationDraftSubmitting] = useState(false);
   const automationDraftSubmittingRef = useRef(false);
+  // While set, Synara is mid-conversation gathering an automation's missing details.
+  // `accumulatedMessage` carries everything said so far so the next reply re-resolves
+  // against the full request rather than the answer alone.
+  const [pendingAutomationConversation, setPendingAutomationConversation] = useState<{
+    accumulatedMessage: string;
+    question: string;
+  } | null>(null);
+  // A composer-local automation setup belongs to the thread it began in; drop it when
+  // the active thread changes so the prompt never leaks onto another conversation.
+  useEffect(() => {
+    setPendingAutomationConversation(null);
+  }, [threadId]);
   const projectInstructions = useProjectInstructionsStore((state) =>
     activeProjectId ? (state.instructionsByProjectId[activeProjectId] ?? "") : "",
   );
@@ -5863,6 +5876,22 @@ export default function ChatView({
     ],
   );
 
+  const cancelAutomationConversation = useCallback(() => {
+    // Abandon the in-progress setup and put everything the user typed back into the
+    // composer, so a false-positive detection never costs them their message.
+    if (pendingAutomationConversation && activeThread) {
+      promptRef.current = pendingAutomationConversation.accumulatedMessage;
+      clearComposerDraftContent(activeThread.id);
+      setComposerDraftPrompt(activeThread.id, pendingAutomationConversation.accumulatedMessage);
+    }
+    setPendingAutomationConversation(null);
+  }, [
+    activeThread,
+    clearComposerDraftContent,
+    pendingAutomationConversation,
+    setComposerDraftPrompt,
+  ]);
+
   const toggleAutomationWarning = useCallback((id: AutomationDraftWarningId, checked: boolean) => {
     setAcknowledgedAutomationWarnings((current) => {
       const next = new Set(current);
@@ -6533,23 +6562,30 @@ export default function ChatView({
     }
     if (!activeProject) return false;
     if (queuedChatTurn === null && !isLivePlanFollowUpSubmission) {
+      // While gathering missing details, fold the reply into everything said so far so
+      // the request re-resolves as a whole instead of parsing the bare answer.
+      const messageForAutomation = pendingAutomationConversation
+        ? `${pendingAutomationConversation.accumulatedMessage}\n${trimmedPromptForSend}`
+        : trimmedPromptForSend;
       const automationRequest = await resolveComposerAutomationRequest({
-        message: trimmedPromptForSend,
+        message: messageForAutomation,
         cwd: activeProject.cwd,
         generateIntent: (request) => api.server.generateAutomationIntent(request),
       });
       if (automationRequest.type !== "normal-chat") {
-        if (automationRequest.type === "missing-schedule") {
-          toastManager.add({
-            type: "warning",
-            title: "Automation schedule needed",
-            description:
-              automationRequest.reason ??
-              "Try /automation every 6h check the page, or @automation daily at 9:00.",
+        if (automationRequest.type === "needs-clarification") {
+          // Keep the message out of the thread and ask for what's missing. The user
+          // answers in the now-empty composer; the banner holds the question and the
+          // raw text so Cancel can restore everything they typed.
+          clearComposerInput(activeThread.id);
+          setPendingAutomationConversation({
+            accumulatedMessage: messageForAutomation,
+            question: automationClarificationPrompt(automationRequest.missingFields),
           });
           return true;
         }
 
+        setPendingAutomationConversation(null);
         const automationIntent = automationRequest.resolution.intent;
         const automationTargetThreadId =
           automationIntent.executionScope === "thread" ? activeThread.id : null;
@@ -6587,6 +6623,11 @@ export default function ChatView({
             : {}),
         });
         return true;
+      }
+      if (pendingAutomationConversation) {
+        // The combined text no longer reads as an automation; abandon setup and let
+        // this message send as a normal chat turn instead of looping on the question.
+        setPendingAutomationConversation(null);
       }
     }
     const sendProviderAvailability = resolveProviderSendAvailability({
@@ -9239,6 +9280,15 @@ export default function ChatView({
                       ? {
                           id: activeProposedPlan.id,
                           title: proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null,
+                        }
+                      : null
+                  }
+                  automationSetup={
+                    pendingAutomationConversation
+                      ? {
+                          question: pendingAutomationConversation.question,
+                          request: pendingAutomationConversation.accumulatedMessage,
+                          onCancel: cancelAutomationConversation,
                         }
                       : null
                   }

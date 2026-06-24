@@ -7,6 +7,7 @@ import type { ModelSelection, ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  automationClarificationPrompt,
   buildComposerAutomationDraft,
   resolveComposerAutomationRequest,
 } from "./composerAutomation";
@@ -403,5 +404,99 @@ describe("composerAutomation", () => {
       "worktree-cleanup",
     ]);
     expect(Array.from(draft.acknowledgedWarningIds)).toEqual([]);
+  });
+
+  it("asks for clarification when an automation request is missing its task and schedule", async () => {
+    const generateIntent = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: null,
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["taskPrompt" as const, "schedule" as const],
+      needsConfirmation: false,
+      reason: "Tell me what to automate.",
+    }));
+
+    const decision = await resolveComposerAutomationRequest({
+      message: "could you create an automation for me?",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent,
+    });
+
+    expect(generateIntent).toHaveBeenCalledTimes(1);
+    expect(decision).toMatchObject({
+      type: "needs-clarification",
+      missingFields: ["taskPrompt", "schedule"],
+      reason: "Tell me what to automate.",
+    });
+  });
+
+  it("resolves to an automation once the follow-up supplies the schedule", async () => {
+    // First turn: a task with no cadence cannot be created yet.
+    const incompleteGeneration = vi.fn(async () => ({
+      isAutomation: true,
+      confidence: 0.9,
+      language: "en",
+      name: null,
+      taskPrompt: null,
+      schedule: null,
+      mode: null,
+      completionPolicy: { type: "none" as const },
+      missingFields: ["schedule" as const],
+      needsConfirmation: false,
+      reason: null,
+    }));
+    const first = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: incompleteGeneration,
+    });
+    expect(first.type).toBe("needs-clarification");
+
+    // Second turn: the composer folds the reply back into the original request. The
+    // deterministic parser now finds the schedule, so the automation resolves even
+    // though optional enrichment generation fails.
+    const failingEnrichment = vi.fn(async () => {
+      throw new Error("enrichment is optional once the schedule parses deterministically");
+    });
+    const combined = await resolveComposerAutomationRequest({
+      message: "create an automation to check the build\nevery 6 hours",
+      cwd: "/tmp/project",
+      nowIso: NOW_ISO,
+      generateIntent: failingEnrichment,
+    });
+    expect(combined).toMatchObject({
+      type: "automation",
+      resolution: {
+        source: "deterministic",
+        intent: {
+          schedule: { type: "interval", everySeconds: 21_600 },
+        },
+      },
+    });
+  });
+
+  describe("automationClarificationPrompt", () => {
+    it("asks for both the task and cadence when the task is missing", () => {
+      expect(automationClarificationPrompt(["taskPrompt", "schedule"])).toContain(
+        "what should this automation do",
+      );
+    });
+
+    it("asks only for the cadence when just the schedule is missing", () => {
+      const prompt = automationClarificationPrompt(["schedule"]);
+      expect(prompt).toContain("How often");
+      expect(prompt).not.toContain("what should this automation do");
+    });
+
+    it("defaults to asking for a cadence when nothing was reported", () => {
+      expect(automationClarificationPrompt([])).toContain("How often");
+    });
   });
 });
