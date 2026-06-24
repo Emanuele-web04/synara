@@ -1605,36 +1605,64 @@ const makeReviewSource = Effect.gen(function* () {
       ),
     );
 
-  const runAgentReview: ReviewSourceShape["runAgentReview"] = (input) =>
+  const withPullRequestOverview = <A, E, R>(
+    source: ReviewSourceRef,
+    cwd: string,
+    body: (joinOverview: Effect.Effect<ReviewPullRequestOverview | null>) => Effect.Effect<A, E, R>,
+  ) =>
     Effect.gen(function* () {
-      const pullRequestOverviewFiber =
-        input.source._tag === "pullRequest"
-          ? yield* loadPullRequest({ cwd: input.cwd, reference: input.source.reference }).pipe(
+      const fiber =
+        source._tag === "pullRequest"
+          ? yield* loadPullRequest({ cwd, reference: source.reference }).pipe(
               Effect.catch(() => Effect.succeed(null)),
               Effect.forkChild,
             )
           : null;
-      let pullRequestOverviewJoined = false;
-      const interruptPullRequestOverview =
-        pullRequestOverviewFiber === null
+      let joined = false;
+      const joinOverview: Effect.Effect<ReviewPullRequestOverview | null> =
+        fiber === null
+          ? Effect.succeed(null)
+          : Effect.gen(function* () {
+              const overview = yield* Fiber.join(fiber);
+              joined = true;
+              return overview;
+            });
+      const interrupt =
+        fiber === null
           ? Effect.void
           : Effect.gen(function* () {
-              if (!pullRequestOverviewJoined) {
-                yield* Fiber.interrupt(pullRequestOverviewFiber).pipe(Effect.ignore);
+              if (!joined) {
+                yield* Fiber.interrupt(fiber).pipe(Effect.ignore);
               }
             });
+      return yield* body(joinOverview).pipe(Effect.ensuring(interrupt));
+    });
 
-      return yield* Effect.gen(function* () {
-        const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
-        const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
-        const currentPatchSource = changeset.patchSource ?? "github";
-        const headMoved =
-          input.expectedHeadSha !== undefined &&
-          changeset.headSha !== undefined &&
-          changeset.headSha !== input.expectedHeadSha;
-        const patchChanged =
-          input.expectedPatchSignature !== undefined &&
-          currentPatchSignature !== input.expectedPatchSignature;
+  const loadChangesetWithGuard = (input: {
+    cwd: string;
+    source: ReviewSourceRef;
+    expectedHeadSha?: string | undefined;
+    expectedPatchSignature?: string | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
+      const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
+      const currentPatchSource = changeset.patchSource ?? "github";
+      const headMoved =
+        input.expectedHeadSha !== undefined &&
+        changeset.headSha !== undefined &&
+        changeset.headSha !== input.expectedHeadSha;
+      const patchChanged =
+        input.expectedPatchSignature !== undefined &&
+        currentPatchSignature !== input.expectedPatchSignature;
+      return { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged };
+    });
+
+  const runAgentReview: ReviewSourceShape["runAgentReview"] = (input) =>
+    withPullRequestOverview(input.source, input.cwd, (joinOverview) =>
+      Effect.gen(function* () {
+        const { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged } =
+          yield* loadChangesetWithGuard(input);
         if (headMoved || patchChanged) {
           return {
             summary: "",
@@ -1662,11 +1690,7 @@ const makeReviewSource = Effect.gen(function* () {
             droppedFindings: 0,
           };
         }
-        let pullRequestOverview: ReviewPullRequestOverview | null = null;
-        if (pullRequestOverviewFiber !== null) {
-          pullRequestOverview = yield* Fiber.join(pullRequestOverviewFiber);
-          pullRequestOverviewJoined = true;
-        }
+        const pullRequestOverview = yield* joinOverview;
 
         const generated = yield* textGeneration.generateReviewFindings({
           cwd: input.cwd,
@@ -1705,40 +1729,15 @@ const makeReviewSource = Effect.gen(function* () {
           droppedFindings: filtered.droppedFindings,
           ...(warnings.length > 0 ? { warnings } : {}),
         };
-      }).pipe(Effect.ensuring(interruptPullRequestOverview));
-    });
+      }),
+    );
 
   const generateWalkthrough: ReviewSourceShape["generateWalkthrough"] = (input) =>
-    Effect.gen(function* () {
-      const pullRequestOverviewFiber =
-        input.source._tag === "pullRequest"
-          ? yield* loadPullRequest({ cwd: input.cwd, reference: input.source.reference }).pipe(
-              Effect.catch(() => Effect.succeed(null)),
-              Effect.forkChild,
-            )
-          : null;
-      let pullRequestOverviewJoined = false;
-      const interruptPullRequestOverview =
-        pullRequestOverviewFiber === null
-          ? Effect.void
-          : Effect.gen(function* () {
-              if (!pullRequestOverviewJoined) {
-                yield* Fiber.interrupt(pullRequestOverviewFiber).pipe(Effect.ignore);
-              }
-            });
-
-      return yield* Effect.gen(function* () {
+    withPullRequestOverview(input.source, input.cwd, (joinOverview) =>
+      Effect.gen(function* () {
         const reference = input.source._tag === "pullRequest" ? input.source.reference : undefined;
-        const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
-        const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
-        const currentPatchSource = changeset.patchSource ?? "github";
-        const headMoved =
-          input.expectedHeadSha !== undefined &&
-          changeset.headSha !== undefined &&
-          changeset.headSha !== input.expectedHeadSha;
-        const patchChanged =
-          input.expectedPatchSignature !== undefined &&
-          currentPatchSignature !== input.expectedPatchSignature;
+        const { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged } =
+          yield* loadChangesetWithGuard(input);
         const now = yield* cacheWriteClock;
         if (headMoved || patchChanged) {
           return {
@@ -1799,11 +1798,7 @@ const makeReviewSource = Effect.gen(function* () {
           };
         }
 
-        let pullRequestOverview: ReviewPullRequestOverview | null = null;
-        if (pullRequestOverviewFiber !== null) {
-          pullRequestOverview = yield* Fiber.join(pullRequestOverviewFiber);
-          pullRequestOverviewJoined = true;
-        }
+        const pullRequestOverview = yield* joinOverview;
 
         const files = parseUnifiedDiffHunks(changeset.patch);
         const hunksSummary = formatHunksSummary(files);
@@ -1869,8 +1864,8 @@ const makeReviewSource = Effect.gen(function* () {
           patchChanged: false,
           ...(warnings.length > 0 ? { warnings } : {}),
         };
-      }).pipe(Effect.ensuring(interruptPullRequestOverview));
-    });
+      }),
+    );
 
   const mapProjectScopeError =
     (operation: string) =>
