@@ -20,6 +20,7 @@ const ReviewListColumn = Schema.Literals([
   "merged",
 ]);
 const ReviewChecksStatus = Schema.Literals(["passing", "failing", "pending", "none"]);
+const ReviewPatchSource = Schema.Literals(["github", "localFallback", "localBranchRange"]);
 const ReviewListSort = Schema.Literals(["updated", "title", "size"]);
 export type ReviewListSort = typeof ReviewListSort.Type;
 
@@ -154,7 +155,7 @@ export const ReviewChangesetResult = Schema.Struct({
   target: ReviewTargetKey,
   patch: Schema.String,
   patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  patchSource: Schema.optional(ReviewPatchSource),
   files: Schema.Array(ReviewChangedFile),
   pullRequest: Schema.optional(GitResolvedPullRequest),
   headSha: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -359,7 +360,7 @@ export const ReviewAgentResult = Schema.Struct({
   findings: Schema.Array(ReviewFinding),
   reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  patchSource: Schema.optional(ReviewPatchSource),
   totalFindings: Schema.optional(NonNegativeInt),
   anchoredFindings: Schema.optional(NonNegativeInt),
   droppedFindings: Schema.optional(NonNegativeInt),
@@ -464,7 +465,7 @@ export const ReviewWalkthrough = Schema.Struct({
   ),
   reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  patchSource: Schema.optional(ReviewPatchSource),
   generatedAt: Schema.optional(Schema.String),
 });
 export type ReviewWalkthrough = typeof ReviewWalkthrough.Type;
@@ -488,7 +489,7 @@ export const ReviewWalkthroughResult = Schema.Struct({
   walkthrough: ReviewWalkthrough,
   reviewedHeadSha: Schema.optional(TrimmedNonEmptyStringSchema),
   patchSignature: Schema.optional(TrimmedNonEmptyStringSchema),
-  patchSource: Schema.optional(Schema.Literals(["github", "localFallback", "localBranchRange"])),
+  patchSource: Schema.optional(ReviewPatchSource),
   headMoved: Schema.optional(Schema.Boolean),
   patchChanged: Schema.optional(Schema.Boolean),
   warnings: Schema.optional(Schema.Array(Schema.String)),

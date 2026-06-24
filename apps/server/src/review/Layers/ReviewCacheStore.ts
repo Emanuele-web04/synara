@@ -428,7 +428,9 @@ const makeReviewCacheStore = Effect.gen(function* () {
   const upsertPullRequestWalkthrough: ReviewCacheStoreShape["upsertPullRequestWalkthrough"] = (
     input,
   ) =>
-    sql`
+    sql
+      .withTransaction(
+        sql`
       INSERT INTO review_cache_pr_walkthrough (
         repository_id,
         reference,
@@ -450,18 +452,23 @@ const makeReviewCacheStore = Effect.gen(function* () {
         payload_json = excluded.payload_json,
         fetched_at = excluded.fetched_at
     `.pipe(
-      Effect.flatMap(
-        () => sql`
+          Effect.flatMap(
+            () => sql`
         DELETE FROM review_cache_pr_walkthrough
         WHERE repository_id = ${input.repositoryId}
           AND reference = ${input.reference}
           AND patch_signature <> ${walkthroughSignature(input.patchSignature)}
           AND fetched_at < ${input.fetchedAt - WALKTHROUGH_CACHE_RETENTION_MS}
       `,
-      ),
-      Effect.asVoid,
-      Effect.mapError(toPersistenceSqlError("ReviewCacheStore.upsertPullRequestWalkthrough:query")),
-    );
+          ),
+        ),
+      )
+      .pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          toPersistenceSqlError("ReviewCacheStore.upsertPullRequestWalkthrough:query"),
+        ),
+      );
 
   return {
     getPullRequestList,

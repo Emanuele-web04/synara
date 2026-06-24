@@ -42,9 +42,8 @@ import {
   sanitizeDiffSummary,
   sanitizeThreadRecap,
   sanitizePrTitle,
-  stripNullOptionalFields,
-  toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+import { stripNullOptionalFields, toJsonSchemaObject } from "../strictJsonSchema.ts";
 
 const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;

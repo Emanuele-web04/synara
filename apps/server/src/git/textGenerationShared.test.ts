@@ -10,9 +10,8 @@ import {
   buildAutomationCompletionEvaluationPrompt,
   buildWalkthroughPrompt,
   decodeStructuredTextGenerationOutput,
-  stripNullOptionalFields,
-  toJsonSchemaObject,
 } from "./textGenerationShared.ts";
+import { stripNullOptionalFields, toJsonSchemaObject } from "./strictJsonSchema.ts";
 
 // OpenAI strict structured-output mode rejects a schema whose object `required` omits any
 // property, or that uses `allOf`. Assert the codex-bound JSON Schema satisfies both, recursively.

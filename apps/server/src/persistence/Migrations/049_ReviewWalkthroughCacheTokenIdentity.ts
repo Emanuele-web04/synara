@@ -4,7 +4,6 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`DROP TABLE IF EXISTS review_walkthroughs`;
   yield* sql`DROP TABLE IF EXISTS review_cache_pr_walkthrough`;
 
   yield* sql`

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseUnifiedDiffHunks, subPatchForHunks } from "./parseUnifiedDiffHunks.ts";
+import { parseUnifiedDiffHunks } from "./parseUnifiedDiffHunks.ts";
 
 const MODIFIED = [
   "diff --git a/src/app.ts b/src/app.ts",
@@ -144,35 +144,5 @@ describe("parseUnifiedDiffHunks", () => {
       "+new",
     ].join("\n");
     expect(parseUnifiedDiffHunks(patch)[0]?.hunks).toHaveLength(0);
-  });
-});
-
-describe("subPatchForHunks", () => {
-  it("reconstructs a valid patch with only the referenced hunks", () => {
-    const sub = subPatchForHunks(MODIFIED, [{ filePath: "src/app.ts", oldStart: 20 }]);
-    expect(sub).toContain("diff --git a/src/app.ts b/src/app.ts");
-    expect(sub).toContain("@@ -20,3 +21,3 @@");
-    expect(sub).not.toContain("@@ -1,4 +1,5 @@");
-    expect(sub).toContain("+  return 1;");
-  });
-
-  it("round-trips through the parser (sub-patch re-parses to the selected hunk)", () => {
-    const sub = subPatchForHunks(`${MODIFIED}\n${ADDED}`, [
-      { filePath: "src/app.ts", oldStart: 1 },
-      { filePath: "src/new.ts", oldStart: 0 },
-    ]);
-    const reparsed = parseUnifiedDiffHunks(sub);
-    expect(reparsed.map((f) => f.path)).toEqual(["src/app.ts", "src/new.ts"]);
-    expect(reparsed[0]?.hunks).toHaveLength(1);
-    expect(reparsed[0]?.hunks[0]?.oldStart).toBe(1);
-  });
-
-  it("returns empty string when no refs match", () => {
-    expect(subPatchForHunks(MODIFIED, [{ filePath: "nope.ts", oldStart: 1 }])).toBe("");
-  });
-
-  it("terminates the emitted patch with a trailing newline", () => {
-    const sub = subPatchForHunks(MODIFIED, [{ filePath: "src/app.ts", oldStart: 20 }]);
-    expect(sub.endsWith("\n")).toBe(true);
   });
 });

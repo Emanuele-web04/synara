@@ -242,5 +242,3 @@ export function ViewedToggle(props: { viewed: boolean; onToggle: () => void }): 
     </button>
   );
 }
-
-export { focusAreaSeverityTone, focusAreaTypeMeta };

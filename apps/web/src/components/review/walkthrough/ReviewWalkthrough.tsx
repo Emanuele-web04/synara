@@ -20,7 +20,7 @@ import { WalkthroughControls } from "./WalkthroughControls";
 import { WalkthroughPrologue } from "./WalkthroughPrologue";
 import { renderWalkthroughStatus } from "./WalkthroughStates";
 
-export function ReviewWalkthrough(props: {
+type ReviewWalkthroughProps = {
   cwd: string | null;
   reference: string;
   source: ReviewSourceRef;
@@ -33,7 +33,9 @@ export function ReviewWalkthrough(props: {
   changesetLoading: boolean;
   title: string;
   body: string | null;
-}): ReactElement {
+};
+
+export function ReviewWalkthrough(props: ReviewWalkthroughProps): ReactElement {
   return (
     <DiffWorkerPoolProvider>
       <ReviewWalkthroughInner {...props} />
@@ -41,20 +43,7 @@ export function ReviewWalkthrough(props: {
   );
 }
 
-function ReviewWalkthroughInner(props: {
-  cwd: string | null;
-  reference: string;
-  source: ReviewSourceRef;
-  target: ReviewTargetKey | null;
-  patch: string | undefined;
-  files: readonly ReviewChangedFile[];
-  patchSignature: string | null;
-  expectedHeadSha: string | null;
-  changesetError: unknown;
-  changesetLoading: boolean;
-  title: string;
-  body: string | null;
-}): ReactElement | null {
+function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | null {
   const { resolvedTheme } = useTheme();
   const readerSectionRef = useRef<HTMLElement>(null);
   const outerScrollRef = useRef<HTMLDivElement>(null);
