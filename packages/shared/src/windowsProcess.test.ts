@@ -89,6 +89,49 @@ describe("windowsProcess", () => {
     );
   });
 
+  it("resolves extensionless path-like Windows shims before spawning", () => {
+    const spawnSync = vi.fn(() => ({
+      stdout: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd\r\n",
+      status: 0,
+    }));
+
+    expect(
+      resolveWindowsCommandPath("C:\\Users\\test\\AppData\\Roaming\\npm\\codex", {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toBe("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd");
+    expect(spawnSync).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\where.exe",
+      ["C:\\Users\\test\\AppData\\Roaming\\npm\\codex"],
+      expect.objectContaining({ shell: false, windowsHide: true }),
+    );
+  });
+
+  it("keeps explicit path-like Windows executables without resolving", () => {
+    const spawnSync = vi.fn();
+
+    expect(
+      resolveWindowsCommandPath("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd", {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toBe("C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd");
+    expect(
+      resolveWindowsCommandPath("C:\\Program Files\\Codex\\codex.exe", {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
+    ).toBe("C:\\Program Files\\Codex\\codex.exe");
+    expect(spawnSync).not.toHaveBeenCalled();
+  });
+
   it("wraps .cmd shims through cmd.exe without shell true", () => {
     const spawnSync = vi.fn(() => ({
       stdout: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd\r\n",
@@ -102,6 +145,37 @@ describe("windowsProcess", () => {
         env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
         spawnSync,
       }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/v:off",
+        "/c",
+        '"C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd" "app-server"',
+      ],
+      shell: false,
+      windowsHide: true,
+    });
+  });
+
+  it("wraps resolved extensionless path-like shims through cmd.exe", () => {
+    const spawnSync = vi.fn(() => ({
+      stdout: "C:\\Users\\test\\AppData\\Roaming\\npm\\codex.cmd\r\n",
+      status: 0,
+    }));
+
+    expect(
+      prepareWindowsSafeProcess(
+        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
+        ["app-server"],
+        {
+          platform: "win32",
+          cwd: "C:\\projects\\synara",
+          env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
+          spawnSync,
+        },
+      ),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
       args: [

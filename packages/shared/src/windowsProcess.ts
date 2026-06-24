@@ -92,6 +92,10 @@ function isPathLikeCommand(command: string): boolean {
   return WINDOWS_PATH_SEPARATOR_PATTERN.test(command) || Path.win32.isAbsolute(command);
 }
 
+function hasWindowsExecutableExtension(command: string): boolean {
+  return Path.win32.extname(command).length > 0;
+}
+
 function isFromCurrentDirectory(candidate: string, cwd: string | undefined): boolean {
   if (!cwd) {
     return false;
@@ -108,7 +112,8 @@ export function resolveWindowsCommandPath(
   command: string,
   input: WindowsSafeProcessInput = {},
 ): string {
-  if (isPathLikeCommand(command)) {
+  const pathLikeCommand = isPathLikeCommand(command);
+  if (pathLikeCommand && hasWindowsExecutableExtension(command)) {
     return command;
   }
 
@@ -131,6 +136,9 @@ export function resolveWindowsCommandPath(
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+  if (pathLikeCommand) {
+    return candidates[0] ?? command;
+  }
   return candidates.find((candidate) => !isFromCurrentDirectory(candidate, cwd)) ?? command;
 }
 
