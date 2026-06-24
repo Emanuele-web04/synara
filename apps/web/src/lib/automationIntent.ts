@@ -199,6 +199,20 @@ export function extractPlainChatAutomationCreationInvocation(value: string): str
   return PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(candidate) ? candidate : null;
 }
 
+// Keeps a clarification carry-forward parseable as an automation across turns. Explicit
+// /automation markers and cadence-only remainders lose their trigger once stripped, so we
+// re-seed a canonical creation scaffold when none survives; the parser strips it back out.
+export function ensureAutomationConversationScaffold(message: string): string {
+  const normalized = normalizeInlineText(message);
+  if (!normalized) {
+    return "create an automation";
+  }
+  if (PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(normalized)) {
+    return normalized;
+  }
+  return `create an automation ${normalized}`;
+}
+
 function removeMatchedText(value: string, match: RegExpExecArray): string {
   return normalizeInlineText(
     `${value.slice(0, match.index)} ${value.slice(match.index + match[0].length)}`,
