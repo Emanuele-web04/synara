@@ -178,7 +178,9 @@ export function automationApprovalGaps(input: {
   // Definite run blockers the server enforces up front (riskAcknowledgementError): full
   // access runtime and an explicit local checkout. These drive the banner and the Run-now
   // disable. "auto" is not a definite blocker, so a normal auto run is never blocked here.
-  const blocking = new Set<AutomationAcknowledgedRiskId>();
+  // Narrowed to the two ids that are both run blockers and valid warning ids, so the set can
+  // seed the display warning ids below.
+  const blocking = new Set<"full-access" | "local-checkout">();
   if (input.runtimeMode === "full-access" && !acknowledged.has("full-access")) {
     blocking.add("full-access");
   }
@@ -189,6 +191,17 @@ export function automationApprovalGaps(input: {
     // Nothing blocks the run, so no approval is surfaced and nothing new is persisted.
     return { warnings: [], acknowledgedRisks: input.acknowledgedRisks };
   }
+  // Display the blocking risks, plus the fast-recurring-loop risk when a sub-minute schedule
+  // means approving will also acknowledge it — so the user sees everything they consent to,
+  // not just the run blockers.
+  const displayIds = new Set<AutomationDraftWarningId>(blocking);
+  if (
+    input.schedule.type === "interval" &&
+    input.schedule.everySeconds < 60 &&
+    !acknowledged.has("fast-interval")
+  ) {
+    displayIds.add("fast-recurring-interval");
+  }
   const warnings = buildAutomationDraftWarnings({
     schedule: input.schedule,
     mode: input.mode,
@@ -198,7 +211,7 @@ export function automationApprovalGaps(input: {
     generatedConfidence: null,
     generatedNeedsConfirmation: false,
     prompt: input.prompt,
-  }).filter((warning) => blocking.has(warning.id as AutomationAcknowledgedRiskId));
+  }).filter((warning) => displayIds.has(warning.id));
   // Persist every risk the config requires so the automation is fully runnable: local
   // checkout is included for "auto" too, so a runtime worktree-creation fallback is covered
   // once approved, plus fast-interval for a sub-minute schedule (automation.update would

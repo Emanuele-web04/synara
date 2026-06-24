@@ -278,17 +278,19 @@ describe("automationApprovalGaps", () => {
     expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
-  it("does not show a fast interval as a run blocker but persists it on approve", () => {
-    // fast-interval never blocks a run, so it is not in the banner warnings. But it must be
-    // persisted alongside full-access, or automation.update would reject the sub-minute
-    // schedule and the one-click approval would fail to save.
+  it("surfaces and persists the fast-loop risk when approving for another blocker", () => {
+    // fast-interval never blocks a run on its own, but when the banner is already shown for a
+    // run blocker, approving also persists fast-interval (or automation.update would reject
+    // the sub-minute schedule). It is therefore surfaced too, so consent is transparent.
     const gaps = automationApprovalGaps({
       ...base,
       schedule: { type: "interval", everySeconds: 15 },
       runtimeMode: "full-access",
       acknowledgedRisks: [],
     });
-    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "fast-recurring-interval"]),
+    );
     expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
   });
 });
