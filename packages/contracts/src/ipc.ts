@@ -74,6 +74,7 @@ import type {
   ReviewChangesetResult,
   ReviewCheckProjectAccessInput,
   ReviewCommentList,
+  ReviewGenerateWalkthroughInput,
   ReviewGetProjectBoardInput,
   ReviewGetViewerInput,
   ReviewListCommentsInput,
@@ -111,6 +112,7 @@ import type {
   ReviewUpdateCommentInput,
   ReviewUpdatedPayload,
   ReviewViewerResult,
+  ReviewWalkthroughResult,
 } from "./review";
 import type {
   ProjectDevServerEvent,
@@ -534,6 +536,9 @@ export interface NativeApi {
       input: ReviewDeleteThreadCommentInput,
     ) => Promise<ReviewThreadCommentMutationResult>;
     runAgent: (input: ReviewRunAgentInput) => Promise<ReviewAgentResult>;
+    generateWalkthrough: (
+      input: ReviewGenerateWalkthroughInput,
+    ) => Promise<ReviewWalkthroughResult>;
     checkProjectAccess: (
       input: ReviewCheckProjectAccessInput,
     ) => Promise<ReviewProjectAccessResult>;

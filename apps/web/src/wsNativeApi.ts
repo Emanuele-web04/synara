@@ -621,8 +621,11 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.reviewRunAgent, input, {
           timeoutMs: null,
         }),
-      checkProjectAccess: (input) =>
-        transport.request(WS_METHODS.reviewCheckProjectAccess, input),
+      generateWalkthrough: (input) =>
+        transport.request(WS_METHODS.reviewGenerateWalkthrough, input, {
+          timeoutMs: null,
+        }),
+      checkProjectAccess: (input) => transport.request(WS_METHODS.reviewCheckProjectAccess, input),
       listProjects: (input) => transport.request(WS_METHODS.reviewListProjects, input),
       getProjectBoard: (input) => transport.request(WS_METHODS.reviewGetProjectBoard, input),
       moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),

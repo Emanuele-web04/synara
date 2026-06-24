@@ -18,6 +18,7 @@ import type {
   ReviewTargetKey,
   ReviewUpdateCommentInput,
   ReviewUpdatedPayload,
+  ReviewWalkthrough,
 } from "@t3tools/contracts";
 import { type QueryClient, mutationOptions, queryOptions } from "@tanstack/react-query";
 import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
@@ -137,6 +138,16 @@ export function applyReviewUpdatedPayload(
     );
     return;
   }
+  if (payload._tag === "pullRequestWalkthrough") {
+    const patchSignature = payload.data.patchSignature;
+    if (patchSignature !== undefined) {
+      queryClient.setQueryData(
+        reviewQueryKeys.walkthrough(payload.cwd, payload.reference, patchSignature),
+        payload.data,
+      );
+    }
+    return;
+  }
   if (payload._tag === "boardLanes") {
     void queryClient.invalidateQueries({
       queryKey: reviewQueryKeys.boardLanesByCwd(payload.cwd),
@@ -253,6 +264,10 @@ export const reviewQueryKeys = {
       includeConversation,
       includeChangeset,
     ] as const,
+  walkthroughs: (cwd: string | null, reference: string | null) =>
+    ["review", "walkthrough", cwd, reference] as const,
+  walkthrough: (cwd: string | null, reference: string | null, patchSignature: string | null) =>
+    ["review", "walkthrough", cwd, reference, patchSignature] as const,
   conversation: (cwd: string | null, reference: string | null) =>
     ["review", "conversation", cwd, reference] as const,
   comments: (targetKey: string) => ["review", "comments", targetKey] as const,
@@ -411,6 +426,39 @@ export function reviewLoadChangesetQueryOptions(input: {
     },
     enabled: input.cwd !== null && input.source !== null,
     staleTime: REVIEW_CHANGESET_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
+export function reviewGenerateWalkthroughQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  source: ReviewSourceRef | null;
+  patchSignature: string | null;
+  expectedHeadSha?: string;
+}) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.walkthrough(input.cwd, input.reference, input.patchSignature),
+    queryFn: async (): Promise<ReviewWalkthrough> => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.source || input.patchSignature === null) {
+        throw new Error("Walkthrough is unavailable.");
+      }
+      const result = await api.review.generateWalkthrough({
+        cwd: input.cwd,
+        source: input.source,
+        expectedPatchSignature: input.patchSignature,
+        ...(input.expectedHeadSha !== undefined ? { expectedHeadSha: input.expectedHeadSha } : {}),
+      });
+      return result.walkthrough;
+    },
+    enabled:
+      input.cwd !== null &&
+      input.reference !== null &&
+      input.source !== null &&
+      input.patchSignature !== null,
+    staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
