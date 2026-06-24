@@ -23,10 +23,9 @@ import {
   prewarmReviewChatThread,
 } from "~/lib/reviewChatThread";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
-import { ArrowLeftIcon, GitPullRequestIcon } from "~/lib/icons";
+import { GitPullRequestIcon } from "~/lib/icons";
 import { useStore } from "~/store";
 import { createReviewChatThreadIdSelector } from "~/storeSelectors";
-import { Button } from "../ui/button";
 import { ReviewCommits } from "./ReviewCommits";
 import { ReviewConversation } from "./ReviewConversation";
 import { ReviewPrHeader } from "./ReviewPrHeader";
@@ -38,6 +37,7 @@ import {
 import { ReviewPrSidebar } from "./ReviewPrSidebar";
 import { ReviewSubmitBar } from "./ReviewSubmitBar";
 import { ReviewSurface } from "./ReviewSurface";
+import { ReviewTabStrip, type ReviewTabItem } from "./ReviewTabStrip";
 import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
@@ -312,20 +312,6 @@ export function ReviewPrView(props: {
         }
       });
   }, [reviewChatPrewarmKey]);
-  const backToOverviewButton = (
-    <Button
-      type="button"
-      size="sm"
-      variant="outline"
-      className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
-      title="Back to pull request overview"
-      aria-label="Back to pull request overview"
-      onClick={() => setTab("conversation")}
-    >
-      <ArrowLeftIcon className="size-3.5" />
-      <span className="hidden lg:inline">Overview</span>
-    </Button>
-  );
   const reviewAction =
     tab === "files" ? (
       <ReviewSubmitBar
@@ -336,10 +322,20 @@ export function ReviewPrView(props: {
         expectedHeadSha={changesetState.data?.headSha ?? null}
       />
     ) : undefined;
-  const navigationAction = tab === "files" ? backToOverviewButton : undefined;
   const updateSidebarCollapsed = (collapsed: boolean) => {
     setSidebarCollapsed(collapsed);
     saveSidebarCollapsed(collapsed);
+  };
+  const prTabs: ReviewTabItem[] = [
+    { id: "conversation", label: "Overview" },
+    { id: "files", label: "Files", count: detail?.changedFiles ?? null },
+    { id: "commits", label: "Commits", count: detail?.commitsCount ?? null },
+    { id: "walkthrough", label: "Walkthrough" },
+  ];
+  const handleTabChange = (id: string): void => {
+    if (id === "conversation" || id === "files" || id === "commits" || id === "walkthrough") {
+      setTab(id);
+    }
   };
 
   return (
@@ -348,6 +344,14 @@ export function ReviewPrView(props: {
         {detail ? (
           <div className="flex h-full min-h-0 min-w-0 flex-1">
             <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+              <ReviewTabStrip
+                tabs={prTabs}
+                value={tab}
+                onValueChange={handleTabChange}
+                size="roomy"
+                aria-label="Pull request views"
+                className="shrink-0"
+              />
               {tab === "files" ? (
                 <main className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
                   <ReviewSurface
@@ -357,7 +361,6 @@ export function ReviewPrView(props: {
                     selectedFilePath={selectedFilePath}
                     onSelectedFilePathChange={setSelectedFilePath}
                     reviewAction={reviewAction}
-                    navigationAction={navigationAction}
                     changesetState={changesetState}
                   />
                 </main>
@@ -367,7 +370,6 @@ export function ReviewPrView(props: {
                     detail={detail}
                     variant="compact"
                     contentClassName="px-4 sm:px-5"
-                    reviewAction={backToOverviewButton}
                   />
                   <ReviewWalkthrough
                     cwd={props.cwd}
@@ -391,12 +393,6 @@ export function ReviewPrView(props: {
                     variant="full"
                     reviewMode="conversation"
                     contentClassName={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
-                    onReviewChanges={() => setTab("files")}
-                    onOverview={() => setTab("conversation")}
-                    commitsActive={tab === "commits"}
-                    onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
-                    onWalkthrough={() => setTab("walkthrough")}
-                    walkthroughActive={false}
                   />
                   {tab === "commits" ? (
                     <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>
