@@ -1,0 +1,134 @@
+import type { ReviewWalkthroughPrologue } from "@t3tools/contracts";
+import type { ReactElement } from "react";
+
+import {
+  ChevronRightIcon,
+  CircleCheckIcon,
+  InfoIcon,
+  ListChecksIcon,
+  SparklesIcon,
+  TriangleAlertIcon,
+} from "~/lib/icons";
+import { cn } from "~/lib/utils";
+import ChatMarkdown from "../../ChatMarkdown";
+import { Button } from "../../ui/button";
+import { ComplexityMeter, FocusAreaCard, ProseCard, SectionHeading } from "./walkthroughPrimitives";
+
+export function WalkthroughPrologue(props: {
+  prologue: ReviewWalkthroughPrologue;
+  title: string;
+  body: string | null;
+  cwd: string | null;
+  canStart: boolean;
+  onStart: () => void;
+}): ReactElement {
+  const { prologue } = props;
+  return (
+    <article className="mx-auto w-full max-w-3xl px-5 py-7 sm:px-7">
+      <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+        <SparklesIcon className="size-3.5" />
+        Overview
+      </div>
+      <h2
+        tabIndex={-1}
+        data-walkthrough-heading
+        className="mt-2 text-balance break-words [overflow-wrap:anywhere] rounded-sm text-[26px] font-semibold leading-8 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+      >
+        {props.title}
+      </h2>
+      {props.body && props.body.trim().length > 0 ? (
+        <ChatMarkdown
+          text={props.body}
+          cwd={props.cwd ?? undefined}
+          allowHtml
+          className="chat-markdown mt-3 max-w-[68ch] text-pretty text-[15px] leading-7 text-foreground/85"
+        />
+      ) : null}
+
+      <div className="mt-5">
+        <ComplexityMeter
+          level={prologue.complexity.level}
+          reasoning={prologue.complexity.reasoning}
+        />
+      </div>
+
+      {prologue.motivation || prologue.outcome ? (
+        <div
+          className={cn(
+            "mt-6 grid gap-3",
+            prologue.motivation && prologue.outcome && "sm:grid-cols-2",
+          )}
+        >
+          {prologue.motivation ? (
+            <ProseCard icon={<InfoIcon className="size-3.5" />} label="Motivation" tone="info">
+              {prologue.motivation}
+            </ProseCard>
+          ) : null}
+          {prologue.outcome ? (
+            <ProseCard
+              icon={<CircleCheckIcon className="size-3.5" />}
+              label="Outcome"
+              tone="success"
+            >
+              {prologue.outcome}
+            </ProseCard>
+          ) : null}
+        </div>
+      ) : null}
+
+      {prologue.keyChanges.length > 0 ? (
+        <section className="mt-10">
+          <SectionHeading icon={<ListChecksIcon className="size-4" />} title="Key changes" />
+          <ol className="mt-3 space-y-2.5">
+            {prologue.keyChanges.map((change, index) => (
+              <li key={change.summary} className="flex min-w-0 items-start gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className="mt-0.5 w-5 shrink-0 text-right font-mono text-[12px] leading-6 tabular-nums text-muted-foreground"
+                >
+                  {index + 1}
+                </span>
+                <span className="min-w-0">
+                  <span className="break-words [overflow-wrap:anywhere] text-[14px] font-medium text-foreground">
+                    {change.summary}
+                  </span>
+                  <span className="mt-0.5 block text-pretty break-words [overflow-wrap:anywhere] text-[12px] leading-5 text-muted-foreground">
+                    {change.description}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </section>
+      ) : null}
+
+      {prologue.focusAreas.length > 0 ? (
+        <section className="mt-10">
+          <SectionHeading
+            icon={<TriangleAlertIcon className="size-4" />}
+            title="Where to look closely"
+          />
+          <div className="mt-3 space-y-2.5">
+            {prologue.focusAreas.map((area) => (
+              <FocusAreaCard key={area.title} area={area} />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {props.canStart ? (
+        <div className="mt-10 flex justify-end border-t border-border/40 pt-5">
+          <Button
+            size="sm"
+            variant="prominent"
+            className="group px-3.5 text-[12px] transition-[background-color,border-color,color,transform] duration-150 ease-out active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100"
+            onClick={props.onStart}
+          >
+            Start reading
+            <ChevronRightIcon className="size-3.5 transition-transform duration-150 ease-out group-hover:translate-x-0.5 motion-reduce:transition-none" />
+          </Button>
+        </div>
+      ) : null}
+    </article>
+  );
+}

@@ -13,6 +13,7 @@ import {
   GitMergeIcon,
   GitCommitIcon,
   GitPullRequestIcon,
+  SparklesIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -133,6 +134,8 @@ export function ReviewPrHeader(props: {
   onOverview?: () => void;
   onCommits?: () => void;
   commitsActive?: boolean;
+  onWalkthrough?: () => void;
+  walkthroughActive?: boolean;
   reviewAction?: ReactNode;
 }) {
   const { detail } = props;
@@ -349,7 +352,7 @@ export function ReviewPrHeader(props: {
               aria-pressed={props.commitsActive}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                props.commitsActive && "text-foreground",
+                props.commitsActive && "bg-muted/60 px-1.5 font-medium text-foreground",
               )}
             >
               {commitStat}
@@ -373,6 +376,25 @@ export function ReviewPrHeader(props: {
             />
             <DiffSquares additions={detail.additions} deletions={detail.deletions} />
           </span>
+          {props.onWalkthrough ? (
+            <>
+              <span className="text-muted-foreground/70" aria-hidden="true">
+                ·
+              </span>
+              <button
+                type="button"
+                onClick={props.onWalkthrough}
+                aria-pressed={props.walkthroughActive}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                  props.walkthroughActive && "bg-muted/60 px-1.5 font-medium text-foreground",
+                )}
+              >
+                <SparklesIcon className="size-3.5 opacity-70" />
+                Walkthrough
+              </button>
+            </>
+          ) : null}
           <div className="ms-auto flex min-w-0 shrink-0 items-center gap-4">
             <span
               className={cn(

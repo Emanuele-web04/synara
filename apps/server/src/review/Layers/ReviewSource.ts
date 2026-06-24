@@ -21,6 +21,7 @@ import {
   type ReviewSourceRef,
   type ReviewTargetKey,
   type ReviewTimelineEvent,
+  type ReviewWalkthrough,
 } from "@t3tools/contracts";
 import { Clock, Effect, Fiber, Layer, Option } from "effect";
 
@@ -37,6 +38,8 @@ import { GitManager } from "../../git/Services/GitManager.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
 import { ReviewError, type ReviewServiceError } from "../Errors.ts";
 import { parseUnifiedDiff } from "../parseUnifiedDiff.ts";
+import { parseUnifiedDiffHunks } from "../parseUnifiedDiffHunks.ts";
+import { formatHunksSummary, reconcileChapterCoverage } from "../walkthroughHunks.ts";
 import { ReviewCacheStore, type ReviewCacheEnvelope } from "../Services/ReviewCacheStore.ts";
 import {
   ReviewPullRequestStore,
@@ -637,6 +640,26 @@ function isUsablePullRequestOverviewCacheEnvelope(
   return (
     isUsableCacheEnvelope(envelope, tokenIdentity) && hasCompleteReviewSidebarAvatars(envelope.data)
   );
+}
+
+function emptyWalkthrough(
+  currentPatchSignature: string,
+  currentPatchSource: ReviewWalkthrough["patchSource"],
+  headSha: string | undefined,
+  generatedAt: string,
+): ReviewWalkthrough {
+  return {
+    prologue: {
+      keyChanges: [],
+      focusAreas: [],
+      complexity: { level: "low", reasoning: "No changes to walk through." },
+    },
+    chapters: [],
+    ...(headSha ? { reviewedHeadSha: headSha } : {}),
+    patchSignature: currentPatchSignature,
+    ...(currentPatchSource ? { patchSource: currentPatchSource } : {}),
+    generatedAt,
+  };
 }
 
 const makeReviewSource = Effect.gen(function* () {
@@ -1582,36 +1605,64 @@ const makeReviewSource = Effect.gen(function* () {
       ),
     );
 
-  const runAgentReview: ReviewSourceShape["runAgentReview"] = (input) =>
+  const withPullRequestOverview = <A, E, R>(
+    source: ReviewSourceRef,
+    cwd: string,
+    body: (joinOverview: Effect.Effect<ReviewPullRequestOverview | null>) => Effect.Effect<A, E, R>,
+  ) =>
     Effect.gen(function* () {
-      const pullRequestOverviewFiber =
-        input.source._tag === "pullRequest"
-          ? yield* loadPullRequest({ cwd: input.cwd, reference: input.source.reference }).pipe(
+      const fiber =
+        source._tag === "pullRequest"
+          ? yield* loadPullRequest({ cwd, reference: source.reference }).pipe(
               Effect.catch(() => Effect.succeed(null)),
               Effect.forkChild,
             )
           : null;
-      let pullRequestOverviewJoined = false;
-      const interruptPullRequestOverview =
-        pullRequestOverviewFiber === null
+      let joined = false;
+      const joinOverview: Effect.Effect<ReviewPullRequestOverview | null> =
+        fiber === null
+          ? Effect.succeed(null)
+          : Effect.gen(function* () {
+              const overview = yield* Fiber.join(fiber);
+              joined = true;
+              return overview;
+            });
+      const interrupt =
+        fiber === null
           ? Effect.void
           : Effect.gen(function* () {
-              if (!pullRequestOverviewJoined) {
-                yield* Fiber.interrupt(pullRequestOverviewFiber).pipe(Effect.ignore);
+              if (!joined) {
+                yield* Fiber.interrupt(fiber).pipe(Effect.ignore);
               }
             });
+      return yield* body(joinOverview).pipe(Effect.ensuring(interrupt));
+    });
 
-      return yield* Effect.gen(function* () {
-        const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
-        const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
-        const currentPatchSource = changeset.patchSource ?? "github";
-        const headMoved =
-          input.expectedHeadSha !== undefined &&
-          changeset.headSha !== undefined &&
-          changeset.headSha !== input.expectedHeadSha;
-        const patchChanged =
-          input.expectedPatchSignature !== undefined &&
-          currentPatchSignature !== input.expectedPatchSignature;
+  const loadChangesetWithGuard = (input: {
+    cwd: string;
+    source: ReviewSourceRef;
+    expectedHeadSha?: string | undefined;
+    expectedPatchSignature?: string | undefined;
+  }) =>
+    Effect.gen(function* () {
+      const changeset = yield* loadChangeset({ cwd: input.cwd, source: input.source });
+      const currentPatchSignature = changeset.patchSignature ?? patchSignature(changeset.patch);
+      const currentPatchSource = changeset.patchSource ?? "github";
+      const headMoved =
+        input.expectedHeadSha !== undefined &&
+        changeset.headSha !== undefined &&
+        changeset.headSha !== input.expectedHeadSha;
+      const patchChanged =
+        input.expectedPatchSignature !== undefined &&
+        currentPatchSignature !== input.expectedPatchSignature;
+      return { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged };
+    });
+
+  const runAgentReview: ReviewSourceShape["runAgentReview"] = (input) =>
+    withPullRequestOverview(input.source, input.cwd, (joinOverview) =>
+      Effect.gen(function* () {
+        const { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged } =
+          yield* loadChangesetWithGuard(input);
         if (headMoved || patchChanged) {
           return {
             summary: "",
@@ -1639,11 +1690,7 @@ const makeReviewSource = Effect.gen(function* () {
             droppedFindings: 0,
           };
         }
-        let pullRequestOverview: ReviewPullRequestOverview | null = null;
-        if (pullRequestOverviewFiber !== null) {
-          pullRequestOverview = yield* Fiber.join(pullRequestOverviewFiber);
-          pullRequestOverviewJoined = true;
-        }
+        const pullRequestOverview = yield* joinOverview;
 
         const generated = yield* textGeneration.generateReviewFindings({
           cwd: input.cwd,
@@ -1682,8 +1729,143 @@ const makeReviewSource = Effect.gen(function* () {
           droppedFindings: filtered.droppedFindings,
           ...(warnings.length > 0 ? { warnings } : {}),
         };
-      }).pipe(Effect.ensuring(interruptPullRequestOverview));
-    });
+      }),
+    );
+
+  const generateWalkthrough: ReviewSourceShape["generateWalkthrough"] = (input) =>
+    withPullRequestOverview(input.source, input.cwd, (joinOverview) =>
+      Effect.gen(function* () {
+        const reference = input.source._tag === "pullRequest" ? input.source.reference : undefined;
+        const { changeset, currentPatchSignature, currentPatchSource, headMoved, patchChanged } =
+          yield* loadChangesetWithGuard(input);
+        const now = yield* cacheWriteClock;
+        if (headMoved || patchChanged) {
+          return {
+            walkthrough: emptyWalkthrough(
+              currentPatchSignature,
+              currentPatchSource,
+              changeset.headSha,
+              new Date(now).toISOString(),
+            ),
+            ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+            patchSignature: currentPatchSignature,
+            patchSource: currentPatchSource,
+            headMoved,
+            patchChanged,
+            warnings: ["The pull request changed before the walkthrough could be generated."],
+          };
+        }
+
+        const repositoryId = reference !== undefined ? yield* resolveRepositoryId(input.cwd) : null;
+        const walkthroughTokenIdentity =
+          repositoryId !== null && reference !== undefined
+            ? yield* readCacheTokenIdentity(input.cwd)
+            : null;
+        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
+          const cached = yield* cacheStore
+            .getPullRequestWalkthrough({
+              repositoryId,
+              reference,
+              patchSignature: currentPatchSignature,
+              tokenIdentity: walkthroughTokenIdentity,
+            })
+            .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+          if (Option.isSome(cached)) {
+            return {
+              walkthrough: cached.value,
+              ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+              patchSignature: currentPatchSignature,
+              patchSource: currentPatchSource,
+              headMoved: false,
+              patchChanged: false,
+            };
+          }
+        }
+
+        if (changeset.patch.trim().length === 0) {
+          return {
+            walkthrough: emptyWalkthrough(
+              currentPatchSignature,
+              currentPatchSource,
+              changeset.headSha,
+              new Date(now).toISOString(),
+            ),
+            ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+            patchSignature: currentPatchSignature,
+            patchSource: currentPatchSource,
+            headMoved: false,
+            patchChanged: false,
+          };
+        }
+
+        const pullRequestOverview = yield* joinOverview;
+
+        const files = parseUnifiedDiffHunks(changeset.patch);
+        const hunksSummary = formatHunksSummary(files);
+
+        const generated = yield* textGeneration.generateWalkthrough({
+          cwd: input.cwd,
+          patch: changeset.patch,
+          ...(hunksSummary.length > 0 ? { hunksSummary } : {}),
+          ...(changeset.pullRequest ? { prTitle: changeset.pullRequest.title } : {}),
+          ...(pullRequestOverview ? { prBody: pullRequestOverview.detail.body } : {}),
+          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+          ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+        });
+
+        const reconciled = reconcileChapterCoverage(files, generated.chapters);
+        const generatedAt = new Date(yield* cacheWriteClock).toISOString();
+        const walkthrough: ReviewWalkthrough = {
+          prologue: generated.prologue,
+          chapters: reconciled.chapters,
+          ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+          patchSignature: currentPatchSignature,
+          patchSource: currentPatchSource,
+          generatedAt,
+        };
+
+        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
+          const fetchedAt = yield* cacheWriteClock;
+          yield* cacheStore
+            .upsertPullRequestWalkthrough({
+              repositoryId,
+              reference,
+              patchSignature: currentPatchSignature,
+              tokenIdentity: walkthroughTokenIdentity,
+              data: walkthrough,
+              fetchedAt,
+            })
+            .pipe(Effect.ignore);
+          yield* reviewUpdateBus.publish({
+            _tag: "pullRequestWalkthrough",
+            cwd: input.cwd,
+            repositoryId,
+            reference,
+            data: walkthrough,
+            fetchedAt,
+          });
+        }
+
+        const warnings = [
+          ...(currentPatchSource === "localFallback"
+            ? ["GitHub diff could not be loaded, so the walkthrough covers a local fallback diff."]
+            : []),
+          ...reconciled.warnings,
+        ];
+
+        return {
+          walkthrough,
+          ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
+          patchSignature: currentPatchSignature,
+          patchSource: currentPatchSource,
+          headMoved: false,
+          patchChanged: false,
+          ...(warnings.length > 0 ? { warnings } : {}),
+        };
+      }),
+    );
 
   const mapProjectScopeError =
     (operation: string) =>
@@ -1738,6 +1920,7 @@ const makeReviewSource = Effect.gen(function* () {
     loadConversation,
     loadPullRequestSurface,
     runAgentReview,
+    generateWalkthrough,
     checkProjectAccess,
     listProjects,
     getProjectBoard,

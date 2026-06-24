@@ -5,6 +5,7 @@ import {
   ReviewConversationResult,
   ReviewListPullRequestsResult,
   ReviewPullRequestOverview,
+  ReviewWalkthrough,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -36,9 +37,16 @@ const decodeList = Schema.decodeUnknownEffect(ReviewListPullRequestsResult);
 const decodeOverview = Schema.decodeUnknownEffect(ReviewPullRequestOverview);
 const decodeConversation = Schema.decodeUnknownEffect(ReviewConversationResult);
 const decodeChangeset = Schema.decodeUnknownEffect(ReviewChangesetResult);
+const decodeWalkthrough = Schema.decodeUnknownEffect(ReviewWalkthrough);
 const LIST_CACHE_RETENTION_MS = 24 * 60 * 60 * 1000;
 const LIST_CACHE_MAX_ROWS_PER_REPOSITORY = 64;
 const DIFF_CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const WALKTHROUGH_CACHE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const WALKTHROUGH_GENERATOR_VERSION = "v1";
+
+function walkthroughSignature(patchSignature: string): string {
+  return `${patchSignature}:${WALKTHROUGH_GENERATOR_VERSION}`;
+}
 
 function patchSignature(patch: string): string {
   return createHash("sha256").update(patch).digest("hex").slice(0, 16);
@@ -389,6 +397,79 @@ const makeReviewCacheStore = Effect.gen(function* () {
       Effect.mapError(toPersistenceSqlError("ReviewCacheStore.upsertPullRequestChangeset:query")),
     );
 
+  const getPullRequestWalkthrough: ReviewCacheStoreShape["getPullRequestWalkthrough"] = (input) =>
+    sql<{ readonly payloadJson: string }>`
+      SELECT payload_json AS "payloadJson"
+      FROM review_cache_pr_walkthrough
+      WHERE repository_id = ${input.repositoryId}
+        AND reference = ${input.reference}
+        AND patch_signature = ${walkthroughSignature(input.patchSignature)}
+        AND token_identity = ${input.tokenIdentity}
+    `.pipe(
+      Effect.mapError(toPersistenceSqlError("ReviewCacheStore.getPullRequestWalkthrough:query")),
+      Effect.flatMap((rows) => {
+        const row = rows[0];
+        if (!row) {
+          return Effect.succeed(Option.none<ReviewWalkthrough>());
+        }
+        return Effect.try({
+          try: () => JSON.parse(row.payloadJson) as unknown,
+          catch: toPersistenceDecodeCauseError("ReviewCacheStore.getPullRequestWalkthrough:json"),
+        }).pipe(
+          Effect.flatMap(decodeWalkthrough),
+          Effect.mapError(
+            toPersistenceDecodeCauseError("ReviewCacheStore.getPullRequestWalkthrough:decode"),
+          ),
+          Effect.map(Option.some),
+        );
+      }),
+    );
+
+  const upsertPullRequestWalkthrough: ReviewCacheStoreShape["upsertPullRequestWalkthrough"] = (
+    input,
+  ) =>
+    sql
+      .withTransaction(
+        sql`
+      INSERT INTO review_cache_pr_walkthrough (
+        repository_id,
+        reference,
+        patch_signature,
+        token_identity,
+        payload_json,
+        fetched_at
+      )
+      VALUES (
+        ${input.repositoryId},
+        ${input.reference},
+        ${walkthroughSignature(input.patchSignature)},
+        ${input.tokenIdentity},
+        ${JSON.stringify(input.data)},
+        ${input.fetchedAt}
+      )
+      ON CONFLICT (repository_id, reference, patch_signature, token_identity)
+      DO UPDATE SET
+        payload_json = excluded.payload_json,
+        fetched_at = excluded.fetched_at
+    `.pipe(
+          Effect.flatMap(
+            () => sql`
+        DELETE FROM review_cache_pr_walkthrough
+        WHERE repository_id = ${input.repositoryId}
+          AND reference = ${input.reference}
+          AND patch_signature <> ${walkthroughSignature(input.patchSignature)}
+          AND fetched_at < ${input.fetchedAt - WALKTHROUGH_CACHE_RETENTION_MS}
+      `,
+          ),
+        ),
+      )
+      .pipe(
+        Effect.asVoid,
+        Effect.mapError(
+          toPersistenceSqlError("ReviewCacheStore.upsertPullRequestWalkthrough:query"),
+        ),
+      );
+
   return {
     getPullRequestList,
     upsertPullRequestList,
@@ -398,6 +479,8 @@ const makeReviewCacheStore = Effect.gen(function* () {
     upsertPullRequestConversation,
     getPullRequestChangeset,
     upsertPullRequestChangeset,
+    getPullRequestWalkthrough,
+    upsertPullRequestWalkthrough,
   } satisfies ReviewCacheStoreShape;
 });
 

@@ -44,8 +44,8 @@ export function ReviewTabStrip(props: {
   return (
     <div
       className={cn(
-        "flex shrink-0 items-center gap-1 border-b border-border/70 bg-muted/[0.08]",
-        size === "roomy" ? "h-12 px-6" : "h-9 px-2",
+        "flex shrink-0 items-center gap-1 border-b border-border/60",
+        size === "roomy" ? "h-11 px-3" : "h-9 px-2",
         props.className,
       )}
     >
@@ -54,7 +54,7 @@ export function ReviewTabStrip(props: {
         aria-label={props["aria-label"]}
         aria-orientation="horizontal"
         onKeyDown={moveFocus}
-        className="flex min-w-0 items-center gap-1 overflow-x-auto"
+        className="-my-2 flex min-w-0 items-center gap-1 overflow-x-auto py-2"
       >
         {props.tabs.map((tab) => {
           const active = tab.id === props.value;
@@ -75,23 +75,18 @@ export function ReviewTabStrip(props: {
               data-active={active || undefined}
               onClick={() => props.onValueChange(tab.id)}
               className={cn(
-                "inline-flex items-center gap-1.5 whitespace-nowrap rounded-xl font-medium outline-none",
-                "transition-[background-color,box-shadow,color,transform] duration-150 ease-out motion-reduce:transition-none",
-                "focus-visible:ring-2 focus-visible:ring-ring",
-                size === "roomy" ? "h-9 px-3 text-[14px]" : "h-6 px-2.5 text-[12px]",
+                "inline-flex items-center gap-1 whitespace-nowrap rounded-[0.625rem] font-medium outline-none",
+                "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
+                "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+                size === "roomy" ? "h-8 px-3 text-[13px]" : "h-6 px-2.5 text-[12px]",
                 active
-                  ? "bg-card text-foreground shadow-sm ring-1 ring-border/70"
-                  : "text-muted-foreground hover:bg-card/70 hover:text-foreground/85 active:scale-[0.98] motion-reduce:active:scale-100",
+                  ? "bg-muted text-foreground active:scale-[0.98] motion-reduce:active:scale-100"
+                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground active:scale-[0.98] motion-reduce:active:scale-100",
               )}
             >
               <span>{tab.label}</span>
               {tab.count != null && tab.count > 0 ? (
-                <span
-                  className={cn(
-                    "tabular-nums text-[11px] leading-none",
-                    active ? "text-muted-foreground" : "text-muted-foreground/65",
-                  )}
-                >
+                <span className="tabular-nums text-[11px] font-medium leading-none text-muted-foreground">
                   {tab.count}
                 </span>
               ) : null}

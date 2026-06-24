@@ -1559,6 +1559,7 @@ export default function Sidebar() {
     : null;
   const terminalOpen = routeTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: focusedProjectId !== null,
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
@@ -7031,7 +7032,6 @@ function SidebarSearchPaletteController(props: {
       homeDir={props.homeDir}
       initialBrowseQuery={props.initialBrowseQuery}
       onOpenSettings={props.onOpenSettings}
-      onOpenUsageSettings={props.onOpenUsageSettings}
       onOpenProject={props.onOpenProject}
       onOpenPullRequestReference={props.onOpenPullRequestReference}
       importProviders={importProviders}

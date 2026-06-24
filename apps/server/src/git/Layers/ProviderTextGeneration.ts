@@ -39,6 +39,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     generatePrContent: (input) => resolveImplementation(input).generatePrContent(input),
     generateDiffSummary: (input) => resolveImplementation(input).generateDiffSummary(input),
     generateReviewFindings: (input) => resolveImplementation(input).generateReviewFindings(input),
+    generateWalkthrough: (input) => resolveImplementation(input).generateWalkthrough(input),
     generateBranchName: (input) => resolveImplementation(input).generateBranchName(input),
     generateThreadTitle: (input) => resolveImplementation(input).generateThreadTitle(input),
     generateThreadRecap: (input) => resolveImplementation(input).generateThreadRecap(input),

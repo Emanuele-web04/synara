@@ -29,7 +29,8 @@ import {
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
 import { resolveAppModelSelection } from "../appSettings";
-import type { ComposerThreadDraftState, LegacyCodexFields } from "../composerDraftStore";
+import type { ComposerThreadDraftState } from "../composerDraftStore";
+import type { LegacyCodexFields } from "./persistedSchema";
 
 export const COMPOSER_PROVIDER_KINDS = [
   "codex",

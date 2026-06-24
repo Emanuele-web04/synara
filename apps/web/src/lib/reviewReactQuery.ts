@@ -18,6 +18,7 @@ import type {
   ReviewTargetKey,
   ReviewUpdateCommentInput,
   ReviewUpdatedPayload,
+  ReviewWalkthroughResult,
 } from "@t3tools/contracts";
 import { type QueryClient, mutationOptions, queryOptions } from "@tanstack/react-query";
 import { serializeReviewTargetKey } from "@t3tools/shared/reviewTargetKey";
@@ -35,6 +36,7 @@ const REVIEW_REMOTE_THREADS_STALE_TIME_MS = 30_000;
 const REVIEW_PROJECT_ACCESS_STALE_TIME_MS = 300_000;
 const REVIEW_PROJECTS_STALE_TIME_MS = 60_000;
 const REVIEW_PROJECT_BOARD_STALE_TIME_MS = 30_000;
+const REVIEW_WALKTHROUGH_GC_TIME_MS = 5 * 60_000;
 
 type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
 type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
@@ -135,6 +137,21 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.conversation(payload.cwd, payload.reference),
       payload.data,
     );
+    return;
+  }
+  if (payload._tag === "pullRequestWalkthrough") {
+    const patchSignature = payload.data.patchSignature;
+    if (patchSignature !== undefined) {
+      queryClient.setQueryData(
+        reviewQueryKeys.walkthrough(
+          payload.cwd,
+          payload.reference,
+          patchSignature,
+          payload.data.reviewedHeadSha ?? null,
+        ),
+        payload.data,
+      );
+    }
     return;
   }
   if (payload._tag === "boardLanes") {
@@ -253,6 +270,12 @@ export const reviewQueryKeys = {
       includeConversation,
       includeChangeset,
     ] as const,
+  walkthrough: (
+    cwd: string | null,
+    reference: string | null,
+    patchSignature: string | null,
+    expectedHeadSha: string | null,
+  ) => ["review", "walkthrough", cwd, reference, patchSignature, expectedHeadSha] as const,
   conversation: (cwd: string | null, reference: string | null) =>
     ["review", "conversation", cwd, reference] as const,
   comments: (targetKey: string) => ["review", "comments", targetKey] as const,
@@ -416,6 +439,44 @@ export function reviewLoadChangesetQueryOptions(input: {
   });
 }
 
+export function reviewGenerateWalkthroughQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  source: ReviewSourceRef | null;
+  patchSignature: string | null;
+  expectedHeadSha?: string;
+}) {
+  return queryOptions({
+    queryKey: reviewQueryKeys.walkthrough(
+      input.cwd,
+      input.reference,
+      input.patchSignature,
+      input.expectedHeadSha ?? null,
+    ),
+    queryFn: async (): Promise<ReviewWalkthroughResult> => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.source || input.patchSignature === null) {
+        throw new Error("Walkthrough is unavailable.");
+      }
+      return api.review.generateWalkthrough({
+        cwd: input.cwd,
+        source: input.source,
+        expectedPatchSignature: input.patchSignature,
+        ...(input.expectedHeadSha !== undefined ? { expectedHeadSha: input.expectedHeadSha } : {}),
+      });
+    },
+    enabled:
+      input.cwd !== null &&
+      input.reference !== null &&
+      input.source !== null &&
+      input.patchSignature !== null,
+    staleTime: Infinity,
+    gcTime: REVIEW_WALKTHROUGH_GC_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
 export function reviewLoadPullRequestQueryOptions(input: {
   cwd: string | null;
   reference: string | null;
@@ -427,7 +488,10 @@ export function reviewLoadPullRequestQueryOptions(input: {
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request overview is unavailable.");
       }
-      return api.review.loadPullRequest({ cwd: input.cwd, reference: input.reference });
+      return api.review.loadPullRequest({
+        cwd: input.cwd,
+        reference: input.reference,
+      });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
@@ -447,7 +511,10 @@ export function reviewLoadPullRequestHeaderQueryOptions(input: {
       if (!input.cwd || !input.reference) {
         throw new Error("Pull request header is unavailable.");
       }
-      return api.review.loadPullRequestHeader({ cwd: input.cwd, reference: input.reference });
+      return api.review.loadPullRequestHeader({
+        cwd: input.cwd,
+        reference: input.reference,
+      });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_PULL_REQUEST_STALE_TIME_MS,
@@ -467,7 +534,10 @@ export function reviewLoadConversationQueryOptions(input: {
       if (!input.cwd || !input.reference) {
         throw new Error("Conversation is unavailable.");
       }
-      return api.review.loadConversation({ cwd: input.cwd, reference: input.reference });
+      return api.review.loadConversation({
+        cwd: input.cwd,
+        reference: input.reference,
+      });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_CONVERSATION_STALE_TIME_MS,
@@ -547,7 +617,10 @@ export function reviewLoadRemoteThreadsQueryOptions(input: {
       if (!input.cwd || !input.reference) {
         throw new Error("Submitted review threads are unavailable.");
       }
-      return api.review.loadRemoteThreads({ cwd: input.cwd, reference: input.reference });
+      return api.review.loadRemoteThreads({
+        cwd: input.cwd,
+        reference: input.reference,
+      });
     },
     enabled: input.cwd !== null && input.reference !== null,
     staleTime: REVIEW_REMOTE_THREADS_STALE_TIME_MS,

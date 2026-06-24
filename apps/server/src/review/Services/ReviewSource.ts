@@ -22,6 +22,8 @@ import {
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
   ReviewRunAgentInput,
+  ReviewGenerateWalkthroughInput,
+  ReviewWalkthroughResult,
   ReviewViewerResult,
 } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
@@ -65,6 +67,10 @@ export interface ReviewSourceShape {
   readonly runAgentReview: (
     input: ReviewRunAgentInput,
   ) => Effect.Effect<ReviewAgentResult, ReviewServiceError>;
+
+  readonly generateWalkthrough: (
+    input: ReviewGenerateWalkthroughInput,
+  ) => Effect.Effect<ReviewWalkthroughResult, ReviewServiceError>;
 
   readonly checkProjectAccess: (
     input: ReviewCheckProjectAccessInput,

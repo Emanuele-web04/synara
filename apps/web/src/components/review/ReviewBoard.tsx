@@ -356,7 +356,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
       <div className="shrink-0 border-b border-border/45 bg-background/78 px-3 py-2.5">
         <div
-          className="flex min-w-0 flex-wrap items-center gap-2 rounded-[1.15rem] border border-border/55 bg-card/60 px-2 py-2 shadow-[0_10px_28px_-26px_var(--foreground)]"
+          className="flex min-w-0 flex-wrap items-center gap-2 rounded-2xl border border-border/55 bg-card/60 px-2 py-2 shadow-[0_10px_28px_-26px_var(--foreground)]"
           role="toolbar"
           aria-label="Pull request review controls"
         >
@@ -462,7 +462,7 @@ function ReviewBoardColumnShell(props: {
 }) {
   const { column } = props;
   return (
-    <section className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-[1.5rem] border border-border/60 bg-card/55 p-2.5 shadow-sm md:h-full md:w-72">
+    <section className="flex min-h-0 w-full shrink-0 flex-col gap-2 overflow-hidden rounded-xl border border-border/55 bg-card/40 p-2.5 md:h-full md:w-72">
       <header className="flex shrink-0 items-center gap-2 px-1">
         <span
           className={cn("size-1.5 shrink-0 rounded-full", COLUMN_ACCENT_DOT[column.accent])}

@@ -1,4 +1,5 @@
 import type {
+  ReviewChangedFile,
   ReviewCheck,
   ReviewCommit,
   ReviewSourceRef,
@@ -22,10 +23,9 @@ import {
   prewarmReviewChatThread,
 } from "~/lib/reviewChatThread";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
-import { ArrowLeftIcon, GitPullRequestIcon } from "~/lib/icons";
+import { GitPullRequestIcon } from "~/lib/icons";
 import { useStore } from "~/store";
 import { createReviewChatThreadIdSelector } from "~/storeSelectors";
-import { Button } from "../ui/button";
 import { ReviewCommits } from "./ReviewCommits";
 import { ReviewConversation } from "./ReviewConversation";
 import { ReviewPrHeader } from "./ReviewPrHeader";
@@ -37,15 +37,18 @@ import {
 import { ReviewPrSidebar } from "./ReviewPrSidebar";
 import { ReviewSubmitBar } from "./ReviewSubmitBar";
 import { ReviewSurface } from "./ReviewSurface";
+import { ReviewTabStrip, type ReviewTabItem } from "./ReviewTabStrip";
 import { EmptyState } from "./reviewPrimitives";
 import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
+import { ReviewWalkthrough } from "./walkthrough/ReviewWalkthrough";
 
-type PrTab = "conversation" | "files" | "commits";
+type PrTab = "conversation" | "files" | "commits" | "walkthrough";
 
 const EMPTY_CHECKS: ReadonlyArray<ReviewCheck> = [];
 const EMPTY_COMMITS: ReadonlyArray<ReviewCommit> = [];
 const EMPTY_EVENTS: ReadonlyArray<ReviewTimelineEvent> = [];
+const EMPTY_FILES: ReadonlyArray<ReviewChangedFile> = [];
 
 function reviewConversationHydrationKey(input: {
   readonly cwd: string | null;
@@ -134,7 +137,7 @@ export function ReviewPrView(props: {
   useEffect(() => {
     setTab("conversation");
     setSelectedFilePath(null);
-  }, [props.reference, sourceKey]);
+  }, [props.cwd, props.reference, sourceKey]);
   const [readySurfaceHydrationKey, setReadySurfaceHydrationKey] = useState<string | null>(null);
   useEffect(() => {
     setReadySurfaceHydrationKey(null);
@@ -156,17 +159,20 @@ export function ReviewPrView(props: {
   }, [conversationHydrationKey, headerDetail]);
   const isSurfaceHydrationReady =
     readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
+  // The walkthrough tab needs the changeset too: ReviewWalkthrough takes patch +
+  // patchSignature, so widen the fetch gate beyond Files.
+  const needsChangeset = tab === "files" || tab === "walkthrough";
   const surfaceQuery = useQuery({
     ...reviewLoadPullRequestSurfaceQueryOptions({
       cwd: props.cwd,
       reference: headerDetail ? props.reference : null,
       source: props.source,
       includeConversation: false,
-      includeChangeset: tab === "files",
+      includeChangeset: needsChangeset,
       queryClient,
     }),
     enabled:
-      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && tab === "files",
+      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && needsChangeset,
   });
   const overviewQuery = useQuery({
     ...reviewLoadPullRequestQueryOptions({
@@ -188,13 +194,14 @@ export function ReviewPrView(props: {
   });
   const overview = surfaceQuery.data?.overview ?? overviewQuery.data ?? null;
   const detail = overview?.detail ?? headerDetail;
+  const prBody = detail && detail.body.trim().length > 0 ? detail.body : null;
   const surfaceChangeset = surfaceQuery.data?.changeset;
   const changesetState = useMemo(
     () => ({
       data: surfaceChangeset,
       isLoading:
         detail !== null &&
-        tab === "files" &&
+        needsChangeset &&
         isSurfaceHydrationReady &&
         surfaceQuery.isLoading &&
         surfaceChangeset === undefined,
@@ -203,10 +210,10 @@ export function ReviewPrView(props: {
     [
       detail,
       isSurfaceHydrationReady,
+      needsChangeset,
       surfaceChangeset,
       surfaceQuery.error,
       surfaceQuery.isLoading,
-      tab,
     ],
   );
   const checks = overview?.checks ?? EMPTY_CHECKS;
@@ -315,24 +322,20 @@ export function ReviewPrView(props: {
         expectedHeadSha={changesetState.data?.headSha ?? null}
       />
     ) : undefined;
-  const navigationAction =
-    tab === "files" ? (
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="h-7 shrink-0 rounded-lg px-2.5 text-[12px]"
-        title="Back to pull request overview"
-        aria-label="Back to pull request overview"
-        onClick={() => setTab("conversation")}
-      >
-        <ArrowLeftIcon className="size-3.5" />
-        <span className="hidden lg:inline">Overview</span>
-      </Button>
-    ) : undefined;
   const updateSidebarCollapsed = (collapsed: boolean) => {
     setSidebarCollapsed(collapsed);
     saveSidebarCollapsed(collapsed);
+  };
+  const prTabs: ReviewTabItem[] = [
+    { id: "conversation", label: "Overview" },
+    { id: "files", label: "Files", count: detail?.changedFiles ?? null },
+    { id: "commits", label: "Commits", count: detail?.commitsCount ?? null },
+    { id: "walkthrough", label: "Walkthrough" },
+  ];
+  const handleTabChange = (id: string): void => {
+    if (id === "conversation" || id === "files" || id === "commits" || id === "walkthrough") {
+      setTab(id);
+    }
   };
 
   return (
@@ -341,6 +344,14 @@ export function ReviewPrView(props: {
         {detail ? (
           <div className="flex h-full min-h-0 min-w-0 flex-1">
             <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
+              <ReviewTabStrip
+                tabs={prTabs}
+                value={tab}
+                onValueChange={handleTabChange}
+                size="roomy"
+                aria-label="Pull request views"
+                className="shrink-0"
+              />
               {tab === "files" ? (
                 <main className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
                   <ReviewSurface
@@ -350,8 +361,29 @@ export function ReviewPrView(props: {
                     selectedFilePath={selectedFilePath}
                     onSelectedFilePathChange={setSelectedFilePath}
                     reviewAction={reviewAction}
-                    navigationAction={navigationAction}
                     changesetState={changesetState}
+                  />
+                </main>
+              ) : tab === "walkthrough" ? (
+                <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                  <ReviewPrHeader
+                    detail={detail}
+                    variant="compact"
+                    contentClassName="px-4 sm:px-5"
+                  />
+                  <ReviewWalkthrough
+                    cwd={props.cwd}
+                    reference={props.reference}
+                    source={props.source}
+                    target={changesetState.data?.target ?? null}
+                    patch={changesetState.data?.patch}
+                    files={changesetState.data?.files ?? EMPTY_FILES}
+                    patchSignature={changesetState.data?.patchSignature ?? null}
+                    expectedHeadSha={changesetState.data?.headSha ?? null}
+                    changesetError={changesetState.error}
+                    changesetLoading={changesetState.isLoading}
+                    title={detail.title}
+                    body={prBody}
                   />
                 </main>
               ) : (
@@ -361,10 +393,6 @@ export function ReviewPrView(props: {
                     variant="full"
                     reviewMode="conversation"
                     contentClassName={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}
-                    onReviewChanges={() => setTab("files")}
-                    onOverview={() => setTab("conversation")}
-                    commitsActive={tab === "commits"}
-                    onCommits={() => setTab(tab === "commits" ? "conversation" : "commits")}
                   />
                   {tab === "commits" ? (
                     <div className={REVIEW_OVERVIEW_COLUMN_CLASS_NAME}>

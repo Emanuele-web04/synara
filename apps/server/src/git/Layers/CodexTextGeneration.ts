@@ -18,6 +18,8 @@ import {
   type BranchNameGenerationResult,
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
+  type ReviewFindingsGenerationResult,
+  type WalkthroughGenerationResult,
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
   type ThreadRecapGenerationResult,
@@ -31,6 +33,8 @@ import {
   buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
+  buildReviewFindingsPrompt,
+  buildWalkthroughPrompt,
   buildPrContentPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
@@ -38,8 +42,8 @@ import {
   sanitizeDiffSummary,
   sanitizeThreadRecap,
   sanitizePrTitle,
-  toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+import { stripNullOptionalFields, toJsonSchemaObject } from "../strictJsonSchema.ts";
 
 const CODEX_REASONING_EFFORT = "low";
 const CODEX_TIMEOUT_MS = 180_000;
@@ -405,7 +409,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ),
         );
 
-        return yield* fileSystem.readFileString(outputPath).pipe(
+        const rawOutput = yield* fileSystem.readFileString(outputPath).pipe(
           Effect.mapError(
             (cause) =>
               new TextGenerationError({
@@ -414,7 +418,23 @@ const makeCodexTextGeneration = Effect.gen(function* () {
                 cause,
               }),
           ),
-          Effect.flatMap(Schema.decodeEffect(Schema.fromJsonString(outputSchemaJson))),
+        );
+
+        // Strict structured output emits `null` for absent optionals; strip those so the
+        // schema (which models them as `Schema.optional`, not nullable) decodes cleanly.
+        const parsed = yield* Effect.try({
+          try: () => JSON.parse(rawOutput) as unknown,
+          catch: (cause) =>
+            new TextGenerationError({
+              operation,
+              detail: "Codex returned invalid structured output.",
+              cause,
+            }),
+        });
+
+        return yield* Schema.decodeUnknownEffect(outputSchemaJson)(
+          stripNullOptionalFields(outputSchemaJson, parsed),
+        ).pipe(
           Effect.catchTag("SchemaError", (cause) =>
             Effect.fail(
               new TextGenerationError({
@@ -509,6 +529,61 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ({
             summary: sanitizeDiffSummary(generated.summary),
           }) satisfies DiffSummaryGenerationResult,
+      ),
+    );
+  };
+
+  const generateReviewFindings: TextGenerationShape["generateReviewFindings"] = (input) => {
+    const { prompt, outputSchemaJson } = buildReviewFindingsPrompt({
+      patch: input.patch,
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateReviewFindings",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            summary: generated.summary.trim(),
+            findings: generated.findings,
+          }) satisfies ReviewFindingsGenerationResult,
+      ),
+    );
+  };
+
+  const generateWalkthrough: TextGenerationShape["generateWalkthrough"] = (input) => {
+    const { prompt, outputSchemaJson } = buildWalkthroughPrompt({
+      patch: input.patch,
+      ...(input.hunksSummary ? { hunksSummary: input.hunksSummary } : {}),
+      ...(input.prTitle ? { prTitle: input.prTitle } : {}),
+      ...(input.prBody ? { prBody: input.prBody } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateWalkthrough",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            prologue: generated.prologue,
+            chapters: generated.chapters,
+          }) satisfies WalkthroughGenerationResult,
       ),
     );
   };
@@ -635,6 +710,8 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
+    generateReviewFindings,
+    generateWalkthrough,
     generateBranchName,
     generateThreadTitle,
     generateThreadRecap,

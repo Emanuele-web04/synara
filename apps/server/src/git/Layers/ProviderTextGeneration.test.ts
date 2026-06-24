@@ -35,6 +35,16 @@ function createTextGenerationDouble(label: string) {
       findings: [],
     }),
   );
+  const generateWalkthrough = vi.fn<TextGenerationShape["generateWalkthrough"]>(() =>
+    Effect.succeed({
+      prologue: {
+        keyChanges: [],
+        focusAreas: [],
+        complexity: { level: "low" as const, reasoning: `${label} walkthrough` },
+      },
+      chapters: [],
+    }),
+  );
   const generateBranchName = vi.fn<TextGenerationShape["generateBranchName"]>(() =>
     Effect.succeed({
       branch: `${label}-branch`,
@@ -65,14 +75,13 @@ function createTextGenerationDouble(label: string) {
       reason: null,
     }),
   );
-  const evaluateAutomationCompletion = vi.fn<
-    TextGenerationShape["evaluateAutomationCompletion"]
-  >(() =>
-    Effect.succeed({
-      stopMatched: false,
-      confidence: 0.2,
-      reason: `${label} completion`,
-    }),
+  const evaluateAutomationCompletion = vi.fn<TextGenerationShape["evaluateAutomationCompletion"]>(
+    () =>
+      Effect.succeed({
+        stopMatched: false,
+        confidence: 0.2,
+        reason: `${label} completion`,
+      }),
   );
 
   return {
@@ -81,6 +90,7 @@ function createTextGenerationDouble(label: string) {
       generatePrContent,
       generateDiffSummary,
       generateReviewFindings,
+      generateWalkthrough,
       generateBranchName,
       generateThreadTitle,
       generateThreadRecap,

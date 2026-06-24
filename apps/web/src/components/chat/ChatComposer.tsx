@@ -6,6 +6,7 @@ import type { ContextWindowSelectionStatus } from "../../lib/contextWindow";
 
 import type {
   ComposerImageAttachment,
+  ComposerFileAttachment,
   ComposerAssistantSelectionAttachment,
   QueuedComposerTurn,
 } from "../../composerDraftStore";
@@ -108,11 +109,13 @@ export interface ChatComposerProps {
   composerAssistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
   composerFileComments: ReadonlyArray<FileCommentDraft>;
   composerImages: ReadonlyArray<ComposerImageAttachment>;
+  composerFiles: ReadonlyArray<ComposerFileAttachment>;
   nonPersistedComposerImageIdSet: ReadonlySet<string>;
   onExpandTimelineImage: ComponentProps<typeof ComposerReferenceAttachments>["onExpandImage"];
   clearComposerAssistantSelectionsFromDraft: () => void;
   clearComposerFileCommentsFromDraft: () => void;
   removeComposerImage: (imageId: string) => void;
+  removeComposerFile: (fileId: string) => void;
   composerEditorRef: Ref<ComposerPromptEditorHandle>;
   activePendingProgress: {
     customAnswer: string;
@@ -228,11 +231,13 @@ export function ChatComposer({
   composerAssistantSelections,
   composerFileComments,
   composerImages,
+  composerFiles,
   nonPersistedComposerImageIdSet,
   onExpandTimelineImage,
   clearComposerAssistantSelectionsFromDraft,
   clearComposerFileCommentsFromDraft,
   removeComposerImage,
+  removeComposerFile,
   composerEditorRef,
   activePendingProgress,
   prompt,
@@ -431,15 +436,18 @@ export function ChatComposer({
                   pendingUserInputs.length === 0 &&
                   (composerAssistantSelections.length > 0 ||
                     composerFileComments.length > 0 ||
+                    composerFiles.length > 0 ||
                     composerImages.length > 0) && (
                     <ComposerReferenceAttachments
                       assistantSelections={composerAssistantSelections}
                       fileComments={composerFileComments}
+                      files={composerFiles}
                       images={composerImages}
                       nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
                       onExpandImage={onExpandTimelineImage}
                       onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
                       onRemoveFileComments={clearComposerFileCommentsFromDraft}
+                      onRemoveFile={removeComposerFile}
                       onRemoveImage={removeComposerImage}
                     />
                   )}
@@ -463,7 +471,6 @@ export function ChatComposer({
                   onChange={onPromptChange}
                   onCommandKeyDown={onComposerCommandKey}
                   onPaste={onComposerPaste}
-                  ariaLabel="Message composer"
                   placeholder={
                     isComposerApprovalState
                       ? "Resolve this approval request to continue"

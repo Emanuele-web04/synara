@@ -24,6 +24,8 @@ import {
   type TextGenerationShape,
   TextGeneration,
   type ThreadRecapGenerationInput,
+  type WalkthroughGenerationInput,
+  type WalkthroughGenerationResult,
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
@@ -99,6 +101,9 @@ interface FakeGitTextGeneration {
     { summary: string; findings: ReadonlyArray<ReviewFinding> },
     TextGenerationError
   >;
+  generateWalkthrough: (
+    input: WalkthroughGenerationInput,
+  ) => Effect.Effect<WalkthroughGenerationResult, TextGenerationError>;
   generateBranchName: (input: {
     cwd: string;
     message: string;
@@ -230,6 +235,15 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
         summary: "Reviewed the selected diff.",
         findings: [],
       }),
+    generateWalkthrough: () =>
+      Effect.succeed({
+        prologue: {
+          keyChanges: [],
+          focusAreas: [],
+          complexity: { level: "low", reasoning: "Fake walkthrough." },
+        },
+        chapters: [],
+      }),
     generateBranchName: () =>
       Effect.succeed({
         branch: "update-workflow",
@@ -294,6 +308,17 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
           (cause) =>
             new TextGenerationError({
               operation: "generateReviewFindings",
+              detail: "fake text generation failed",
+              ...(cause !== undefined ? { cause } : {}),
+            }),
+        ),
+      ),
+    generateWalkthrough: (input) =>
+      implementation.generateWalkthrough(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new TextGenerationError({
+              operation: "generateWalkthrough",
               detail: "fake text generation failed",
               ...(cause !== undefined ? { cause } : {}),
             }),

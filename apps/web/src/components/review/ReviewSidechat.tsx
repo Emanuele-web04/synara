@@ -512,7 +512,6 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
               terminalContexts={[]}
               disabled={isStartingSidechat || isResolvingSkills}
               placeholder="Ask about this review"
-              ariaLabel="Ask about this pull request"
               onRemoveTerminalContext={noopMessagesHandler}
               onChange={handleDraftChange}
               onCommandKeyDown={handleComposerCommandKey}

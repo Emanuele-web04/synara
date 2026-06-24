@@ -481,6 +481,7 @@ function GlobalShortcutsDialog() {
   );
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
   const terminalWorkspaceOpen = shouldRenderTerminalWorkspace({
+    activeProjectExists: activeProject != null,
     presentationMode: activeThreadTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });

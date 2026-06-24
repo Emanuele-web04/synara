@@ -16,11 +16,13 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
   return {
     prompt: "",
     images: [],
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
     fileComments: [],
+    pastedTexts: [],
     skills: [],
     mentions: [],
     queuedTurns: [],
