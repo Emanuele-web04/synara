@@ -9,15 +9,9 @@ import {
   SparklesIcon,
   TriangleAlertIcon,
 } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { Button } from "../../ui/button";
-import {
-  ComplexityMeter,
-  FocusAreaCard,
-  ProseCard,
-  SectionHeading,
-  WALKTHROUGH_STAGGER_CAP,
-  WALKTHROUGH_STAGGER_STEP_MS,
-} from "./walkthroughPrimitives";
+import { ComplexityMeter, FocusAreaCard, ProseCard, SectionHeading } from "./walkthroughPrimitives";
 
 export function WalkthroughPrologue(props: {
   prologue: ReviewWalkthroughPrologue;
@@ -27,24 +21,34 @@ export function WalkthroughPrologue(props: {
   onStart: () => void;
 }): ReactElement {
   const { prologue } = props;
+  const hasPrecedingSection =
+    Boolean(prologue.motivation || prologue.outcome) ||
+    prologue.keyChanges.length > 0 ||
+    prologue.focusAreas.length > 0;
   return (
     <article className="mx-auto w-full max-w-3xl px-5 py-7 sm:px-7">
       <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         <SparklesIcon className="size-3.5" />
         Overview
       </div>
-      <h1
+      <h2
         tabIndex={-1}
-        className="mt-2 text-balance break-words rounded-sm text-[26px] font-semibold leading-8 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        data-walkthrough-heading
+        className="mt-2 text-balance break-words [overflow-wrap:anywhere] rounded-sm text-[26px] font-semibold leading-8 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         {props.title}
-      </h1>
+      </h2>
       {props.body ? (
         <p className="mt-3 max-w-2xl text-[14px] leading-6 text-muted-foreground">{props.body}</p>
       ) : null}
 
       {prologue.motivation || prologue.outcome ? (
-        <div className="mt-6 grid gap-3 animate-in fade-in duration-200 ease-out delay-[60ms] fill-mode-both motion-reduce:animate-none sm:grid-cols-2">
+        <div
+          className={cn(
+            "mt-6 grid gap-3",
+            prologue.motivation && prologue.outcome && "sm:grid-cols-2",
+          )}
+        >
           {prologue.motivation ? (
             <ProseCard icon={<InfoIcon className="size-3.5" />} label="Motivation" tone="info">
               {prologue.motivation}
@@ -63,24 +67,20 @@ export function WalkthroughPrologue(props: {
       ) : null}
 
       {prologue.keyChanges.length > 0 ? (
-        <section className="mt-10 animate-in fade-in duration-200 ease-out delay-[100ms] fill-mode-both motion-reduce:animate-none">
+        <section className="mt-10">
           <SectionHeading icon={<ListChecksIcon className="size-4" />} title="Key changes" />
           <ul className="mt-3 space-y-3">
-            {prologue.keyChanges.map((change, index) => (
-              <li
-                key={change.summary}
-                className="flex min-w-0 items-start gap-2.5 animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out fill-mode-both motion-reduce:animate-none"
-                style={{
-                  animationDelay: `${Math.min(index, WALKTHROUGH_STAGGER_CAP) * WALKTHROUGH_STAGGER_STEP_MS}ms`,
-                }}
-              >
+            {prologue.keyChanges.map((change) => (
+              <li key={change.summary} className="flex min-w-0 items-start gap-2.5">
                 <span
                   aria-hidden="true"
                   className="mt-1.5 size-1.5 shrink-0 rounded-full bg-foreground/45"
                 />
                 <span className="min-w-0">
-                  <span className="text-[14px] font-medium text-foreground">{change.summary}</span>
-                  <span className="mt-0.5 block text-[12px] leading-5 text-muted-foreground">
+                  <span className="break-words [overflow-wrap:anywhere] text-[14px] font-medium text-foreground">
+                    {change.summary}
+                  </span>
+                  <span className="mt-0.5 block break-words [overflow-wrap:anywhere] text-[12px] leading-5 text-muted-foreground">
                     {change.description}
                   </span>
                 </span>
@@ -91,28 +91,20 @@ export function WalkthroughPrologue(props: {
       ) : null}
 
       {prologue.focusAreas.length > 0 ? (
-        <section className="mt-10 animate-in fade-in duration-200 ease-out delay-[140ms] fill-mode-both motion-reduce:animate-none">
+        <section className="mt-10">
           <SectionHeading
             icon={<TriangleAlertIcon className="size-4" />}
             title="Where to look closely"
           />
           <div className="mt-3 space-y-2.5">
-            {prologue.focusAreas.map((area, index) => (
-              <div
-                key={area.title}
-                className="animate-in fade-in slide-in-from-bottom-1 duration-200 ease-out fill-mode-both motion-reduce:animate-none"
-                style={{
-                  animationDelay: `${Math.min(index, WALKTHROUGH_STAGGER_CAP) * WALKTHROUGH_STAGGER_STEP_MS}ms`,
-                }}
-              >
-                <FocusAreaCard area={area} />
-              </div>
+            {prologue.focusAreas.map((area) => (
+              <FocusAreaCard key={area.title} area={area} />
             ))}
           </div>
         </section>
       ) : null}
 
-      <div className="mt-10 animate-in fade-in duration-200 ease-out delay-[180ms] fill-mode-both motion-reduce:animate-none">
+      <div className={hasPrecedingSection ? "mt-10" : "mt-6"}>
         <ComplexityMeter
           level={prologue.complexity.level}
           reasoning={prologue.complexity.reasoning}

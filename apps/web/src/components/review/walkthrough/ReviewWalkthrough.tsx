@@ -6,7 +6,7 @@ import type {
   ReviewWalkthroughChapter,
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
@@ -57,6 +57,8 @@ function ReviewWalkthroughInner(props: {
 }): ReactElement | null {
   const { resolvedTheme } = useTheme();
   const readerSectionRef = useRef<HTMLElement>(null);
+  const outerScrollRef = useRef<HTMLDivElement>(null);
+  const prevReadingRef = useRef<WalkthroughReading | null>(null);
   const [reading, setReading] = useState<WalkthroughReading>("overview");
   const [diffStyle, setDiffStyle] = useState<"unified" | "split">(() =>
     typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches
@@ -118,6 +120,30 @@ function ReviewWalkthroughInner(props: {
     });
   };
 
+  const onReadingViewMount = useCallback(
+    (node: HTMLDivElement | null): void => {
+      if (!node) {
+        return;
+      }
+      const readingChanged = reading !== prevReadingRef.current;
+      prevReadingRef.current = reading;
+      if (!readingChanged) {
+        return;
+      }
+      readerSectionRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      outerScrollRef.current?.scrollTo({ top: 0, behavior: "auto" });
+      const fromNav = document.activeElement?.closest(
+        "[data-walkthrough-rail],[data-walkthrough-controls]",
+      );
+      if (fromNav) {
+        return;
+      }
+      const heading = node.querySelector<HTMLElement>("[data-walkthrough-heading]");
+      (heading ?? node).focus({ preventScroll: true });
+    },
+    [reading],
+  );
+
   const status = renderWalkthroughStatus({
     changesetError: props.changesetError,
     changesetLoading: props.changesetLoading,
@@ -147,28 +173,20 @@ function ReviewWalkthroughInner(props: {
     setReading(chapter.id);
   };
 
-  const onReadingViewMount = (node: HTMLDivElement | null): void => {
-    if (!node) {
-      return;
-    }
-    readerSectionRef.current?.scrollTo({ top: 0, behavior: "auto" });
-    const fromControl = document.activeElement?.closest(
-      "[aria-label='Walkthrough navigation'], [aria-label='Chapter navigation']",
-    );
-    if (fromControl) {
-      return;
-    }
-    const heading = node.querySelector<HTMLElement>("[tabindex='-1'], h1, h2");
-    heading?.focus({ preventScroll: true });
-  };
-
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--color-background-surface)]">
-      <WalkthroughControls
-        diffStyle={diffStyle}
-        onToggleDiffStyle={() => setDiffStyle((value) => (value === "split" ? "unified" : "split"))}
-      />
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)] xl:overflow-hidden">
+      <div data-walkthrough-controls>
+        <WalkthroughControls
+          diffStyle={diffStyle}
+          onToggleDiffStyle={() =>
+            setDiffStyle((value) => (value === "split" ? "unified" : "split"))
+          }
+        />
+      </div>
+      <div
+        ref={outerScrollRef}
+        className="flex min-h-0 flex-1 flex-col overflow-y-auto xl:grid xl:grid-cols-[minmax(0,1fr)_minmax(19rem,23rem)] xl:overflow-hidden"
+      >
         <section
           ref={readerSectionRef}
           aria-label="Walkthrough reader"
@@ -177,7 +195,8 @@ function ReviewWalkthroughInner(props: {
           <div
             key={activeChapter?.id ?? "overview"}
             ref={onReadingViewMount}
-            className="animate-in fade-in duration-200 ease-out motion-reduce:animate-none"
+            tabIndex={-1}
+            className="outline-none animate-in fade-in duration-200 ease-out fill-mode-both motion-reduce:animate-none"
           >
             {activeChapter && activeIndex >= 0 ? (
               <WalkthroughChapterReader
@@ -209,6 +228,7 @@ function ReviewWalkthroughInner(props: {
         </section>
         <aside
           aria-label="Walkthrough navigation"
+          data-walkthrough-rail
           className="order-1 max-h-[38vh] overflow-y-auto overscroll-contain border-b border-border/40 bg-[var(--color-background-surface)] sm:max-h-[42vh] xl:order-2 xl:max-h-none xl:overflow-visible xl:border-b-0 xl:border-l"
         >
           <WalkthroughChapterRail

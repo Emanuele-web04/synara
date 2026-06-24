@@ -44,7 +44,7 @@ const FOCUS_AREA_TYPE_META: Record<ReviewFocusAreaType, FocusAreaTypeMeta> = {
   architecture: {
     label: "Architecture",
     icon: <GitPullRequestIcon className="size-3.5" />,
-    iconClassName: "bg-muted text-muted-foreground",
+    iconClassName: "bg-muted/40 text-muted-foreground",
   },
   "testing-gap": {
     label: "Testing gap",
@@ -64,7 +64,7 @@ const FOCUS_AREA_TYPE_META: Record<ReviewFocusAreaType, FocusAreaTypeMeta> = {
   "new-pattern": {
     label: "New pattern",
     icon: <InfoIcon className="size-3.5" />,
-    iconClassName: "bg-muted text-muted-foreground",
+    iconClassName: "bg-muted/40 text-muted-foreground",
   },
 };
 
@@ -73,7 +73,7 @@ export function focusAreaTypeMeta(type: ReviewFocusAreaType): FocusAreaTypeMeta 
     FOCUS_AREA_TYPE_META[type] ?? {
       label: type,
       icon: <InfoIcon className="size-3.5" />,
-      iconClassName: "bg-muted text-muted-foreground",
+      iconClassName: "bg-muted/40 text-muted-foreground",
     }
   );
 }

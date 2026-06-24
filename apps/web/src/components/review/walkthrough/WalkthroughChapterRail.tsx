@@ -1,13 +1,11 @@
-import { autoAnimate } from "@formkit/auto-animate";
 import type { ReviewChangedFile, ReviewWalkthroughChapter } from "@t3tools/contracts";
 import type { ReactElement } from "react";
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import { DiffStat, hasNonZeroStat } from "../../chat/DiffStatLabel";
 import { CheckIcon, GitPullRequestIcon, SparklesIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { splitRepoRelativePath } from "~/lib/diffRendering";
-import { WALKTHROUGH_LIST_ANIMATION } from "./walkthroughPrimitives";
 
 export type WalkthroughReading = "overview" | string;
 
@@ -35,49 +33,38 @@ export function WalkthroughChapterRail(props: {
   onOpenOverview: () => void;
   onOpenChapter: (chapter: ReviewWalkthroughChapter) => void;
 }): ReactElement {
-  const animatedListsRef = useRef(new WeakSet<HTMLElement>());
-  const attachChapterListAutoAnimateRef = useCallback((node: HTMLElement | null) => {
-    if (!node || animatedListsRef.current.has(node)) {
-      return;
-    }
-    autoAnimate(node, WALKTHROUGH_LIST_ANIMATION);
-    animatedListsRef.current.add(node);
-  }, []);
   return (
     <nav aria-label="Changes" className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-1.5 border-b border-border/40 px-4 py-3">
         <GitPullRequestIcon className="size-3.5 text-muted-foreground" />
-        <h2 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
           Changes
-        </h2>
+        </span>
       </div>
       <div
-        ref={attachChapterListAutoAnimateRef}
         role="list"
-        className="min-h-0 flex-1 space-y-1 overflow-y-auto px-2 py-2"
+        className="min-h-0 flex-1 space-y-1 overflow-y-visible px-2 py-2 xl:overflow-y-auto"
       >
         <div role="listitem">
           <button
             type="button"
-            aria-current={props.reading === "overview" ? "true" : undefined}
+            aria-current={props.reading === "overview" ? "step" : undefined}
             onClick={props.onOpenOverview}
             className={cn(
               "flex w-full items-center gap-2 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
-              props.reading === "overview"
-                ? "bg-muted/60 hover:bg-muted/70"
-                : "hover:-translate-y-px hover:bg-muted/30 motion-reduce:hover:translate-y-0",
+              props.reading === "overview" ? "bg-muted/60 hover:bg-muted/70" : "hover:bg-muted/30",
             )}
           >
             <span className="relative isolate grid size-5 shrink-0 place-items-center overflow-hidden rounded bg-muted">
               <span
                 className={cn(
-                  "absolute inset-0 origin-center rounded bg-foreground transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
-                  props.reading === "overview" ? "scale-100 opacity-100" : "scale-90 opacity-0",
+                  "absolute inset-0 rounded bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                  props.reading === "overview" ? "opacity-100" : "opacity-0",
                 )}
               />
               <SparklesIcon
                 className={cn(
-                  "relative size-3 transition-colors duration-150 ease-out motion-reduce:transition-none",
+                  "relative size-3",
                   props.reading === "overview" ? "text-background" : "text-muted-foreground",
                 )}
               />
@@ -98,12 +85,7 @@ export function WalkthroughChapterRail(props: {
           </button>
         </div>
         {props.chapters.map((chapter, index) => (
-          <div
-            role="listitem"
-            key={chapter.id}
-            className="animate-in fade-in slide-in-from-right-1 duration-200 ease-out fill-mode-both motion-reduce:animate-none"
-            style={{ animationDelay: `${Math.min(index, 6) * 25}ms` }}
-          >
+          <div role="listitem" key={chapter.id}>
             <WalkthroughChapterRailItem
               chapter={chapter}
               index={index}
@@ -135,14 +117,12 @@ function WalkthroughChapterRailItem(props: {
   return (
     <button
       type="button"
-      aria-current={props.active ? "true" : undefined}
+      aria-current={props.active ? "step" : undefined}
       aria-label={`Chapter ${props.index + 1}: ${chapter.title}`}
       onClick={props.onOpen}
       className={cn(
         "flex w-full min-w-0 gap-2.5 rounded-[0.625rem] px-2.5 py-2.5 text-left outline-none transition-[background-color,transform] duration-150 ease-out focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98] motion-reduce:transition-none motion-reduce:active:scale-100",
-        props.active
-          ? "bg-muted/60 hover:bg-muted/70"
-          : "hover:-translate-y-px hover:bg-muted/30 motion-reduce:hover:translate-y-0",
+        props.active ? "bg-muted/60 hover:bg-muted/70" : "hover:bg-muted/30",
       )}
     >
       <span
@@ -151,16 +131,11 @@ function WalkthroughChapterRailItem(props: {
       >
         <span
           className={cn(
-            "absolute inset-0 origin-center rounded bg-foreground transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
-            props.active ? "scale-100 opacity-100" : "scale-90 opacity-0",
+            "absolute inset-0 rounded bg-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            props.active ? "opacity-100" : "opacity-0",
           )}
         />
-        <span
-          className={cn(
-            "relative transition-colors duration-150 ease-out motion-reduce:transition-none",
-            props.active ? "text-background" : "text-foreground",
-          )}
-        >
+        <span className={cn("relative", props.active ? "text-background" : "text-foreground")}>
           {props.index + 1}
         </span>
       </span>
@@ -175,14 +150,14 @@ function WalkthroughChapterRailItem(props: {
           {chapter.title}
         </span>
         <span className="mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] leading-4 text-muted-foreground">
-          <span className="shrink-0">
+          <span className="shrink-0 tabular-nums">
             {uniqueFiles.length} {uniqueFiles.length === 1 ? "file" : "files"}
           </span>
           {hasNonZeroStat(stat) ? (
             <DiffStat
               additions={stat.additions}
               deletions={stat.deletions}
-              className="text-[11px]"
+              className="shrink-0 whitespace-nowrap text-[11px]"
             />
           ) : (
             <span className="shrink-0 text-muted-foreground">no line changes</span>
@@ -200,22 +175,23 @@ function WalkthroughChapterRailItem(props: {
                   className="flex min-w-0 items-center gap-1.5"
                 >
                   <span
-                    className={cn(
-                      "min-w-0 truncate font-mono text-[11px] font-medium text-foreground",
-                      parts.dir ? "max-w-[50%]" : "flex-1",
-                    )}
+                    title={parts.name}
+                    className="min-w-0 flex-[2_1_0%] truncate font-mono text-[11px] font-medium text-foreground"
                   >
                     {parts.name}
                   </span>
                   {parts.dir ? (
-                    <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                    <span
+                      title={parts.dir}
+                      className="min-w-0 max-w-[40%] flex-[0_1_auto] truncate font-mono text-[11px] text-muted-foreground"
+                    >
                       {parts.dir}
                     </span>
                   ) : null}
                   <CheckIcon
                     className={cn(
-                      "size-3 shrink-0 text-success-foreground transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
-                      viewed ? "scale-100 opacity-100" : "scale-75 opacity-0",
+                      "size-3 shrink-0 text-success-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+                      viewed ? "opacity-100" : "opacity-0",
                     )}
                   />
                 </span>
