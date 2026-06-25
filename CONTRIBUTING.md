@@ -2,11 +2,11 @@
 
 ## Read This First
 
-We are not actively accepting contributions right now.
+We are accepting focused contributions, especially small bug fixes, reliability fixes, performance improvements, and maintenance work.
 
-You can still open an issue or PR, but please do so knowing there is a high chance we close it, defer it forever, or never look at it.
+You can open an issue or PR, but please do so knowing that Synara is still early and we are keeping scope, quality, and direction tight.
 
-If that sounds annoying, that is because it is. This project is still early and we are trying to keep scope, quality, and direction under control.
+Large, unfocused, or direction-changing PRs may still be closed quickly.
 
 PRs are automatically labeled with a `vouch:*` trust status and a `size:*` diff size based on changed lines.
 
@@ -54,7 +54,7 @@ If we have to guess what changed, we are much less likely to review it.
 
 If you are thinking about a non-trivial change, open an issue first.
 
-That still does not mean we will want the PR, but it gives you a chance to avoid wasting your time.
+That gives you a chance to check whether the direction fits before spending time on a larger patch.
 
 ## Be Realistic
 
