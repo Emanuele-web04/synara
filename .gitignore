@@ -1,6 +1,7 @@
 node_modules
 .bun
 .turbo
+.claude/worktrees/
 .DS_Store
 *.log
 *.tsbuildinfo
