@@ -75,8 +75,29 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test
-        run: bun run test
+      - name: Test contracts package
+        run: bun run --filter @t3tools/contracts test
+
+      - name: Test effect-acp package
+        run: bun run --filter effect-acp test
+
+      - name: Test shared package
+        run: bun run --filter @t3tools/shared test
+
+      - name: Test server package
+        run: bun run --filter t3 test
+
+      - name: Test desktop package
+        run: bun run --filter @t3tools/desktop test
+
+      - name: Test web package
+        run: bun run --filter @t3tools/web test
+
+      - name: Test Cloudflare runtime bridge package
+        run: bun run --filter @t3tools/cloudflare-runtime-bridge test
+
+      - name: Test release scripts package
+        run: bun run --filter @t3tools/scripts test
 
   build:
     name: Build ${{ matrix.label }}
