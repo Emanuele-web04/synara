@@ -2,12 +2,13 @@ import type { ReviewChangedFile, ReviewSourceRef, ReviewTargetKey } from "@t3too
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
 
-import { FileIcon, PanelLeftCloseIcon, PanelLeftIcon, SearchIcon } from "~/lib/icons";
+import { PanelLeftCloseIcon, PanelLeftIcon, SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ReviewAgentBar } from "./ReviewAgentBar";
 import { ReviewDiffPane } from "./ReviewDiffPane";
 import { ReviewFileTree } from "./ReviewFileTree";
 import { ReviewSubmitBar } from "./ReviewSubmitBar";
+import { ReviewRailResizer } from "./reviewPrimitives";
 import { useReviewViewedFiles } from "./reviewViewedFiles";
 import { useResizableReviewSidebar } from "./useResizableReviewSidebar";
 
@@ -57,7 +58,7 @@ function FileRailToggleButton(props: {
       className={cn(
         "inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none",
         "transition-[background-color,color,opacity,transform] duration-150 motion-reduce:transition-none",
-        "hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        "hover:bg-muted/40 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
       )}
     >
       <Icon className="size-4" aria-hidden="true" />
@@ -158,14 +159,14 @@ export function ReviewLayout(props: {
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 overflow-hidden",
-          props.mode === "page" && "border-t border-border/35 bg-background dark:border-border/45",
+          props.mode === "page" && "border-t border-border/60 bg-background",
         )}
       >
         {showFileRail && fileRailCollapsed ? (
           <aside
             className={cn(
               "hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-r bg-background py-2",
-              props.mode === "page" ? "border-border/35 lg:flex" : "border-border/65 2xl:flex",
+              props.mode === "page" ? "border-border/60 lg:flex" : "border-border/60 2xl:flex",
             )}
           >
             <FileRailToggleButton collapsed onCollapsedChange={updateFileRailCollapsed} />
@@ -173,17 +174,11 @@ export function ReviewLayout(props: {
               className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-2"
               aria-hidden="true"
             >
-              <span className="flex size-8 items-center justify-center rounded-xl bg-muted/35 text-muted-foreground ring-1 ring-border/35">
-                <FileIcon className="size-4" />
-              </span>
               {totals.files > 0 ? (
-                <span className="rounded-full bg-muted/45 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/35">
+                <span className="rounded-full bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/40">
                   {viewedProgress.count}/{totals.files}
                 </span>
               ) : null}
-              <span className="mt-1 [writing-mode:vertical-rl] text-[10px] font-semibold text-muted-foreground/75 uppercase tracking-wide">
-                Files
-              </span>
             </div>
           </aside>
         ) : showFileRail ? (
@@ -192,13 +187,13 @@ export function ReviewLayout(props: {
               className={cn(
                 "hidden min-h-0 shrink-0 flex-col border-r bg-background",
                 props.mode === "page"
-                  ? "border-border/35 bg-background lg:flex"
-                  : "border-border/65 2xl:flex",
+                  ? "border-border/60 bg-background lg:flex"
+                  : "border-border/60 2xl:flex",
               )}
               style={{ width: railResize.width }}
             >
-              <div className="flex shrink-0 flex-col gap-2 border-b border-border/25 bg-background px-3 py-2.5">
-                <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg border border-border/35 bg-muted/25 px-2 text-muted-foreground focus-within:border-ring/55 focus-within:ring-2 focus-within:ring-ring/20">
+              <div className="flex shrink-0 flex-col gap-2 border-b border-border/40 bg-background px-3 py-2.5">
+                <label className="flex h-8 min-w-0 items-center gap-2 rounded-lg border border-border/40 bg-muted/40 px-2 text-muted-foreground focus-within:border-ring/55 focus-within:ring-2 focus-within:ring-ring/20">
                   <SearchIcon className="size-3.5 shrink-0" aria-hidden="true" />
                   <input
                     value={fileSearch}
@@ -224,7 +219,7 @@ export function ReviewLayout(props: {
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
                     {totals.files > 0 ? (
-                      <span className="shrink-0 rounded-full bg-muted/45 px-2 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/35">
+                      <span className="shrink-0 rounded-full bg-muted/40 px-2 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums ring-1 ring-border/40">
                         {viewedProgress.count}/{totals.files}
                       </span>
                     ) : null}
@@ -251,22 +246,11 @@ export function ReviewLayout(props: {
                 />
               </div>
             </aside>
-            <div
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize file list"
-              aria-valuemin={railResize.bounds.min}
-              aria-valuemax={railResize.bounds.max}
-              aria-valuenow={railResize.width}
-              tabIndex={0}
-              onDoubleClick={railResize.resetWidth}
-              onPointerDown={railResize.handleResizeStart}
-              onKeyDown={railResize.handleResizeKeyDown}
-              className={cn(
-                "-ms-px relative z-10 w-1 shrink-0 cursor-col-resize bg-transparent outline-none",
-                props.mode === "page" ? "hidden lg:block" : "hidden 2xl:block",
-                "transition-colors duration-150 hover:bg-[var(--sidebar-accent)] focus-visible:bg-primary/30",
-              )}
+            <ReviewRailResizer
+              resize={railResize}
+              edge="left"
+              label="Resize file list"
+              className={cn(props.mode === "page" ? "hidden lg:block" : "hidden 2xl:block")}
             />
           </>
         ) : null}

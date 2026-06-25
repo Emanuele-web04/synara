@@ -312,7 +312,7 @@ export function ReviewDiffPane(props: {
         "shrink-0",
         density === "page"
           ? "gap-0.5 rounded-lg bg-transparent p-0"
-          : "rounded-lg bg-muted/24 p-0.5 ring-1 ring-border/55",
+          : "rounded-lg bg-muted/40 p-0.5",
       )}
       variant="outline"
       size="xs"
@@ -364,12 +364,12 @@ export function ReviewDiffPane(props: {
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       <div
         className={cn(
-          "group/diff-strip shrink-0 overflow-hidden border-b border-border/35 bg-background",
+          "group/diff-strip shrink-0 overflow-hidden border-b border-border/40 bg-background",
           density === "page" ? "flex flex-col" : "flex h-8 items-center gap-2 px-3",
         )}
       >
         {density === "page" && props.agentControl ? (
-          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/30 px-3">
+          <div className="flex h-9 shrink-0 items-center gap-2 border-b border-border/40 px-3">
             {props.agentControl}
           </div>
         ) : null}
@@ -384,9 +384,7 @@ export function ReviewDiffPane(props: {
               {density === "page" ? (
                 <>
                   <div className="flex min-w-0 shrink-0 items-center gap-2">
-                    <span className="font-semibold text-[12px] text-foreground/95">
-                      Changed files
-                    </span>
+                    <span className="font-semibold text-[12px] text-foreground">Changed files</span>
                     <span className="hidden items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums sm:inline-flex">
                       <span>
                         {props.summary.files} file{props.summary.files === 1 ? "" : "s"}
@@ -408,15 +406,15 @@ export function ReviewDiffPane(props: {
                     />
                   ) : (
                     <span
-                      className="min-w-0 flex-1 truncate rounded-lg border border-border/30 bg-muted/20 px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
+                      className="min-w-0 flex-1 truncate rounded-lg border border-border/40 bg-muted/40 px-2.5 py-1 font-mono text-[11px] text-muted-foreground"
                       title={selectedFileLabel}
                     >
                       {selectedFileLabel}
                     </span>
                   )}
-                  <div className="flex h-7 shrink-0 items-center gap-1 rounded-lg border border-border/30 bg-muted/20 p-0.5">
+                  <div className="flex h-7 shrink-0 items-center gap-1 rounded-lg border border-border/40 bg-muted/40 p-0.5">
                     {layoutControls}
-                    <span className="h-4 w-px bg-border/45" aria-hidden="true" />
+                    <span className="h-4 w-px bg-border/40" aria-hidden="true" />
                     {wrapControl}
                   </div>
                   {props.reviewAction || props.navigationAction ? (
@@ -465,7 +463,7 @@ export function ReviewDiffPane(props: {
                 {density === "page" ? "Changed files" : "Files"}
               </span>
               <span className="text-[11px] text-muted-foreground">Loading changed files</span>
-              <span className="hidden h-5 w-48 animate-pulse rounded-lg bg-muted/35 sm:block" />
+              <span className="hidden h-5 w-48 animate-pulse rounded-lg bg-muted/40 sm:block" />
             </div>
           ) : null}
           {density !== "page" && props.agentControl ? (
@@ -477,7 +475,7 @@ export function ReviewDiffPane(props: {
             <Popover>
               <PopoverTrigger
                 className={cn(
-                  "inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground/65 opacity-70 outline-none transition-[background-color,color,opacity] hover:bg-card/55 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring group-hover/diff-strip:opacity-100",
+                  "inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted/40 text-muted-foreground/75 outline-none transition-[background-color,color] hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:active:scale-100",
                   !props.agentControl && "ms-auto",
                 )}
                 aria-label="Diff view options"
@@ -549,13 +547,13 @@ export function ReviewDiffPane(props: {
         ) : renderablePatch?.kind === "raw" ? (
           <div className="h-full min-w-0 overflow-auto p-2">
             <div className="flex min-w-0 flex-col gap-2">
-              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/80">
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground/75">
                 <TriangleAlertIcon className="size-3.5 shrink-0" />
                 {renderablePatch.reason}
               </p>
               <pre
                 className={cn(
-                  "min-w-0 max-w-full rounded-xl border border-border/70 bg-muted/20 p-3 font-mono text-[11px] leading-relaxed text-foreground/90",
+                  "min-w-0 max-w-full rounded-lg border border-border/40 bg-muted/40 p-3 font-mono text-[11px] leading-relaxed text-foreground/90",
                   diffWordWrap
                     ? "overflow-auto whitespace-pre-wrap wrap-break-word"
                     : "overflow-auto",
@@ -589,12 +587,17 @@ function DiffPaneLoadingState(props: { density: "page" | "dock" }) {
       {Array.from({ length: fileCount }, (_, fileIndex) => (
         <section
           key={fileIndex}
-          className="shrink-0 overflow-hidden rounded-xl border border-border/55 bg-card/45"
+          className={cn(
+            "shrink-0 overflow-hidden",
+            props.density === "page"
+              ? "border-b border-border/40"
+              : "rounded-lg border border-border/40",
+          )}
         >
-          <div className="flex h-9 items-center gap-2 border-b border-border/40 bg-muted/25 px-3">
+          <div className="flex h-8 items-center gap-2 border-b border-border/40 bg-muted/40 px-3">
             <span className="size-3.5 shrink-0 animate-pulse rounded bg-muted/60" />
             <span className="h-3 w-[min(18rem,55%)] animate-pulse rounded bg-muted/55" />
-            <span className="ms-auto h-3 w-10 animate-pulse rounded bg-success/20" />
+            <span className="ms-auto h-3 w-10 animate-pulse rounded bg-muted/40" />
           </div>
           <div className="flex flex-col gap-1.5 px-3 py-3 font-mono text-[11px]">
             {Array.from({ length: fileIndex === 0 ? 7 : 4 }, (_, lineIndex) => (

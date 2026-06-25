@@ -87,12 +87,12 @@ export const ReviewFileDiffBlock = memo(function ReviewFileDiffBlockView(
                 props.onToggleReviewed?.();
               }}
               className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[11px] font-medium outline-none",
+                "inline-flex h-7 items-center gap-1 rounded-lg border px-2 text-[11px] font-medium outline-none",
                 "transition-[background-color,border-color,color,opacity] duration-150 motion-reduce:transition-none",
-                "focus-visible:ring-2 focus-visible:ring-ring",
+                "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:active:scale-100",
                 props.reviewed
                   ? "border-success/25 bg-success/12 text-success-foreground"
-                  : "border-border/50 bg-muted/20 text-muted-foreground hover:bg-muted/35 hover:text-foreground",
+                  : "border-border/40 bg-muted/40 text-muted-foreground hover:bg-muted/60 hover:text-foreground",
               )}
             >
               <CheckIcon className={cn("size-3", !props.reviewed && "opacity-45")} />
@@ -100,12 +100,10 @@ export const ReviewFileDiffBlock = memo(function ReviewFileDiffBlockView(
             </button>
           ) : null}
           <ChevronDownIcon
-            style={{
-              width: "14px",
-              height: "14px",
-              transition: "transform 150ms ease",
-              transform: props.collapsed ? "rotate(-90deg)" : "rotate(0deg)",
-            }}
+            className={cn(
+              "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+              props.collapsed ? "rotate-[-90deg]" : "rotate-0",
+            )}
           />
         </span>
       )}

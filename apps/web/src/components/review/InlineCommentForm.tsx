@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CheckIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
+import { Loader2Icon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { ReviewAvatar } from "./reviewPrPrimitives";
-import { reviewTextareaClassName } from "./reviewPrimitives";
+import { ReviewPill, reviewTextareaClassName } from "./reviewPrimitives";
 
 export function InlineCommentForm(props: {
   initialBody?: string;
@@ -44,13 +44,11 @@ export function InlineCommentForm(props: {
             className="size-4"
           />
           <span className="min-w-0 truncate font-medium text-foreground">{props.author.login}</span>
-          <span className="shrink-0 rounded-full bg-warning/12 px-1.5 py-0.5 font-medium text-warning-foreground">
-            Pending
-          </span>
+          <ReviewPill tone="warning">Pending</ReviewPill>
         </div>
       ) : null}
-      <div className="overflow-hidden rounded-lg border border-border/70 bg-background shadow-[inset_0_1px_0_color-mix(in_srgb,var(--foreground)_6%,transparent)]">
-        <div className="flex h-8 items-center justify-between gap-2 border-b border-border/45 bg-muted/18 px-2">
+      <div className="overflow-hidden rounded-lg border border-border/40 bg-background">
+        <div className="flex h-8 items-center justify-between gap-2 border-b border-border/40 bg-muted/40 px-2">
           <div
             role="tablist"
             aria-label="Comment editor mode"
@@ -64,27 +62,16 @@ export function InlineCommentForm(props: {
                 aria-selected={tab === entry}
                 onClick={() => setTab(entry)}
                 className={cn(
-                  "h-6 rounded-md px-2.5 text-[11px] font-medium capitalize outline-none transition-colors duration-150 motion-reduce:transition-none",
+                  "h-6 rounded-md px-2.5 text-[11px] font-medium capitalize outline-none transition-[background-color,color,transform] duration-150 motion-reduce:transition-none active:scale-[0.96] motion-reduce:active:scale-100",
                   "focus-visible:ring-2 focus-visible:ring-ring",
                   tab === entry
-                    ? "bg-muted/72 text-foreground shadow-[inset_0_0_0_1px_var(--border)]"
-                    : "text-muted-foreground hover:bg-muted/35 hover:text-foreground",
+                    ? "bg-muted/60 text-foreground font-medium"
+                    : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
                 )}
               >
                 {entry}
               </button>
             ))}
-          </div>
-          <div
-            className="hidden items-center gap-0.5 text-muted-foreground sm:flex"
-            aria-hidden="true"
-          >
-            <span className="px-1.5 text-[12px] font-semibold">H</span>
-            <span className="px-1.5 text-[12px] font-semibold">B</span>
-            <span className="px-1.5 text-[12px] italic">I</span>
-            <span className="px-1 text-[12px]">&lt;&gt;</span>
-            <ExternalLinkIcon className="size-3.5" />
-            <CheckIcon className="size-3.5" />
           </div>
         </div>
         {tab === "preview" ? (

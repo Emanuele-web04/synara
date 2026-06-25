@@ -26,7 +26,7 @@ export function ReviewRouteChrome(props: {
   return (
     <div
       className={cn(
-        "review-route-strip flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-border/45 bg-background px-2.5",
+        "review-route-strip flex h-12 shrink-0 items-center gap-2 overflow-hidden border-b border-border/60 bg-background px-2.5",
         desktopTopBarTrafficLightGutterClassName,
       )}
     >
@@ -49,7 +49,7 @@ export function ReviewRouteChrome(props: {
         >
           <SelectTrigger
             size="sm"
-            className="h-8 min-w-32 max-w-44 shrink-0 rounded-xl border-border/45 bg-muted/25 text-[11px]"
+            className="h-8 min-w-32 max-w-44 shrink-0 rounded-lg border-border/40 bg-muted/25 text-[11px]"
             aria-label="Review project"
           >
             <SelectValue>{props.selectedProjectName}</SelectValue>

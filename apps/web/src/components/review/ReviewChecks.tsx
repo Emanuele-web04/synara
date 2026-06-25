@@ -1,7 +1,7 @@
 import type { ReviewCheck } from "@t3tools/contracts";
 
 import { CircleCheckIcon } from "~/lib/icons";
-import { CheckStateIcon, checkStateLabel } from "./reviewPrPrimitives";
+import { CheckRow } from "./ReviewPrSidebarChecksPanel";
 import { EmptyState } from "./reviewPrimitives";
 
 export function ReviewChecks(props: { checks: ReadonlyArray<ReviewCheck> }) {
@@ -14,34 +14,10 @@ export function ReviewChecks(props: { checks: ReadonlyArray<ReviewCheck> }) {
   }
 
   return (
-    <ul className="my-4 flex w-full flex-col divide-y divide-border/60 overflow-hidden rounded-2xl border border-border/70 bg-card/88 shadow-sm">
+    <ul className="my-4 flex w-full flex-col gap-1 overflow-hidden rounded-lg border border-border/40 bg-card p-1">
       {props.checks.map((check, index) => (
-        <li
-          key={`${check.name}:${index}`}
-          className="flex min-w-0 items-center gap-2 px-4 py-2.5 text-[13px]"
-        >
-          <CheckStateIcon state={check.state} />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <span className="min-w-0 truncate text-foreground" title={check.name}>
-              {check.name}
-            </span>
-            {check.workflow ? (
-              <span className="truncate text-[11px] text-muted-foreground">{check.workflow}</span>
-            ) : null}
-          </div>
-          <span className="shrink-0 text-[11px] text-muted-foreground">
-            {checkStateLabel(check.state)}
-          </span>
-          {check.url ? (
-            <a
-              href={check.url}
-              target="_blank"
-              rel="noreferrer"
-              className="shrink-0 rounded-full px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              Details
-            </a>
-          ) : null}
+        <li key={`${check.name}:${index}`} className="min-w-0">
+          <CheckRow check={check} variant="card" />
         </li>
       ))}
     </ul>

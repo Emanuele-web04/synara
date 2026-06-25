@@ -130,12 +130,12 @@ export function ReviewAgentBar(props: {
             ? "min-h-8 border-b border-border/35 px-4 py-1"
             : props.mode === "rail"
               ? "rounded-lg border border-border/35 bg-muted/20 p-2"
-              : "border-b border-border/65 px-2 py-1",
+              : "border-b border-border/60 px-2 py-1",
       )}
     >
       <span
         className={cn(
-          "hidden min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground/80 sm:inline-flex",
+          "hidden min-w-0 items-center gap-1.5 text-[11px] font-medium text-muted-foreground/75 sm:inline-flex",
           props.mode === "inline" && "sr-only",
         )}
       >

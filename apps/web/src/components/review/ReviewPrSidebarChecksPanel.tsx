@@ -6,9 +6,10 @@ import type {
 } from "@t3tools/contracts";
 import type { ReactElement } from "react";
 
-import { ArrowUpRightIcon } from "~/lib/icons";
+import { ArrowUpRightIcon, CircleCheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { CheckStateIcon, checkStateLabel } from "./reviewPrPrimitives";
+import { EmptyState } from "./reviewPrimitives";
 
 export type ReviewChecksStatus =
   | ReviewPullRequestDetail["checksStatus"]
@@ -36,10 +37,10 @@ const CHECK_STATE_SORT_ORDER: Record<ReviewCheckState, number> = {
 };
 
 const PANEL_TONE_CLASS: Record<ChecksTone, string> = {
-  danger: "border-destructive/28 bg-destructive/8",
-  warning: "border-warning/26 bg-warning/8",
-  success: "border-success/24 bg-success/7",
-  muted: "border-border/34 bg-muted/14",
+  danger: "border-border/40 bg-destructive/10",
+  warning: "border-border/40 bg-warning/10",
+  success: "border-border/40 bg-success/8",
+  muted: "border-border/40 bg-muted/40",
 };
 
 const SUMMARY_TONE_CLASS: Record<ChecksTone, string> = {
@@ -177,7 +178,10 @@ function CheckStat(props: { label: string; value: number }): ReactElement {
   );
 }
 
-function CheckRow(props: { check: ReviewCheck; variant: "card" | "inspector" }): ReactElement {
+export function CheckRow(props: {
+  check: ReviewCheck;
+  variant: "card" | "inspector";
+}): ReactElement {
   const subtitle = props.check.description ?? props.check.workflow ?? null;
   const content = (
     <>
@@ -190,12 +194,12 @@ function CheckRow(props: { check: ReviewCheck; variant: "card" | "inspector" }):
           >
             {props.check.name}
           </p>
-          <p className="shrink-0 text-[10px] text-muted-foreground/76">
+          <p className="shrink-0 text-[10px] text-muted-foreground/75">
             {checkStateLabel(props.check.state)}
           </p>
         </div>
         {subtitle ? (
-          <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground/78" title={subtitle}>
+          <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground/75" title={subtitle}>
             {subtitle}
           </p>
         ) : null}
@@ -214,8 +218,8 @@ function CheckRow(props: { check: ReviewCheck; variant: "card" | "inspector" }):
       ? cn("rounded-lg border px-2 py-1.5", ROW_TONE_CLASS[props.check.state])
       : cn(
           "rounded-md px-1 py-2",
-          props.check.state === "failure" && "bg-destructive/7",
-          props.check.state === "pending" && "bg-warning/6",
+          props.check.state === "failure" && "bg-destructive/10",
+          props.check.state === "pending" && "bg-warning/10",
         ),
     props.check.url &&
       "hover:bg-muted/25 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background",
@@ -264,7 +268,7 @@ export function ReviewPrSidebarChecksPanel(props: {
             </div>
           ) : null}
         </div>
-        <p className="mt-1 text-[11px] text-muted-foreground/82">
+        <p className="mt-1 text-[11px] text-muted-foreground/75">
           {reviewChecksDetail(summary, props.checksStatus)}
         </p>
 
@@ -292,7 +296,7 @@ export function ReviewPrSidebarChecksPanel(props: {
 
   return (
     <section className={cn("flex min-h-0 flex-col gap-2", props.className)}>
-      <div className={cn("rounded-xl border px-3 py-3", PANEL_TONE_CLASS[tone])}>
+      <div className={cn("rounded-lg border px-3 py-3", PANEL_TONE_CLASS[tone])}>
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <h3 className="font-medium text-[11px] text-muted-foreground">Checks</h3>
@@ -304,7 +308,7 @@ export function ReviewPrSidebarChecksPanel(props: {
             >
               {reviewChecksHeadline(summary, props.checksStatus)}
             </p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground/84">
+            <p className="mt-0.5 text-[11px] text-muted-foreground/75">
               {reviewChecksDetail(summary, props.checksStatus)}
             </p>
           </div>
@@ -340,6 +344,10 @@ export function ReviewPrSidebarChecksPanel(props: {
             </li>
           ))}
         </ul>
+      ) : summary.total === 0 ? (
+        <EmptyState icon={<CircleCheckIcon />} title="No checks">
+          No CI checks reported for this pull request.
+        </EmptyState>
       ) : null}
     </section>
   );

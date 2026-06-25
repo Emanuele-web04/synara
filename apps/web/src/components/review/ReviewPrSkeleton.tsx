@@ -3,7 +3,7 @@ import { ReviewLoadingRows } from "./reviewPrimitives";
 
 export function ReviewPrHeaderSkeleton() {
   return (
-    <div className="flex shrink-0 flex-col gap-4 border-b border-border/50 bg-background px-4 py-5 sm:px-6">
+    <div className="flex shrink-0 flex-col border-b border-border/50 bg-background px-5 py-5 sm:px-7">
       <div className="flex min-w-0 items-start justify-between gap-4">
         <div className="flex min-w-0 flex-1 flex-col gap-2">
           <div className="flex items-center gap-1.5">
@@ -18,14 +18,14 @@ export function ReviewPrHeaderSkeleton() {
         </div>
         <Skeleton className="h-7 w-28 rounded-md" />
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-3 ps-0 sm:ps-6">
+      <div className="mt-2 flex min-w-0 flex-wrap items-center gap-3 ps-0 sm:ps-7">
         <Skeleton className="h-5 w-16 rounded-full" />
         <Skeleton className="size-4 rounded-full" />
         <Skeleton className="h-4 w-20" />
         <Skeleton className="h-5 w-40 rounded-md" />
         <Skeleton className="h-5 w-48 rounded-md" />
       </div>
-      <div className="flex min-h-14 items-center gap-4 rounded-[1.55rem] border border-border/45 bg-card/35 px-4 py-3">
+      <div className="mt-7 flex min-h-12 items-center gap-4 rounded-lg border border-border/45 bg-muted/25 px-4 py-3">
         <Skeleton className="h-4 w-20" />
         <Skeleton className="h-4 w-28" />
         <Skeleton className="h-4 w-24" />
@@ -37,7 +37,7 @@ export function ReviewPrHeaderSkeleton() {
 
 function CommentCardSkeleton() {
   return (
-    <div className="flex flex-col gap-3 rounded-[1.2rem] border border-border/38 bg-card/38 p-4">
+    <div className="flex flex-col gap-3 rounded-lg border border-border/38 bg-card/38 p-4">
       <div className="flex items-center gap-1.5">
         <Skeleton className="size-4 rounded-full" />
         <Skeleton className="h-3 w-24" />
@@ -57,7 +57,7 @@ export function ReviewOverviewSkeleton() {
       aria-busy="true"
       aria-label="Loading pull request overview"
     >
-      <section className="flex flex-col gap-4 rounded-[1.2rem] border border-border/38 bg-card/38 p-5">
+      <section className="flex flex-col gap-4 rounded-lg border border-border/38 bg-card/38 p-5">
         <Skeleton className="h-5 w-28" />
         <div className="flex flex-col gap-2">
           <Skeleton className="h-4 w-full" />
@@ -67,13 +67,13 @@ export function ReviewOverviewSkeleton() {
         </div>
       </section>
       <Skeleton className="ms-1 h-3 w-44" />
-      <section className="rounded-[1.2rem] border border-border/38 bg-card/38 p-4">
+      <section className="rounded-lg border border-border/38 bg-card/38 p-4">
         <div className="flex items-start gap-3">
           <Skeleton className="size-6 rounded-full" />
           <div className="flex min-w-0 flex-1 flex-col gap-2">
             <Skeleton className="h-4 w-32" />
             <Skeleton className="h-3 w-56" />
-            <Skeleton className="mt-2 h-20 w-full rounded-[1rem]" />
+            <Skeleton className="mt-2 h-20 w-full rounded-lg" />
           </div>
         </div>
       </section>
@@ -100,7 +100,7 @@ export function ReviewPrSidebarSkeleton() {
         {[0, 1, 2, 3].map((index) => (
           <section
             key={index}
-            className="flex flex-col gap-2 rounded-xl border border-border/25 bg-muted/12 p-3"
+            className="flex flex-col gap-2 rounded-lg border border-border/25 bg-muted/12 p-3"
           >
             <Skeleton className="h-3 w-28" />
             <Skeleton className="h-3 w-full" />

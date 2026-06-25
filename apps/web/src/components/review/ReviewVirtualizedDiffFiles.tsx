@@ -130,7 +130,9 @@ export const ReviewVirtualizedDiffFiles = memo(function ReviewVirtualizedDiffFil
               props.density === "page"
                 ? "diff-render-file scroll-mt-12"
                 : "diff-render-file mb-3 scroll-mt-16 last:mb-0",
-              props.selectedFilePath === row.path && "outline outline-1 outline-primary/30",
+              props.selectedFilePath === row.path &&
+                "before:absolute before:inset-y-0 before:left-0 before:z-20 before:w-0.5 before:bg-primary",
+              props.selectedFilePath === row.path && props.density === "dock" && "before:rounded-l",
             )}
             style={{ transform: `translateY(${String(virtualItem.start)}px)` }}
             onClickCapture={(event) => handleHeaderClickCapture(event, row.renderKey, row.path)}
@@ -173,12 +175,12 @@ const LazyReviewFileDiffBlock = memo(function LazyReviewFileDiffBlock(props: {
 
   if (!fileDiff) {
     return (
-      <div className="overflow-hidden border-b border-border/45 bg-muted/18">
-        <div className="flex h-8 items-center gap-2 border-b border-border/55 bg-muted/30 px-3">
+      <div className="overflow-hidden border-b border-border/40 bg-muted/40">
+        <div className="flex h-8 items-center gap-2 border-b border-border/40 bg-muted/40 px-3">
           <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground">
             {props.row.path}
           </span>
-          <span className="ms-auto text-[10px] text-muted-foreground/70">
+          <span className="ms-auto text-[10px] text-muted-foreground/75">
             Unable to render diff
           </span>
         </div>

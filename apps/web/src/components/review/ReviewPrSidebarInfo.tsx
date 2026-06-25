@@ -63,10 +63,10 @@ const MERGEABLE_LABEL: Record<ReviewSidebarDetail["mergeable"], string> = {
 };
 
 const READINESS_CLASS: Record<ReadinessTone, string> = {
-  danger: "border-destructive/24 bg-destructive/6",
-  warning: "border-warning/24 bg-warning/6",
-  success: "border-success/24 bg-success/6",
-  muted: "border-border/24 bg-muted/10",
+  danger: "border-destructive/40 bg-destructive/10",
+  warning: "border-warning/40 bg-warning/10",
+  success: "border-success/40 bg-success/8",
+  muted: "border-border/40 bg-muted/40",
 };
 
 const READINESS_DOT_CLASS: Record<ReadinessTone, string> = {
@@ -158,30 +158,13 @@ function InspectorSection(props: {
   trailing?: ReactNode;
 }): ReactElement {
   return (
-    <section className={cn("min-w-0 border-t border-border/24 px-4 py-3", props.className)}>
+    <section className={cn("min-w-0 border-t border-border/40 px-4 py-3", props.className)}>
       <div className="mb-2 flex min-w-0 items-center justify-between gap-2">
         <h3 className="truncate font-medium text-[11px] text-muted-foreground">{props.title}</h3>
         {props.trailing}
       </div>
       {props.children}
     </section>
-  );
-}
-
-function LineDelta(props: { detail: ReviewSidebarDetail; compact?: boolean }): ReactElement {
-  return (
-    <div
-      className={cn(
-        "flex min-w-0 items-center gap-2 overflow-hidden",
-        props.compact ? "text-[11px] text-muted-foreground" : "text-[12px] text-foreground",
-      )}
-    >
-      <span className="truncate text-muted-foreground">Lines</span>
-      <span className="ms-auto shrink-0 text-success-foreground tabular-nums">
-        +{props.detail.additions}
-      </span>
-      <span className="shrink-0 text-destructive tabular-nums">-{props.detail.deletions}</span>
-    </div>
   );
 }
 
@@ -215,7 +198,7 @@ function ReadinessHeader(props: {
         />
         <div className="min-w-0 flex-1">
           <p className="truncate font-semibold text-[14px] text-foreground">{state.title}</p>
-          <p className="mt-0.5 text-[12px] text-muted-foreground/82">{state.description}</p>
+          <p className="mt-0.5 text-[12px] text-muted-foreground/75">{state.description}</p>
         </div>
         <ReviewerAvatarStack detail={props.detail} className="pt-0.5" presentation="informative" />
       </div>
@@ -426,7 +409,7 @@ function PeopleSection(props: { detail: ReviewSidebarDetail }): ReactElement | n
             <p className="truncate font-medium text-[12px] text-foreground">
               {reviewerSummary(props.detail)}
             </p>
-            <p className="mt-0.5 truncate text-[11px] text-muted-foreground/78">
+            <p className="mt-0.5 truncate text-[11px] text-muted-foreground/75">
               {participants.length} participant{participants.length === 1 ? "" : "s"}
             </p>
           </div>
@@ -435,7 +418,7 @@ function PeopleSection(props: { detail: ReviewSidebarDetail }): ReactElement | n
         {hasReviewers ? (
           <ReviewersList detail={props.detail} />
         ) : (
-          <p className="text-[12px] text-muted-foreground/78">No reviewers requested</p>
+          <p className="text-[12px] text-muted-foreground/75">No reviewers requested</p>
         )}
         {participants.length > 0 ? <ParticipantsAvatars entries={participants} /> : null}
       </div>
@@ -488,14 +471,14 @@ function MetadataSection(props: { detail: ReviewSidebarDetail }): ReactElement |
   );
 }
 
-function CursorLedgerPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
+function ReviewReadinessPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
   const ledgerRows = readinessLedgerRows(props.detail, props.checks);
 
   return (
     <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden overscroll-contain">
       <ReadinessHeader detail={props.detail} checks={props.checks} variant="compact" />
       <div className="px-4 py-3">
-        <dl className="overflow-hidden rounded-md border border-border/24">
+        <dl className="overflow-hidden rounded-lg border border-border/40">
           {ledgerRows.map((row) => (
             <LedgerRow {...row} key={row.key} />
           ))}
@@ -513,7 +496,6 @@ function CursorLedgerPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
       <InspectorSection title="Activity">
         <div className="flex flex-col gap-2.5">
           <ChangeLedger detail={props.detail} />
-          <LineDelta detail={props.detail} />
           <DetailsLedger detail={props.detail} events={props.events} />
         </div>
       </InspectorSection>
@@ -530,7 +512,7 @@ function LedgerRow(props: {
   trailing?: ReactNode;
 }): ReactElement {
   return (
-    <div className="grid min-h-[52px] grid-cols-[4rem_minmax(0,1fr)] gap-3 border-t border-border/20 px-3 py-2 first:border-t-0">
+    <div className="grid min-h-[52px] grid-cols-[4rem_minmax(0,1fr)] gap-3 border-t border-border/40 px-3 py-2 first:border-t-0">
       <dt className="truncate pt-0.5 font-medium text-[11px] text-muted-foreground">
         {props.label}
       </dt>
@@ -543,7 +525,7 @@ function LedgerRow(props: {
           <p className="min-w-0 truncate font-medium text-[12px] text-foreground">{props.value}</p>
           {props.trailing ? <div className="ms-auto shrink-0">{props.trailing}</div> : null}
         </div>
-        <div className="mt-0.5 min-w-0 break-words text-[11px] text-muted-foreground/78 [overflow-wrap:anywhere]">
+        <div className="mt-0.5 min-w-0 break-words text-[11px] text-muted-foreground/75 [overflow-wrap:anywhere]">
           {props.description}
         </div>
       </dd>
@@ -614,5 +596,5 @@ function readinessLedgerRows(
 }
 
 export function ReviewPrSidebarInfoPanel(props: ReviewPrSidebarInfoPanelProps): ReactElement {
-  return <CursorLedgerPanel {...props} />;
+  return <ReviewReadinessPanel {...props} />;
 }

@@ -192,8 +192,8 @@ export function ReviewSubmitBar(props: {
         "flex shrink-0 flex-wrap items-center gap-2 bg-background",
         props.mode === "header" && "ms-auto max-w-full border-0 bg-transparent p-0 shadow-none",
         props.mode === "page" &&
-          "absolute bottom-3 right-3 z-20 max-w-[min(30rem,calc(100%-1.5rem))] rounded-xl border border-border/70 px-2 py-1 shadow-[0_8px_24px_rgba(0,0,0,0.10)]",
-        props.mode === "dock" && "border-t border-border/70 px-2 py-1.5",
+          "absolute bottom-3 right-3 z-20 max-w-[min(30rem,calc(100%-1.5rem))] rounded-lg border border-border/40 px-2 py-1",
+        props.mode === "dock" && "border-t border-border/60 px-2 py-1.5",
       )}
     >
       {(props.mode === "page" || props.mode === "header") && pageSummary ? (

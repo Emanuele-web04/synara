@@ -8,6 +8,7 @@ import { useState } from "react";
 
 import { BotIcon, CheckIcon, MessageCircleIcon, SquarePenIcon, Trash2, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { Button } from "../ui/button";
 import type { ReviewLineAnnotationData, ReviewLocalDraftAnnotation } from "./reviewAnnotations";
 import { InlineCommentForm } from "./InlineCommentForm";
 import { ReviewAvatar } from "./reviewPrPrimitives";
@@ -28,24 +29,14 @@ export interface ReviewCommentThreadActions {
   deleteRemoteComment: (commentId: string) => void;
 }
 
-const BUBBLE_SHELL_CLASS =
-  "mx-2 my-1 overflow-hidden rounded-lg border border-border/70 bg-card/95 shadow-[0_12px_30px_-26px_var(--foreground)]";
+const BUBBLE_SHELL_CLASS = "mx-2 my-1 overflow-hidden rounded-lg border border-border/60 bg-card";
 
 const SEVERITY_SURFACE: Record<ReviewFinding["severity"], string> = {
-  blocker: "border-destructive/35 bg-destructive/[0.055]",
-  major: "border-warning-foreground/30 bg-warning/[0.09]",
-  minor: "border-info/30 bg-info/[0.07]",
-  nit: "border-border/80 bg-muted/22",
+  blocker: "border-destructive/25 bg-destructive/10",
+  major: "border-warning/25 bg-warning/10",
+  minor: "border-info/25 bg-info/10",
+  nit: "border-border/40 bg-muted/40",
 };
-
-const THREAD_ACTION_CLASS =
-  "flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-muted-foreground outline-none transition-colors duration-150 motion-reduce:transition-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring";
-
-const PRIMARY_THREAD_ACTION_CLASS =
-  "flex items-center gap-1 rounded-md bg-foreground px-2 py-1 text-[11px] font-medium text-background outline-none transition-opacity duration-150 motion-reduce:transition-none hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring";
-
-const ICON_BUTTON_CLASS =
-  "rounded-md p-1 text-muted-foreground opacity-70 outline-none transition-[background-color,color,opacity] duration-150 motion-reduce:transition-none hover:bg-muted/60 hover:text-foreground hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring";
 
 function viewerAuthor(
   viewer: ReviewViewerResult | null,
@@ -80,22 +71,26 @@ function AgentFinding(props: { finding: ReviewFinding; actions: ReviewCommentThr
         {finding.message}
       </p>
       <div className="flex items-center gap-1">
-        <button
+        <Button
           type="button"
-          className={PRIMARY_THREAD_ACTION_CLASS}
+          size="xs"
+          variant="default"
+          className="active:scale-[0.96] motion-reduce:active:scale-100"
           onClick={() => actions.convertFinding(finding)}
         >
           <MessageCircleIcon className="size-3" />
           Convert to comment
-        </button>
-        <button
+        </Button>
+        <Button
           type="button"
-          className={THREAD_ACTION_CLASS}
+          size="xs"
+          variant="ghost"
+          className="active:scale-[0.96] motion-reduce:active:scale-100"
           onClick={() => actions.dismissFinding(finding)}
         >
           <XIcon className="size-3" />
           Dismiss
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -147,46 +142,48 @@ function SavedCommentBubble(props: {
         <span className="min-w-0 truncate font-medium text-foreground">
           {props.viewer?.login || "You"}
         </span>
-        <span
-          className={cn("shrink-0 tabular-nums", comment.resolved && "line-through opacity-70")}
-        >
-          {formatTimestamp(comment.updatedAt)}
-        </span>
+        <span className="shrink-0 tabular-nums">{formatTimestamp(comment.updatedAt)}</span>
         {comment.resolved ? <ReviewPill tone="success">Resolved</ReviewPill> : null}
-        <div className="ms-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 motion-reduce:transition-none">
-          <button
+        <div className="ms-auto flex items-center gap-0.5">
+          <Button
             type="button"
+            size="icon-xs"
+            variant="ghost"
             title={comment.resolved ? "Reopen" : "Resolve"}
             aria-label={comment.resolved ? "Reopen comment" : "Resolve comment"}
-            className={ICON_BUTTON_CLASS}
+            className="active:scale-[0.96] motion-reduce:active:scale-100"
             onClick={() => actions.toggleResolved(comment)}
           >
             <CheckIcon className="size-3" />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="icon-xs"
+            variant="ghost"
             title="Edit"
             aria-label="Edit comment"
-            className={ICON_BUTTON_CLASS}
+            className="active:scale-[0.96] motion-reduce:active:scale-100"
             onClick={() => setEditing(true)}
           >
             <SquarePenIcon className="size-3" />
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            size="icon-xs"
+            variant="ghost"
             title="Delete"
             aria-label="Delete comment"
-            className={cn(ICON_BUTTON_CLASS, "hover:bg-destructive/10 hover:text-destructive")}
+            className="hover:text-destructive active:scale-[0.96] motion-reduce:active:scale-100"
             onClick={() => actions.remove(comment)}
           >
             <Trash2 className="size-3" />
-          </button>
+          </Button>
         </div>
       </div>
       <p
         className={cn(
-          "whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground/88",
-          comment.resolved && "opacity-70",
+          "whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground",
+          comment.resolved && "text-muted-foreground",
         )}
       >
         {comment.body}
@@ -233,29 +230,33 @@ function SubmittedThreadComment(props: {
         </span>
         <span className="shrink-0 tabular-nums">{formatTimestamp(comment.createdAt)}</span>
         {props.canManage && commentId !== undefined ? (
-          <div className="ms-auto flex items-center gap-0.5 opacity-0 transition-opacity duration-150 group-hover/comment:opacity-100 group-focus-within/comment:opacity-100 motion-reduce:transition-none">
-            <button
+          <div className="ms-auto flex items-center gap-0.5">
+            <Button
               type="button"
+              size="icon-xs"
+              variant="ghost"
               title="Edit"
               aria-label="Edit comment"
-              className={ICON_BUTTON_CLASS}
+              className="active:scale-[0.96] motion-reduce:active:scale-100"
               onClick={() => setEditing(true)}
             >
               <SquarePenIcon className="size-3" />
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
+              size="icon-xs"
+              variant="ghost"
               title="Delete"
               aria-label="Delete comment"
-              className={cn(ICON_BUTTON_CLASS, "hover:bg-destructive/10 hover:text-destructive")}
+              className="hover:text-destructive active:scale-[0.96] motion-reduce:active:scale-100"
               onClick={() => actions.deleteRemoteComment(commentId)}
             >
               <Trash2 className="size-3" />
-            </button>
+            </Button>
           </div>
         ) : null}
       </div>
-      <p className="whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground/88">
+      <p className="whitespace-pre-wrap break-words ps-5 text-[13px] leading-relaxed text-foreground">
         {comment.body}
       </p>
     </div>
@@ -271,19 +272,21 @@ function SubmittedThread(props: {
   const [replying, setReplying] = useState(false);
   const viewerLogin = props.viewer?.login.trim() ?? "";
   return (
-    <div className={cn(BUBBLE_SHELL_CLASS, "divide-y divide-border/45 bg-card/95")}>
+    <div className={cn(BUBBLE_SHELL_CLASS, "divide-y divide-border/40")}>
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
         <MessageCircleIcon className="size-3.5 shrink-0" />
         <span className="font-medium uppercase tracking-wide">Submitted</span>
         {thread.isResolved ? <ReviewPill tone="success">Resolved</ReviewPill> : null}
-        <button
+        <Button
           type="button"
-          className={cn(THREAD_ACTION_CLASS, "ms-auto")}
+          size="xs"
+          variant="ghost"
+          className="ms-auto active:scale-[0.96] motion-reduce:active:scale-100"
           onClick={() => actions.resolveRemoteThread(thread, !thread.isResolved)}
         >
           <CheckIcon className="size-3" />
           {thread.isResolved ? "Unresolve" : "Resolve"}
-        </button>
+        </Button>
       </div>
       {thread.comments.map((comment, index) => (
         <SubmittedThreadComment
@@ -306,14 +309,16 @@ function SubmittedThread(props: {
           />
         </div>
       ) : (
-        <button
+        <Button
           type="button"
-          className={cn(THREAD_ACTION_CLASS, "m-2 self-start")}
+          size="xs"
+          variant="ghost"
+          className="m-2 self-start active:scale-[0.96] motion-reduce:active:scale-100"
           onClick={() => setReplying(true)}
         >
           <MessageCircleIcon className="size-3" />
           Reply
-        </button>
+        </Button>
       )}
     </div>
   );
@@ -343,7 +348,7 @@ export function ReviewCommentThread(props: {
         data.comments.length === 0 && "border-dashed bg-background/92",
       )}
     >
-      <div className="flex h-8 items-center gap-2 border-b border-border/45 bg-muted/16 px-3">
+      <div className="flex h-8 items-center gap-2 border-b border-border/40 bg-muted/40 px-3">
         <MessageCircleIcon className="size-3.5 text-muted-foreground/85" aria-hidden="true" />
         <span className="font-medium text-[12px] text-foreground/90">
           {data.comments.length > 0 ? "Comment thread" : "Comment"}
@@ -362,7 +367,7 @@ export function ReviewCommentThread(props: {
       ))}
 
       {draft ? (
-        <div className="border-t border-border/35 p-2.5 first:border-t-0">
+        <div className="border-t border-border/25 p-2.5 first:border-t-0">
           <InlineCommentForm
             initialBody={draft.body}
             busy={draft.status === "saving"}
@@ -376,14 +381,16 @@ export function ReviewCommentThread(props: {
           />
         </div>
       ) : data.comments.length > 0 ? (
-        <button
+        <Button
           type="button"
-          className={cn(THREAD_ACTION_CLASS, "mx-2.5 mb-2.5 self-start")}
+          size="xs"
+          variant="ghost"
+          className="mx-2.5 mb-2.5 self-start active:scale-[0.96] motion-reduce:active:scale-100"
           onClick={() => actions.startReply(data)}
         >
           <MessageCircleIcon className="size-3" />
           Reply
-        </button>
+        </Button>
       ) : null}
     </div>
   );

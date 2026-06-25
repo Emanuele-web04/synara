@@ -13,6 +13,7 @@ import {
   GitMergeIcon,
   GitCommitIcon,
   GitPullRequestIcon,
+  LoaderCircleIcon,
   SparklesIcon,
 } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -34,45 +35,11 @@ function repoSlug(url: string): string | null {
   }
 }
 
-function DiffSquares(props: { additions: number; deletions: number }) {
-  const total = props.additions + props.deletions;
-  const greens =
-    total === 0
-      ? 0
-      : Math.min(
-          5,
-          Math.max(props.additions > 0 ? 1 : 0, Math.round((props.additions / total) * 5)),
-        );
-  const reds =
-    total === 0 ? 0 : Math.min(5 - greens, Math.max(props.deletions > 0 ? 1 : 0, 5 - greens));
-  return (
-    <span
-      className="inline-flex items-center gap-0.5"
-      aria-label={`${props.additions} additions, ${props.deletions} deletions`}
-      title={`${props.additions} additions, ${props.deletions} deletions`}
-    >
-      {Array.from({ length: 5 }, (_, index) => (
-        <span
-          key={index}
-          className={cn(
-            "size-1.5 rounded-full",
-            index < greens
-              ? "bg-success"
-              : index < greens + reds
-                ? "bg-destructive"
-                : "bg-muted-foreground/25",
-          )}
-        />
-      ))}
-    </span>
-  );
-}
-
 function BranchChip(props: { name: string; compact?: boolean }) {
   return (
     <span
       className={cn(
-        "min-w-0 truncate rounded-full border border-border/45 bg-muted/20 font-mono text-foreground",
+        "min-w-0 truncate rounded-full border border-border/40 bg-muted/60 font-mono text-foreground",
         props.compact
           ? "max-w-[11rem] px-1.5 py-0 text-[10.5px] leading-5 text-muted-foreground"
           : "max-w-[18rem] px-2 py-0.5 text-[12px]",
@@ -115,14 +82,62 @@ function mergeReadiness(detail: ReviewPullRequestDetail | ReviewPullRequestHeade
   return { label: "Ready to merge", tone: "success" };
 }
 
-function MergeReadinessIcon(props: { tone: ReturnType<typeof mergeReadiness>["tone"] }) {
-  if (props.tone === "success") {
-    return <CircleCheckIcon className="size-4 text-success-foreground" />;
+function MergeReadinessBadge(props: {
+  readiness: ReturnType<typeof mergeReadiness>;
+  variant: "compact" | "full";
+}) {
+  const { label, tone } = props.readiness;
+  const running =
+    tone === "warning" && (label === "Checks are running" || label === "Checks loading");
+  const icon = running ? (
+    <LoaderCircleIcon className="size-4 animate-spin text-warning-foreground" />
+  ) : tone === "success" ? (
+    <CircleCheckIcon className="size-4 text-success-foreground" />
+  ) : tone === "danger" ? (
+    <CircleAlertIcon className="size-4 text-destructive" />
+  ) : tone === "warning" ? (
+    <CircleAlertIcon className="size-4 text-warning-foreground" />
+  ) : (
+    <GitPullRequestIcon className="size-4 text-muted-foreground" />
+  );
+  const toneText =
+    tone === "danger"
+      ? "text-destructive"
+      : tone === "success"
+        ? "text-success-foreground"
+        : tone === "warning"
+          ? "text-warning-foreground"
+          : "text-muted-foreground";
+  if (props.variant === "compact") {
+    return (
+      <span
+        className={cn("inline-flex shrink-0 items-center gap-1 text-[11px] font-medium", toneText)}
+      >
+        {icon}
+        {label}
+      </span>
+    );
   }
-  if (props.tone === "danger") {
-    return <CircleAlertIcon className="size-4 text-destructive" />;
-  }
-  return <CircleAlertIcon className="size-4 text-warning-foreground" />;
+  const toneFill =
+    tone === "success"
+      ? "bg-success/8"
+      : tone === "danger"
+        ? "bg-destructive/10"
+        : tone === "warning"
+          ? "bg-warning/10"
+          : "bg-muted/40";
+  return (
+    <span
+      className={cn(
+        "inline-flex min-w-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[13px] font-semibold",
+        toneFill,
+        toneText,
+      )}
+    >
+      {icon}
+      <span className="truncate">{label}</span>
+    </span>
+  );
 }
 
 export function ReviewPrHeader(props: {
@@ -189,7 +204,7 @@ export function ReviewPrHeader(props: {
         type="button"
         size="sm"
         variant="outline"
-        className="h-8 shrink-0 rounded-full px-3 text-[12px] transition-[transform,box-shadow] duration-150 motion-reduce:transition-none lg:gap-1.5"
+        className="h-8 shrink-0 rounded-full px-3 text-[12px] transition-[transform,box-shadow] duration-150 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100 lg:gap-1.5"
         title="Back to pull request overview"
         aria-label="Back to pull request overview"
         onClick={props.onOverview}
@@ -202,7 +217,7 @@ export function ReviewPrHeader(props: {
         type="button"
         size="sm"
         variant="prominent"
-        className="h-8 shrink-0 rounded-full px-4 text-[13px] transition-[transform,box-shadow] duration-150 motion-reduce:transition-none"
+        className="h-8 shrink-0 rounded-full px-4 text-[13px] transition-[transform,box-shadow] duration-150 active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100"
         title="Open files and inline comments"
         onClick={props.onReviewChanges}
       >
@@ -226,19 +241,7 @@ export function ReviewPrHeader(props: {
             updated {updatedAt}
           </span>
         ) : null}
-        <span
-          className={cn(
-            "hidden shrink-0 items-center gap-1 text-[11px] font-medium md:inline-flex",
-            readiness.tone === "danger"
-              ? "text-destructive"
-              : readiness.tone === "success"
-                ? "text-success-foreground"
-                : "text-warning-foreground",
-          )}
-        >
-          <MergeReadinessIcon tone={readiness.tone} />
-          {readiness.label}
-        </span>
+        <MergeReadinessBadge readiness={readiness} variant="compact" />
         <div className="ms-auto flex shrink-0 items-center gap-3.5">
           {props.reviewAction}
           {primaryAction}
@@ -324,7 +327,7 @@ export function ReviewPrHeader(props: {
             aria-label="Copy branch names"
             title={copiedBranches ? "Copied" : "Copy branch names"}
             className={cn(
-              "flex size-6 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none ring-1 ring-transparent transition-[background-color,color,box-shadow,transform] duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-95 motion-reduce:transition-none motion-reduce:active:scale-100",
+              "flex size-6 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none ring-1 ring-transparent transition-[background-color,color,box-shadow,transform] duration-150 hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100",
               copiedBranches && "bg-success/12 text-success-foreground ring-success/20",
             )}
             onClick={copyBranches}
@@ -341,18 +344,19 @@ export function ReviewPrHeader(props: {
           className={cn(
             "flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted-foreground",
             isFilesMode
-              ? "mt-5 min-h-11 rounded-[1.45rem] border border-border/45 bg-muted/25 px-4 py-2 sm:ms-6"
-              : "mt-7 min-h-12 rounded-[1.45rem] border border-border/45 bg-muted/25 px-4 py-2.5",
+              ? "mt-5 min-h-11 rounded-lg border border-border/45 bg-muted/25 px-4 py-2 sm:ms-6"
+              : "mt-7 min-h-12 rounded-lg border border-border/45 bg-muted/25 px-4 py-2.5",
           )}
         >
+          <MergeReadinessBadge readiness={readiness} variant="full" />
           {props.onCommits ? (
             <button
               type="button"
               onClick={props.onCommits}
               aria-pressed={props.commitsActive}
               className={cn(
-                "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                props.commitsActive && "bg-muted/60 px-1.5 font-medium text-foreground",
+                "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100",
+                props.commitsActive && "font-medium text-foreground",
               )}
             >
               {commitStat}
@@ -374,7 +378,6 @@ export function ReviewPrHeader(props: {
               deletions={detail.deletions}
               className="text-[12px] tabular-nums"
             />
-            <DiffSquares additions={detail.additions} deletions={detail.deletions} />
           </span>
           {props.onWalkthrough ? (
             <>
@@ -386,8 +389,8 @@ export function ReviewPrHeader(props: {
                 onClick={props.onWalkthrough}
                 aria-pressed={props.walkthroughActive}
                 className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-                  props.walkthroughActive && "bg-muted/60 px-1.5 font-medium text-foreground",
+                  "inline-flex items-center gap-1.5 rounded-md outline-none transition-colors duration-150 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:transition-none motion-reduce:active:scale-100",
+                  props.walkthroughActive && "font-medium text-foreground",
                 )}
               >
                 <SparklesIcon className="size-3.5 opacity-70" />
@@ -396,19 +399,6 @@ export function ReviewPrHeader(props: {
             </>
           ) : null}
           <div className="ms-auto flex min-w-0 shrink-0 items-center gap-4">
-            <span
-              className={cn(
-                "inline-flex min-w-0 items-center gap-1.5 text-[12px] transition-colors duration-150 motion-reduce:transition-none",
-                readiness.tone === "danger"
-                  ? "text-destructive"
-                  : readiness.tone === "success"
-                    ? "text-success-foreground"
-                    : "text-warning-foreground",
-              )}
-            >
-              <MergeReadinessIcon tone={readiness.tone} />
-              <span className="truncate font-medium">{readiness.label}</span>
-            </span>
             {props.reviewAction}
             {primaryAction}
           </div>

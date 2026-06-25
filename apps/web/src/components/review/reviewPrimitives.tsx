@@ -1,7 +1,7 @@
 import type { ReviewFindingSeverity, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { mergeProps } from "@base-ui/react/merge-props";
 import { useRender } from "@base-ui/react/use-render";
-import type { ReactNode } from "react";
+import type { KeyboardEvent, PointerEvent, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { ArrowRightIcon, GitBranchIcon } from "~/lib/icons";
@@ -89,6 +89,43 @@ export function ReviewPill(props: {
       ) : null}
       {props.children}
     </span>
+  );
+}
+
+interface ReviewRailResize {
+  bounds: { min: number; max: number };
+  width: number;
+  handleResizeStart: (event: PointerEvent<HTMLElement>) => void;
+  handleResizeKeyDown: (event: KeyboardEvent<HTMLElement>) => void;
+  resetWidth: () => void;
+}
+
+export function ReviewRailResizer(props: {
+  resize: ReviewRailResize;
+  edge: "left" | "right";
+  label: string;
+  className?: string;
+}) {
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label={props.label}
+      aria-valuemin={props.resize.bounds.min}
+      aria-valuemax={props.resize.bounds.max}
+      aria-valuenow={props.resize.width}
+      tabIndex={0}
+      onDoubleClick={props.resize.resetWidth}
+      onPointerDown={props.resize.handleResizeStart}
+      onKeyDown={props.resize.handleResizeKeyDown}
+      className={cn(
+        "relative z-10 w-1 shrink-0 cursor-col-resize bg-border/40 outline-none",
+        "before:absolute before:-inset-x-1.5 before:inset-y-0 before:content-['']",
+        "transition-colors duration-150 hover:bg-[var(--sidebar-accent)] focus-visible:bg-primary/30",
+        props.edge === "right" ? "-me-px" : "-ms-px",
+        props.className,
+      )}
+    />
   );
 }
 
@@ -241,7 +278,7 @@ export function CountChip(props: { count: number; className?: string }) {
 }
 
 export const reviewTextareaClassName =
-  "w-full resize-y rounded-2xl border border-input bg-background/80 px-3 py-2 font-system-ui text-[12px] text-foreground outline-none transition-[border-color,box-shadow,background-color] duration-150 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 disabled:opacity-64 motion-reduce:transition-none";
+  "w-full resize-y rounded-lg border border-input bg-background/80 px-3 py-2 font-system-ui text-[12px] text-foreground outline-none transition-[border-color,box-shadow,background-color] duration-150 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 disabled:opacity-64 motion-reduce:transition-none";
 
 export function EmptyState(props: {
   children: ReactNode;
