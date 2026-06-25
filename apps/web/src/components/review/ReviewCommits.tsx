@@ -13,7 +13,7 @@ export function ReviewCommits(props: { commits: ReadonlyArray<ReviewCommit> }) {
   }
 
   return (
-    <ul className="my-4 flex w-full flex-col divide-y divide-border/60 overflow-hidden rounded-2xl border border-border/70 bg-card/88 shadow-sm">
+    <ul className="my-4 flex w-full flex-col divide-y divide-border/25 overflow-hidden rounded-lg border border-border/40 bg-card">
       {props.commits.map((commit) => {
         const when = formatRelativeReviewTime(commit.authoredDate);
         return (
@@ -33,7 +33,7 @@ export function ReviewCommits(props: { commits: ReadonlyArray<ReviewCommit> }) {
                 {when ? <span className="tabular-nums">{when}</span> : null}
               </span>
             </div>
-            <code className="shrink-0 rounded-lg bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
+            <code className="shrink-0 rounded-lg bg-muted/60 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground tabular-nums">
               {commit.abbreviatedOid}
             </code>
           </li>

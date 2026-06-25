@@ -24,6 +24,7 @@ import {
 } from "~/lib/reviewChatThread";
 import { rpcErrorMessage } from "~/lib/rpcErrorMessage";
 import { GitPullRequestIcon } from "~/lib/icons";
+import { cn } from "~/lib/utils";
 import { useStore } from "~/store";
 import { createReviewChatThreadIdSelector } from "~/storeSelectors";
 import { ReviewCommits } from "./ReviewCommits";
@@ -59,14 +60,6 @@ function reviewConversationHydrationKey(input: {
     return null;
   }
   return [input.cwd, input.reference, input.sourceKey].join("\u001f");
-}
-
-function Centered(props: { children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-0 flex-1 items-center justify-center gap-2 px-6 text-center text-[12px] text-muted-foreground">
-      {props.children}
-    </div>
-  );
 }
 
 const REVIEW_OVERVIEW_COLUMN_CLASS_NAME =
@@ -353,7 +346,12 @@ export function ReviewPrView(props: {
                 className="shrink-0"
               />
               {tab === "files" ? (
-                <main className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden">
+                <main
+                  role="tabpanel"
+                  id={`review-tabpanel-${tab}`}
+                  aria-labelledby={`review-tab-${tab}`}
+                  className="flex h-full min-h-0 min-w-0 flex-1 overflow-hidden"
+                >
                   <ReviewSurface
                     mode="page"
                     cwd={props.cwd}
@@ -365,7 +363,12 @@ export function ReviewPrView(props: {
                   />
                 </main>
               ) : tab === "walkthrough" ? (
-                <main className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+                <main
+                  role="tabpanel"
+                  id={`review-tabpanel-${tab}`}
+                  aria-labelledby={`review-tab-${tab}`}
+                  className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+                >
                   <ReviewPrHeader
                     detail={detail}
                     variant="compact"
@@ -387,7 +390,13 @@ export function ReviewPrView(props: {
                   />
                 </main>
               ) : (
-                <main className="min-h-0 min-w-0 flex-1 overflow-y-auto">
+                <main
+                  key={tab}
+                  role="tabpanel"
+                  id={`review-tabpanel-${tab}`}
+                  aria-labelledby={`review-tab-${tab}`}
+                  className="chat-pane-enter min-h-0 min-w-0 flex-1 overflow-y-auto"
+                >
                   <ReviewPrHeader
                     detail={detail}
                     variant="full"
@@ -437,7 +446,7 @@ export function ReviewPrView(props: {
             ) : null}
           </div>
         ) : headerQuery.isLoading ? (
-          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+          <div className={cn(REVIEW_OVERVIEW_COLUMN_CLASS_NAME, "flex min-h-0 min-w-0 flex-1")}>
             <div className="shrink-0">
               <ReviewPrHeaderSkeleton />
             </div>
@@ -449,14 +458,16 @@ export function ReviewPrView(props: {
             </div>
           </div>
         ) : headerQuery.isError ? (
-          <div className="min-w-0 flex-1 overflow-y-auto">
+          <div className={cn(REVIEW_OVERVIEW_COLUMN_CLASS_NAME, "flex-1 overflow-y-auto")}>
             <EmptyState icon={<GitPullRequestIcon />} title="Unavailable">
               {rpcErrorMessage(headerQuery.error) ?? "Could not load this pull request."}
             </EmptyState>
           </div>
         ) : (
-          <div className="min-w-0 flex-1 overflow-y-auto">
-            <Centered>No pull request data.</Centered>
+          <div className={cn(REVIEW_OVERVIEW_COLUMN_CLASS_NAME, "flex-1 overflow-y-auto")}>
+            <EmptyState icon={<GitPullRequestIcon />} title="No pull request">
+              No pull request data.
+            </EmptyState>
           </div>
         )}
       </div>

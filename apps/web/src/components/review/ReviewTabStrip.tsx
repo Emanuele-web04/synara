@@ -45,7 +45,7 @@ export function ReviewTabStrip(props: {
     <div
       className={cn(
         "flex shrink-0 items-center gap-1 border-b border-border/60",
-        size === "roomy" ? "h-11 px-3" : "h-9 px-2",
+        size === "roomy" ? "h-12 px-3" : "h-9 px-2",
         props.className,
       )}
     >
@@ -70,18 +70,20 @@ export function ReviewTabStrip(props: {
               }}
               type="button"
               role="tab"
+              id={`review-tab-${tab.id}`}
+              aria-controls={`review-tabpanel-${tab.id}`}
               aria-selected={active}
               tabIndex={active ? 0 : -1}
               data-active={active || undefined}
               onClick={() => props.onValueChange(tab.id)}
               className={cn(
-                "inline-flex items-center gap-1 whitespace-nowrap rounded-[0.625rem] font-medium outline-none",
+                "relative inline-flex items-center gap-1 whitespace-nowrap rounded-lg font-medium outline-none",
                 "transition-[background-color,color,transform] duration-150 ease-out motion-reduce:transition-none",
                 "focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
                 size === "roomy" ? "h-8 px-3 text-[13px]" : "h-6 px-2.5 text-[12px]",
                 active
-                  ? "bg-muted text-foreground active:scale-[0.98] motion-reduce:active:scale-100"
-                  : "text-muted-foreground hover:bg-muted/50 hover:text-foreground active:scale-[0.98] motion-reduce:active:scale-100",
+                  ? "bg-muted text-foreground font-semibold after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-primary active:scale-[0.96] motion-reduce:active:scale-100"
+                  : "text-muted-foreground hover:bg-muted/40 hover:text-foreground active:scale-[0.96] motion-reduce:active:scale-100",
               )}
             >
               <span>{tab.label}</span>

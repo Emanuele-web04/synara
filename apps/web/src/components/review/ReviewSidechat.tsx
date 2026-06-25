@@ -492,9 +492,10 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
               type="button"
               disabled={isSendBlocked}
               className={cn(
-                "rounded-full border border-border/35 bg-muted/20 text-muted-foreground transition-[background-color,color,border-color] duration-150 hover:border-border/60 hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                "rounded-full bg-muted/60 text-muted-foreground transition-[background-color,color,transform] duration-150 hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+                "active:scale-[0.96] motion-reduce:active:scale-100",
                 "disabled:pointer-events-none disabled:opacity-45",
-                "px-2.5 py-1 text-[11px]",
+                "px-2.5 py-1.5 text-[11px]",
               )}
               onClick={() => void sendDraft(suggestion)}
             >
@@ -503,8 +504,8 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
           ))}
         </div>
       ) : null}
-      <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "rounded-3xl")}>
-        <div className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden rounded-3xl")}>
+      <div className={cn(COMPOSER_INPUT_SHELL_CLASS_NAME, "rounded-lg")}>
+        <div className={cn(COMPOSER_INPUT_SURFACE_CLASS_NAME, "overflow-hidden rounded-lg")}>
           <div className={cn(COMPOSER_EDITOR_PADDING_CLASS_NAME, "pt-3 pb-3.5")}>
             <ComposerPromptEditor
               value={draft}
@@ -534,7 +535,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
             <button
               type="submit"
               disabled={!hasPrompt || isSendBlocked}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-95 transition-[opacity,transform] hover:scale-[1.03] hover:opacity-100 disabled:pointer-events-none disabled:opacity-35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none"
+              className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-95 transition-[opacity,transform] hover:opacity-100 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none motion-reduce:active:scale-100"
               aria-label={isStartingSidechat ? "Starting PR chat" : "Send PR chat question"}
             >
               {isStartingSidechat || isResolvingSkills ? (
@@ -557,7 +558,6 @@ export function ReviewSidechat(props: {
   hostThreadId?: ThreadId | null;
   reviewThreadId?: ThreadId | null;
   ownsPrewarm?: boolean | undefined;
-  header?: ReactNode;
   bodyAfterMessages?: ReactNode;
 }) {
   const queryClient = useQueryClient();
@@ -1004,29 +1004,27 @@ export function ReviewSidechat(props: {
     <section
       className={cn("flex min-h-0 flex-col bg-background", compact ? "flex-1" : "min-h-0 flex-1")}
     >
-      {props.header ? (
-        <div className="relative shrink-0">
-          {props.header}
-          <button
-            type="button"
-            aria-label="Start new PR chat thread"
-            title="Start new PR chat thread"
-            disabled={isStartingNewThread}
-            onClick={() => void startFreshThread()}
-            className={cn(
-              "absolute top-3 right-12 inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground outline-none",
-              "transition-[background-color,color,opacity,transform] duration-150 hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-              "disabled:pointer-events-none disabled:opacity-40",
-            )}
-          >
-            {isStartingNewThread ? (
-              <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
-            ) : (
-              <PlusIcon className="size-3.5" aria-hidden="true" />
-            )}
-          </button>
-        </div>
-      ) : null}
+      <div className="flex shrink-0 items-center justify-end px-3.5 py-2">
+        <button
+          type="button"
+          aria-label="Start new PR chat thread"
+          title="Start new PR chat thread"
+          disabled={isStartingNewThread}
+          onClick={() => void startFreshThread()}
+          className={cn(
+            "inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground outline-none",
+            "transition-[background-color,color,opacity,transform] duration-150 hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+            "active:scale-[0.96] motion-reduce:active:scale-100",
+            "disabled:pointer-events-none disabled:opacity-40",
+          )}
+        >
+          {isStartingNewThread ? (
+            <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
+          ) : (
+            <PlusIcon className="size-3.5" aria-hidden="true" />
+          )}
+        </button>
+      </div>
       <div
         className={cn(
           "flex min-h-0 flex-col overflow-hidden",

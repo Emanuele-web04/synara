@@ -201,11 +201,12 @@ function ViewedCheckbox(props: { viewed: boolean; onToggle: () => void }) {
         props.onToggle();
       }}
       className={cn(
-        "flex size-4 shrink-0 items-center justify-center rounded-full border outline-none transition-[background-color,border-color,color,opacity,transform] duration-150 motion-reduce:transition-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
+        "relative flex size-4 shrink-0 items-center justify-center rounded-full border outline-none transition-[background-color,border-color,transform] duration-150 motion-reduce:transition-none",
+        "before:absolute before:-inset-y-1 before:-inset-x-2 before:content-['']",
+        "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:active:scale-100",
         props.viewed
-          ? "border-success/25 bg-success/10 text-success-foreground/85 opacity-90"
-          : "border-border/45 bg-muted/20 text-transparent opacity-45 hover:border-foreground/30 hover:opacity-100 group-hover/file:opacity-75",
+          ? "border-success/25 bg-success/10 text-success"
+          : "border-border/40 bg-muted/40 text-transparent",
       )}
     >
       <CheckIcon className="size-2.5" />
@@ -226,13 +227,10 @@ export function ReviewFileTree(props: {
     return (
       <ul className="flex flex-col gap-1 p-2" aria-busy="true">
         {[0, 1, 2, 3, 4, 5].map((index) => (
-          <li key={index} className="flex h-8 items-center gap-2 rounded-lg px-2">
+          <li key={index} className="flex h-7 items-center gap-1.5 rounded-lg px-2">
             <Skeleton className="size-3.5 shrink-0 rounded-sm" />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <Skeleton className="h-2.5 w-4/5" />
-              <Skeleton className="h-2 w-1/2" />
-            </div>
-            <Skeleton className="size-3.5 shrink-0 rounded-full" />
+            <Skeleton className="h-2.5 w-4/5" />
+            <Skeleton className="ms-auto h-2.5 w-8 shrink-0" />
           </li>
         ))}
       </ul>
@@ -377,34 +375,33 @@ function ReviewFileTreeItemRow(props: {
         }}
         className={cn(
           "group/directory flex h-7 w-full min-w-0 items-center pe-2 text-left text-[12px]",
-          "transition-[background-color,opacity] duration-150 motion-reduce:transition-none",
+          "transition-[background-color,transform] duration-150 motion-reduce:transition-none",
+          "active:scale-[0.96] motion-reduce:active:scale-100",
         )}
       >
         <TreeItemLabel
           className={cn(
-            "h-7 w-full bg-transparent px-0 py-0 hover:bg-muted/35 in-data-[selected=true]:bg-transparent",
-            containsSelected
-              ? "bg-muted/45"
-              : "text-muted-foreground/82 opacity-95 hover:bg-muted/35 hover:opacity-100",
+            "h-7 w-full bg-transparent px-0 py-0 hover:bg-muted/40 in-data-[selected=true]:bg-transparent",
+            "text-muted-foreground/75",
           )}
         >
-          <FolderGlyph className="size-3.5 shrink-0 text-muted-foreground/78" />
+          <FolderGlyph className="size-3.5 shrink-0 text-muted-foreground/75" />
           <span
             className={cn(
               "min-w-0 flex-1 truncate font-medium",
               containsSelected ? "text-foreground" : "text-muted-foreground",
-              isComplete && !containsSelected && "text-muted-foreground/85",
+              isComplete && !containsSelected && "text-muted-foreground/75",
             )}
           >
             {directory.name}
           </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground/60 tabular-nums transition-colors group-hover/directory:text-muted-foreground/80 group-focus-visible/directory:text-muted-foreground/80">
+          <span className="shrink-0 text-[10px] text-muted-foreground/75 tabular-nums">
             {directory.viewedCount}/{directory.fileCount}
           </span>
           <DiffStat
             additions={directory.additions}
             deletions={directory.deletions}
-            className="hidden shrink-0 text-[10px] opacity-75 tabular-nums group-hover/directory:inline-flex group-focus-visible/directory:inline-flex"
+            className="inline-flex shrink-0 text-[10px] text-muted-foreground/75 tabular-nums"
           />
         </TreeItemLabel>
       </TreeItem>
@@ -424,16 +421,19 @@ function ReviewFileTreeItemRow(props: {
         aria-label={name}
         aria-current={isSelected ? "true" : undefined}
         className={cn(
-          "group/file flex h-7 w-full min-w-0 items-center pe-7 text-left text-[12px]",
-          "transition-[background-color,box-shadow,opacity] duration-150 motion-reduce:transition-none",
-          isSelected ? "bg-muted/55 shadow-[inset_2px_0_0_var(--primary)]" : "hover:bg-muted/35",
+          "group/file relative flex h-7 w-full min-w-0 items-center pe-7 text-left text-[12px]",
+          "transition-[background-color,transform] duration-150 motion-reduce:transition-none",
+          "active:scale-[0.96] motion-reduce:active:scale-100",
+          isSelected
+            ? "before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-primary before:content-['']"
+            : "hover:bg-muted/40",
         )}
       >
         <TreeItemLabel
           className={cn(
             "h-7 w-full bg-transparent px-0 py-0 hover:bg-transparent in-data-[selected=true]:bg-transparent",
-            isSelected ? "font-medium text-foreground" : "text-muted-foreground",
-            isViewed && !isSelected && "text-muted-foreground/85",
+            isSelected ? "text-foreground" : "text-muted-foreground",
+            isViewed && !isSelected && "text-muted-foreground/75",
           )}
         >
           <FileEntryIcon
@@ -442,30 +442,15 @@ function ReviewFileTreeItemRow(props: {
             theme={props.resolvedTheme}
             className="size-3.5 shrink-0"
           />
-          <span
-            className={cn(
-              "min-w-0 flex-1 truncate font-medium text-foreground/95",
-              isViewed && "line-through decoration-muted-foreground/40",
-            )}
-          >
-            {name}
-          </span>
+          <span className="min-w-0 flex-1 truncate font-medium">{name}</span>
           <DiffStat
             additions={file.insertions}
             deletions={file.deletions}
-            className={cn(
-              "hidden shrink-0 text-[10px] tabular-nums opacity-70 transition-opacity group-hover/file:opacity-90 xl:inline-flex",
-              isViewed && !isSelected && "opacity-35",
-            )}
+            className="inline-flex shrink-0 text-[10px] text-muted-foreground/75 tabular-nums"
           />
         </TreeItemLabel>
       </TreeItem>
-      <div
-        className={cn(
-          "absolute right-1.5 top-1/2 -translate-y-1/2 opacity-70 transition-opacity group-hover/file:opacity-100 focus-within:opacity-100",
-          isViewed && "opacity-100",
-        )}
-      >
+      <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
         <ViewedCheckbox viewed={isViewed} onToggle={() => props.onToggleViewed(file.path)} />
       </div>
     </div>

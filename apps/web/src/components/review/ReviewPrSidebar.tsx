@@ -11,6 +11,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { BotIcon, PanelRightCloseIcon, SidebarHiddenRightWideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ReviewPrSidebarInfoPanel, type ReviewSidebarDetail } from "./ReviewPrSidebarInfo";
+import { ReviewRailResizer } from "./reviewPrimitives";
 import { ReviewSidechat } from "./ReviewSidechat";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 import { useResizableReviewSidebar } from "./useResizableReviewSidebar";
@@ -41,6 +42,18 @@ function defaultSidebarTab(mode: "conversation" | "files"): ReviewSidebarTab {
   return mode === "files" ? "info" : "chat";
 }
 
+const SIDEBAR_ASSISTANT_LABEL = "Review assistant";
+
+function SidebarStatusDot(props: { ariaLabel?: string; title?: string }) {
+  return (
+    <span
+      className="size-2 rounded-full bg-success ring-1 ring-success/30"
+      aria-label={props.ariaLabel}
+      title={props.title}
+    />
+  );
+}
+
 function SidebarCollapseButton(props: {
   collapsed: boolean;
   onCollapsedChange: ((collapsed: boolean) => void) | undefined;
@@ -57,6 +70,7 @@ function SidebarCollapseButton(props: {
         "inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none",
         "transition-[background-color,color,opacity,transform] duration-150 motion-reduce:transition-none",
         "hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        "active:scale-[0.96] motion-reduce:active:scale-100",
       )}
     >
       <Icon className="size-4" aria-hidden="true" />
@@ -69,15 +83,15 @@ function CollapsedSidebarRail(props: {
   onCollapsedChange: ((collapsed: boolean) => void) | undefined;
 }) {
   return (
-    <aside className="hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border/30 bg-background py-2 xl:flex">
+    <aside className="hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border/60 bg-background py-2 xl:flex">
       <SidebarCollapseButton collapsed onCollapsedChange={props.onCollapsedChange} />
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-2" aria-hidden="true">
-        <span className="flex size-8 items-center justify-center rounded-xl bg-muted/35 text-primary ring-1 ring-border/35">
+        <span className="flex size-8 items-center justify-center rounded-lg bg-muted/40 text-primary ring-1 ring-border/40">
           <BotIcon className="size-4" />
         </span>
-        <span className="size-2 rounded-full bg-success shadow-[0_0_16px_rgba(34,197,94,0.45)]" />
+        <SidebarStatusDot />
         <span className="mt-1 [writing-mode:vertical-rl] text-[10px] font-semibold text-muted-foreground/75 uppercase tracking-wide">
-          {props.mode === "files" ? "Ask Devin" : "AI chat"}
+          {SIDEBAR_ASSISTANT_LABEL}
         </span>
       </div>
     </aside>
@@ -100,10 +114,10 @@ function SidebarTabButton(props: {
       onClick={() => props.onSelect(props.tab)}
       className={cn(
         "inline-flex h-8 min-w-0 items-center justify-center rounded-lg px-3 text-[12px] font-medium outline-none",
-        "transition-[background-color,color,box-shadow] duration-150 motion-reduce:transition-none",
-        "focus-visible:ring-2 focus-visible:ring-ring",
+        "transition-[background-color,color,box-shadow,transform] duration-150 motion-reduce:transition-none",
+        "focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.96] motion-reduce:active:scale-100",
         active
-          ? "bg-muted/55 text-foreground shadow-[inset_0_0_0_1px_var(--border)]"
+          ? "bg-muted/60 font-semibold text-foreground"
           : "text-muted-foreground hover:bg-muted/30 hover:text-foreground",
       )}
     >
@@ -123,7 +137,7 @@ function SidebarTabbedHeader(props: {
       <div
         role="tablist"
         aria-label="Pull request sidebar"
-        className="inline-flex min-w-0 rounded-xl bg-muted/18 p-0.5 ring-1 ring-border/25"
+        className="inline-flex min-w-0 rounded-lg bg-muted/40 p-0.5 ring-1 ring-border/40"
       >
         <SidebarTabButton tab="info" activeTab={props.activeTab} onSelect={props.onTabChange}>
           Info
@@ -133,34 +147,12 @@ function SidebarTabbedHeader(props: {
         </SidebarTabButton>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.activeTab === "chat" ? (
-          <span
-            className="size-2 rounded-full bg-success shadow-[0_0_16px_rgba(34,197,94,0.45)]"
-            title="PR context loaded"
-          />
-        ) : null}
+        {props.activeTab === "chat" ? <SidebarStatusDot title="PR context loaded" /> : null}
         <SidebarCollapseButton
           collapsed={props.collapsed}
           onCollapsedChange={props.onCollapsedChange}
         />
       </div>
-    </div>
-  );
-}
-
-function ChatPanelHeader(props: { mode: "conversation" | "files" }) {
-  return (
-    <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border/20 px-4 py-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-xl bg-muted/35 text-primary ring-1 ring-border/35">
-          <BotIcon className="size-4" aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <h2 className="truncate font-semibold text-[13px] text-foreground">Ask Devin</h2>
-          <p className="truncate text-[11px] text-muted-foreground">PR context</p>
-        </div>
-      </div>
-      <span className="size-2 rounded-full bg-success shadow-[0_0_16px_rgba(34,197,94,0.45)]" />
     </div>
   );
 }
@@ -232,25 +224,15 @@ export function ReviewPrSidebar(props: {
 
   return (
     <>
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize AI chat sidebar"
-        aria-valuemin={resize.bounds.min}
-        aria-valuemax={resize.bounds.max}
-        aria-valuenow={resize.width}
-        tabIndex={0}
-        onDoubleClick={resize.resetWidth}
-        onPointerDown={resize.handleResizeStart}
-        onKeyDown={resize.handleResizeKeyDown}
-        className={cn(
-          "-me-px relative z-10 hidden w-1 shrink-0 cursor-col-resize bg-transparent outline-none xl:block",
-          "transition-colors duration-150 hover:bg-[var(--sidebar-accent)] focus-visible:bg-primary/30",
-        )}
+      <ReviewRailResizer
+        resize={resize}
+        edge="right"
+        label="Resize AI chat sidebar"
+        className="hidden xl:block"
       />
       <aside
         ref={sidebarRef}
-        className="hidden h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-border/30 bg-background xl:flex"
+        className="hidden h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background xl:flex"
         style={{ width: resize.width }}
       >
         <SidebarTabbedHeader
@@ -285,7 +267,6 @@ export function ReviewPrSidebar(props: {
             hostThreadId={props.hostThreadId ?? null}
             reviewThreadId={props.reviewThreadId ?? null}
             ownsPrewarm={props.sidechatOwnsPrewarm}
-            header={<ChatPanelHeader mode={mode} />}
           />
         </div>
       </aside>
