@@ -306,13 +306,14 @@ export function ReviewPrView(props: {
       });
   }, [reviewChatPrewarmKey]);
   const reviewAction =
-    tab === "files" ? (
+    tab === "files" || tab === "walkthrough" ? (
       <ReviewSubmitBar
         mode="header"
         cwd={props.cwd}
         reference={props.reference}
         target={changesetState.data?.target ?? null}
         expectedHeadSha={changesetState.data?.headSha ?? null}
+        showQuickApprove={tab === "walkthrough"}
       />
     ) : undefined;
   const updateSidebarCollapsed = (collapsed: boolean) => {
@@ -373,6 +374,7 @@ export function ReviewPrView(props: {
                     detail={detail}
                     variant="compact"
                     contentClassName="px-4 sm:px-5"
+                    reviewAction={reviewAction}
                   />
                   <ReviewWalkthrough
                     cwd={props.cwd}

@@ -39,6 +39,7 @@ export function ReviewSubmitBar(props: {
   reference: string | null;
   target: ReviewTargetKey | null;
   expectedHeadSha?: string | null;
+  showQuickApprove?: boolean;
 }) {
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -94,7 +95,7 @@ export function ReviewSubmitBar(props: {
     return null;
   }
 
-  const handleSubmit = () => {
+  const submitReview = (nextEvent: ReviewSubmitEvent) => {
     if (props.cwd === null || props.reference === null) {
       return;
     }
@@ -103,7 +104,7 @@ export function ReviewSubmitBar(props: {
       return;
     }
     const trimmedBody = body.trim();
-    if (event === "comment" && trimmedBody.length === 0 && inlineComments.length === 0) {
+    if (nextEvent === "comment" && trimmedBody.length === 0 && inlineComments.length === 0) {
       return;
     }
     const submittedSubmitKey = currentSubmitKey;
@@ -117,7 +118,7 @@ export function ReviewSubmitBar(props: {
       {
         cwd: props.cwd,
         reference: props.reference,
-        event,
+        event: nextEvent,
         ...(trimmedBody.length > 0 ? { body: trimmedBody } : {}),
         ...(inlineComments.length > 0 ? { comments: inlineComments } : {}),
         ...(props.expectedHeadSha ? { expectedHeadSha: props.expectedHeadSha } : {}),
@@ -164,6 +165,7 @@ export function ReviewSubmitBar(props: {
       },
     );
   };
+  const handleSubmit = () => submitReview(event);
 
   const summary =
     inlineComments.length === 1
@@ -181,6 +183,7 @@ export function ReviewSubmitBar(props: {
   // GitHub rejects a COMMENT review with neither a body nor inline comments.
   const canSend = event !== "comment" || body.trim().length > 0 || inlineComments.length > 0;
   const submitDisabled = submitMutation.isPending || commentsAreRefreshing || !canSend;
+  const quickApproveDisabled = submitMutation.isPending || commentsAreRefreshing;
   const reloadReviewData = () => {
     void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.all });
     setStatus({ kind: "idle" });
@@ -207,6 +210,30 @@ export function ReviewSubmitBar(props: {
             <span className="truncate">{pageSummary}</span>
           </span>
         </div>
+      ) : null}
+
+      {props.showQuickApprove ? (
+        <Button
+          type="button"
+          size={props.mode === "dock" ? "xs" : "sm"}
+          variant="default"
+          disabled={quickApproveDisabled}
+          className={cn(
+            "shrink-0 shadow-none",
+            props.mode === "header" ? "h-7 rounded-md px-2.5 text-[12px]" : "rounded-lg",
+          )}
+          onClick={() => {
+            setEvent("approve");
+            submitReview("approve");
+          }}
+        >
+          {submitMutation.isPending ? (
+            <Loader2Icon className="size-3 animate-spin" />
+          ) : (
+            <CircleCheckIcon className="size-3.5" />
+          )}
+          Approve review
+        </Button>
       ) : null}
 
       <Popover open={open} onOpenChange={setOpen}>

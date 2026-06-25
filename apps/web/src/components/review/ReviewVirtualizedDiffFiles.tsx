@@ -70,6 +70,7 @@ export const ReviewVirtualizedDiffFiles = memo(function ReviewVirtualizedDiffFil
     props.diffRenderMode,
     props.diffWordWrap,
     props.viewedPaths,
+    props.commentsEnabled,
     props.annotationsByFile,
     rowVirtualizer,
   ]);
@@ -144,6 +145,7 @@ export const ReviewVirtualizedDiffFiles = memo(function ReviewVirtualizedDiffFil
               overflow={props.diffWordWrap ? "wrap" : "scroll"}
               collapsed={isCollapsed}
               reviewed={props.viewedPaths?.has(row.path) ?? false}
+              commentsEnabled={props.commentsEnabled}
               lineAnnotations={fileAnnotations}
               {...(onToggleReviewed ? { onToggleReviewed } : {})}
               onStartDraft={props.onStartDraft}
@@ -163,6 +165,7 @@ const LazyReviewFileDiffBlock = memo(function LazyReviewFileDiffBlock(props: {
   overflow: "scroll" | "wrap";
   collapsed: boolean;
   reviewed: boolean;
+  commentsEnabled: boolean;
   lineAnnotations: ReadonlyArray<DiffLineAnnotation<ReviewLineAnnotationData>>;
   onToggleReviewed?: (() => void) | undefined;
   onStartDraft: (anchor: ReviewDraftAnchor) => void;
@@ -196,6 +199,7 @@ const LazyReviewFileDiffBlock = memo(function LazyReviewFileDiffBlock(props: {
       overflow={props.overflow}
       collapsed={props.collapsed}
       reviewed={props.reviewed}
+      commentsEnabled={props.commentsEnabled}
       lineAnnotations={props.lineAnnotations}
       {...(props.onToggleReviewed ? { onToggleReviewed: props.onToggleReviewed } : {})}
       onStartDraft={props.onStartDraft}

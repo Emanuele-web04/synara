@@ -6,7 +6,7 @@ import type {
   ReviewWalkthroughChapter,
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactElement } from "react";
 
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
@@ -14,6 +14,9 @@ import { getRenderablePatch, resolveFileDiffPath } from "~/lib/diffRendering";
 import { useTheme } from "~/hooks/useTheme";
 import { DiffWorkerPoolProvider } from "../../DiffWorkerPoolProvider";
 import { useReviewViewedFiles } from "../reviewViewedFiles";
+import { ReviewCommentThread } from "../ReviewCommentThread";
+import type { ReviewLineAnnotationData } from "../reviewAnnotations";
+import { useReviewCommentAnnotations } from "../useReviewCommentAnnotations";
 import { WalkthroughChapterRail, type WalkthroughReading } from "./WalkthroughChapterRail";
 import { WalkthroughChapterReader } from "./WalkthroughChapterReader";
 import { WalkthroughControls } from "./WalkthroughControls";
@@ -57,6 +60,9 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
   const [completedChapterIds, setCompletedChapterIds] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const [collapsedFilePaths, setCollapsedFilePaths] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
 
   const walkthroughQuery = useQuery(
     reviewGenerateWalkthroughQueryOptions({
@@ -93,6 +99,28 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
 
   const allFilePaths = useMemo(() => props.files.map((file) => file.path), [props.files]);
   const { viewedPaths, toggleViewed } = useReviewViewedFiles(props.target, allFilePaths);
+  const commentTools = useReviewCommentAnnotations({
+    target: props.target,
+    cwd: props.cwd,
+    reference: props.reference,
+    patchSignature: props.patchSignature,
+    headSha: props.expectedHeadSha,
+  });
+
+  const renderAnnotation = useCallback(
+    (data: ReviewLineAnnotationData) => (
+      <ReviewCommentThread
+        data={data}
+        actions={commentTools.threadActions}
+        viewer={commentTools.viewer}
+      />
+    ),
+    [commentTools.threadActions, commentTools.viewer],
+  );
+
+  useEffect(() => {
+    setCollapsedFilePaths(new Set());
+  }, [props.reference, props.patchSignature, props.expectedHeadSha]);
 
   const activeChapter =
     reading === "overview" ? null : (chapters.find((chapter) => chapter.id === reading) ?? null);
@@ -161,6 +189,17 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
   const openChapter = (chapter: ReviewWalkthroughChapter): void => {
     setReading(chapter.id);
   };
+  const toggleCollapsedFile = (path: string): void => {
+    setCollapsedFilePaths((previous) => {
+      const next = new Set(previous);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
@@ -195,9 +234,15 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
                 fileDiffs={chapterFileDiffs(activeChapter, fileDiffsByPath)}
                 theme={resolvedTheme}
                 diffStyle={diffStyle}
+                commentsEnabled={commentTools.commentsEnabled}
+                annotationsByFile={commentTools.annotationsByFile}
                 completed={completedChapterIds.has(activeChapter.id)}
                 viewedPaths={viewedPaths}
+                collapsedFilePaths={collapsedFilePaths}
                 onToggleViewed={toggleViewed}
+                onToggleCollapsed={toggleCollapsedFile}
+                onStartDraft={commentTools.startDraft}
+                renderAnnotation={renderAnnotation}
                 onToggleComplete={() => toggleComplete(activeChapter.id)}
                 onNavigatePrevious={() =>
                   setReading(activeIndex <= 0 ? "overview" : chapters[activeIndex - 1]!.id)
