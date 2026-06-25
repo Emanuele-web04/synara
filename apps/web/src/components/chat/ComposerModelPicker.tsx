@@ -24,6 +24,7 @@ import {
 } from "react";
 
 import { appHistory } from "../../appNavigation";
+import type { ResolvedCodexAccount } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStarredModels } from "../../hooks/useStarredModels";
 import {
@@ -35,7 +36,14 @@ import { SearchIcon } from "~/lib/icons";
 import { starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { Input } from "../ui/input";
-import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+} from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
 import {
@@ -91,6 +99,9 @@ type ComposerModelPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
+  selectedCodexAccountId?: string;
+  onCodexAccountChange?: (accountId: string) => void;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
@@ -467,6 +478,32 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
+            {tab === "codex" &&
+            (props.codexAccounts?.length ?? 0) > 1 &&
+            props.onCodexAccountChange ? (
+              <>
+                <MenuGroup>
+                  <MenuGroupLabel className={PICKER_PANEL_GROUP_LABEL_CLASS_NAME}>
+                    Account
+                  </MenuGroupLabel>
+                  <MenuRadioGroup
+                    value={props.selectedCodexAccountId ?? props.codexAccounts?.[0]?.id ?? ""}
+                    onValueChange={(value) => {
+                      if (props.disabled || !value) return;
+                      props.onCodexAccountChange?.(value);
+                      props.onSelectionCommitted?.();
+                    }}
+                  >
+                    {props.codexAccounts?.map((account) => (
+                      <MenuRadioItem key={account.id} value={account.id}>
+                        <span className="truncate">{account.label}</span>
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                </MenuGroup>
+                <MenuSeparator />
+              </>
+            ) : null}
             {discoveryError ? (
               <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
                 {discoveryError}

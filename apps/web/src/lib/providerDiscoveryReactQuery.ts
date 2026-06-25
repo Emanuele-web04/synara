@@ -285,7 +285,22 @@ export const providerDiscoveryQueryKeys = {
     apiEndpoint: string | null,
     agentDir: string | null,
     cwd: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
+    homePath: string | null = null,
+    shadowHomePath: string | null = null,
+    accountId: string | null = null,
+  ) =>
+    [
+      "provider-discovery",
+      "models",
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      homePath,
+      shadowHomePath,
+      accountId,
+    ] as const,
   agentsForProvider: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
   agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
@@ -424,6 +439,9 @@ export function isInitialModelDiscoveryPending(query: {
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
+  homePath?: string | null;
+  shadowHomePath?: string | null;
+  accountId?: string | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
   cwd?: string | null;
@@ -442,6 +460,9 @@ export function providerModelsQueryOptions(input: {
     input.apiEndpoint ?? null,
     input.agentDir ?? null,
     cwd,
+    input.homePath ?? null,
+    input.shadowHomePath ?? null,
+    input.accountId ?? null,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -455,6 +476,9 @@ export function providerModelsQueryOptions(input: {
           const result = await api.provider.listModels({
             provider: input.provider,
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.homePath ? { homePath: input.homePath } : {}),
+            ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+            ...(input.accountId ? { accountId: input.accountId } : {}),
             ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
             ...(input.agentDir ? { agentDir: input.agentDir } : {}),
             ...(cwd ? { cwd } : {}),

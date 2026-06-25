@@ -59,7 +59,13 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     addProjectBaseDirectory: "",
     textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
     providers: {
-      codex: { ...provider, binaryPath: "codex", homePath: "" },
+      codex: {
+        ...provider,
+        binaryPath: "codex",
+        homePath: "",
+        selectedAccountId: "default",
+        accounts: [],
+      },
       claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "", enableArtifacts: false },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },

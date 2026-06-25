@@ -297,6 +297,68 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
+function normalizeCodexProviderOptionsForComparison(
+  providerOptions: ProviderStartOptions | undefined,
+): NonNullable<ProviderStartOptions["codex"]> | undefined {
+  const codex = providerOptions?.codex;
+  if (!codex) {
+    return undefined;
+  }
+  const binaryPath = toNonEmptyProviderInput(codex.binaryPath);
+  const homePath = toNonEmptyProviderInput(codex.homePath);
+  const shadowHomePath = toNonEmptyProviderInput(codex.shadowHomePath);
+  const accountId = toNonEmptyProviderInput(codex.accountId);
+  const normalized = {
+    ...(binaryPath ? { binaryPath } : {}),
+    ...(homePath ? { homePath } : {}),
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+    ...(accountId ? { accountId } : {}),
+  } satisfies NonNullable<ProviderStartOptions["codex"]>;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function codexProviderOptionsEqual(
+  left: NonNullable<ProviderStartOptions["codex"]> | undefined,
+  right: NonNullable<ProviderStartOptions["codex"]> | undefined,
+): boolean {
+  return (
+    left?.binaryPath === right?.binaryPath &&
+    left?.homePath === right?.homePath &&
+    left?.shadowHomePath === right?.shadowHomePath &&
+    left?.accountId === right?.accountId
+  );
+}
+
+function shouldRestartCodexForProviderOptionsChange(input: {
+  readonly requestedProvider: ProviderKind;
+  readonly previousProviderOptions: ProviderStartOptions | undefined;
+  readonly requestedProviderOptions: ProviderStartOptions | undefined;
+}): boolean {
+  if (input.requestedProvider !== "codex") {
+    return false;
+  }
+  return !codexProviderOptionsEqual(
+    normalizeCodexProviderOptionsForComparison(input.previousProviderOptions),
+    normalizeCodexProviderOptionsForComparison(input.requestedProviderOptions),
+  );
+}
+
+function shouldDropCodexResumeCursorForProviderOptionsChange(input: {
+  readonly providerOptionsChanged: boolean;
+  readonly previousProviderOptions: ProviderStartOptions | undefined;
+  readonly requestedProviderOptions: ProviderStartOptions | undefined;
+}): boolean {
+  if (!input.providerOptionsChanged) {
+    return false;
+  }
+  const previous = normalizeCodexProviderOptionsForComparison(input.previousProviderOptions);
+  const requested = normalizeCodexProviderOptionsForComparison(input.requestedProviderOptions);
+  return (previous?.homePath ?? "") !== (requested?.homePath ?? "");
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 // Codex app-server still expects `$skill` text next to the structured skill item.
 export function normalizeSkillMentionTextForProvider(input: {
   readonly provider: ProviderKind;
@@ -309,7 +371,7 @@ export function normalizeSkillMentionTextForProvider(input: {
 
   let nextText = input.messageText;
   for (const skill of input.skills) {
-    const escapedName = skill.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedName = escapeRegExp(skill.name);
     nextText = nextText.replace(
       new RegExp(`(^|\\s)/${escapedName}(?=\\s|$)`, "gi"),
       `$1$${skill.name}`,
@@ -1977,6 +2039,12 @@ const make = Effect.gen(function* () {
       const computerControlChanged =
         requestedComputerControl !== undefined &&
         requestedComputerControl !== previousComputerControl;
+      const previousProviderOptions = threadProviderOptions.get(threadId);
+      const providerOptionsChanged = shouldRestartCodexForProviderOptionsChange({
+        requestedProvider: desiredModelSelection.provider,
+        previousProviderOptions,
+        requestedProviderOptions: resolvedProviderOptions,
+      });
 
       if (
         !runtimeModeChanged &&
@@ -1985,7 +2053,8 @@ const make = Effect.gen(function* () {
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
         !computerControlChanged &&
-        !autoApproveSynaraToolsChanged
+        !autoApproveSynaraToolsChanged &&
+        !providerOptionsChanged
       ) {
         return {
           activeSessionBeforeEnsure,
@@ -2013,6 +2082,7 @@ const make = Effect.gen(function* () {
         !runtimeModeChanged &&
         !providerChanged &&
         !workspaceChanged &&
+        !providerOptionsChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
         !autoApproveSynaraToolsChanged &&
@@ -2042,7 +2112,14 @@ const make = Effect.gen(function* () {
       // takes effect on resume and dropping history would lose fidelity for
       // nothing.
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange || runtimeModeChanged
+        providerChanged ||
+        shouldRestartForModelChange ||
+        runtimeModeChanged ||
+        shouldDropCodexResumeCursorForProviderOptionsChange({
+          providerOptionsChanged,
+          previousProviderOptions,
+          requestedProviderOptions: resolvedProviderOptions,
+        })
           ? undefined
           : (activeSessionBeforeEnsure?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
@@ -2059,6 +2136,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
         computerControlChanged,
+        providerOptionsChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       // Keep the provider cursor when only cwd changes. The existing lifecycle
@@ -2086,6 +2164,7 @@ const make = Effect.gen(function* () {
       if (options?.enableComputerControl !== undefined) {
         threadSessionComputerControl.set(threadId, options.enableComputerControl);
       }
+      threadProviderOptions.set(threadId, resolvedProviderOptions);
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -2145,6 +2224,7 @@ const make = Effect.gen(function* () {
         threadSessionModelSelections.set(threadId, desiredModelSelection);
         threadSessionComputerControl.set(threadId, forkComputerControl);
         threadSessionAutoApproveSynaraTools.set(threadId, autoApproveSynaraTools);
+        threadProviderOptions.set(threadId, resolvedProviderOptions);
         const forkedSession =
           (yield* resolveActiveSession(threadId)) ??
           ({
@@ -2249,6 +2329,7 @@ const make = Effect.gen(function* () {
     if (options?.enableComputerControl !== undefined) {
       threadSessionComputerControl.set(threadId, options.enableComputerControl);
     }
+    threadProviderOptions.set(threadId, resolvedProviderOptions);
     yield* bindSessionToThread(startedSession);
     if (!retainContextBootstrapSuppression) {
       suppressContextBootstrapOnNextStartThreadIds.delete(threadId);
@@ -2733,9 +2814,6 @@ const make = Effect.gen(function* () {
         }
         return;
       }
-    }
-    if (input.providerOptions !== undefined) {
-      threadProviderOptions.set(input.threadId, input.providerOptions);
     }
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);

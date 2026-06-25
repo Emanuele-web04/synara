@@ -77,8 +77,10 @@ import {
 } from "~/projectInstructionsStore";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import {
+  getCodexAccountOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
+  resolveSelectedCodexAccount,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -1321,6 +1323,11 @@ export default function ChatView({
     isModelPickerOpen: isComposerModelEffortPickerOpen,
     resolvedThreadWorktreePath,
   });
+  const codexAccounts = useMemo(() => getCodexAccountOptions(settings), [settings]);
+  const selectedCodexAccount = useMemo(
+    () => resolveSelectedCodexAccount(settings),
+    [settings],
+  );
   const {
     selectedComposerSkills,
     selectedComposerMentions,
@@ -2599,6 +2606,13 @@ export default function ChatView({
       setMode: setComposerDraftComputerControlMode,
       focusComposer: scheduleComposerFocus,
     });
+  const onCodexAccountSelect = useCallback(
+    (accountId: string) => {
+      updateSettings({ selectedCodexAccountId: accountId });
+      scheduleComposerFocus();
+    },
+    [scheduleComposerFocus, updateSettings],
+  );
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -4392,6 +4406,9 @@ export default function ChatView({
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      codexAccounts={codexAccounts}
+      selectedCodexAccountId={selectedCodexAccount.id}
+      onCodexAccountChange={onCodexAccountSelect}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModelsByProvider={runtimeModelsByProvider}

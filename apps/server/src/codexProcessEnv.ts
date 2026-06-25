@@ -14,7 +14,11 @@ import {
   type ShellEnvironmentReader,
 } from "@synara/shared/shell";
 
-import { resolveBaseCodexHomePath, resolveSynaraCodexHomeOverlayPath } from "./codexHomePaths.ts";
+import {
+  resolveBaseCodexHomePath,
+  resolveCodexHomeOverlayAccountSegment,
+  resolveSynaraCodexHomeOverlayPath,
+} from "./codexHomePaths.ts";
 import {
   buildProviderChildEnvironment,
   registerProviderCredentialKey,
@@ -22,6 +26,7 @@ import {
 
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+const CODEX_ACCOUNT_PRIVATE_STATE_FILES = new Set(["auth.json", "models_cache.json"]);
 // SQLite databases and their WAL/SHM/journal sidecars are never mirrored into
 // the overlay. SQLite derives sidecar paths from the path it opened the
 // database through, and on Windows deleting a sidecar through a symlink only
@@ -202,6 +207,7 @@ async function ensureCodexOverlaySymlink(input: {
   readonly sourcePath: string;
   readonly targetPath: string;
   readonly type: "dir" | "file";
+  readonly force?: boolean;
 }): Promise<void> {
   let targetStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
   try {
@@ -215,9 +221,13 @@ async function ensureCodexOverlaySymlink(input: {
       return;
     }
 
-    if (targetStat.isSymbolicLink() || CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
-      // Auth must mirror the user's real Codex home so external `codex login`
-      // changes are visible.
+    if (
+      input.force ||
+      targetStat.isSymbolicLink() ||
+      CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)
+    ) {
+      // Account-private state and auth must mirror the selected Codex home so
+      // external `codex login` changes are visible.
       await fs.rm(input.targetPath, { recursive: true, force: true });
     } else {
       return;
@@ -644,10 +654,26 @@ async function serializeCodexOverlayPreparation<A>(
 async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
   readonly appendConfigToml?: string;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
+    : undefined;
+  if (shadowHomePath && path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
+    throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+  }
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(
+    input.env,
+    sourceHomePath,
+    resolveCodexHomeOverlayAccountSegment({
+      homePath: sourceHomePath,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(shadowHomePath ? { shadowHomePath } : {}),
+    }),
+  );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -660,6 +686,9 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
     await removeLegacyCodexOverlaySqliteLinks(overlayHomePath);
     for (const entry of prioritizeCodexOverlayEntries(await fs.readdir(sourceHomePath))) {
       if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
+        continue;
+      }
+      if (shadowHomePath && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
@@ -675,6 +704,32 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   } catch {
     // If the source home is partially missing, Codex can still start with the
     // overlay config and create any required state lazily.
+  }
+
+  if (shadowHomePath) {
+    try {
+      for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
+        const sourcePath = path.join(shadowHomePath, entry);
+        const stat = await fs.lstat(sourcePath).catch((cause: unknown) => {
+          if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+            return undefined;
+          }
+          throw cause;
+        });
+        if (!stat) continue;
+        const targetPath = path.join(overlayHomePath, entry);
+        await ensureCodexOverlaySymlink({
+          entryName: entry,
+          sourcePath,
+          targetPath,
+          type: stat.isDirectory() ? "dir" : "file",
+          force: true,
+        });
+      }
+    } catch {
+      // Missing shadow homes should not prevent Codex from creating account
+      // state lazily, but existing private files must never be read or logged.
+    }
   }
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
@@ -721,10 +776,23 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
 async function prepareSynaraCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
   readonly appendConfigToml?: string;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(input.env, sourceHomePath);
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
+    : undefined;
+  const overlayHomePath = resolveSynaraCodexHomeOverlayPath(
+    input.env,
+    sourceHomePath,
+    resolveCodexHomeOverlayAccountSegment({
+      homePath: sourceHomePath,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(shadowHomePath ? { shadowHomePath } : {}),
+    }),
+  );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -737,6 +805,8 @@ export async function buildCodexProcessEnv(
   input: {
     readonly env?: NodeJS.ProcessEnv;
     readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
     readonly appendConfigToml?: string;
@@ -746,11 +816,18 @@ export async function buildCodexProcessEnv(
   const overlayHomePath = await prepareSynaraCodexHomeOverlay({
     env: baseEnv,
     ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
     ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
   });
+  const directAccountHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(baseEnv, input.shadowHomePath)
+    : input.homePath
+      ? resolveBaseCodexHomePath(baseEnv, input.homePath)
+      : undefined;
   const configuredEnv =
-    overlayHomePath || input.homePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
+    overlayHomePath || directAccountHomePath
+      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? directAccountHomePath }
       : baseEnv;
   if (overlayHomePath && !configuredEnv.CODEX_SQLITE_HOME?.trim()) {
     // Keep every Codex process (Synara's app-server, the user's own `codex`

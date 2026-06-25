@@ -23,6 +23,7 @@ import { envPathKeyFor } from "@synara/shared/executable";
 import { isPathName, mergePathEntries } from "@synara/shared/shell";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { expandHomePath } from "@synara/shared/synaraHome";
+import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import {
   Array,
@@ -846,10 +847,18 @@ const runAntigravityCommand = (args: ReadonlyArray<string>, executable = "agy") 
 
 // ── Health check ────────────────────────────────────────────────────
 
-async function makeCodexProbeEnv(homePath?: string): Promise<NodeJS.ProcessEnv> {
+async function makeCodexProbeEnv(
+  homePath?: string,
+  shadowHomePath?: string,
+  accountId?: string,
+): Promise<NodeJS.ProcessEnv> {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
+  const normalizedShadowHomePath = nonEmptyTrimmed(shadowHomePath);
+  const normalizedAccountId = nonEmptyTrimmed(accountId);
   return buildCodexProcessEnv({
     ...(normalizedHomePath ? { homePath: normalizedHomePath } : {}),
+    ...(normalizedShadowHomePath ? { shadowHomePath: normalizedShadowHomePath } : {}),
+    ...(normalizedAccountId ? { accountId: normalizedAccountId } : {}),
   });
 }
 
@@ -879,6 +888,8 @@ const hasCustomModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
 export const makeCheckCodexProviderStatus = (
   binaryPath?: string,
   homePath?: string,
+  shadowHomePath?: string,
+  accountId?: string,
 ): Effect.Effect<
   ServerProviderStatus,
   never,
@@ -887,7 +898,9 @@ export const makeCheckCodexProviderStatus = (
   const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const probeEnv = yield* Effect.promise(() => makeCodexProbeEnv(homePath));
+    const probeEnv = yield* Effect.promise(() =>
+      makeCodexProbeEnv(homePath, shadowHomePath, accountId),
+    );
 
     // Probe 1: `codex --version` — is the CLI reachable?
     const versionProbe = yield* probeProviderCliVersion(
@@ -2436,15 +2449,18 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       const loadProviderStatuses = serverSettings.ready
         .pipe(
           Effect.flatMap(() => serverSettings.getSettings),
-          Effect.flatMap((settings) =>
-            Effect.all(
+          Effect.flatMap((settings) => {
+            const codexOptions = providerStartOptionsFromServerSettings(settings).codex;
+            return Effect.all(
               [
                 checkProviderWhenEnabled(
                   settings,
                   CODEX_PROVIDER,
                   makeCheckCodexProviderStatus(
-                    settings.providers.codex.binaryPath,
-                    settings.providers.codex.homePath,
+                    codexOptions?.binaryPath,
+                    codexOptions?.homePath,
+                    codexOptions?.shadowHomePath,
+                    codexOptions?.accountId,
                   ),
                 ),
                 checkProviderWhenEnabled(
@@ -2506,8 +2522,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               {
                 concurrency: "unbounded",
               },
-            ),
-          ),
+            );
+          }),
         )
         .pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
