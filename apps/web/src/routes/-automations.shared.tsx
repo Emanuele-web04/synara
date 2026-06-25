@@ -23,6 +23,7 @@ import {
   ComposerPickerMenuSubPopup,
 } from "~/components/chat/ComposerPickerMenuPopup";
 import { ProviderModelPicker } from "~/components/chat/ProviderModelPicker";
+import { Alert, AlertDescription, AlertTitle } from "~/components/ui/alert";
 import { Button } from "~/components/ui/button";
 import { Dialog, DialogPopup, DialogTitle } from "~/components/ui/dialog";
 import {
@@ -642,6 +643,50 @@ export function maxIterationOptions(
     return MAX_ITERATION_PRESETS;
   }
   return [{ value, label: maxIterationLabel(value) }, ...MAX_ITERATION_PRESETS];
+}
+
+// Shown at the top of an automation's detail panel when it still needs a one-time risk
+// approval before it can run. Approving persists on the automation, so it never asks again.
+export function AutomationApprovalBanner({
+  warnings,
+  busy,
+  onApprove,
+  onApproveAndRun,
+}: {
+  readonly warnings: readonly AutomationDraftWarning[];
+  readonly busy: boolean;
+  readonly onApprove: () => void;
+  readonly onApproveAndRun: () => void;
+}) {
+  if (warnings.length === 0) {
+    return null;
+  }
+  return (
+    <Alert variant="warning">
+      <AlertTitle>Approval needed to run</AlertTitle>
+      <AlertDescription>
+        <span>
+          This automation needs your approval once before it can run. It won&apos;t ask again.
+        </span>
+        <ul className="flex flex-col gap-1.5">
+          {warnings.map((warning) => (
+            <li key={warning.id} className="text-xs">
+              <span className="font-medium text-foreground/90">{warning.title}</span>
+              <span className="block">{warning.detail}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={onApprove}>
+            Approve
+          </Button>
+          <Button type="button" size="sm" disabled={busy} onClick={onApproveAndRun}>
+            Approve &amp; run now
+          </Button>
+        </div>
+      </AlertDescription>
+    </Alert>
+  );
 }
 
 export function AutomationModelPicker({
