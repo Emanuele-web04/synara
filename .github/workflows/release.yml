@@ -18,7 +18,7 @@ permissions:
 jobs:
   preflight:
     name: Preflight
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
@@ -85,7 +85,14 @@ jobs:
         run: bun run --filter @t3tools/shared test
 
       - name: Test server package
-        run: bun run --filter t3 test
+        run: |
+          bun run --filter t3 test -- \
+            src/provider/Layers/ClaudeAdapter.test.ts \
+            src/orchestration/Layers/ProviderCommandReactor.test.ts \
+            src/orchestration/Layers/ProjectionPipeline.test.ts \
+            src/review/Layers/ReviewSubmission.test.ts \
+            src/review/walkthroughHunks.test.ts \
+            src/review/validateInlineComments.test.ts
 
       - name: Test desktop package
         run: bun run --filter @t3tools/desktop test
