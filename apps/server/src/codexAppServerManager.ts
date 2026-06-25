@@ -235,11 +235,16 @@ interface CodexSkillListInput {
   readonly cwd: string;
   readonly forceReload?: boolean;
   readonly threadId?: string;
+  readonly codexOptions?: CodexDiscoveryOptions;
 }
 
-interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {}
+interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
 
-interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {}
+interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
 
 type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 
@@ -2742,9 +2747,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
     const cwd = input.cwd.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
@@ -2756,7 +2763,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd);
+    const context = await this.resolveContextForDiscovery(input.threadId, cwd, codexOptions);
     let response: Record<string, unknown>;
     try {
       response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
@@ -2784,10 +2791,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
     const cwd = input.cwd?.trim() || null;
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
       forceRemoteSync: input.forceRemoteSync === true,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
@@ -2799,7 +2808,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd ?? undefined);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      cwd ?? undefined,
+      codexOptions,
+    );
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
       ...(cwd ? { cwds: [cwd] } : {}),
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
@@ -2816,9 +2829,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readPlugin(input: CodexPluginReadInput): Promise<ProviderReadPluginResult> {
     const marketplacePath = input.marketplacePath.trim();
     const pluginName = input.pluginName.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       marketplacePath,
       pluginName,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
@@ -2828,7 +2843,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
     }
 
-    const context = await this.resolveContextForDiscovery(undefined);
+    const context = await this.resolveContextForDiscovery(input.threadId, input.cwd, codexOptions);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
       marketplacePath,
       pluginName,

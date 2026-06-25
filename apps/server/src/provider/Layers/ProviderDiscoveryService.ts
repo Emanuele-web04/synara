@@ -103,6 +103,19 @@ function isolateMalformedModelDescriptors(input: {
   );
 }
 
+const PROVIDER_DISCOVERY_OPTION_KEYS = {
+  codex: ["binaryPath", "homePath", "shadowHomePath", "accountId"],
+  claudeAgent: ["binaryPath", "homePath"],
+  cursor: ["binaryPath", "apiEndpoint"],
+  devin: ["binaryPath"],
+  antigravity: ["binaryPath"],
+  grok: ["binaryPath"],
+  droid: ["binaryPath"],
+  opencode: ["binaryPath", "serverUrl", "experimentalWebSockets"],
+  pi: ["binaryPath", "agentDir"],
+  omp: ["binaryPath", "agentDir"],
+} as const satisfies Record<ProviderKind, readonly string[]>;
+
 const make = Effect.gen(function* () {
   const registry = yield* ProviderAdapterRegistry;
   const serverConfig = yield* ServerConfig;
@@ -174,15 +187,22 @@ const make = Effect.gen(function* () {
   const applyProviderStartOptions = <T extends { readonly provider: ProviderKind }>(
     parsed: T,
     providerOptions: ProviderStartOptions | undefined,
+    replaceProviderOptions: boolean,
   ): T => {
+    const base = { ...parsed } as Record<string, unknown>;
+    if (replaceProviderOptions) {
+      for (const key of PROVIDER_DISCOVERY_OPTION_KEYS[parsed.provider]) {
+        delete base[key];
+      }
+    }
     const providerConfig = providerOptions?.[parsed.provider];
     if (!providerConfig || typeof providerConfig !== "object") {
-      return parsed;
+      return base as T;
     }
     const overlay = Object.fromEntries(
       Object.entries(providerConfig).filter(([, value]) => value !== undefined && value !== ""),
     );
-    return { ...parsed, ...overlay } as T;
+    return { ...base, ...overlay } as T;
   };
 
   const resolveDiscoveryInput = <
@@ -191,7 +211,7 @@ const make = Effect.gen(function* () {
     parsed: T,
   ): Effect.Effect<
     T & { readonly provider: ProviderKind; readonly instanceId: string; readonly enabled: boolean },
-    never,
+    ProviderValidationError,
     never
   > =>
     Effect.gen(function* () {
@@ -202,6 +222,18 @@ const make = Effect.gen(function* () {
         provider: parsed.provider,
         ...(parsed.instanceId ? { instanceId: parsed.instanceId } : {}),
       });
+      if (!instance) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderDiscoveryService.resolveDiscoveryInput",
+          issue: `Unknown provider instance '${parsed.instanceId}'.`,
+        });
+      }
+      if (parsed.provider !== instance.driver) {
+        return yield* new ProviderValidationError({
+          operation: "ProviderDiscoveryService.resolveDiscoveryInput",
+          issue: `Requested provider '${parsed.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
+        });
+      }
       const resolved = {
         ...parsed,
         provider: instance.driver as ProviderKind,
@@ -212,7 +244,11 @@ const make = Effect.gen(function* () {
         readonly instanceId: string;
         readonly enabled: boolean;
       };
-      return applyProviderStartOptions(resolved, providerStartOptionsFromInstance(instance));
+      return applyProviderStartOptions(
+        resolved,
+        providerStartOptionsFromInstance(instance),
+        parsed.instanceId !== undefined,
+      );
     });
 
   const getComposerCapabilities: ProviderDiscoveryServiceShape["getComposerCapabilities"] = (

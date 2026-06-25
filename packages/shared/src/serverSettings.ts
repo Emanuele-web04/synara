@@ -82,6 +82,9 @@ export function providerStartOptionsFromServerSettings(
     },
     claudeAgent: {
       ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
+      ...(providers.claudeAgent.homePath.trim()
+        ? { homePath: providers.claudeAgent.homePath.trim() }
+        : {}),
       enableArtifacts: providers.claudeAgent.enableArtifacts,
     },
     cursor: {

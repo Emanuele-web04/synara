@@ -36,6 +36,7 @@ import {
   DEFAULT_APP_SNAP_SHORTCUT,
 } from "@synara/shared/appSnapShortcut";
 import type { SynaraDesktopFlavor } from "@synara/shared/desktopIdentity";
+import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
@@ -818,7 +819,7 @@ const PROVIDER_INSTANCE_PROVIDER_ORDER = [
 ] as const satisfies ReadonlyArray<ProviderKind>;
 
 function providerInstanceIdForCodexAccount(accountId: string): ProviderInstanceId {
-  return accountId === DEFAULT_CODEX_ACCOUNT_ID ? "codex" : `codex_${accountId}`;
+  return accountId === DEFAULT_CODEX_ACCOUNT_ID ? "codex" : codexAccountInstanceId(accountId);
 }
 
 function defaultProviderInstanceLabel(provider: ProviderKind): string {
