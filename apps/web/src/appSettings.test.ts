@@ -20,6 +20,7 @@ import {
   DEFAULT_TIMESTAMP_FORMAT,
   didProviderEnablementChange,
   getAppModelOptions,
+  getCodexProviderDiscoveryOptions,
   getCustomBinaryPathForProvider,
   getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
@@ -666,6 +667,8 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "/usr/local/bin/claude",
         codexBinaryPath: "",
         codexHomePath: "/Users/you/.codex",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "http://localhost:3000",
         cursorBinaryPath: "/usr/local/bin/agent",
         antigravityBinaryPath: "/usr/local/bin/agy",
@@ -707,6 +710,8 @@ describe("getProviderStartOptions", () => {
         claudeBinaryPath: "",
         codexBinaryPath: "",
         codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
         cursorBinaryPath: "",
         antigravityBinaryPath: "",
@@ -722,12 +727,105 @@ describe("getProviderStartOptions", () => {
     ).toBeUndefined();
   });
 
+  it("resolves the selected Codex account into provider start options", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "/Users/you/.codex",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "work",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        devinBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+      }),
+    ).toEqual({
+      codex: {
+        accountId: "work",
+        homePath: "/Users/you/.codex",
+        shadowHomePath: "/Users/you/.codex_work",
+      },
+    });
+  });
+
+  it("emits an empty Codex options object when switching back to default among accounts", () => {
+    expect(
+      getProviderStartOptions({
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "default",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        devinBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+      }),
+    ).toEqual({
+      codex: {},
+    });
+  });
+
+  it("keeps default Codex account discovery separate from custom accounts", () => {
+    expect(
+      getCodexProviderDiscoveryOptions({
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [
+          {
+            id: "work",
+            label: "Work",
+            homePath: "",
+            shadowHomePath: "/Users/you/.codex_work",
+          },
+        ],
+        selectedCodexAccountId: "default",
+      }),
+    ).toEqual({
+      binaryPath: null,
+      homePath: null,
+      shadowHomePath: null,
+      accountId: "default",
+    });
+  });
+
   it("ignores default provider command names as custom binary overrides", () => {
     expect(
       getProviderStartOptions({
         claudeBinaryPath: "claude",
         codexBinaryPath: "codex",
         codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
         cursorApiEndpoint: "",
         cursorBinaryPath: "cursor-agent",
         antigravityBinaryPath: "agy",

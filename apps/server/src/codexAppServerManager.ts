@@ -6,6 +6,7 @@ import {
   ApprovalRequestId,
   BROWSER_TOOL_NAMES,
   EventId,
+  type ProviderStartOptions,
   type ProviderComposerCapabilities,
   ProviderItemId,
   type ProviderListModelsResult,
@@ -188,6 +189,8 @@ interface CodexSessionContext {
   transportError?: Error;
   stopPromise?: Promise<void>;
   teardownCapturedBeforeExit?: boolean;
+  codexOptions?: CodexDiscoveryOptions;
+  discoveryKey?: string;
   discovery?: boolean;
 }
 
@@ -200,6 +203,8 @@ interface CodexSkillListInput {
 interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {}
 
 interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {}
+
+type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 
 interface JsonRpcError {
   code?: number;
@@ -963,6 +968,26 @@ function setRecentCacheEntry<K, V>(
   }
 }
 
+function normalizeCodexDiscoveryOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexDiscoveryOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const normalized = {
+    ...(options.binaryPath?.trim() ? { binaryPath: options.binaryPath.trim() } : {}),
+    ...(options.homePath?.trim() ? { homePath: options.homePath.trim() } : {}),
+    ...(options.shadowHomePath?.trim() ? { shadowHomePath: options.shadowHomePath.trim() } : {}),
+    ...(options.accountId?.trim() ? { accountId: options.accountId.trim() } : {}),
+  } satisfies CodexDiscoveryOptions;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefined): string {
+  const normalized = normalizeCodexDiscoveryOptions(options);
+  return normalized ? JSON.stringify(normalized) : "__default__";
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly previouslyBoundThreadIds = new Set<ThreadId>();
@@ -1020,11 +1045,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   // while the per-thread bearer token travels through the app-server process
   // env referenced by `bearer_token_env_var`.
   private async buildSessionProcessEnv(
-    homePath: string | undefined,
+    codexOptions: CodexDiscoveryOptions | undefined,
     gatewayBearerToken: string | undefined,
   ) {
     const env = await buildCodexProcessEnv({
-      ...(homePath ? { homePath } : {}),
+      ...(codexOptions?.homePath ? { homePath: codexOptions.homePath } : {}),
+      ...(codexOptions?.shadowHomePath ? { shadowHomePath: codexOptions.shadowHomePath } : {}),
+      ...(codexOptions?.accountId ? { accountId: codexOptions.accountId } : {}),
       ...(this.agentGatewayMcp
         ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl()) }
         : {}),
@@ -1083,8 +1110,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       const codexOptions = readCodexProviderOptions(input);
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -1092,13 +1122,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: await this.buildSessionProcessEnv(
-          codexHomePath,
+          normalizedCodexOptions,
           gatewaySessionLease?.connection.bearerToken,
         ),
       });
@@ -1125,6 +1157,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -1890,8 +1923,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: input.runtimeMode,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
       await this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
@@ -1899,13 +1935,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           ? { minimumVersion: MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION }
           : {}),
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
       });
       gatewaySessionLease = this.agentGatewayMcp?.acquireSessionLease(threadId);
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: await this.buildSessionProcessEnv(
-          codexHomePath,
+          normalizedCodexOptions,
           gatewaySessionLease?.connection.bearerToken,
         ),
       });
@@ -1929,6 +1967,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -2514,8 +2553,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result;
   }
 
-  async listModels(threadId?: string): Promise<ProviderListModelsResult> {
-    const cacheKey = threadId?.trim() || "__default__";
+  async listModels(
+    input?:
+      | string
+      | {
+          readonly threadId?: string;
+          readonly cwd?: string;
+          readonly codexOptions?: CodexDiscoveryOptions;
+        },
+  ): Promise<ProviderListModelsResult> {
+    const threadId = typeof input === "string" ? input : input?.threadId;
+    const cwd = typeof input === "string" ? undefined : input?.cwd;
+    const codexOptions = typeof input === "string" ? undefined : input?.codexOptions;
+    const cacheKey = JSON.stringify({
+      threadId: threadId?.trim() || null,
+      cwd: cwd?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+    });
     const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
       return {
@@ -2524,7 +2578,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
     }
 
-    const context = await this.resolveContextForDiscovery(threadId);
+    const context = await this.resolveContextForDiscovery(threadId, cwd, codexOptions);
     const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
       cursor: null,
       limit: 50,
@@ -2621,15 +2675,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
+    codexOptions?: CodexDiscoveryOptions,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
+    const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
+    const isCompatibleContext = (context: CodexSessionContext): boolean =>
+      optionsKey === "__default__" ||
+      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
         if (
           this.isContextInitializedAndRoutable(session) &&
-          (!normalizedCwd || session.session.cwd === normalizedCwd)
+          (!normalizedCwd || session.session.cwd === normalizedCwd) &&
+          isCompatibleContext(session)
         ) {
           return session;
         }
@@ -2643,20 +2703,25 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       for (const activeSession of this.sessions.values()) {
         if (
           this.isContextInitializedAndRoutable(activeSession) &&
-          activeSession.session.cwd === normalizedCwd
+          activeSession.session.cwd === normalizedCwd &&
+          isCompatibleContext(activeSession)
         ) {
           return activeSession;
         }
       }
-      return this.getOrCreateDiscoverySession(normalizedCwd);
+      return codexOptions
+        ? this.getOrCreateDiscoverySession(normalizedCwd, codexOptions)
+        : this.getOrCreateDiscoverySession(normalizedCwd);
     }
     const firstActive = Array.from(this.sessions.values()).find((context) =>
-      this.isContextInitializedAndRoutable(context),
+      this.isContextInitializedAndRoutable(context) && isCompatibleContext(context),
     );
     if (firstActive) {
       return firstActive;
     }
-    return this.getOrCreateDiscoverySession(process.cwd());
+    return codexOptions
+      ? this.getOrCreateDiscoverySession(process.cwd(), codexOptions)
+      : this.getOrCreateDiscoverySession(process.cwd());
   }
 
   private async resolveVoiceTranscriptionAuth(input: {
@@ -2739,49 +2804,79 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
-  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+  private async getOrCreateDiscoverySession(
+    cwd: string,
+    codexOptions?: CodexDiscoveryOptions,
+  ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
-    const startup = this.discoverySessionStartups.get(normalizedCwd);
+    const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
+    const discoveryKey = JSON.stringify({
+      cwd: normalizedCwd,
+      account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
+    });
+    const startup = this.discoverySessionStartups.get(discoveryKey);
     if (startup) {
       return startup;
     }
-    const existing = this.discoverySessions.get(normalizedCwd);
+    const existing = this.discoverySessions.get(discoveryKey);
     if (
       existing &&
       existing.session.status === "ready" &&
       !existing.stopping &&
       !existing.child.killed
     ) {
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return existing;
     }
 
-    const nextStartup = this.createDiscoverySession(normalizedCwd);
-    this.discoverySessionStartups.set(normalizedCwd, nextStartup);
+    const nextStartup = this.createDiscoverySession(
+      discoveryKey,
+      normalizedCwd,
+      normalizedCodexOptions,
+    );
+    this.discoverySessionStartups.set(discoveryKey, nextStartup);
     try {
       return await nextStartup;
     } finally {
-      if (this.discoverySessionStartups.get(normalizedCwd) === nextStartup) {
-        this.discoverySessionStartups.delete(normalizedCwd);
+      if (this.discoverySessionStartups.get(discoveryKey) === nextStartup) {
+        this.discoverySessionStartups.delete(discoveryKey);
       }
     }
   }
 
-  private async createDiscoverySession(normalizedCwd: string): Promise<CodexSessionContext> {
-    const existing = this.discoverySessions.get(normalizedCwd);
+  private async createDiscoverySession(
+    discoveryKey: string,
+    normalizedCwd: string,
+    normalizedCodexOptions: CodexDiscoveryOptions | undefined,
+  ): Promise<CodexSessionContext> {
+    const existing = this.discoverySessions.get(discoveryKey);
     if (existing) {
-      await this.stopDiscoverySession(normalizedCwd);
+      await this.stopDiscoverySession(discoveryKey);
     }
 
     const now = new Date().toISOString();
+    const codexBinaryPath = normalizedCodexOptions?.binaryPath ?? "codex";
     await this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
+      ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
+      ...(normalizedCodexOptions?.shadowHomePath
+        ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
+        : {}),
+      ...(normalizedCodexOptions?.accountId ? { accountId: normalizedCodexOptions.accountId } : {}),
     });
     const child = spawnCodexAppServer({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
-      env: await buildCodexProcessEnv(),
+      env: await buildCodexProcessEnv({
+        ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
+        ...(normalizedCodexOptions?.shadowHomePath
+          ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
+          : {}),
+        ...(normalizedCodexOptions?.accountId
+          ? { accountId: normalizedCodexOptions.accountId }
+          : {}),
+      }),
     });
     const context: CodexSessionContext = {
       session: {
@@ -2790,7 +2885,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: "full-access",
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
-        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
+        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${discoveryKey}`),
         createdAt: now,
         updatedAt: now,
       },
@@ -2810,10 +2905,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
+      ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
+      discoveryKey,
       discovery: true,
     };
 
-    this.discoverySessions.set(normalizedCwd, context);
+    this.discoverySessions.set(discoveryKey, context);
     this.attachProcessListeners(context);
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
@@ -2826,10 +2923,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Discovery can still function without account metadata.
       }
       this.updateSession(context, { status: "ready" });
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return context;
     } catch (error) {
-      await this.stopDiscoverySession(normalizedCwd);
+      await this.stopDiscoverySession(discoveryKey);
       throw error;
     }
   }
@@ -2867,7 +2964,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.discovery || context.stopping) {
       return;
     }
-    const discoveryKey = context.session.cwd?.trim();
+    const discoveryKey = context.discoveryKey ?? context.session.cwd?.trim();
     if (!discoveryKey || this.discoverySessions.get(discoveryKey) !== context) {
       return;
     }
@@ -3014,7 +3111,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private stopFailedContext(context: CodexSessionContext): void {
     const stopping = context.discovery
-      ? this.stopDiscoverySession(context.session.cwd ?? "")
+      ? this.stopDiscoverySession(context.discoveryKey ?? context.session.cwd ?? "")
       : this.stopSession(context.session.threadId);
     void stopping.catch((stopError) => {
       log.error("failed to stop Codex session after process or transport failure", {
@@ -3712,6 +3809,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly binaryPath: string;
     readonly cwd: string;
     readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
     readonly minimumVersion?: string;
   }): Promise<void> {
     await assertSupportedCodexCliVersion(input);
@@ -4071,8 +4170,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
-    const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+    const latestReviewTurn = snapshot.turns
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }
@@ -4098,6 +4197,8 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
 } {
   const options = input.providerOptions?.codex;
   if (!options) {
@@ -4106,6 +4207,8 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   return {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options.accountId ? { accountId: options.accountId } : {}),
   };
 }
 
@@ -4221,10 +4324,14 @@ async function runCodexCliVersionGate(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
   readonly minimumVersion?: string;
 }): Promise<CodexCliBinaryFingerprint | null> {
   const env = await buildCodexProcessEnv({
     ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
   });
   // Resolved against the env the spawn below uses, never `process.env`. On macOS and Linux
   // `buildCodexProcessEnv` can replace PATH with the login shell's, so resolving through the
@@ -4295,13 +4402,21 @@ const codexCliVersionGates = new Map<string, CodexCliVersionGateEntry>();
 function codexCliVersionGateKey(
   binaryPath: string,
   homePath: string | undefined,
+  shadowHomePath: string | undefined,
+  accountId: string | undefined,
   minimumVersion: string | undefined,
 ): string {
   // The installed version depends only on which binary runs and which CODEX_HOME
   // shapes its environment. The required floor is part of the verdict, while the
   // caller's cwd is not. JSON encoding keeps the components unambiguous, since a
   // path may contain any separator we'd pick.
-  return JSON.stringify([binaryPath, homePath ?? "", minimumVersion ?? ""]);
+  return JSON.stringify([
+    binaryPath,
+    homePath ?? "",
+    shadowHomePath ?? "",
+    accountId ?? "",
+    minimumVersion ?? "",
+  ]);
 }
 
 /** True when the file behind a cached verdict is no longer the one that was probed. */
@@ -4318,6 +4433,8 @@ async function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
   readonly minimumVersion?: string;
 }): Promise<void> {
   // Prefer an explicit cwd check before spawning. A missing working directory
@@ -4325,7 +4442,13 @@ async function assertSupportedCodexCliVersion(input: {
   // is per-call state, so it must run even when the version verdict is cached.
   assertCodexWorkingDirectoryExists(input.cwd);
 
-  const key = codexCliVersionGateKey(input.binaryPath, input.homePath, input.minimumVersion);
+  const key = codexCliVersionGateKey(
+    input.binaryPath,
+    input.homePath,
+    input.shadowHomePath,
+    input.accountId,
+    input.minimumVersion,
+  );
   const now = Date.now();
   const existing = codexCliVersionGates.get(key);
   if (existing) {

@@ -110,4 +110,34 @@ describe("providerStartOptionsFromServerSettings", () => {
     });
     expect(providerOptions.devin).toEqual({ binaryPath: "/custom/bin/devin" });
   });
+
+  it("uses the selected Codex account while preserving the shared provider binary", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          binaryPath: "/custom/bin/codex",
+          homePath: "/shared/codex-home",
+          accounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/accounts/work",
+            },
+          ],
+          selectedAccountId: "work",
+        },
+      },
+    };
+
+    expect(providerStartOptionsFromServerSettings(settings).codex).toEqual({
+      binaryPath: "/custom/bin/codex",
+      homePath: "/shared/codex-home",
+      shadowHomePath: "/accounts/work",
+      accountId: "work",
+    });
+  });
 });

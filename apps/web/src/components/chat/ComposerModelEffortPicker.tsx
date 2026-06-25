@@ -17,6 +17,7 @@ import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import type { ResolvedCodexAccount } from "../../appSettings";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
 import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
@@ -56,6 +57,8 @@ type ComposerModelEffortPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
+  selectedCodexAccountId?: string;
   compact?: boolean;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
@@ -66,6 +69,7 @@ type ComposerModelEffortPickerProps = {
   // effort ladder as a stepped slider card with the model list behind its label.
   // Models without an effort ladder always fall back to the menu layout.
   effortControl?: ComposerEffortControl;
+  onCodexAccountChange?: (accountId: string) => void;
   onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
   onSelectionCommitted?: () => void;
 
@@ -224,7 +228,14 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
           : {})}
         {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
         {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+        {...(props.codexAccounts ? { codexAccounts: props.codexAccounts } : {})}
+        {...(props.selectedCodexAccountId
+          ? { selectedCodexAccountId: props.selectedCodexAccountId }
+          : {})}
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
+        {...(props.onCodexAccountChange
+          ? { onCodexAccountChange: props.onCodexAccountChange }
+          : {})}
         onProviderModelChange={props.onProviderModelChange}
         onAfterSelection={onAfterSelection}
       />

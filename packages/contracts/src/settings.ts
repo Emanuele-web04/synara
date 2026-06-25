@@ -7,6 +7,22 @@ const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
+export const DEFAULT_CODEX_ACCOUNT_ID = "default";
+
+export const CodexAccountId = TrimmedString.check(Schema.isMaxLength(64));
+export type CodexAccountId = typeof CodexAccountId.Type;
+
+export const CodexAccountConfig = Schema.Struct({
+  id: CodexAccountId,
+  label: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  shadowHomePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+});
+export type CodexAccountConfig = typeof CodexAccountConfig.Type;
+
+const CodexAccountConfigs = Schema.Array(CodexAccountConfig).pipe(
+  Schema.withDecodingDefault(() => []),
+);
 
 const ProviderSettingsBase = {
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -18,6 +34,10 @@ export const CodexServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "codex")),
   homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  accounts: CodexAccountConfigs,
+  selectedAccountId: CodexAccountId.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_CODEX_ACCOUNT_ID),
+  ),
 });
 export type CodexServerProviderSettings = typeof CodexServerProviderSettings.Type;
 
@@ -152,6 +172,8 @@ export const ServerSettingsPatch = Schema.Struct({
         Schema.Struct({
           ...ProviderSettingsBasePatch,
           homePath: Schema.optionalKey(StringSetting),
+          accounts: Schema.optionalKey(CodexAccountConfigs),
+          selectedAccountId: Schema.optionalKey(CodexAccountId),
         }),
       ),
       claudeAgent: Schema.optionalKey(

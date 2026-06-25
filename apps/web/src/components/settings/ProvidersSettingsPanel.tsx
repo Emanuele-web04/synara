@@ -3,6 +3,7 @@
 // Layer: Settings panel
 
 import {
+  DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ServerProviderStatus,
@@ -29,10 +30,16 @@ import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
 
-import type { AppSettings, AppSettingsBinding } from "~/appSettings";
+import {
+  getCodexAccountOptions,
+  normalizeCodexAccounts,
+  type AppSettings,
+  type AppSettingsBinding,
+  type CodexAccountSettings,
+} from "~/appSettings";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { CentralIcon } from "~/lib/central-icons";
-import { DownloadIcon, ExternalLinkIcon, Loader2Icon } from "~/lib/icons";
+import { DownloadIcon, ExternalLinkIcon, Loader2Icon, PlusIcon, XIcon } from "~/lib/icons";
 import {
   hasReconciledServerProviderStatuses,
   serverConfigQueryOptions,
@@ -63,11 +70,16 @@ import { ELEVATED_HOVER_SURFACE_RAISED_TEXT_CLASS_NAME } from "~/surfaceStyles";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { DisclosureChevron } from "../ui/DisclosureChevron";
+import { SelectItem } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { toastManager } from "../ui/toast";
 import { ProviderIcon } from "../ProviderIcon";
 import { DebouncedSettingTextInput } from "./DebouncedSettingTextInput";
-import { SettingResetButton, useSettingsRestoreSignal } from "./SettingControls";
+import {
+  SettingResetButton,
+  SettingsSelectControl,
+  useSettingsRestoreSignal,
+} from "./SettingControls";
 import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
 type ProviderInstallTextKey =
@@ -378,7 +390,12 @@ function isProviderInstallConfigDirty(
   settings: AppSettings,
   defaults: AppSettings,
 ): boolean {
-  return config.fields.some((field) => isProviderInstallFieldDirty(field, settings, defaults));
+  return (
+    config.fields.some((field) => isProviderInstallFieldDirty(field, settings, defaults)) ||
+    (config.provider === "codex" &&
+      (settings.selectedCodexAccountId !== defaults.selectedCodexAccountId ||
+        JSON.stringify(settings.codexAccounts) !== JSON.stringify(defaults.codexAccounts)))
+  );
 }
 
 export function isProviderInstallSettingsDirty(
@@ -400,7 +417,10 @@ function createProviderInstallDisclosureState(
         field.kind === "password"
           ? settings[field.configuredKey]
           : Boolean(settings[field.settingsKey]),
-      ),
+      ) ||
+        (config.provider === "codex" &&
+          (settings.codexAccounts.length > 0 ||
+            settings.selectedCodexAccountId !== DEFAULT_CODEX_ACCOUNT_ID)),
     ]),
   ) as Record<ProviderKind, boolean>;
 }
@@ -412,11 +432,16 @@ function createClosedProviderInstallDisclosureState(): Record<ProviderKind, bool
 }
 
 export function createProviderInstallResetPatch(defaults: AppSettings): Partial<AppSettings> {
-  return Object.fromEntries(
+  const fieldPatch = Object.fromEntries(
     PROVIDER_INSTALL_SETTINGS.flatMap((config) =>
       config.fields.map((field) => [field.settingsKey, defaults[field.settingsKey]]),
     ),
   ) as Partial<AppSettings>;
+  return {
+    ...fieldPatch,
+    codexAccounts: defaults.codexAccounts,
+    selectedCodexAccountId: defaults.selectedCodexAccountId,
+  };
 }
 
 function setProviderListMembership(
@@ -643,6 +668,168 @@ function ProviderInstallFieldControl(props: {
   );
 }
 
+function CodexAccountsControl(props: {
+  settings: AppSettings;
+  updateSettings: (patch: Partial<AppSettings>) => void;
+}) {
+  const accounts = props.settings.codexAccounts;
+  const accountOptions = getCodexAccountOptions(props.settings);
+  const selectedAccountLabel =
+    accountOptions.find((account) => account.id === props.settings.selectedCodexAccountId)?.label ??
+    "Default";
+
+  const addAccount = () => {
+    const existingIds = new Set(accounts.map((account) => account.id));
+    let index = accounts.length + 1;
+    let id = `account${index}`;
+    while (existingIds.has(id)) {
+      index += 1;
+      id = `account${index}`;
+    }
+    const nextAccount: CodexAccountSettings = {
+      id,
+      label: `Account ${index}`,
+      homePath: props.settings.codexHomePath,
+      shadowHomePath: "",
+    };
+    props.updateSettings({
+      codexAccounts: [...accounts, nextAccount],
+      selectedCodexAccountId: id,
+    });
+  };
+
+  const updateAccount = (
+    accountId: string,
+    patch: Partial<Omit<CodexAccountSettings, "id">>,
+  ) => {
+    props.updateSettings({
+      codexAccounts: normalizeCodexAccounts(
+        accounts.map((account) => (account.id === accountId ? { ...account, ...patch } : account)),
+      ),
+    });
+  };
+
+  const removeAccount = (accountId: string) => {
+    props.updateSettings({
+      codexAccounts: accounts.filter((account) => account.id !== accountId),
+      ...(props.settings.selectedCodexAccountId === accountId
+        ? { selectedCodexAccountId: DEFAULT_CODEX_ACCOUNT_ID }
+        : {}),
+    });
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="block text-xs font-medium text-foreground">Codex account</span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            Select the account used for new Codex turns.
+          </span>
+        </div>
+        <Button type="button" size="xs" variant="outline" onClick={addAccount}>
+          <PlusIcon className="size-3.5" />
+          Add
+        </Button>
+      </div>
+
+      <SettingsSelectControl
+        value={props.settings.selectedCodexAccountId}
+        onValueChange={(selectedCodexAccountId) =>
+          props.updateSettings({ selectedCodexAccountId })
+        }
+        ariaLabel="Codex account"
+        triggerClassName="w-full"
+        valueContent={<span className="truncate">{selectedAccountLabel}</span>}
+      >
+        {accountOptions.map((account) => (
+          <SelectItem hideIndicator key={account.id} value={account.id}>
+            <span className="truncate">{account.label}</span>
+          </SelectItem>
+        ))}
+      </SettingsSelectControl>
+
+      {accounts.length > 0 ? (
+        <div className="space-y-2">
+          {accounts.map((account) => (
+            <div
+              key={account.id}
+              className={cn(
+                SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+                SETTINGS_INSET_RADIUS_CLASS_NAME,
+                "px-3 py-3",
+              )}
+            >
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-medium text-foreground">
+                    {account.label || account.id}
+                  </div>
+                  <div className="truncate text-[11px] text-muted-foreground">{account.id}</div>
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="ghost"
+                  onClick={() => removeAccount(account.id)}
+                >
+                  <XIcon className="size-3.5" />
+                  Remove
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="block">
+                  <span className="block text-xs font-medium text-foreground">Label</span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-label`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.label}
+                    onCommit={(label) => updateAccount(account.id, { label })}
+                    placeholder="Work"
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="block">
+                  <span className="block text-xs font-medium text-foreground">
+                    Shared CODEX_HOME
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.homePath}
+                    onCommit={(homePath) => updateAccount(account.id, { homePath })}
+                    placeholder={props.settings.codexHomePath || "~/.codex"}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="block sm:col-span-2">
+                  <span className="block text-xs font-medium text-foreground">
+                    Shadow auth home
+                  </span>
+                  <DebouncedSettingTextInput
+                    id={`codex-account-${account.id}-shadow-home`}
+                    size="sm"
+                    variant="soft"
+                    className="mt-1"
+                    value={account.shadowHomePath}
+                    onCommit={(shadowHomePath) => updateAccount(account.id, { shadowHomePath })}
+                    placeholder="~/.codex_work"
+                    spellCheck={false}
+                  />
+                </label>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ProviderToolRow(props: {
   config: ProviderInstallSettings;
   open: boolean;
@@ -770,6 +957,12 @@ function ProviderToolRow(props: {
                   updateSettings={props.updateSettings}
                 />
               ))}
+              {props.config.provider === "codex" ? (
+                <CodexAccountsControl
+                  settings={props.settings}
+                  updateSettings={props.updateSettings}
+                />
+              ) : null}
             </div>
           </div>
         </CollapsiblePanel>

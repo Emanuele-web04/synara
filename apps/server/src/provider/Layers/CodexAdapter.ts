@@ -2325,9 +2325,18 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           }),
       }).pipe(Effect.map((result) => result satisfies ProviderReadPluginResult));
 
-    const listModels: NonNullable<CodexAdapterShape["listModels"]> = (_input) =>
+    const listModels: NonNullable<CodexAdapterShape["listModels"]> = (input) =>
       Effect.tryPromise({
-        try: () => manager.listModels(),
+        try: () =>
+          manager.listModels({
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+            },
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,

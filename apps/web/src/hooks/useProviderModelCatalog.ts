@@ -12,7 +12,12 @@ import type {
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { getAppModelOptions, getCustomModelsByProvider, useAppSettings } from "../appSettings";
+import {
+  getAppModelOptions,
+  getCodexProviderDiscoveryOptions,
+  getCustomModelsByProvider,
+  useAppSettings,
+} from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
 import { collapseCursorModelVariants } from "../cursorModelVariants";
 import {
@@ -91,6 +96,10 @@ export function useProviderModelCatalog(input: {
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
+  const codexDiscoveryOptions = useMemo(
+    () => getCodexProviderDiscoveryOptions(settings),
+    [settings],
+  );
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
@@ -142,6 +151,7 @@ export function useProviderModelCatalog(input: {
     }),
     codex: providerModelsQueryOptions({
       provider: "codex",
+      ...codexDiscoveryOptions,
       enabled: codexModelDiscoveryEnabled,
     }),
     cursor: providerModelsQueryOptions({
@@ -200,8 +210,18 @@ export function useProviderModelCatalog(input: {
   const piDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.pi);
   const devinDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.devin);
 
-  const [, , modelProvider, modelBinaryPath, modelApiEndpoint, modelAgentDir, modelCwd] =
-    modelQueryOptionsByProvider[selectedProvider].queryKey;
+  const [
+    ,
+    ,
+    modelProvider,
+    modelBinaryPath,
+    modelApiEndpoint,
+    modelAgentDir,
+    modelCwd,
+    modelHomePath,
+    modelShadowHomePath,
+    modelAccountId,
+  ] = modelQueryOptionsByProvider[selectedProvider].queryKey;
   const selectedProviderModelsQueryKey = useMemo(
     () =>
       providerDiscoveryQueryKeys.models(
@@ -210,8 +230,20 @@ export function useProviderModelCatalog(input: {
         modelApiEndpoint,
         modelAgentDir,
         modelCwd,
+        modelHomePath,
+        modelShadowHomePath,
+        modelAccountId,
       ),
-    [modelProvider, modelBinaryPath, modelApiEndpoint, modelAgentDir, modelCwd],
+    [
+      modelProvider,
+      modelBinaryPath,
+      modelHomePath,
+      modelShadowHomePath,
+      modelAccountId,
+      modelApiEndpoint,
+      modelAgentDir,
+      modelCwd,
+    ],
   );
 
   const selectedProviderModelsEnabled = modelQueryOptionsByProvider[selectedProvider].enabled;

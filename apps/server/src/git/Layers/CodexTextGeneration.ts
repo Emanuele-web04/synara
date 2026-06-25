@@ -177,9 +177,11 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const prepareIsolatedCodexHome = (
     operation: TextGenerationOperation,
     sourceHomePath?: string,
+    authHomePath?: string,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
       const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
+      const sourceAuthHome = authHomePath?.trim() || sourceCodexHome;
       const isolatedHomePath = path.join(
         tempDir,
         `synara-codex-home-${process.pid}-${randomUUID()}`,
@@ -218,7 +220,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       }
 
       const sourceAuth = yield* fileSystem
-        .readFileString(path.join(sourceCodexHome, "auth.json"))
+        .readFileString(path.join(sourceAuthHome, "auth.json"))
         .pipe(Effect.catch(() => Effect.succeed(null)));
       if (sourceAuth !== null) {
         yield* fileSystem
@@ -297,13 +299,18 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     Effect.gen(function* () {
       const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
       const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
+      const resolvedCodexAuthHomePath = resolveCodexAuthHomePath(providerOptions);
       const schemaPath = yield* writeTempFile(
         operation,
         "codex-schema",
         JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
       );
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
-      const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
+      const isolatedCodexHome = yield* prepareIsolatedCodexHome(
+        operation,
+        resolvedCodexHomePath,
+        resolvedCodexAuthHomePath,
+      );
 
       const workingDirectoryExists = fileSystem.stat(cwd).pipe(
         Effect.map((cwdInfo) => cwdInfo.type === "Directory"),
@@ -682,6 +689,13 @@ function resolveCodexHomePath(
   providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
 ): string | undefined {
   const resolved = codexHomePath?.trim() || providerOptions?.codex?.homePath?.trim();
+  return resolved && resolved.length > 0 ? resolved : undefined;
+}
+
+function resolveCodexAuthHomePath(
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string | undefined {
+  const resolved = providerOptions?.codex?.shadowHomePath?.trim();
   return resolved && resolved.length > 0 ? resolved : undefined;
 }
 

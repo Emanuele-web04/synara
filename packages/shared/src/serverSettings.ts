@@ -1,4 +1,5 @@
 import {
+  DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_MODEL_BY_PROVIDER,
   type ModelSelection,
   type ProviderStartOptions,
@@ -50,10 +51,21 @@ export function providerStartOptionsFromServerSettings(
   settings: ServerSettings,
 ): ProviderStartOptions {
   const { providers } = settings;
+  const selectedCodexAccount =
+    providers.codex.selectedAccountId === DEFAULT_CODEX_ACCOUNT_ID
+      ? undefined
+      : providers.codex.accounts.find(
+          (account) => account.id === providers.codex.selectedAccountId,
+        );
+  const codexHomePath = selectedCodexAccount?.homePath || providers.codex.homePath;
   return {
     codex: {
       ...(providers.codex.binaryPath ? { binaryPath: providers.codex.binaryPath } : {}),
-      ...(providers.codex.homePath ? { homePath: providers.codex.homePath } : {}),
+      ...(codexHomePath ? { homePath: codexHomePath } : {}),
+      ...(selectedCodexAccount?.shadowHomePath
+        ? { shadowHomePath: selectedCodexAccount.shadowHomePath }
+        : {}),
+      ...(selectedCodexAccount ? { accountId: selectedCodexAccount.id } : {}),
     },
     claudeAgent: {
       ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
