@@ -967,16 +967,19 @@ describe("ClaudeAdapterLive", () => {
           "session.state.changed",
           "turn.started",
           "thread.started",
-          "provider.unhandled",
+          "runtime.warning",
           "content.delta",
         ],
       );
 
-      const unhandled = runtimeEvents[5];
-      assert.equal(unhandled?.type, "provider.unhandled");
-      if (unhandled?.type === "provider.unhandled") {
-        assert.equal(String(unhandled.turnId), String(turn.turnId));
-        assert.equal(unhandled.payload.nativeEventName, "type:future_sdk_message");
+      const warning = runtimeEvents[5];
+      assert.equal(warning?.type, "runtime.warning");
+      if (warning?.type === "runtime.warning") {
+        assert.equal(String(warning.turnId), String(turn.turnId));
+        assert.equal(
+          warning.payload.message,
+          "Unhandled Claude SDK message type 'future_sdk_message'.",
+        );
       }
 
       const delta = runtimeEvents[6];
@@ -2111,7 +2114,7 @@ describe("ClaudeAdapterLive", () => {
         }
 
         // Two distinct unknown subtypes, each emitted twice — each must surface
-        // exactly one provider fallback (per-kind de-dupe), so two events total.
+        // exactly one warning (per-kind de-dupe), so two events total.
         for (const subtype of ["future_unknown_subtype", "another_unknown_subtype"]) {
           for (let i = 0; i < 2; i += 1) {
             harness.query.emit({
@@ -2149,8 +2152,8 @@ describe("ClaudeAdapterLive", () => {
             event.type === "task.completed" &&
             String(event.payload.taskId).startsWith("task-updated"),
         );
-        const unhandledEventNames = runtimeEvents.flatMap((event) =>
-          event.type === "provider.unhandled" ? [event.payload.nativeEventName] : [],
+        const warningMessages = runtimeEvents.flatMap((event) =>
+          event.type === "runtime.warning" ? [event.payload.message] : [],
         );
 
         assert.equal(thinkingProgressEvents.length, 3);
@@ -2183,21 +2186,21 @@ describe("ClaudeAdapterLive", () => {
         if (failedTaskEvent?.type === "task.completed") {
           assert.equal(failedTaskEvent.payload.summary, "Task update failed");
         }
-        assert.equal(unhandledEventNames.length, 2);
+        assert.equal(warningMessages.length, 2);
         assert.equal(
-          unhandledEventNames.some((name) => name.includes("thinking_tokens")),
+          warningMessages.some((message) => message.includes("thinking_tokens")),
           false,
         );
         assert.equal(
-          unhandledEventNames.some((name) => name.includes("task_updated")),
+          warningMessages.some((message) => message.includes("task_updated")),
           false,
         );
         assert.equal(
-          unhandledEventNames.some((name) => name.includes("future_unknown_subtype")),
+          warningMessages.some((message) => message.includes("future_unknown_subtype")),
           true,
         );
         assert.equal(
-          unhandledEventNames.some((name) => name.includes("another_unknown_subtype")),
+          warningMessages.some((message) => message.includes("another_unknown_subtype")),
           true,
         );
       }).pipe(
