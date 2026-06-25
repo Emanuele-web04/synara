@@ -133,6 +133,38 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("clears persisted resume cursors when the provider instance changes", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+
+      const threadId = ThreadId.makeUnsafe("thread-instance-change");
+
+      yield* directory.upsert({
+        provider: "codex",
+        providerInstanceId: "codex_personal",
+        threadId,
+        resumeCursor: {
+          threadId: "provider-thread-personal",
+        },
+      });
+
+      yield* directory.upsert({
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+      });
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.resumeCursor, null);
+        assert.deepEqual(runtime.value.runtimePayload, {
+          providerInstanceId: "codex_work",
+        });
+      }
+    }));
+
   it("resets adapterKey to the new provider when provider changes without an explicit adapter key", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;

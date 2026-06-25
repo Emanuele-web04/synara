@@ -18,6 +18,7 @@ describe("providerStartOptionsFromServerSettings", () => {
         claudeAgent: {
           ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
           binaryPath: "",
+          homePath: "",
         },
         cursor: {
           ...DEFAULT_SERVER_SETTINGS.providers.cursor,
@@ -84,6 +85,11 @@ describe("providerStartOptionsFromServerSettings", () => {
           binaryPath: "/custom/bin/codex",
           homePath: "/custom/codex-home",
         },
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          binaryPath: "/custom/bin/claude",
+          homePath: "/custom/claude-home",
+        },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
           binaryPath: "/custom/bin/opencode",
@@ -102,6 +108,10 @@ describe("providerStartOptionsFromServerSettings", () => {
     expect(providerOptions.codex).toEqual({
       binaryPath: "/custom/bin/codex",
       homePath: "/custom/codex-home",
+    });
+    expect(providerOptions.claudeAgent).toEqual({
+      binaryPath: "/custom/bin/claude",
+      homePath: "/custom/claude-home",
     });
     expect(providerOptions.opencode).toEqual({
       binaryPath: "/custom/bin/opencode",

@@ -165,6 +165,7 @@ function makeFakeCodexAdapter(
           status: "ready",
           runtimeMode: input.runtimeMode,
           threadId: input.threadId,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
           resumeCursor: input.resumeCursor ?? { opaque: `resume-${String(input.threadId)}` },
           cwd: input.cwd ?? process.cwd(),
           createdAt: now,
@@ -2530,6 +2531,34 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("rejects provider and provider-instance driver mismatches", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      routing.codex.startSession.mockClear();
+      routing.claude.startSession.mockClear();
+
+      const result = yield* Effect.result(
+        provider.startSession(asThreadId("thread-mismatch"), {
+          provider: "codex",
+          providerInstanceId: "claudeAgent",
+          threadId: asThreadId("thread-mismatch"),
+          runtimeMode: "full-access",
+        }),
+      );
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.startSession",
+          issue:
+            "Requested provider 'codex' does not match provider instance 'claudeAgent' driver 'claudeAgent'.",
+        }),
+      );
+      assert.equal(routing.codex.startSession.mock.calls.length, 0);
+      assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
   it.effect(
     "routes early approval and user-input responses to live sessions before persistence",
     () =>
@@ -2575,6 +2604,37 @@ routing.layer("ProviderServiceLive routing", (it) => {
           ],
         ]);
       }),
+  );
+
+  it.effect("preserves provider instance id when adopting binding-less live sessions", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-live-instance");
+
+      yield* routing.codex.adapter.startSession({
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+        runtimeMode: "approval-required",
+      });
+
+      const bindingBeforeTurn = yield* directory.getBinding(threadId);
+      assert.equal(Option.isNone(bindingBeforeTurn), true);
+
+      yield* provider.sendTurn({
+        threadId,
+        input: "hello from work account",
+        attachments: [],
+      });
+
+      const bindingAfterTurn = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(bindingAfterTurn), true);
+      if (Option.isSome(bindingAfterTurn)) {
+        assert.equal(bindingAfterTurn.value.provider, "codex");
+        assert.equal(bindingAfterTurn.value.providerInstanceId, "codex_work");
+      }
+    }),
   );
 
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>

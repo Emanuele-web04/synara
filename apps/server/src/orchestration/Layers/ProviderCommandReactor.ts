@@ -118,6 +118,11 @@ import { QueuedTurnPromotionRepository } from "../../persistence/Services/Queued
 import { ManagedAttachmentRepository } from "../../persistence/Services/ManagedAttachments.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import {
+  mergeProviderStartOptions,
+  providerStartOptionsFromInstance,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
@@ -275,53 +280,43 @@ function toNonEmptyProviderInput(value: string | undefined): string | undefined 
   return normalized && normalized.length > 0 ? normalized : undefined;
 }
 
-function normalizeCodexProviderOptionsForComparison(
+function normalizeProviderOptionsForComparison(
+  provider: ProviderKind,
   providerOptions: ProviderStartOptions | undefined,
-): NonNullable<ProviderStartOptions["codex"]> | undefined {
-  const codex = providerOptions?.codex;
-  if (!codex) {
+): Record<string, unknown> | undefined {
+  const rawOptions = providerOptions?.[provider];
+  if (!rawOptions || typeof rawOptions !== "object") {
     return undefined;
   }
-  const binaryPath = toNonEmptyProviderInput(codex.binaryPath);
-  const homePath = toNonEmptyProviderInput(codex.homePath);
-  const shadowHomePath = toNonEmptyProviderInput(codex.shadowHomePath);
-  const accountId = toNonEmptyProviderInput(codex.accountId);
-  const normalized = {
-    ...(binaryPath ? { binaryPath } : {}),
-    ...(homePath ? { homePath } : {}),
-    ...(shadowHomePath ? { shadowHomePath } : {}),
-    ...(accountId ? { accountId } : {}),
-  } satisfies NonNullable<ProviderStartOptions["codex"]>;
+  const normalized = Object.fromEntries(
+    Object.entries(rawOptions)
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? toNonEmptyProviderInput(value) : value,
+      ])
+      .filter(([, value]) => value !== undefined && value !== ""),
+  );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function codexProviderOptionsEqual(
-  left: NonNullable<ProviderStartOptions["codex"]> | undefined,
-  right: NonNullable<ProviderStartOptions["codex"]> | undefined,
-): boolean {
-  return (
-    left?.binaryPath === right?.binaryPath &&
-    left?.homePath === right?.homePath &&
-    left?.shadowHomePath === right?.shadowHomePath &&
-    left?.accountId === right?.accountId
-  );
-}
-
-function shouldRestartCodexForProviderOptionsChange(input: {
+function shouldRestartForProviderOptionsChange(input: {
   readonly requestedProvider: ProviderKind;
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
 }): boolean {
-  if (input.requestedProvider !== "codex") {
-    return false;
-  }
-  return !codexProviderOptionsEqual(
-    normalizeCodexProviderOptionsForComparison(input.previousProviderOptions),
-    normalizeCodexProviderOptionsForComparison(input.requestedProviderOptions),
+  return !Equal.equals(
+    normalizeProviderOptionsForComparison(input.requestedProvider, input.previousProviderOptions),
+    normalizeProviderOptionsForComparison(input.requestedProvider, input.requestedProviderOptions),
   );
 }
 
-function shouldDropCodexResumeCursorForProviderOptionsChange(input: {
+function readNormalizedOption(options: Record<string, unknown> | undefined, key: string): string {
+  const value = options?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function shouldDropResumeCursorForProviderOptionsChange(input: {
+  readonly requestedProvider: ProviderKind;
   readonly providerOptionsChanged: boolean;
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
@@ -329,9 +324,30 @@ function shouldDropCodexResumeCursorForProviderOptionsChange(input: {
   if (!input.providerOptionsChanged) {
     return false;
   }
-  const previous = normalizeCodexProviderOptionsForComparison(input.previousProviderOptions);
-  const requested = normalizeCodexProviderOptionsForComparison(input.requestedProviderOptions);
-  return (previous?.homePath ?? "") !== (requested?.homePath ?? "");
+  const previous = normalizeProviderOptionsForComparison(
+    input.requestedProvider,
+    input.previousProviderOptions,
+  );
+  const requested = normalizeProviderOptionsForComparison(
+    input.requestedProvider,
+    input.requestedProviderOptions,
+  );
+  switch (input.requestedProvider) {
+    case "codex":
+      return (
+        readNormalizedOption(previous, "homePath") !==
+          readNormalizedOption(requested, "homePath") ||
+        readNormalizedOption(previous, "shadowHomePath") !==
+          readNormalizedOption(requested, "shadowHomePath") ||
+        readNormalizedOption(previous, "accountId") !== readNormalizedOption(requested, "accountId")
+      );
+    case "claudeAgent":
+      return (
+        readNormalizedOption(previous, "homePath") !== readNormalizedOption(requested, "homePath")
+      );
+    default:
+      return false;
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -1747,7 +1763,16 @@ const make = Effect.gen(function* () {
         issue: `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`,
       });
     }
-    const resolvedProviderOptions = providerStartOptionsFromServerSettings(settings);
+    const resolvedInstance = resolveProviderInstance(settings, {
+      provider: preferredProvider,
+      instanceId: desiredProviderInstanceId,
+    });
+    const resolvedProviderOptions = mergeProviderStartOptions(
+      providerStartOptionsFromServerSettings(settings),
+      resolvedInstance?.driver === preferredProvider
+        ? providerStartOptionsFromInstance(resolvedInstance)
+        : undefined,
+    );
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -1862,7 +1887,7 @@ const make = Effect.gen(function* () {
               currentProvider === "devin") &&
             !Equal.equals(previousModelSelection, requestedModelSelection));
       const previousProviderOptions = threadProviderOptions.get(threadId);
-      const providerOptionsChanged = shouldRestartCodexForProviderOptionsChange({
+      const providerOptionsChanged = shouldRestartForProviderOptionsChange({
         requestedProvider: desiredModelSelection.provider,
         previousProviderOptions,
         requestedProviderOptions: resolvedProviderOptions,
@@ -1890,7 +1915,8 @@ const make = Effect.gen(function* () {
         providerInstanceChanged ||
         shouldRestartForModelChange ||
         runtimeModeChanged ||
-        shouldDropCodexResumeCursorForProviderOptionsChange({
+        shouldDropResumeCursorForProviderOptionsChange({
+          requestedProvider: desiredModelSelection.provider,
           providerOptionsChanged,
           previousProviderOptions,
           requestedProviderOptions: resolvedProviderOptions,

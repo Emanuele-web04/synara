@@ -10,6 +10,7 @@
  */
 import * as OS from "node:os";
 import type {
+  ProviderInstanceId,
   ProviderKind,
   ServerSettings,
   ServerProviderAuthStatus,
@@ -1998,6 +1999,40 @@ function isDisabledProviderStatusOverlay(status: ServerProviderStatus): boolean 
   return status.message === DISABLED_PROVIDER_STATUS_MESSAGE && status.available === false;
 }
 
+interface ProviderStatusProjectionInstance {
+  readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderKind;
+  readonly displayName: string;
+  readonly enabled: boolean;
+  readonly isDefault?: boolean;
+}
+
+function projectStatusForProviderInstance(
+  status: ServerProviderStatus,
+  instance: ProviderStatusProjectionInstance,
+  enabled = instance.enabled,
+): ServerProviderStatus {
+  const projected = {
+    ...status,
+    instanceId: instance.instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName,
+    enabled,
+  } satisfies ServerProviderStatus;
+  if (instance.isDefault || status.authStatus === "unknown") {
+    return projected;
+  }
+  const { authType, authLabel, ...withoutAuthMetadata } = projected;
+  void authType;
+  void authLabel;
+  return {
+    ...withoutAuthMetadata,
+    status: projected.status === "ready" ? "warning" : projected.status,
+    authStatus: "unknown",
+    message: projected.message ?? "Authentication has not been checked for this provider instance.",
+  } satisfies ServerProviderStatus;
+}
+
 function mergeProviderStatusUpdates(
   previousStatuses: ReadonlyArray<ServerProviderStatus>,
   updatedStatuses: ReadonlyArray<ServerProviderStatus>,
@@ -2068,13 +2103,13 @@ export function projectProviderStatusesForSettings(
       enabledForInstance: (instanceEnabled: boolean) => boolean = (value) => value,
     ) => {
       for (const instance of instances) {
-        projected.push({
-          ...baseStatus,
-          instanceId: instance.instanceId,
-          driver: instance.driver,
-          displayName: instance.displayName,
-          enabled: enabledForInstance(instance.enabled),
-        });
+        projected.push(
+          projectStatusForProviderInstance(
+            baseStatus,
+            instance,
+            enabledForInstance(instance.enabled),
+          ),
+        );
       }
     };
 
@@ -2099,13 +2134,7 @@ export function projectProviderStatusesForSettings(
         : suppressProviderVersionAdvisory(status);
       for (const instance of instances) {
         if (instance.enabled) {
-          projected.push({
-            ...visibleStatus,
-            instanceId: instance.instanceId,
-            driver: instance.driver,
-            displayName: instance.displayName,
-            enabled: true,
-          });
+          projected.push(projectStatusForProviderInstance(visibleStatus, instance));
           continue;
         }
         const disabledStatus = makeDisabledProviderStatus(provider, status.checkedAt);

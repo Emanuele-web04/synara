@@ -10076,7 +10076,6 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 2);
     expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
-      resumeCursor: { opaque: "resume-1" },
       providerOptions: {
         codex: {
           accountId: "work",
@@ -10085,6 +10084,7 @@ describe("ProviderCommandReactor", () => {
         },
       },
     });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
 
     await Effect.runPromise(
       harness.serverSettings.updateSettings({
@@ -10111,7 +10111,6 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 3);
     expect(harness.startSession.mock.calls[2]?.[1]).toMatchObject({
-      resumeCursor: { opaque: "resume-2" },
       providerOptions: {
         codex: {
           binaryPath: "codex",
@@ -10119,6 +10118,94 @@ describe("ProviderCommandReactor", () => {
         },
       },
     });
+    expect(harness.startSession.mock.calls[2]?.[1]).not.toHaveProperty("resumeCursor");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-default-repeat"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-codex-account-default-repeat"),
+          role: "user",
+          text: "still default account",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 4);
+    expect(harness.startSession.mock.calls.length).toBe(3);
+  });
+
+  it("restarts Claude sessions when Claude provider options change", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
+      serverSettings: {
+        providers: {
+          claudeAgent: {
+            homePath: "/tmp/claude-personal",
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-home-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-home-1"),
+          role: "user",
+          text: "personal claude",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({
+        providers: { claudeAgent: { homePath: "/tmp/claude-work" } },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-claude-home-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-claude-home-2"),
+          role: "user",
+          text: "work claude",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls[1]?.[1]).toMatchObject({
+      providerOptions: {
+        claudeAgent: {
+          homePath: "/tmp/claude-work",
+        },
+      },
+    });
+    expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {

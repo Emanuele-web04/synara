@@ -2283,6 +2283,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           manager.listSkills({
             cwd: input.cwd,
             ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+            },
             ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
           }),
         catch: (cause) =>
@@ -2300,6 +2306,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           manager.listPlugins({
             ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
             ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+            },
             ...(input.forceRemoteSync !== undefined
               ? { forceRemoteSync: input.forceRemoteSync }
               : {}),
@@ -2320,6 +2332,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           manager.readPlugin({
             marketplacePath: input.marketplacePath,
             pluginName: input.pluginName,
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
+            ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            codexOptions: {
+              ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+              ...(input.homePath ? { homePath: input.homePath } : {}),
+              ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+              ...(input.accountId ? { accountId: input.accountId } : {}),
+            },
           }),
         catch: (cause) =>
           new ProviderAdapterRequestError({

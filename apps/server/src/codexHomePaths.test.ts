@@ -106,4 +106,21 @@ describe("Codex home paths", () => {
       "/users/me/.codex_work",
     ]);
   });
+
+  it("includes account-scoped overlays for account-id-only Codex homes", () => {
+    const segment = resolveCodexHomeOverlayAccountSegment({
+      accountId: "work",
+      homePath: "/users/me/.codex",
+    });
+    const candidates = resolveCodexHomeAllowlistCandidates({
+      env: { SYNARA_HOME: "/synara/runtime" },
+      homePath: "/users/me/.codex",
+      accountId: "work",
+    });
+    assert.deepEqual(candidates, [
+      "/users/me/.codex",
+      path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
+      path.join("/synara/runtime", "codex-home-overlay"),
+    ]);
+  });
 });

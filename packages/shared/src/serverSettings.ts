@@ -79,6 +79,7 @@ export function providerStartOptionsFromServerSettings(
     },
     claudeAgent: {
       ...(providers.claudeAgent.binaryPath ? { binaryPath: providers.claudeAgent.binaryPath } : {}),
+      ...(providers.claudeAgent.homePath ? { homePath: providers.claudeAgent.homePath } : {}),
     },
     cursor: {
       ...(providers.cursor.binaryPath ? { binaryPath: providers.cursor.binaryPath } : {}),

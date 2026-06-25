@@ -537,6 +537,39 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(codex?.versionAdvisory?.updateCommand, null);
     });
 
+    it("does not copy one authenticated status onto every provider instance", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [
+          {
+            ...cachedReadyCodexStatus,
+            authType: "chatgpt",
+            authLabel: "Default Account",
+          },
+        ],
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Codex Work",
+              config: {
+                accountId: "work",
+              },
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+
+      const defaultCodex = statuses.find((status) => status.instanceId === "codex");
+      const workCodex = statuses.find((status) => status.instanceId === "codex_work");
+      assert.strictEqual(defaultCodex?.authStatus, "authenticated");
+      assert.strictEqual(defaultCodex?.authLabel, "Default Account");
+      assert.strictEqual(workCodex?.status, "warning");
+      assert.strictEqual(workCodex?.authStatus, "unknown");
+      assert.strictEqual(workCodex?.authLabel, undefined);
+    });
+
     it.effect("does not expose cached ready statuses for disabled providers", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;

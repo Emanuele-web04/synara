@@ -74,7 +74,10 @@ export const ProviderListSkillsInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsInput = typeof ProviderListSkillsInput.Type;
@@ -112,6 +115,8 @@ export const ProviderListCommandsInput = Schema.Struct({
   threadId: Schema.optional(TrimmedNonEmptyString),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
   serverUrl: Schema.optional(TrimmedNonEmptyString),
   experimentalWebSockets: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
@@ -206,6 +211,10 @@ export const ProviderListPluginsInput = Schema.Struct({
   instanceId: Schema.optional(ProviderInstanceId),
   cwd: Schema.optional(TrimmedNonEmptyString),
   threadId: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
   forceRemoteSync: Schema.optional(Schema.Boolean),
   forceReload: Schema.optional(Schema.Boolean),
 });
@@ -228,6 +237,10 @@ export const ProviderReadPluginInput = Schema.Struct({
   pluginName: TrimmedNonEmptyString,
   cwd: Schema.optional(TrimmedNonEmptyString),
   threadId: Schema.optional(TrimmedNonEmptyString),
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
+  shadowHomePath: Schema.optional(TrimmedNonEmptyString),
+  accountId: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 

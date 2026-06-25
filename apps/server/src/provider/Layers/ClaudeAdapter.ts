@@ -319,7 +319,8 @@ interface ClaudeSessionContext {
   readonly lifecycleGeneration?: string;
   readonly promptQueue: Queue.Queue<PromptQueueItem>;
   readonly query: ClaudeQueryRuntime;
-  readonly discoveryKey: string;
+  readonly commandDiscoveryKey: string;
+  readonly accountDiscoveryKey: string;
   readonly messageStream?: AsyncIterable<SDKMessage>;
   readonly processOwner: ClaudeProcessOwner;
   stopDeferred?: Deferred.Deferred<void, ProviderAdapterProcessError>;
@@ -616,12 +617,13 @@ function claudeDiscoveryKey(input: {
   readonly binaryPath?: string | null | undefined;
   readonly homePath?: string | null | undefined;
   readonly cwd?: string | null | undefined;
+  readonly includeCwd?: boolean;
 }): string {
   return JSON.stringify({
     instanceId: input.instanceId?.trim() || null,
     binaryPath: input.binaryPath?.trim() || "claude",
     homePath: input.homePath?.trim() || null,
-    cwd: input.cwd?.trim() || null,
+    cwd: input.includeCwd === false ? null : input.cwd?.trim() || null,
   });
 }
 
@@ -5330,11 +5332,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           );
 
         const providerOptions = input.providerOptions?.claudeAgent;
-        const discoveryKey = claudeDiscoveryKey({
+        const commandDiscoveryKey = claudeDiscoveryKey({
           instanceId: input.providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
           cwd: input.cwd,
+        });
+        const accountDiscoveryKey = claudeDiscoveryKey({
+          instanceId: input.providerInstanceId,
+          binaryPath: providerOptions?.binaryPath,
+          homePath: providerOptions?.homePath,
+          includeCwd: false,
         });
         const modelSelection =
           input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
@@ -5525,17 +5533,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           if (input.runtimeMode === "auto") {
             yield* verifyClaudeAutoModelSupport({
               queryRuntime,
-              discoveryKey,
+              discoveryKey: accountDiscoveryKey,
               selectedModel: effectiveClaudeModel,
               apiModelId,
               operation: "startSession",
             });
-          } else if (!cachedModelsByKey.has(discoveryKey)) {
+          } else if (!cachedModelsByKey.has(accountDiscoveryKey)) {
             // Populate model cache in the background from the first non-Auto session.
             queryRuntime
               .supportedModels()
               .then((models) => {
-                cachedModelsByKey.set(discoveryKey, {
+                cachedModelsByKey.set(accountDiscoveryKey, {
                   models: models.map(mapClaudeModelInfo),
                   source: "sdk",
                   cached: false,
@@ -5547,11 +5555,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
 
           // Populate agent cache in background from first session
-          if (!cachedAgentsByKey.has(discoveryKey)) {
+          if (!cachedAgentsByKey.has(accountDiscoveryKey)) {
             queryRuntime
               .supportedAgents()
               .then((agents) => {
-                cachedAgentsByKey.set(discoveryKey, {
+                cachedAgentsByKey.set(accountDiscoveryKey, {
                   agents: agents.map((a) => ({
                     name: a.name,
                     displayName: a.name,
@@ -5605,7 +5613,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : {}),
             promptQueue,
             query: queryRuntime,
-            discoveryKey,
+            commandDiscoveryKey,
+            accountDiscoveryKey,
             ...(messageStream ? { messageStream } : {}),
             processOwner,
             streamFiber: undefined,
@@ -5831,7 +5840,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             if (context.session.runtimeMode === "auto") {
               yield* verifyClaudeAutoModelSupport({
                 queryRuntime: context.query,
-                discoveryKey: context.discoveryKey,
+                discoveryKey: context.accountDiscoveryKey,
                 selectedModel: modelSelection.model,
                 apiModelId,
                 operation: "sendTurn",
@@ -6463,9 +6472,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // 1. Try an active session first (cheapest path).
         const context = input.threadId
           ? sessions.get(ThreadId.makeUnsafe(input.threadId))
-          : [...sessions.values()].find((s) => !s.stopped && s.discoveryKey === discoveryKey);
+          : [...sessions.values()].find(
+              (s) => !s.stopped && s.commandDiscoveryKey === discoveryKey,
+            );
 
-        if (context && !context.stopped && context.discoveryKey === discoveryKey) {
+        if (context && !context.stopped && context.commandDiscoveryKey === discoveryKey) {
           const commands = yield* Effect.tryPromise({
             try: () => context.query.supportedCommands(),
             catch: (cause) => toRequestError(context.session.threadId, "listCommands", cause),
@@ -6573,7 +6584,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const listModels: NonNullable<ClaudeAdapterShape["listModels"]> = (input) =>
       Effect.gen(function* () {
-        const discoveryKey = claudeDiscoveryKey(input);
+        const discoveryKey = claudeDiscoveryKey({ ...input, includeCwd: false });
         const cachedModels = cachedModelsByKey.get(discoveryKey);
         if (cachedModels) {
           return { ...cachedModels, cached: true };
@@ -6581,7 +6592,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         // Prefer an active session so discovery does not spawn another process.
         for (const [, context] of sessions) {
-          if (!context.stopped && context.query && context.discoveryKey === discoveryKey) {
+          if (!context.stopped && context.query && context.accountDiscoveryKey === discoveryKey) {
             const result = yield* Effect.tryPromise({
               try: async () => ({
                 models: (await context.query.supportedModels()).map(mapClaudeModelInfo),
@@ -6636,13 +6647,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     const listAgents: NonNullable<ClaudeAdapterShape["listAgents"]> = (input) =>
       Effect.sync(() => {
-        const discoveryKey = claudeDiscoveryKey(input);
+        const discoveryKey = claudeDiscoveryKey({ ...input, includeCwd: false });
         const cachedAgents = cachedAgentsByKey.get(discoveryKey);
         if (cachedAgents) {
           return { ...cachedAgents, cached: true };
         }
         for (const [, context] of sessions) {
-          if (!context.stopped && context.query && context.discoveryKey === discoveryKey) {
+          if (!context.stopped && context.query && context.accountDiscoveryKey === discoveryKey) {
             context.query
               .supportedAgents()
               .then((agents) => {

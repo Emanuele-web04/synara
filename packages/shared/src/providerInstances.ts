@@ -5,7 +5,6 @@
 
 import type {
   ModelSelection,
-  ProviderDriverKind,
   ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   ProviderInstanceId,
@@ -40,6 +39,8 @@ export interface ResolvedProviderInstance {
 
 type MutableProviderInstanceConfigMap = Record<string, ProviderInstanceConfig>;
 type MutableProviderStartOptions = Partial<Record<ProviderKind, unknown>>;
+const PROVIDER_INSTANCE_ID_MAX_CHARS = 64;
+const CODEX_ACCOUNT_INSTANCE_PREFIX = "codex_";
 
 function trimString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -93,8 +94,31 @@ export function resolveProviderStatusInstanceId(input: {
   return input.instanceId ?? defaultInstanceIdForProvider(input.provider);
 }
 
-function codexAccountInstanceId(accountId: string): ProviderInstanceId {
-  return `codex_${accountId}`;
+function stableSlugHash(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36).padStart(7, "0");
+}
+
+export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
+  const normalizedAccountId = accountId.trim();
+  const raw = `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId}`;
+  if (raw.length <= PROVIDER_INSTANCE_ID_MAX_CHARS) {
+    return raw;
+  }
+  const hash = stableSlugHash(normalizedAccountId);
+  const availableAccountChars =
+    PROVIDER_INSTANCE_ID_MAX_CHARS -
+    CODEX_ACCOUNT_INSTANCE_PREFIX.length -
+    "_".length -
+    hash.length;
+  return `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId.slice(
+    0,
+    availableAccountChars,
+  )}_${hash}`;
 }
 
 function legacyProviderConfig(
@@ -204,10 +228,14 @@ export function resolveProviderInstance(
     readonly instanceId?: ProviderInstanceId | undefined;
     readonly provider?: ProviderKind | undefined;
   },
-): ResolvedProviderInstance {
+): ResolvedProviderInstance | null {
   const instances = deriveProviderInstances(settings);
-  const requestedInstanceId =
-    input.instanceId ?? (input.provider ? defaultInstanceIdForProvider(input.provider) : "codex");
+  if (input.instanceId !== undefined) {
+    return instances.find((instance) => instance.instanceId === input.instanceId) ?? null;
+  }
+  const requestedInstanceId = input.provider
+    ? defaultInstanceIdForProvider(input.provider)
+    : "codex";
   return (
     instances.find((instance) => instance.instanceId === requestedInstanceId) ??
     instances.find((instance) => instance.driver === input.provider && instance.isDefault) ??
@@ -303,8 +331,8 @@ export function mergeProviderStartOptions(
       continue;
     }
     merged[provider] = {
-      ...(baseProviderOptions ?? {}),
-      ...(overlayProviderOptions ?? {}),
+      ...baseProviderOptions,
+      ...overlayProviderOptions,
     };
   }
   return merged as ProviderStartOptions;

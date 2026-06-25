@@ -665,14 +665,15 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   if (shadowHomePath && path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
     throw new Error("Codex account shadow home must be different from CODEX_HOME.");
   }
+  const accountSegment = resolveCodexHomeOverlayAccountSegment({
+    homePath: sourceHomePath,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+  });
   const overlayHomePath = resolveSynaraCodexHomeOverlayPath(
     input.env,
     sourceHomePath,
-    resolveCodexHomeOverlayAccountSegment({
-      homePath: sourceHomePath,
-      ...(input.accountId ? { accountId: input.accountId } : {}),
-      ...(shadowHomePath ? { shadowHomePath } : {}),
-    }),
+    accountSegment,
   );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
@@ -688,7 +689,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
         continue;
       }
-      if (shadowHomePath && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
+      if (accountSegment && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
