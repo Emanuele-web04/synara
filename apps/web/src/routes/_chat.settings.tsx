@@ -958,6 +958,9 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.reviewWalkthroughDiffStyle !== defaults.reviewWalkthroughDiffStyle
+      ? ["Walkthrough diff view"]
+      : []),
     ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
       ? ["Prompt suggestions"]
       : []),

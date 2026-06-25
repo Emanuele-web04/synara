@@ -100,7 +100,7 @@ async function mountDraftThreadWithViewer() {
   };
 }
 
-async function mountSubmittedThread() {
+async function mountSubmittedThread(input: { isResolved?: boolean } = {}) {
   const actions = buildActions();
   const host = document.createElement("div");
   host.className = "w-[520px] bg-background p-4";
@@ -118,7 +118,7 @@ async function mountSubmittedThread() {
           path: "src/review/a.ts",
           line: 42,
           side: "RIGHT",
-          isResolved: false,
+          isResolved: input.isResolved ?? false,
           comments: [
             {
               author: "octocat",
@@ -217,12 +217,53 @@ describe("ReviewCommentThread", () => {
     }
   });
 
+  it("collapses and expands submitted comment threads", async () => {
+    const mounted = await mountSubmittedThread();
+
+    try {
+      await expect.element(page.getByText("Can we tighten this?")).toBeVisible();
+      await page.getByRole("button", { name: "Collapse submitted comments" }).click();
+      await expect.element(page.getByText("Thread collapsed.")).toBeVisible();
+      await expect.element(page.getByText("Can we tighten this?")).not.toBeVisible();
+      await page.getByRole("button", { name: "Expand submitted comments" }).click();
+      await expect.element(page.getByText("Can we tighten this?")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("auto-collapses resolved submitted comment threads", async () => {
+    const mounted = await mountSubmittedThread({ isResolved: true });
+
+    try {
+      await expect.element(page.getByText("Resolved thread collapsed.")).toBeVisible();
+      await expect.element(page.getByText("Can we tighten this?")).not.toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders current viewer avatars for pending local comments", async () => {
     const mounted = await mountLocalThreadWithViewer();
 
     try {
       const avatar = page.getByRole("img", { name: "Tbsheff" }).element();
       expect(avatar).toHaveAttribute("src", "https://avatars.githubusercontent.com/u/1?v=4");
+      await expect.element(page.getByText("Pending local comment")).toBeVisible();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("collapses and expands pending local comment threads", async () => {
+    const mounted = await mountLocalThreadWithViewer();
+
+    try {
+      await expect.element(page.getByText("Pending local comment")).toBeVisible();
+      await page.getByRole("button", { name: "Collapse comment thread" }).click();
+      await expect.element(page.getByText("Thread collapsed.")).toBeVisible();
+      await expect.element(page.getByText("Pending local comment")).not.toBeVisible();
+      await page.getByRole("button", { name: "Expand comment thread" }).click();
       await expect.element(page.getByText("Pending local comment")).toBeVisible();
     } finally {
       await mounted.cleanup();
