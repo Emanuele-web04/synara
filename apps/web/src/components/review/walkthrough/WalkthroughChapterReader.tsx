@@ -1,9 +1,10 @@
+import type { DiffLineAnnotation } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type { ReviewWalkthroughChapter } from "@t3tools/contracts";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useMemo, useState } from "react";
 
-import { FileDiffCard, FileDiffSurface } from "../../chat/FileDiffView";
+import { FileDiffSurface } from "../../chat/FileDiffView";
 import {
   CheckIcon,
   ChevronLeftIcon,
@@ -15,11 +16,14 @@ import {
 import { resolveFileDiffPath } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 import { Button } from "../../ui/button";
+import { ReviewFileDiffBlock, type ReviewDraftAnchor } from "../ReviewFileDiffBlock";
+import type { ReviewLineAnnotationData } from "../reviewAnnotations";
 import { ChapterFindingCard, JudgmentCallout } from "./walkthroughChapterCards";
-import { ProgressRing, ViewedToggle } from "./walkthroughPrimitives";
+import { ProgressRing } from "./walkthroughPrimitives";
 
 const MAX_DIFFS = 12;
 const MAX_FINDINGS = 12;
+const EMPTY_ANNOTATIONS: DiffLineAnnotation<ReviewLineAnnotationData>[] = [];
 
 export function WalkthroughChapterReader(props: {
   chapter: ReviewWalkthroughChapter;
@@ -28,9 +32,18 @@ export function WalkthroughChapterReader(props: {
   fileDiffs: readonly FileDiffMetadata[];
   theme: "light" | "dark";
   diffStyle: "unified" | "split";
+  commentsEnabled: boolean;
+  annotationsByFile: ReadonlyMap<
+    string,
+    ReadonlyArray<DiffLineAnnotation<ReviewLineAnnotationData>>
+  >;
   completed: boolean;
   viewedPaths: ReadonlySet<string>;
+  collapsedFilePaths: ReadonlySet<string>;
   onToggleViewed: (path: string) => void;
+  onToggleCollapsed: (path: string) => void;
+  onStartDraft: (anchor: ReviewDraftAnchor) => void;
+  renderAnnotation: (data: ReviewLineAnnotationData) => ReactNode;
   onToggleComplete: () => void;
   onNavigatePrevious: () => void;
   onNavigateNext: (() => void) | null;
@@ -88,20 +101,26 @@ export function WalkthroughChapterReader(props: {
               {visibleDiffs.map((fileDiff) => {
                 const resolved = resolveFileDiffPath(fileDiff);
                 const path = uniqueFiles.includes(resolved) ? resolved : null;
+                const annotations =
+                  path !== null
+                    ? (props.annotationsByFile.get(path) ?? EMPTY_ANNOTATIONS)
+                    : EMPTY_ANNOTATIONS;
                 return (
-                  <div key={fileDiff.cacheKey ?? fileDiff.name}>
-                    <FileDiffCard
+                  <div key={fileDiff.cacheKey ?? fileDiff.name} className="diff-render-file">
+                    <ReviewFileDiffBlock
                       fileDiff={fileDiff}
                       theme={props.theme}
                       diffStyle={props.diffStyle}
+                      commentsEnabled={props.commentsEnabled}
+                      lineAnnotations={annotations}
+                      onStartDraft={props.onStartDraft}
+                      renderAnnotation={props.renderAnnotation}
                       {...(path !== null
                         ? {
-                            renderHeaderMetadata: () => (
-                              <ViewedToggle
-                                viewed={props.viewedPaths.has(path)}
-                                onToggle={() => props.onToggleViewed(path)}
-                              />
-                            ),
+                            collapsed: props.collapsedFilePaths.has(path),
+                            reviewed: props.viewedPaths.has(path),
+                            onToggleCollapsed: () => props.onToggleCollapsed(path),
+                            onToggleReviewed: () => props.onToggleViewed(path),
                           }
                         : {})}
                     />

@@ -26,8 +26,10 @@ export interface ReviewFileDiffBlockProps {
   overflow?: "scroll" | "wrap";
   collapsed?: boolean;
   reviewed?: boolean;
+  commentsEnabled?: boolean;
   lineAnnotations: ReadonlyArray<DiffLineAnnotation<ReviewLineAnnotationData>>;
   onToggleReviewed?: () => void;
+  onToggleCollapsed?: () => void;
   onStartDraft: (anchor: ReviewDraftAnchor) => void;
   renderAnnotation: (data: ReviewLineAnnotationData) => ReactNode;
 }
@@ -64,7 +66,7 @@ export const ReviewFileDiffBlock = memo(function ReviewFileDiffBlockView(
         theme: resolveDiffThemeName(props.theme),
         themeType: props.theme,
         unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
-        enableGutterUtility: true,
+        enableGutterUtility: props.commentsEnabled ?? true,
         onGutterUtilityClick: handleGutterUtilityClick,
         ...(props.collapsed !== undefined ? { collapsed: props.collapsed } : {}),
       }}
@@ -99,12 +101,40 @@ export const ReviewFileDiffBlock = memo(function ReviewFileDiffBlockView(
               {props.reviewed ? "Reviewed" : "Mark reviewed"}
             </button>
           ) : null}
-          <ChevronDownIcon
-            className={cn(
-              "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
-              props.collapsed ? "rotate-[-90deg]" : "rotate-0",
-            )}
-          />
+          {props.collapsed !== undefined ? (
+            props.onToggleCollapsed ? (
+              <button
+                type="button"
+                aria-expanded={!props.collapsed}
+                aria-label={props.collapsed ? `Expand ${filePath}` : `Collapse ${filePath}`}
+                title={props.collapsed ? "Expand file" : "Collapse file"}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  props.onToggleCollapsed?.();
+                }}
+                className={cn(
+                  "inline-flex size-7 items-center justify-center rounded-lg text-muted-foreground outline-none",
+                  "transition-[background-color,color,transform] duration-150 motion-reduce:transition-none",
+                  "hover:bg-muted/60 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
+                  "active:scale-[0.96] motion-reduce:active:scale-100",
+                )}
+              >
+                <ChevronDownIcon
+                  className={cn(
+                    "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                    props.collapsed ? "rotate-[-90deg]" : "rotate-0",
+                  )}
+                />
+              </button>
+            ) : (
+              <ChevronDownIcon
+                className={cn(
+                  "size-3.5 transition-transform duration-150 motion-reduce:transition-none",
+                  props.collapsed ? "rotate-[-90deg]" : "rotate-0",
+                )}
+              />
+            )
+          ) : null}
         </span>
       )}
     />
@@ -122,8 +152,10 @@ function areReviewFileDiffBlockPropsEqual(
     previous.overflow === next.overflow &&
     previous.collapsed === next.collapsed &&
     previous.reviewed === next.reviewed &&
+    previous.commentsEnabled === next.commentsEnabled &&
     previous.lineAnnotations === next.lineAnnotations &&
     previous.onToggleReviewed === next.onToggleReviewed &&
+    previous.onToggleCollapsed === next.onToggleCollapsed &&
     previous.onStartDraft === next.onStartDraft &&
     previous.renderAnnotation === next.renderAnnotation
   );

@@ -1684,12 +1684,11 @@ diffs-container {
 }
 
 .review-files-workbench .review-diff-viewport .diff-render-file {
-  border-right: 0;
-  border-left: 0;
-  border-radius: 0;
+  border-right: 1px solid var(--review-pane-border);
+  border-left: 1px solid var(--review-pane-border);
+  border-radius: 0.625rem;
   background: var(--review-diff-file-bg);
   border-color: var(--review-pane-border);
-  border-bottom: 0;
 }
 
 .review-diff-viewport .diff-render-file:first-child {
