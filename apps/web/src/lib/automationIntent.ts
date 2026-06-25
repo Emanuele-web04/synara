@@ -697,27 +697,30 @@ function stripAutomationScaffold(value: string): string {
   cleaned = cleaned
     .replace(
       new RegExp(
-        `\\b(?:you\\s+)?wake\\s+up\\s+every\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
+        `\\b(?:you\\s+)?wake\\s+up\\s+(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
         "i",
       ),
       "",
     )
     .replace(
       new RegExp(
-        `\\b(?:you\\s+)?run\\s+(?:it|this)?\\s*every\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
+        `\\b(?:you\\s+)?run\\s+(?:it|this)?\\s*(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
         "i",
       ),
       "",
     )
-    .replace(new RegExp(`\\bevery\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`, "i"), "")
+    .replace(
+      new RegExp(`\\b(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`, "i"),
+      "",
+    )
     .replace(
       new RegExp(
-        `^every\\s+${BARE_INTERVAL_UNIT_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
+        `^(?:every|each)\\s+${BARE_INTERVAL_UNIT_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
         "i",
       ),
       "",
     )
-    .replace(new RegExp(`\\bevery\\s+${BARE_INTERVAL_UNIT_PATTERN}$`, "i"), "")
+    .replace(new RegExp(`\\b(?:every|each)\\s+${BARE_INTERVAL_UNIT_PATTERN}$`, "i"), "")
     .replace(new RegExp(`\\bogni\\s+${INTERVAL_PATTERN}\\b\\s*(?:e|poi|per|,)?\\s*`, "i"), "")
     .replace(
       new RegExp(
