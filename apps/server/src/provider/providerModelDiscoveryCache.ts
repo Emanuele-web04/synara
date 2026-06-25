@@ -38,7 +38,11 @@ export const PROVIDER_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64;
 
 export interface ProviderModelDiscoveryCacheKey {
   readonly provider: ProviderListModelsInput["provider"];
+  readonly instanceId: string | null;
   readonly binaryPath: string | null;
+  readonly homePath: string | null;
+  readonly shadowHomePath: string | null;
+  readonly accountId: string | null;
   readonly apiEndpoint: string | null;
   readonly agentDir: string | null;
   readonly cwd: string | null;
@@ -79,7 +83,11 @@ export function providerModelDiscoveryCacheKey(
 ): ProviderModelDiscoveryCacheKey {
   return {
     provider: input.provider,
+    instanceId: input.instanceId ?? null,
     binaryPath: input.binaryPath ?? null,
+    homePath: input.homePath ?? null,
+    shadowHomePath: input.shadowHomePath ?? null,
+    accountId: input.accountId ?? null,
     apiEndpoint: input.apiEndpoint ?? null,
     agentDir: input.agentDir ?? null,
     cwd: input.cwd ?? null,
@@ -89,14 +97,19 @@ export function providerModelDiscoveryCacheKey(
 /**
  * Stable serialization for a cache key. This is the on-disk contract for the
  * persisted catalog snapshot (providerModelCatalogCache.ts), so field order
- * here is a file format, not an implementation detail.
+ * here is a file format, not an implementation detail. Snapshots written with
+ * an older field list simply miss and fall back to fresh discovery.
  */
 export const serializeProviderModelDiscoveryCacheKey = (
   key: ProviderModelDiscoveryCacheKey,
 ): string =>
   JSON.stringify([
     key.provider,
+    key.instanceId,
     key.binaryPath,
+    key.homePath,
+    key.shadowHomePath,
+    key.accountId,
     key.apiEndpoint,
     key.agentDir,
     key.cwd,

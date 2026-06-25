@@ -6,6 +6,7 @@
 
 import type {
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderModelDescriptor,
 } from "@synara/contracts";
@@ -73,6 +74,7 @@ function modelDiscoveryError(
 
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null;
   /**
    * Enables discovery for the on-demand providers (cursor/grok/droid/opencode/pi)
    * even when they are not selected — pass the picker's open state so their lists
@@ -92,7 +94,8 @@ export function useProviderModelCatalog(input: {
   /** Preserve eager Claude/Codex agent discovery on surfaces that already prefetch both. */
   agentDiscoveryPolicy?: "selected" | "eager-core";
 }): ProviderModelCatalog {
-  const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
+  const { selectedProvider, selectedProviderInstanceId, discoveryEnabled, modelHintByProvider } =
+    input;
   const agentDiscoveryPolicy = input.agentDiscoveryPolicy ?? "selected";
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
@@ -105,6 +108,13 @@ export function useProviderModelCatalog(input: {
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
   );
+  const selectedInstanceQueryOption = (
+    provider: ProviderKind,
+  ): { readonly instanceId?: ProviderInstanceId } => {
+    const instanceId =
+      selectedProvider === provider ? selectedProviderInstanceId?.trim() : undefined;
+    return instanceId ? { instanceId } : {};
+  };
   const prefetchProviderSet = useMemo(
     () =>
       input.prefetchProviders === undefined ? null : new Set<ProviderKind>(input.prefetchProviders),
@@ -148,33 +158,39 @@ export function useProviderModelCatalog(input: {
   const modelQueryOptionsByProvider = {
     claudeAgent: providerModelsQueryOptions({
       provider: "claudeAgent",
+      ...selectedInstanceQueryOption("claudeAgent"),
       binaryPath: settings.claudeBinaryPath || null,
       enabled: claudeModelDiscoveryEnabled,
     }),
     codex: providerModelsQueryOptions({
       provider: "codex",
+      ...selectedInstanceQueryOption("codex"),
       ...codexDiscoveryOptions,
       enabled: codexModelDiscoveryEnabled,
     }),
     cursor: providerModelsQueryOptions({
       provider: "cursor",
+      ...selectedInstanceQueryOption("cursor"),
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: cursorModelDiscoveryEnabled,
     }),
     antigravity: providerModelsQueryOptions({
       provider: "antigravity",
+      ...selectedInstanceQueryOption("antigravity"),
       binaryPath: settings.antigravityBinaryPath || null,
       cwd: discoveryCwd,
       enabled: antigravityModelDiscoveryEnabled,
     }),
     grok: providerModelsQueryOptions({
       provider: "grok",
+      ...selectedInstanceQueryOption("grok"),
       binaryPath: settings.grokBinaryPath || null,
       enabled: grokModelDiscoveryEnabled,
     }),
     droid: providerModelsQueryOptions({
       provider: "droid",
+      ...selectedInstanceQueryOption("droid"),
       binaryPath: settings.droidBinaryPath || null,
       cwd: discoveryCwd,
       // Droid probes every model through a disposable ACP session. Keep it
@@ -183,12 +199,14 @@ export function useProviderModelCatalog(input: {
     }),
     opencode: providerModelsQueryOptions({
       provider: "opencode",
+      ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),
     pi: providerModelsQueryOptions({
       provider: "pi",
+      ...selectedInstanceQueryOption("pi"),
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
@@ -196,6 +214,7 @@ export function useProviderModelCatalog(input: {
     }),
     devin: providerModelsQueryOptions({
       provider: "devin",
+      ...selectedInstanceQueryOption("devin"),
       binaryPath: settings.devinBinaryPath || null,
       cwd: discoveryCwd,
       enabled: devinModelDiscoveryEnabled,
@@ -225,6 +244,7 @@ export function useProviderModelCatalog(input: {
     ,
     ,
     modelProvider,
+    modelInstanceId,
     modelBinaryPath,
     modelApiEndpoint,
     modelAgentDir,
@@ -244,9 +264,11 @@ export function useProviderModelCatalog(input: {
         modelHomePath,
         modelShadowHomePath,
         modelAccountId,
+        modelInstanceId,
       ),
     [
       modelProvider,
+      modelInstanceId,
       modelBinaryPath,
       modelHomePath,
       modelShadowHomePath,
@@ -271,18 +293,21 @@ export function useProviderModelCatalog(input: {
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
+      ...selectedInstanceQueryOption("claudeAgent"),
       enabled: shouldDiscoverProvider("claudeAgent", agentDiscoveryPolicy === "eager-core"),
     }),
   );
   const codexDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "codex",
+      ...selectedInstanceQueryOption("codex"),
       enabled: shouldDiscoverProvider("codex", agentDiscoveryPolicy === "eager-core"),
     }),
   );
   const openCodeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "opencode",
+      ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,

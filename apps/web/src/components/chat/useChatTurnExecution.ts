@@ -421,6 +421,7 @@ export function useChatTurnExecution({
           selectedModelSelectionForSend.provider === "claudeAgent"
             ? selectedModelSelectionForSend.supportsAutoMode
             : undefined,
+          { instanceId: selectedModelSelectionForSend.instanceId },
         );
 
         if (isLocalDraftThread) {

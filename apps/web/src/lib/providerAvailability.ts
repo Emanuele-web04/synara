@@ -1,5 +1,6 @@
 import {
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
@@ -36,6 +37,7 @@ export function normalizeProviderStatusForLocalConfig(input: {
   }
   if (input.disabled) {
     return {
+      ...status,
       provider: input.provider,
       status: "warning",
       available: false,
@@ -67,6 +69,10 @@ export function normalizeProviderStatusForLocalConfig(input: {
   if (normalizeCustomBinaryPath(input.confirmedCustomBinaryPath) === customBinaryPath) {
     // Only the exact path used by a successful session can suppress the warning.
     return {
+      ...(status.instanceId !== undefined ? { instanceId: status.instanceId } : {}),
+      ...(status.driver !== undefined ? { driver: status.driver } : {}),
+      ...(status.displayName !== undefined ? { displayName: status.displayName } : {}),
+      ...(status.enabled !== undefined ? { enabled: status.enabled } : {}),
       provider: status.provider,
       available: true,
       status: "ready",
@@ -113,7 +119,22 @@ export function providerUnavailableReason(status: ServerProviderStatus | null | 
 export function findProviderStatus(
   statuses: readonly ServerProviderStatus[],
   provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ServerProviderStatus | null {
+  if (instanceId) {
+    return (
+      statuses.find(
+        (status) =>
+          status.provider === provider && (status.instanceId ?? status.provider) === instanceId,
+      ) ??
+      statuses.find(
+        (status) =>
+          status.provider === provider &&
+          (status.instanceId === undefined || status.instanceId === status.provider),
+      ) ??
+      null
+    );
+  }
   return statuses.find((status) => status.provider === provider) ?? null;
 }
 
@@ -159,9 +180,10 @@ export function resolveAvailableProviderPreference(input: {
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
   readonly statuses: readonly ServerProviderStatus[];
 }): ProviderSendAvailability {
-  const status = findProviderStatus(input.statuses, input.provider);
+  const status = findProviderStatus(input.statuses, input.provider, input.instanceId);
   return {
     provider: input.provider,
     status,
@@ -177,6 +199,7 @@ function shouldRefreshBeforeBlocking(status: ServerProviderStatus | null): boole
 // Re-check a blocked provider once before surfacing stale install/auth state to the user.
 export async function resolveProviderSendAvailabilityWithRefresh(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
   readonly statuses: readonly ServerProviderStatus[];
   readonly refreshStatuses: ProviderStatusRefresh;
 }): Promise<ProviderSendAvailability> {
@@ -197,6 +220,7 @@ export async function resolveProviderSendAvailabilityWithRefresh(input: {
 
   return resolveProviderSendAvailability({
     provider: input.provider,
+    ...(input.instanceId ? { instanceId: input.instanceId } : {}),
     statuses: refreshedStatuses,
   });
 }

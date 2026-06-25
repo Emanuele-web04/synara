@@ -3,7 +3,7 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -60,6 +60,8 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     stickyModelSelectionByProvider[selectedProvider];
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
+  const selectedProviderInstanceId: ProviderInstanceId =
+    draftModelSelection?.instanceId ?? selectedProvider;
   const selectedProviderModelOptions = draftModelSelection?.options;
   const selectedModelSupportsAutoMode =
     draftModelSelection?.provider === "claudeAgent"
@@ -105,11 +107,14 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
   const handleProviderModelChange = (
     provider: ProviderKind,
     model: ModelSlug,
+    instanceId?: ProviderInstanceId,
     supportsAutoMode?: boolean,
     options?: ProviderOptions,
   ) => {
     const store = useComposerDraftStore.getState();
-    const nextSelection = buildModelSelection(provider, model, options, supportsAutoMode);
+    const nextSelection = buildModelSelection(provider, model, options, supportsAutoMode, {
+      instanceId: instanceId ?? provider,
+    });
     // Mirrors the composer: update the scratch draft and persist the sticky selection.
     store.setModelSelectionAndSticky(scratchThreadId, nextSelection);
   };
@@ -179,6 +184,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     selectedProvider,
     selectedModel,
     selectedModelSupportsAutoMode,
+    selectedProviderInstanceId,
     selectedProviderModelOptions,
     setPrompt,
     handleProviderModelChange,

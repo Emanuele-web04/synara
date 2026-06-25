@@ -463,7 +463,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
       .filter((key) => key[1] === "composer-capabilities");
     expect(capabilityKeys).toHaveLength(NEW_THREAD_MODEL_PREFETCH_PROVIDERS.length);
     expect(capabilityKeys).not.toContainEqual(
-      providerDiscoveryQueryKeys.composerCapabilities("droid"),
+      providerDiscoveryQueryKeys.composerCapabilities("droid", null),
     );
 
     // Droid warms only on explicit intent, capabilities riding along exactly once.
@@ -479,7 +479,7 @@ describe("prefetchModelsForNewThread — warm-option invariants", () => {
     expect(droidKeys).toContainEqual(
       providerDiscoveryQueryKeys.models("droid", "/bin/droid", null, null, "/tmp/project"),
     );
-    expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid"));
+    expect(droidKeys).toContainEqual(providerDiscoveryQueryKeys.composerCapabilities("droid", null));
     expect(
       droidCalls.find(
         (options) => options.queryKey[1] === "models" && options.queryKey[2] === "droid",

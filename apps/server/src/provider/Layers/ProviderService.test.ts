@@ -78,6 +78,7 @@ import {
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
 import { AGENT_GATEWAY_TURN_AUTHORITY_RETIRED } from "../../agentGateway/sessionLease.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.makeUnsafe(value);
 const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
@@ -469,6 +470,7 @@ function makeProviderServiceLayer(
     makeProviderServiceLive(options).pipe(
       Layer.provide(providerAdapterLayer),
       Layer.provide(directoryLayer),
+      Layer.provide(ServerSettingsService.layerTest()),
     ),
     directoryLayer,
     runtimeRepositoryLayer,
@@ -665,6 +667,7 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
     const providerLayer = makeProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
 
     yield* Effect.gen(function* () {
@@ -736,6 +739,7 @@ it.effect(
       const providerLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
         Layer.provide(ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer))),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       yield* Effect.gen(function* () {
@@ -1067,6 +1071,7 @@ it.effect(
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
       const updatedResumeCursor = {
         threadId: asThreadId("thread-1"),
@@ -1117,6 +1122,7 @@ it.effect(
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       secondCodex.startSession.mockClear();
@@ -4455,6 +4461,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -4486,6 +4493,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       secondClaude.startSession.mockClear();
@@ -4549,6 +4557,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -4581,6 +4590,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       yield* Effect.gen(function* () {
@@ -4645,6 +4655,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const firstProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
         Layer.provide(firstDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -4681,6 +4692,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const secondProviderLayer = makeProviderServiceLive().pipe(
         Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
         Layer.provide(secondDirectoryLayer),
+        Layer.provide(ServerSettingsService.layerTest()),
       );
 
       const savedProfile = yield* Effect.gen(function* () {

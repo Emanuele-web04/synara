@@ -123,10 +123,13 @@ export function makeServerProviderLayer(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),
       Layer.provide(ProviderRuntimeEventRepositoryLive),
+      // Provider sessions resolve persisted provider-instance settings before launch.
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(ProviderHealthLive),
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
     return Layer.mergeAll(
       providerServiceLayer,

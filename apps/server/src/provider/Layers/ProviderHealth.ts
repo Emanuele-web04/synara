@@ -21,6 +21,7 @@ import { ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import { envPathKeyFor } from "@synara/shared/executable";
 import { isPathName, mergePathEntries } from "@synara/shared/shell";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 import { expandHomePath } from "@synara/shared/synaraHome";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
@@ -2167,28 +2168,87 @@ export function projectProviderStatusesForSettings(
   checkedAt = new Date().toISOString(),
 ): ProviderStatuses {
   const statusByProvider = new Map(statuses.map((status) => [status.provider, status] as const));
+  const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+  for (const instance of deriveProviderInstances(settings)) {
+    const entries = instancesByProvider.get(instance.driver) ?? [];
+    instancesByProvider.set(instance.driver, [...entries, instance]);
+  }
   const projected: ServerProviderStatus[] = [];
 
   for (const provider of PROVIDERS) {
     const status = statusByProvider.get(provider);
+    const providerInstances = instancesByProvider.get(provider) ?? [];
+    const instances =
+      providerInstances.length > 0
+        ? providerInstances
+        : [
+            {
+              instanceId: provider,
+              driver: provider,
+              displayName: provider,
+              enabled: true,
+            },
+          ];
+    const projectStatusForInstances = (
+      baseStatus: ServerProviderStatus,
+      enabledForInstance: (instanceEnabled: boolean) => boolean = (value) => value,
+    ) => {
+      for (const instance of instances) {
+        projected.push({
+          ...baseStatus,
+          instanceId: instance.instanceId,
+          driver: instance.driver,
+          displayName: instance.displayName,
+          enabled: enabledForInstance(instance.enabled),
+        });
+      }
+    };
+
     if (!isProviderEnabledForSettings(provider, settings)) {
       const disabledStatus = makeDisabledProviderStatus(provider, status?.checkedAt ?? checkedAt);
       const disabledStatusWithAdvisory = {
         ...disabledStatus,
         versionAdvisory: makeSuppressedProviderVersionAdvisory(disabledStatus, status?.version),
       } satisfies ServerProviderStatus;
-      projected.push(
+      projectStatusForInstances(
         status?.updateState
           ? { ...disabledStatusWithAdvisory, updateState: status.updateState }
           : disabledStatusWithAdvisory,
+        () => false,
       );
       continue;
     }
 
     if (status && !isDisabledProviderStatusOverlay(status)) {
-      projected.push(
-        settings.enableProviderUpdateChecks ? status : suppressProviderVersionAdvisory(status),
-      );
+      const visibleStatus = settings.enableProviderUpdateChecks
+        ? status
+        : suppressProviderVersionAdvisory(status);
+      for (const instance of instances) {
+        if (instance.enabled) {
+          projected.push({
+            ...visibleStatus,
+            instanceId: instance.instanceId,
+            driver: instance.driver,
+            displayName: instance.displayName,
+            enabled: true,
+          });
+          continue;
+        }
+        const disabledStatus = makeDisabledProviderStatus(provider, status.checkedAt);
+        const disabledStatusWithAdvisory = {
+          ...disabledStatus,
+          versionAdvisory: makeSuppressedProviderVersionAdvisory(disabledStatus, status.version),
+        } satisfies ServerProviderStatus;
+        projected.push({
+          ...(status.updateState
+            ? { ...disabledStatusWithAdvisory, updateState: status.updateState }
+            : disabledStatusWithAdvisory),
+          instanceId: instance.instanceId,
+          driver: instance.driver,
+          displayName: instance.displayName,
+          enabled: false,
+        });
+      }
     }
   }
 

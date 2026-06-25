@@ -1,5 +1,6 @@
 import type {
   ProviderComposerCapabilities,
+  ProviderInstanceId,
   ProviderKind,
   ProviderListAgentsResult,
   ProviderListCommandsResult,
@@ -256,29 +257,49 @@ function requireDiscoveredModels(
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   modelsAll: ["provider-discovery", "models"] as const,
-  composerCapabilities: (provider: ProviderKind) =>
-    ["provider-discovery", "composer-capabilities", provider] as const,
+  composerCapabilities: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
+    ["provider-discovery", "composer-capabilities", provider, instanceId] as const,
   commands: (
     provider: ProviderKind,
     cwd: string | null,
     agentDir: string | null,
     connectionKey: string | null,
-  ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
+    instanceId: ProviderInstanceId | null = null,
+  ) =>
+    ["provider-discovery", "commands", provider, instanceId, cwd, agentDir, connectionKey] as const,
   // The skill list is query-independent (filtering is client-side), so the key
   // deliberately excludes the typed filter to avoid a refetch per keystroke.
-  skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
-    ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skills: (
+    provider: ProviderKind,
+    cwd: string | null,
+    agentDir: string | null,
+    instanceId: ProviderInstanceId | null = null,
+  ) => ["provider-discovery", "skills", provider, instanceId, cwd, agentDir] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
-  plugins: (provider: ProviderKind, cwd: string | null, threadId: string | null) =>
-    ["provider-discovery", "plugins", provider, cwd, threadId] as const,
+  plugins: (
+    provider: ProviderKind,
+    cwd: string | null,
+    threadId: string | null,
+    instanceId: ProviderInstanceId | null = null,
+  ) => ["provider-discovery", "plugins", provider, instanceId, cwd, threadId] as const,
   plugin: (
     provider: ProviderKind,
     marketplacePath: string,
     pluginName: string,
     cwd: string | null,
     threadId: string | null,
+    instanceId: ProviderInstanceId | null = null,
   ) =>
-    ["provider-discovery", "plugin", provider, marketplacePath, pluginName, cwd, threadId] as const,
+    [
+      "provider-discovery",
+      "plugin",
+      provider,
+      instanceId,
+      marketplacePath,
+      pluginName,
+      cwd,
+      threadId,
+    ] as const,
   models: (
     provider: ProviderKind,
     binaryPath: string | null,
@@ -288,11 +309,13 @@ export const providerDiscoveryQueryKeys = {
     homePath: string | null = null,
     shadowHomePath: string | null = null,
     accountId: string | null = null,
+    instanceId: ProviderInstanceId | null = null,
   ) =>
     [
       "provider-discovery",
       "models",
       provider,
+      instanceId,
       binaryPath,
       apiEndpoint,
       agentDir,
@@ -301,22 +324,42 @@ export const providerDiscoveryQueryKeys = {
       shadowHomePath,
       accountId,
     ] as const,
-  agentsForProvider: (provider: ProviderKind) =>
-    ["provider-discovery", "agents", provider] as const,
-  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
-    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
+  agentsForProvider: (provider: ProviderKind, instanceId?: ProviderInstanceId | null) =>
+    instanceId === undefined
+      ? (["provider-discovery", "agents", provider] as const)
+      : (["provider-discovery", "agents", provider, instanceId] as const),
+  agents: (
+    provider: ProviderKind,
+    instanceId: ProviderInstanceId | null,
+    binaryPath: string | null,
+    cwd: string | null,
+  ) =>
+    [
+      ...providerDiscoveryQueryKeys.agentsForProvider(provider, instanceId),
+      binaryPath,
+      cwd,
+    ] as const,
 };
 
 export function providerModelDiscoveryRetry(provider: ProviderKind): number {
   return provider === "cursor" ? 0 : provider === "droid" ? 2 : 3;
 }
 
-export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
+export function providerComposerCapabilitiesQueryOptions(
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null,
+) {
+  // The default instance shares the provider-level key so new-thread prefetches
+  // (which warm by provider) serve the composer's first read.
+  const keyInstanceId = instanceId && instanceId !== provider ? instanceId : null;
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider),
+    queryKey: providerDiscoveryQueryKeys.composerCapabilities(provider, keyInstanceId),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.getComposerCapabilities({ provider });
+      return api.provider.getComposerCapabilities({
+        provider,
+        ...(instanceId ? { instanceId } : {}),
+      });
     },
     staleTime: Infinity,
   });
@@ -324,13 +367,19 @@ export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind)
 
 export function providerSkillsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   agentDir?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
+    queryKey: providerDiscoveryQueryKeys.skills(
+      input.provider,
+      input.cwd,
+      input.agentDir ?? null,
+      input.instanceId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -338,6 +387,7 @@ export function providerSkillsQueryOptions(input: {
       }
       return api.provider.listSkills({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
@@ -368,6 +418,7 @@ export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled
 
 export function providerCommandsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   binaryPath?: string | null;
@@ -391,6 +442,7 @@ export function providerCommandsQueryOptions(input: {
       input.cwd,
       input.agentDir ?? null,
       connectionKey,
+      input.instanceId ?? null,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
@@ -399,6 +451,7 @@ export function providerCommandsQueryOptions(input: {
       }
       return api.provider.listCommands({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         cwd: input.cwd,
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
@@ -438,6 +491,7 @@ export function isInitialModelDiscoveryPending(query: {
 
 export function providerModelsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
   homePath?: string | null;
   shadowHomePath?: string | null;
@@ -463,6 +517,7 @@ export function providerModelsQueryOptions(input: {
     input.homePath ?? null,
     input.shadowHomePath ?? null,
     input.accountId ?? null,
+    input.instanceId ?? null,
   );
   return queryOptions<ProviderListModelsResult, Error, ProviderListModelsResult, typeof queryKey>({
     queryKey,
@@ -475,6 +530,7 @@ export function providerModelsQueryOptions(input: {
           const api = ensureNativeApi();
           const result = await api.provider.listModels({
             provider: input.provider,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
             ...(input.homePath ? { homePath: input.homePath } : {}),
             ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
@@ -545,6 +601,7 @@ export function providerModelsQueryOptions(input: {
 
 export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
   cwd?: string | null;
   enabled?: boolean;
@@ -552,6 +609,7 @@ export function providerAgentsQueryOptions(input: {
   return queryOptions({
     queryKey: providerDiscoveryQueryKeys.agents(
       input.provider,
+      input.instanceId ?? null,
       input.binaryPath ?? null,
       input.cwd ?? null,
     ),
@@ -559,6 +617,7 @@ export function providerAgentsQueryOptions(input: {
       const api = ensureNativeApi();
       return api.provider.listAgents({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
@@ -575,16 +634,23 @@ export function providerAgentsQueryOptions(input: {
 
 export function providerPluginsQueryOptions(input: {
   provider: ProviderKind;
+  instanceId?: ProviderInstanceId | null;
   cwd: string | null;
   threadId?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.plugins(input.provider, input.cwd, input.threadId ?? null),
+    queryKey: providerDiscoveryQueryKeys.plugins(
+      input.provider,
+      input.cwd,
+      input.threadId ?? null,
+      input.instanceId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.provider.listPlugins({
         provider: input.provider,
+        ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
       });

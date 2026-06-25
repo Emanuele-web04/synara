@@ -293,6 +293,7 @@ describe("wsNativeApi", () => {
           claudeAgent: {
             enabled: true,
             binaryPath: "claude",
+            homePath: "",
             launchArgs: "",
             enableArtifacts: false,
             customModels: [],
@@ -313,6 +314,7 @@ describe("wsNativeApi", () => {
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
           omp: { enabled: true, binaryPath: "omp", agentDir: "", customModels: [] },
         },
+        providerInstances: {},
         skills: { disabled: [] },
       },
     } as const;

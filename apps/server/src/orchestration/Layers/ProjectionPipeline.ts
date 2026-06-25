@@ -1286,14 +1286,27 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             }),
             projectionThreadRepository.getById({ threadId: event.payload.threadId }),
           ]);
+          const currentSessionRow = Option.getOrNull(currentSession);
           const turnStartSession = deriveTurnStartSession({
             threadId: event.payload.threadId,
-            currentSession: Option.getOrNull(currentSession),
+            currentSession:
+              currentSessionRow === null
+                ? null
+                : (({ providerInstanceId, ...row }) => ({
+                    ...row,
+                    ...(providerInstanceId != null ? { providerInstanceId } : {}),
+                  }))(currentSessionRow),
             providerName:
               Option.getOrNull(thread)?.modelSelection.provider ??
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
+            ...((providerInstanceId) =>
+              providerInstanceId != null ? { providerInstanceId } : {})(
+              Option.getOrNull(thread)?.modelSelection.instanceId ??
+                currentSessionRow?.providerInstanceId ??
+                event.payload.modelSelection?.instanceId,
+            ),
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
@@ -1312,6 +1325,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
+            ...(event.payload.session.providerInstanceId
+              ? { providerInstanceId: event.payload.session.providerInstanceId }
+              : {}),
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,

@@ -18,7 +18,11 @@ import {
 
 const KEY: ProviderModelDiscoveryCacheKey = {
   provider: "opencode",
+  instanceId: null,
   binaryPath: "/bin/opencode",
+  homePath: null,
+  shadowHomePath: null,
+  accountId: null,
   apiEndpoint: null,
   agentDir: null,
   cwd: "/repo/a",

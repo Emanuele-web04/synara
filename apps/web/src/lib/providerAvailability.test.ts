@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderStatus } from "@synara/contracts";
 import {
+  findProviderStatus,
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   resolveAvailableProviderPreference,
+  resolveProviderSendAvailability,
   resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
 
@@ -293,6 +295,41 @@ describe("resolveProviderSendAvailabilityWithRefresh", () => {
     ).resolves.toMatchObject({
       usable: false,
       unavailableReason: "Antigravity is not authenticated yet.",
+    });
+  });
+});
+
+describe("findProviderStatus", () => {
+  it("selects the exact provider instance when multiple instances share a provider", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        displayName: "Work",
+        message: "Work account is disabled.",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toEqual(statuses[1]);
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Work account is disabled.",
     });
   });
 });

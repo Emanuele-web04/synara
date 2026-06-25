@@ -281,7 +281,14 @@ export function AutomationCreateDialog({
     if (hasBlockingAutomationDraftWarnings(warnings, acknowledgedWarningIds)) return;
     const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(warnings, acknowledgedWarningIds);
     createAutomation(
-      createInputFromForm(form, getProviderStartOptions(settings), acknowledgedRisks),
+      createInputFromForm(
+        form,
+        getProviderStartOptions(
+          settings,
+          form.modelSelection.instanceId ?? form.modelSelection.provider,
+        ),
+        acknowledgedRisks,
+      ),
       () => onOpenChange(false),
     );
   };

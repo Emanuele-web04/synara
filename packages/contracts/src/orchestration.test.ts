@@ -45,6 +45,7 @@ const decodeProviderStartOptions = Schema.decodeUnknownEffect(ProviderStartOptio
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
+const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 
 it.effect("decodes last-known PRs persisted before draft/mergeability/diff fields existed", () =>
   Effect.gen(function* () {
@@ -157,6 +158,22 @@ it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
           command: "git status --short",
         },
       },
+    });
+  }),
+);
+
+it.effect("preserves provider instance ids when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
     });
   }),
 );

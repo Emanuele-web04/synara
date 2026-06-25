@@ -8,6 +8,7 @@
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -24,7 +25,6 @@ import {
 } from "react";
 
 import { appHistory } from "../../appNavigation";
-import type { ResolvedCodexAccount } from "../../appSettings";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { useStarredModels } from "../../hooks/useStarredModels";
 import {
@@ -81,12 +81,19 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_ICON_CLASS_NAME,
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
-import { resolveProviderModelLabel, resolveVisibleProviderOptions } from "./ProviderModelPicker";
+import {
+  type ProviderModelPickerInstance,
+  resolveProviderInstanceLabel,
+  resolveProviderModelLabel,
+  resolveVisibleProviderOptions,
+} from "./ProviderModelPicker";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 
 export type ComposerModelSelectionOptions = {
   /** Provider options to commit together with the model (starred presets, row effort). */
   modelOptions?: ProviderOptions;
+  /** Provider instance (account) the model is committed for. */
+  instanceId?: ProviderInstanceId;
 };
 
 type ComposerModelPickerProps = {
@@ -99,9 +106,8 @@ type ComposerModelPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
-  selectedCodexAccountId?: string;
-  onCodexAccountChange?: (accountId: string) => void;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
@@ -243,6 +249,14 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
+  const selectedInstanceLabel = resolveProviderInstanceLabel({
+    provider: activeProvider,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
+    providerInstances: props.providerInstances,
+  });
+  const triggerModelLabel = selectedInstanceLabel
+    ? `${selectedInstanceLabel} · ${modelLabel}`
+    : modelLabel;
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
     props.model,
@@ -283,6 +297,24 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
         });
   const starredModelSlots = new Set(starredModels.map(starredModelSlotKey));
 
+  const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+    (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
+  const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
+    const instances = instancesFor(provider);
+    if (
+      provider === props.provider &&
+      props.selectedProviderInstanceId !== undefined &&
+      instances.some((instance) => instance.instanceId === props.selectedProviderInstanceId)
+    ) {
+      return props.selectedProviderInstanceId;
+    }
+    return (
+      instances.find((instance) => instance.isDefault)?.instanceId ??
+      instances[0]?.instanceId ??
+      provider
+    );
+  };
+
   // Commit a row: `patch` carries the traits to apply on top of the provider's options.
   // `keepOpen` leaves the panel up so the footer slider can tune the model just picked.
   const commitRow = (
@@ -291,6 +323,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     patch: Record<string, unknown>,
     keepOpen = false,
   ) => {
+    const instanceId = selectedInstanceIdFor(row.provider);
     if (Object.keys(patch).length > 0) {
       props.onProviderModelChange(row.provider, model, {
         modelOptions: buildNextProviderOptions(
@@ -298,9 +331,10 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
           providerOptionsFor(row.provider),
           patch,
         ),
+        instanceId,
       });
     } else {
-      props.onProviderModelChange(row.provider, model);
+      props.onProviderModelChange(row.provider, model, { instanceId });
     }
     if (keepOpen) {
       selectionCommittedWhileOpenRef.current = true;
@@ -403,7 +437,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
-        modelLabel={modelLabel}
+        modelLabel={triggerModelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
@@ -478,25 +512,33 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
-            {tab === "codex" &&
-            (props.codexAccounts?.length ?? 0) > 1 &&
-            props.onCodexAccountChange ? (
+            {tab !== STARRED_TAB && instancesFor(tab).length > 1 ? (
               <>
                 <MenuGroup>
                   <MenuGroupLabel className={PICKER_PANEL_GROUP_LABEL_CLASS_NAME}>
-                    Account
+                    Instance
                   </MenuGroupLabel>
                   <MenuRadioGroup
-                    value={props.selectedCodexAccountId ?? props.codexAccounts?.[0]?.id ?? ""}
+                    value={selectedInstanceIdFor(tab)}
                     onValueChange={(value) => {
                       if (props.disabled || !value) return;
-                      props.onCodexAccountChange?.(value);
+                      const model =
+                        tab === activeProvider
+                          ? props.model
+                          : props.modelOptionsByProvider[tab][0]?.slug;
+                      if (!model) return;
+                      props.onProviderModelChange(tab, model, { instanceId: value });
+                      setMenuOpen(false);
                       props.onSelectionCommitted?.();
                     }}
                   >
-                    {props.codexAccounts?.map((account) => (
-                      <MenuRadioItem key={account.id} value={account.id}>
-                        <span className="truncate">{account.label}</span>
+                    {instancesFor(tab).map((instance) => (
+                      <MenuRadioItem
+                        key={instance.instanceId}
+                        value={instance.instanceId}
+                        disabled={!instance.enabled}
+                      >
+                        <span className="truncate">{instance.label}</span>
                       </MenuRadioItem>
                     ))}
                   </MenuRadioGroup>

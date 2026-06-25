@@ -66,7 +66,13 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
         selectedAccountId: "default",
         accounts: [],
       },
-      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "", enableArtifacts: false },
+      claudeAgent: {
+        ...provider,
+        binaryPath: "claude",
+        homePath: "",
+        launchArgs: "",
+        enableArtifacts: false,
+      },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       devin: { ...provider, binaryPath: "devin" },
       antigravity: { ...provider, binaryPath: "agy" },
@@ -83,6 +89,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       omp: { ...provider, binaryPath: "omp", agentDir: "" },
       ...overrides,
     },
+    providerInstances: {},
     skills: { disabled: [] },
   };
 }

@@ -2,6 +2,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type ProviderComposerCapabilities,
   ProviderGetComposerCapabilitiesInput,
+  type ProviderKind,
   ProviderListAgentsInput,
   ProviderListCommandsInput,
   ProviderListModelsInput,
@@ -11,11 +12,15 @@ import {
   ProviderListSkillsInput,
   type ProviderListSkillsResult,
   ProviderReadPluginInput,
+  type ProviderStartOptions,
   type ProviderSkillDescriptor,
 } from "@synara/contracts";
+import {
+  providerStartOptionsFromInstance,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 import { Effect, Exit, Layer, Option, Queue, Schema, SchemaIssue } from "effect";
 
-import { isServerBetaFeatureEnabled } from "../../betaFeatureGate.ts";
 import { ServerConfig } from "../../config.ts";
 import { gateBetaOnlyProviders, ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderValidationError } from "../Errors.ts";
@@ -166,14 +171,49 @@ const make = Effect.gen(function* () {
       Queue.offerUnsafe(catalogWriteQueue, entries);
     },
   });
-  const providerIsEnabled = Effect.fn("providerIsEnabled")(function* (
-    provider: ProviderGetComposerCapabilitiesInput["provider"],
-  ) {
-    return yield* serverSettings.getSettings.pipe(
-      Effect.map((settings) => settings.providers[provider].enabled),
-      Effect.orElseSucceed(() => isServerBetaFeatureEnabled(provider)),
+  const applyProviderStartOptions = <T extends { readonly provider: ProviderKind }>(
+    parsed: T,
+    providerOptions: ProviderStartOptions | undefined,
+  ): T => {
+    const providerConfig = providerOptions?.[parsed.provider];
+    if (!providerConfig || typeof providerConfig !== "object") {
+      return parsed;
+    }
+    const overlay = Object.fromEntries(
+      Object.entries(providerConfig).filter(([, value]) => value !== undefined && value !== ""),
     );
-  });
+    return { ...parsed, ...overlay } as T;
+  };
+
+  const resolveDiscoveryInput = <
+    T extends { readonly provider: ProviderKind; readonly instanceId?: string | undefined },
+  >(
+    parsed: T,
+  ): Effect.Effect<
+    T & { readonly provider: ProviderKind; readonly instanceId: string; readonly enabled: boolean },
+    never,
+    never
+  > =>
+    Effect.gen(function* () {
+      const settings = yield* serverSettings.getSettings.pipe(
+        Effect.orElseSucceed(() => gateBetaOnlyProviders(DEFAULT_SERVER_SETTINGS)),
+      );
+      const instance = resolveProviderInstance(settings, {
+        provider: parsed.provider,
+        ...(parsed.instanceId ? { instanceId: parsed.instanceId } : {}),
+      });
+      const resolved = {
+        ...parsed,
+        provider: instance.driver as ProviderKind,
+        instanceId: instance.instanceId,
+        enabled: instance.enabled,
+      } as T & {
+        readonly provider: ProviderKind;
+        readonly instanceId: string;
+        readonly enabled: boolean;
+      };
+      return applyProviderStartOptions(resolved, providerStartOptionsFromInstance(instance));
+    });
 
   const getComposerCapabilities: ProviderDiscoveryServiceShape["getComposerCapabilities"] = (
     input,
@@ -184,13 +224,14 @@ const make = Effect.gen(function* () {
         schema: ProviderGetComposerCapabilitiesInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
-        return disabledCapabilitiesForProvider(parsed.provider);
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
+        return disabledCapabilitiesForProvider(resolved.provider);
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       const capabilities = adapter.getComposerCapabilities
         ? yield* adapter.getComposerCapabilities()
-        : disabledCapabilitiesForProvider(parsed.provider);
+        : disabledCapabilitiesForProvider(resolved.provider);
       // The unified Synara skills catalog backs skill discovery for every
       // provider, including ones without native skill support.
       return {
@@ -207,22 +248,23 @@ const make = Effect.gen(function* () {
         schema: ProviderListSkillsInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return {
           skills: [],
           source: "disabled",
           cached: false,
         };
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       const nativeResult: ProviderListSkillsResult | null = adapter.listSkills
         ? yield* adapter
-            .listSkills(parsed)
+            .listSkills(resolved)
             .pipe(
               Effect.catch((error) =>
                 Effect.logWarning(
                   "provider-native skill discovery failed; serving the Synara skills catalog only",
-                  { provider: parsed.provider, error },
+                  { provider: resolved.provider, error },
                 ).pipe(Effect.as(null)),
               ),
             )
@@ -232,14 +274,14 @@ const make = Effect.gen(function* () {
           cwd: parsed.cwd,
           homeDir: serverConfig.homeDir,
           synaraBaseDir: serverConfig.baseDir,
-          provider: parsed.provider,
+          provider: resolved.provider,
           ...(parsed.forceReload !== undefined ? { forceReload: parsed.forceReload } : {}),
           ...(parsed.agentDir !== undefined ? { agentDir: parsed.agentDir } : undefined),
         }),
       ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("synara skills catalog discovery failed", {
-            provider: parsed.provider,
+            provider: resolved.provider,
             cause,
           }).pipe(Effect.as([] as ProviderSkillDescriptor[])),
         ),
@@ -265,14 +307,15 @@ const make = Effect.gen(function* () {
         schema: ProviderListCommandsInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return {
           commands: [],
           source: "disabled",
           cached: false,
         };
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       if (!adapter.listCommands) {
         return {
           commands: [],
@@ -280,8 +323,8 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      if (parsed.provider !== "claudeAgent") {
-        return yield* adapter.listCommands(parsed);
+      if (resolved.provider !== "claudeAgent") {
+        return yield* adapter.listCommands(resolved);
       }
       // Server-owned like the session start options, so discovery lists the
       // same commands a new Claude session will actually have.
@@ -289,7 +332,7 @@ const make = Effect.gen(function* () {
         Effect.orElseSucceed(() => gateBetaOnlyProviders(DEFAULT_SERVER_SETTINGS)),
       );
       return yield* adapter.listCommands({
-        ...parsed,
+        ...resolved,
         enableArtifacts: settings.providers.claudeAgent.enableArtifacts,
       });
     });
@@ -301,7 +344,8 @@ const make = Effect.gen(function* () {
         schema: ProviderListPluginsInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return {
           marketplaces: [],
           marketplaceLoadErrors: [],
@@ -311,7 +355,7 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       if (!adapter.listPlugins) {
         return {
           marketplaces: [],
@@ -322,7 +366,7 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listPlugins(parsed);
+      return yield* adapter.listPlugins(resolved);
     });
 
   const readPlugin: ProviderDiscoveryServiceShape["readPlugin"] = (input) =>
@@ -332,20 +376,21 @@ const make = Effect.gen(function* () {
         schema: ProviderReadPluginInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return yield* new ProviderValidationError({
           operation: "ProviderDiscoveryService.readPlugin",
-          issue: `Provider '${parsed.provider}' is disabled in Synara settings.`,
+          issue: `Provider instance '${resolved.instanceId}' is disabled in Synara settings.`,
         });
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       if (!adapter.readPlugin) {
         return yield* new ProviderValidationError({
           operation: "ProviderDiscoveryService.readPlugin",
-          issue: `Plugin discovery is unavailable for provider '${parsed.provider}'.`,
+          issue: `Plugin discovery is unavailable for provider '${resolved.provider}'.`,
         });
       }
-      return yield* adapter.readPlugin(parsed);
+      return yield* adapter.readPlugin(resolved);
     });
 
   const listModels: ProviderDiscoveryServiceShape["listModels"] = (input) =>
@@ -355,14 +400,15 @@ const make = Effect.gen(function* () {
         schema: ProviderListModelsInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return {
           models: [],
           source: "disabled",
           cached: false,
         };
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       if (!adapter.listModels) {
         return {
           models: [],
@@ -371,22 +417,22 @@ const make = Effect.gen(function* () {
         };
       }
       const listModelsFromAdapter = adapter.listModels;
-      const discover = Effect.suspend(() => listModelsFromAdapter(parsed)).pipe(
+      const discover = Effect.suspend(() => listModelsFromAdapter(resolved)).pipe(
         Effect.flatMap((result) =>
-          isolateMalformedModelDescriptors({ provider: parsed.provider, result }),
+          isolateMalformedModelDescriptors({ provider: resolved.provider, result }),
         ),
       );
       // OMP re-resolves file-backed modelRoles per request, so a shared fresh
       // window would freeze role/config edits for up to 30 minutes and persist
       // them across restarts. `omp models` is a cheap subprocess — bypass the
       // shared cache so every picker read reflects the live catalog.
-      if (parsed.provider === "omp") {
+      if (resolved.provider === "omp") {
         return yield* discover;
       }
-      const cacheKey = providerModelDiscoveryCacheKey(parsed);
+      const cacheKey = providerModelDiscoveryCacheKey(resolved);
       const runtimeVersion =
-        parsed.provider === "claudeAgent"
-          ? ((yield* providerHealth.getStatuses).find((status) => status.provider === "claudeAgent")
+        resolved.provider === "claudeAgent"
+          ? ((yield* providerHealth.getStatuses).find((status) => status.provider === "claudeAgent" && status.instanceId === resolved.instanceId)
               ?.version ?? null)
           : undefined;
       return yield* modelDiscoveryCache.lookup(
@@ -402,14 +448,15 @@ const make = Effect.gen(function* () {
         schema: ProviderListAgentsInput,
         payload: input,
       });
-      if (!(yield* providerIsEnabled(parsed.provider))) {
+      const resolved = yield* resolveDiscoveryInput(parsed);
+      if (!resolved.enabled) {
         return {
           agents: [],
           source: "disabled",
           cached: false,
         };
       }
-      const adapter = yield* registry.getByProvider(parsed.provider);
+      const adapter = yield* registry.getByProvider(resolved.provider);
       if (!adapter.listAgents) {
         return {
           agents: [],
@@ -417,7 +464,7 @@ const make = Effect.gen(function* () {
           cached: false,
         };
       }
-      return yield* adapter.listAgents(parsed);
+      return yield* adapter.listAgents(resolved);
     });
 
   return {

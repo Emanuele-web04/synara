@@ -204,6 +204,7 @@ export function resolveTextGenerationProvider(settings: ServerSettings): ServerS
     ...settings,
     textGenerationModelSelection: {
       provider: fallback,
+      instanceId: fallback,
       model:
         fallback === "droid"
           ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
@@ -287,6 +288,7 @@ function migrateRemovedKiloSettings(settings: unknown): unknown {
         textGenerationModelSelection: {
           ...selectionRecord,
           provider: "opencode",
+          ...(selectionRecord.instanceId === "kilo" ? { instanceId: "opencode" } : {}),
           ...(migratedOptions === undefined ? {} : { options: migratedOptions }),
         },
       };

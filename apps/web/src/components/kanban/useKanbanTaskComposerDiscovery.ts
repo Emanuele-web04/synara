@@ -6,6 +6,7 @@
 import type {
   ProjectEntry,
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderNativeCommandDescriptor,
@@ -54,6 +55,7 @@ const KANBAN_SUPPORTED_APP_SLASH_COMMANDS = new Set(["clear", "default", "plan"]
 interface UseKanbanTaskComposerDiscoveryInput {
   readonly composerTrigger: ComposerTrigger | null;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
@@ -80,6 +82,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const {
     composerTrigger,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,
@@ -116,11 +119,12 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   });
 
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       binaryPath:
@@ -150,6 +154,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       agentDir:
@@ -166,6 +171,7 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId: scratchThreadId,
       enabled:

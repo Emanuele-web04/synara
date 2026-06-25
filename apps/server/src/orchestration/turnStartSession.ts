@@ -1,6 +1,7 @@
 import type {
   ModelSelection,
   OrchestrationSession,
+  ProviderInstanceId,
   RuntimeMode,
   ThreadId,
 } from "@synara/contracts";
@@ -46,6 +47,7 @@ export function deriveTurnStartSession(input: {
   readonly threadId: ThreadId;
   readonly currentSession: OrchestrationSession | null;
   readonly providerName: OrchestrationSession["providerName"];
+  readonly providerInstanceId?: ProviderInstanceId;
   readonly requestedRuntimeMode: RuntimeMode;
   readonly requestedAt: string;
   /**
@@ -64,11 +66,18 @@ export function deriveTurnStartSession(input: {
     input.currentSession?.providerName != null && input.sessionProviderEstablished !== false
       ? input.currentSession.providerName
       : undefined;
+  const sessionProviderInstanceId =
+    input.currentSession?.providerInstanceId != null && input.sessionProviderEstablished !== false
+      ? input.currentSession.providerInstanceId
+      : input.providerInstanceId;
 
   return {
     threadId: input.threadId,
     status: "starting",
     providerName: sessionProviderName ?? input.providerName,
+    ...(sessionProviderInstanceId !== undefined
+      ? { providerInstanceId: sessionProviderInstanceId }
+      : {}),
     runtimeMode: input.currentSession?.runtimeMode ?? input.requestedRuntimeMode,
     activeTurnId: null,
     lastError: null,
