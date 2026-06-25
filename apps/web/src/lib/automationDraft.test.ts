@@ -11,6 +11,7 @@ import {
   automationApprovalGaps,
   buildAutomationDraftWarnings,
   hasBlockingAutomationDraftWarnings,
+  maxIterationsForFastIntervalApproval,
   warningIdsForAcknowledgedRisks,
 } from "./automationDraft";
 
@@ -196,10 +197,11 @@ describe("automation draft warnings", () => {
 describe("automationApprovalGaps", () => {
   const base = {
     schedule: { type: "daily" as const, timeOfDay: "09:00" },
+    enabled: true,
+    maxIterations: null,
     mode: "standalone" as const,
     runtimeMode: "approval-required" as const,
     worktreeMode: "worktree" as const,
-    maxIterations: null,
     prompt: "Check the build.",
   };
 
@@ -210,6 +212,7 @@ describe("automationApprovalGaps", () => {
       acknowledgedRisks: [],
     });
     expect(gaps.warnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["full-access"]);
     expect(gaps.acknowledgedRisks).toEqual(["full-access"]);
   });
 
@@ -220,16 +223,7 @@ describe("automationApprovalGaps", () => {
       acknowledgedRisks: [],
     });
     expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
-    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
-  });
-
-  it("requires local-checkout approval for standalone auto fallback", () => {
-    const gaps = automationApprovalGaps({
-      ...base,
-      worktreeMode: "auto",
-      acknowledgedRisks: [],
-    });
-    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
     expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
   });
 
@@ -243,6 +237,9 @@ describe("automationApprovalGaps", () => {
     expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
       new Set(["full-access", "local-checkout"]),
     );
+    expect(new Set(gaps.runBlockingWarnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
     expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
@@ -254,48 +251,114 @@ describe("automationApprovalGaps", () => {
       acknowledgedRisks: ["full-access", "local-checkout"],
     });
     expect(gaps.warnings).toEqual([]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
     expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
   it("needs no approval for an approval-required worktree automation", () => {
     const gaps = automationApprovalGaps({ ...base, acknowledgedRisks: [] });
     expect(gaps.warnings).toEqual([]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
     expect(gaps.acknowledgedRisks).toEqual([]);
   });
 
-  it("shows fast interval approval when it will be persisted", () => {
+  it("shows local-checkout approval for heartbeat updates without blocking the run", () => {
+    // Heartbeat reuses the target thread (no local env), so local-checkout never blocks
+    // dispatch. It is still surfaced so automation.update accepts a local heartbeat.
     const gaps = automationApprovalGaps({
       ...base,
-      schedule: { type: "interval", everySeconds: 15 },
       runtimeMode: "full-access",
+      worktreeMode: "local",
+      mode: "heartbeat",
       acknowledgedRisks: [],
     });
-    expect(gaps.warnings.map((warning) => warning.id)).toEqual([
-      "fast-recurring-interval",
-      "full-access",
-    ]);
-    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
+    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
   });
 
-  it("caps legacy fast intervals when approving", () => {
+  it("keeps an approval path for an approval-required local heartbeat", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "local",
+      mode: "heartbeat",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["local-checkout"]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual(["local-checkout"]);
+  });
+
+  it("does not block an auto worktree but covers its fallback on approve", () => {
+    // worktreeMode "auto" is not a definite blocker, so Run now is blocked only by
+    // full-access. The banner still shows the local-checkout fallback risk that approval saves.
+    const gaps = automationApprovalGaps({
+      ...base,
+      runtimeMode: "full-access",
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "local-checkout"]),
+    );
+    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "local-checkout"]));
+  });
+
+  it("needs no approval for an approval-required auto automation", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      worktreeMode: "auto",
+      mode: "standalone",
+      acknowledgedRisks: [],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual([]);
+  });
+
+  it("surfaces and persists the fast-loop risk when approving for another blocker", () => {
+    // fast-interval never blocks a run on its own, but when the banner is already shown for a
+    // run blocker, approving also persists fast-interval (or automation.update would reject
+    // the sub-minute schedule). It is therefore surfaced too, so consent is transparent.
     const gaps = automationApprovalGaps({
       ...base,
       schedule: { type: "interval", everySeconds: 15 },
       runtimeMode: "full-access",
       acknowledgedRisks: [],
-      maxIterations: null,
     });
+    expect(new Set(gaps.warnings.map((warning) => warning.id))).toEqual(
+      new Set(["full-access", "fast-recurring-interval"]),
+    );
+    expect(gaps.runBlockingWarnings.map((warning) => warning.id)).toEqual(["full-access"]);
+    expect(new Set(gaps.acknowledgedRisks)).toEqual(new Set(["full-access", "fast-interval"]));
     expect(gaps.maxIterations).toBe(10);
   });
 
-  it("keeps fast interval approval visible when only the safety cap is missing", () => {
+  it("surfaces fast-loop approval for imported definitions without blocking run now", () => {
     const gaps = automationApprovalGaps({
       ...base,
       schedule: { type: "interval", everySeconds: 15 },
-      acknowledgedRisks: ["fast-interval"],
-      maxIterations: null,
+      acknowledgedRisks: [],
     });
     expect(gaps.warnings.map((warning) => warning.id)).toEqual(["fast-recurring-interval"]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual(["fast-interval"]);
+    expect(gaps.maxIterations).toBe(10);
+  });
+
+  it("surfaces a cap-only fast-loop repair for legacy acknowledged definitions", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      maxIterations: 25,
+      acknowledgedRisks: ["fast-interval"],
+    });
+    expect(gaps.warnings.map((warning) => warning.id)).toEqual(["fast-recurring-interval"]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
     expect(gaps.acknowledgedRisks).toEqual(["fast-interval"]);
     expect(gaps.maxIterations).toBe(10);
   });
@@ -309,5 +372,60 @@ describe("automationApprovalGaps", () => {
       maxIterations: 3,
     });
     expect(gaps.maxIterations).toBeUndefined();
+  });
+
+  it("does not show a cap-only repair for paused legacy fast loops", () => {
+    const gaps = automationApprovalGaps({
+      ...base,
+      schedule: { type: "interval", everySeconds: 15 },
+      enabled: false,
+      acknowledgedRisks: ["fast-interval"],
+    });
+    expect(gaps.warnings).toEqual([]);
+    expect(gaps.runBlockingWarnings).toEqual([]);
+    expect(gaps.acknowledgedRisks).toEqual(["fast-interval"]);
+    expect(gaps.maxIterations).toBeUndefined();
+  });
+});
+
+describe("maxIterationsForFastIntervalApproval", () => {
+  it("caps enabled imported fast loops without a max iteration limit", () => {
+    expect(
+      maxIterationsForFastIntervalApproval({
+        schedule: { type: "interval", everySeconds: 15 },
+        enabled: true,
+        maxIterations: null,
+      }),
+    ).toBe(10);
+  });
+
+  it("caps enabled imported fast loops above the server cap", () => {
+    expect(
+      maxIterationsForFastIntervalApproval({
+        schedule: { type: "interval", everySeconds: 15 },
+        enabled: true,
+        maxIterations: 25,
+      }),
+    ).toBe(10);
+  });
+
+  it("leaves already-bounded fast loops unchanged", () => {
+    expect(
+      maxIterationsForFastIntervalApproval({
+        schedule: { type: "interval", everySeconds: 15 },
+        enabled: true,
+        maxIterations: 3,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not cap disabled legacy fast loops during approval", () => {
+    expect(
+      maxIterationsForFastIntervalApproval({
+        schedule: { type: "interval", everySeconds: 15 },
+        enabled: false,
+        maxIterations: null,
+      }),
+    ).toBeUndefined();
   });
 });
