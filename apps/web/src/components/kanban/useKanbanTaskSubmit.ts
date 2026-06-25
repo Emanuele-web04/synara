@@ -8,6 +8,7 @@ import type {
   ModelSlug,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
@@ -29,6 +30,7 @@ interface UseKanbanTaskSubmitInput {
   readonly selectedProjectId: ProjectId | null;
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly selectedModel: ModelSlug | null;
   readonly taskPreview: string;
   readonly trimmedPrompt: string;
@@ -49,6 +51,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     taskPreview,
     trimmedPrompt,
@@ -90,7 +93,9 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
     const modelSelection =
       scratchState?.modelSelectionByProvider[selectedProvider] ??
-      buildModelSelection(selectedProvider, selectedModel);
+      buildModelSelection(selectedProvider, selectedModel, null, {
+        instanceId: selectedProviderInstanceId,
+      });
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,
@@ -115,6 +120,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = resolveProviderSendAvailability({
       provider: modelSelection.provider,
+      instanceId: modelSelection.instanceId,
       statuses: providerStatuses,
     });
     if (!sendAvailability.usable) {
@@ -192,6 +198,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     runtimeMode,
     scratchThreadId,
     selectedModel,
+    selectedProviderInstanceId,
     selectedProjectId,
     selectedProvider,
     sendAsDraft,

@@ -1,4 +1,4 @@
-import { ProviderKind, type ThreadId } from "@t3tools/contracts";
+import { ProviderInstanceId, ProviderKind, type ThreadId } from "@t3tools/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
@@ -50,6 +50,26 @@ function mergeRuntimePayload(
   return next;
 }
 
+function readProviderInstanceId(
+  provider: ProviderKind,
+  runtimePayload: unknown | null | undefined,
+): ProviderInstanceId {
+  if (!isRecord(runtimePayload)) {
+    return provider;
+  }
+  const rawProviderInstanceId =
+    "providerInstanceId" in runtimePayload ? runtimePayload.providerInstanceId : undefined;
+  if (Schema.is(ProviderInstanceId)(rawProviderInstanceId)) {
+    return rawProviderInstanceId;
+  }
+  const rawModelSelection =
+    "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
+  if (isRecord(rawModelSelection) && Schema.is(ProviderInstanceId)(rawModelSelection.instanceId)) {
+    return rawModelSelection.instanceId;
+  }
+  return provider;
+}
+
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntimeRepository;
 
@@ -65,6 +85,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                 Option.some({
                   threadId: value.threadId,
                   provider,
+                  providerInstanceId: readProviderInstanceId(provider, value.runtimePayload),
                   adapterKey: value.adapterKey,
                   runtimeMode: value.runtimeMode,
                   status: value.status,
@@ -95,6 +116,9 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     const now = new Date().toISOString();
     const providerChanged =
       existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
+    const providerInstanceId =
+      binding.providerInstanceId ??
+      readProviderInstanceId(binding.provider, existingRuntime?.runtimePayload);
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
@@ -111,7 +135,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
             : (existingRuntime?.resumeCursor ?? null),
         runtimePayload: mergeRuntimePayload(
           existingRuntime?.runtimePayload ?? null,
-          binding.runtimePayload,
+          mergeRuntimePayload(binding.runtimePayload ?? null, { providerInstanceId }),
         ),
       })
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
@@ -156,6 +180,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               Option.some({
                 threadId: row.threadId,
                 provider,
+                providerInstanceId: readProviderInstanceId(provider, row.runtimePayload),
                 adapterKey: row.adapterKey,
                 runtimeMode: row.runtimeMode,
                 status: row.status,

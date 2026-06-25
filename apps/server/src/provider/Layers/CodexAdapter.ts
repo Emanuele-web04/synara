@@ -1628,7 +1628,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             detail: toMessage(cause, "Failed to start Codex adapter session."),
             cause,
           }),
-      }).pipe(Effect.map((session) => session));
+      }).pipe(
+        Effect.map((session) => ({
+          ...session,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+        })),
+      );
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>

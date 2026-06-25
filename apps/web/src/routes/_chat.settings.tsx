@@ -4,8 +4,9 @@
 // Exports: Settings route component for `/settings`
 
 import {
-  DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceConfig,
+  type ProviderInstanceConfigMap,
   type ProviderKind,
   type ServerProviderStatus,
   type ThreadId,
@@ -42,19 +43,17 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
-  type CodexAccountSettings,
   DEFAULT_UI_DENSITY,
   type UiDensity,
-  getCodexAccountOptions,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  getProviderInstanceOptions,
   MAX_CUSTOM_MODEL_LENGTH,
   MIN_CHAT_FONT_SIZE_PX,
   MIN_TERMINAL_FONT_SIZE_PX,
   MODEL_PROVIDER_SETTINGS,
-  normalizeCodexAccounts,
   normalizeChatFontSizePx,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -260,7 +259,7 @@ type InstallProviderSettings = {
   binaryPathKey: InstallBinarySettingsKey;
   binaryPlaceholder: string;
   binaryDescription: ReactNode;
-  homePathKey?: "codexHomePath";
+  homePathKey?: "codexHomePath" | "claudeHomePath";
   homePlaceholder?: string;
   homeDescription?: ReactNode;
   apiEndpointKey?: "cursorApiEndpoint";
@@ -388,6 +387,9 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
         Leave blank to use <code>claude</code> from your PATH.
       </>
     ),
+    homePathKey: "claudeHomePath",
+    homePlaceholder: "Claude HOME",
+    homeDescription: "Optional HOME directory for this Claude account.",
   },
   {
     provider: "cursor",
@@ -668,7 +670,7 @@ function SettingsRouteView() {
   const environmentPanelRef = useRef<HTMLDivElement | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
-    claudeAgent: Boolean(settings.claudeBinaryPath),
+    claudeAgent: Boolean(settings.claudeBinaryPath || settings.claudeHomePath),
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
@@ -743,9 +745,8 @@ function SettingsRouteView() {
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
-  const codexAccounts = settings.codexAccounts;
-  const codexAccountOptions = useMemo(() => getCodexAccountOptions(settings), [settings]);
   const claudeBinaryPath = settings.claudeBinaryPath;
+  const claudeHomePath = settings.claudeHomePath;
   const cursorBinaryPath = settings.cursorBinaryPath;
   const cursorApiEndpoint = settings.cursorApiEndpoint;
   const geminiBinaryPath = settings.geminiBinaryPath;
@@ -849,6 +850,7 @@ function SettingsRouteView() {
     textGenerationModel,
     textGenerationProvider,
   } = settings;
+  const providerInstanceOptions = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const gitTextGenerationModelOptions = useMemo(
     () =>
       getGitTextGenerationModelOptions({
@@ -867,21 +869,59 @@ function SettingsRouteView() {
     ],
   );
   const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
+  const currentGitTextGenerationInstanceId =
+    settings.textGenerationProviderInstanceId ?? currentGitTextGenerationProvider;
   const currentGitTextGenerationModel =
     settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
-  const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
+  const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";
+  const defaultGitTextGenerationInstanceId =
+    defaults.textGenerationProviderInstanceId ?? defaultGitTextGenerationProvider;
   const defaultGitTextGenerationModel =
     defaults.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const isGitTextGenerationModelDirty =
     currentGitTextGenerationProvider !== defaultGitTextGenerationProvider ||
+    currentGitTextGenerationInstanceId !== defaultGitTextGenerationInstanceId ||
     currentGitTextGenerationModel !== defaultGitTextGenerationModel;
-  const selectedGitTextGenerationModelLabel =
+  const gitTextGenerationPickerOptions = useMemo(
+    () =>
+      gitTextGenerationModelOptions.flatMap((option) =>
+        providerInstanceOptions
+          .filter((instance) => instance.provider === option.provider && instance.enabled)
+          .map((instance) => ({
+            key: `${instance.instanceId}:${option.provider}:${option.slug}`,
+            value: `${instance.instanceId}:${option.provider}:${option.slug}`,
+            instance,
+            option,
+          })),
+      ),
+    [gitTextGenerationModelOptions, providerInstanceOptions],
+  );
+  const selectedGitTextGenerationPickerOption = gitTextGenerationPickerOptions.find(
+    (entry) =>
+      entry.instance.instanceId === currentGitTextGenerationInstanceId &&
+      entry.option.provider === currentGitTextGenerationProvider &&
+      entry.option.slug === currentGitTextGenerationModel,
+  );
+  const selectedGitTextGenerationModelName =
+    selectedGitTextGenerationPickerOption?.option.name ??
     gitTextGenerationModelOptions.find(
       (option) =>
         option.provider === currentGitTextGenerationProvider &&
         option.slug === currentGitTextGenerationModel,
-    )?.name ?? currentGitTextGenerationModel;
+    )?.name ??
+    currentGitTextGenerationModel;
+  const selectedGitTextGenerationInstanceLabel =
+    selectedGitTextGenerationPickerOption?.instance.label ??
+    providerInstanceOptions.find(
+      (option) => option.instanceId === currentGitTextGenerationInstanceId,
+    )?.label;
+  const selectedGitTextGenerationModelLabel =
+    selectedGitTextGenerationInstanceLabel &&
+    selectedGitTextGenerationInstanceLabel !==
+      PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
+      ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
+      : selectedGitTextGenerationModelName;
   const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
     (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
   )!;
@@ -913,6 +953,7 @@ function SettingsRouteView() {
     : savedCustomModelRows.slice(0, 5);
   const isInstallSettingsDirty =
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
+    settings.claudeHomePath !== defaults.claudeHomePath ||
     settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
     settings.cursorApiEndpoint !== defaults.cursorApiEndpoint ||
     settings.geminiBinaryPath !== defaults.geminiBinaryPath ||
@@ -924,6 +965,7 @@ function SettingsRouteView() {
     settings.codexHomePath !== defaults.codexHomePath ||
     settings.selectedCodexAccountId !== defaults.selectedCodexAccountId ||
     JSON.stringify(settings.codexAccounts) !== JSON.stringify(defaults.codexAccounts) ||
+    JSON.stringify(settings.providerInstances) !== JSON.stringify(defaults.providerInstances) ||
     settings.openCodeBinaryPath !== defaults.openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets !== defaults.openCodeExperimentalWebSockets ||
     settings.openCodeServerUrl !== defaults.openCodeServerUrl ||
@@ -1084,50 +1126,86 @@ function SettingsRouteView() {
     [settings, updateSettings],
   );
 
-  const addCodexAccount = useCallback(() => {
-    const existingIds = new Set(codexAccounts.map((account) => account.id));
-    let index = codexAccounts.length + 1;
-    let id = `account${index}`;
-    while (existingIds.has(id)) {
-      index += 1;
-      id = `account${index}`;
-    }
-    const nextAccount: CodexAccountSettings = {
-      id,
-      label: `Account ${index}`,
-      homePath: codexHomePath,
-      shadowHomePath: "",
-    };
-    updateSettings({
-      codexAccounts: [...codexAccounts, nextAccount],
-      selectedCodexAccountId: id,
-    });
-  }, [codexAccounts, codexHomePath, updateSettings]);
-
-  const updateCodexAccount = useCallback(
-    (accountId: string, patch: Partial<Omit<CodexAccountSettings, "id">>) => {
-      updateSettings({
-        codexAccounts: normalizeCodexAccounts(
-          codexAccounts.map((account) =>
-            account.id === accountId ? { ...account, ...patch } : account,
-          ),
-        ),
-      });
+  const addProviderInstance = useCallback(
+    (provider: Extract<ProviderKind, "codex" | "claudeAgent">) => {
+      const nextInstances: Record<string, ProviderInstanceConfig> = {
+        ...settings.providerInstances,
+      };
+      const prefix = provider === "claudeAgent" ? "claude" : provider;
+      const existingIds = new Set(Object.keys(nextInstances));
+      let index = 2;
+      let instanceId = `${prefix}_${index}`;
+      while (existingIds.has(instanceId)) {
+        index += 1;
+        instanceId = `${prefix}_${index}`;
+      }
+      nextInstances[instanceId] = {
+        driver: provider,
+        displayName: `${PROVIDER_DISPLAY_NAMES[provider]} ${index}`,
+        enabled: true,
+        config:
+          provider === "codex"
+            ? { binaryPath: codexBinaryPath, homePath: codexHomePath, shadowHomePath: "" }
+            : { binaryPath: claudeBinaryPath, homePath: claudeHomePath },
+      };
+      updateSettings({ providerInstances: nextInstances as ProviderInstanceConfigMap });
     },
-    [codexAccounts, updateSettings],
+    [
+      claudeBinaryPath,
+      claudeHomePath,
+      codexBinaryPath,
+      codexHomePath,
+      settings.providerInstances,
+      updateSettings,
+    ],
   );
 
-  const removeCodexAccount = useCallback(
-    (accountId: string) => {
-      const nextAccounts = codexAccounts.filter((account) => account.id !== accountId);
+  const updateProviderInstance = useCallback(
+    (
+      instanceId: string,
+      patch: {
+        readonly displayName?: string;
+        readonly enabled?: boolean;
+        readonly config?: Record<string, unknown>;
+      },
+    ) => {
+      const existing = settings.providerInstances[instanceId];
+      if (!existing) return;
       updateSettings({
-        codexAccounts: nextAccounts,
-        ...(settings.selectedCodexAccountId === accountId
-          ? { selectedCodexAccountId: DEFAULT_CODEX_ACCOUNT_ID }
-          : {}),
+        providerInstances: {
+          ...settings.providerInstances,
+          [instanceId]: {
+            ...existing,
+            ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+            ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+            ...(patch.config
+              ? {
+                  config: {
+                    ...(existing.config &&
+                    typeof existing.config === "object" &&
+                    !Array.isArray(existing.config)
+                      ? existing.config
+                      : {}),
+                    ...patch.config,
+                  },
+                }
+              : {}),
+          },
+        },
       });
     },
-    [codexAccounts, settings.selectedCodexAccountId, updateSettings],
+    [settings.providerInstances, updateSettings],
+  );
+
+  const removeProviderInstance = useCallback(
+    (instanceId: string) => {
+      const nextInstances: Record<string, ProviderInstanceConfig> = {
+        ...settings.providerInstances,
+      };
+      delete nextInstances[instanceId];
+      updateSettings({ providerInstances: nextInstances as ProviderInstanceConfigMap });
+    },
+    [settings.providerInstances, updateSettings],
   );
 
   const handleProviderOrderDragEnd = useCallback(
@@ -2401,6 +2479,7 @@ function SettingsRouteView() {
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
+                    textGenerationProviderInstanceId: defaults.textGenerationProviderInstanceId,
                     textGenerationModel: defaults.textGenerationModel,
                   })
                 }
@@ -2412,12 +2491,12 @@ function SettingsRouteView() {
               value={currentGitTextGenerationValue}
               onValueChange={(value) => {
                 if (!value) return;
-                const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex) as ProviderKind;
-                const model = value.slice(separatorIndex + 1);
-                if (!provider || !model) return;
+                const [instanceId, provider, ...modelParts] = value.split(":");
+                const model = modelParts.join(":");
+                if (!instanceId || !provider || !model) return;
                 updateSettings({
-                  textGenerationProvider: provider,
+                  textGenerationProvider: provider as ProviderKind,
+                  textGenerationProviderInstanceId: instanceId,
                   textGenerationModel: model,
                 });
               }}
@@ -2425,13 +2504,9 @@ function SettingsRouteView() {
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
-              {gitTextGenerationModelOptions.map((option) => (
-                <SelectItem
-                  hideIndicator
-                  key={`${option.provider}:${option.slug}`}
-                  value={`${option.provider}:${option.slug}`}
-                >
-                  {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
+              {gitTextGenerationPickerOptions.map(({ instance, key, option, value }) => (
+                <SelectItem hideIndicator key={key} value={value}>
+                  {instance.label} / {option.name}
                 </SelectItem>
               ))}
             </SettingsSelectControl>
@@ -2724,6 +2799,142 @@ function SettingsRouteView() {
     </div>
   );
 
+  const renderProviderInstancesEditor = (
+    provider: Extract<ProviderKind, "codex" | "claudeAgent">,
+  ) => {
+    const instanceRows = Object.entries(settings.providerInstances).filter(
+      ([instanceId, config]) => config.driver === provider && instanceId !== provider,
+    );
+    const homeLabel = provider === "codex" ? "CODEX_HOME" : "HOME";
+    const homePlaceholder = provider === "codex" ? codexHomePath || "~/.codex" : "~";
+
+    const readConfigString = (config: unknown, key: string): string => {
+      if (!config || typeof config !== "object" || Array.isArray(config)) return "";
+      const value = (config as Record<string, unknown>)[key];
+      return typeof value === "string" ? value : "";
+    };
+
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="block text-xs font-medium text-foreground">Provider instances</span>
+            <span className="mt-1 block text-xs text-muted-foreground">
+              {provider === "codex"
+                ? "Add separate Codex accounts with their own home or shadow auth home."
+                : "Add separate Claude accounts with their own HOME directory."}
+            </span>
+          </div>
+          <Button
+            type="button"
+            size="xs"
+            variant="outline"
+            onClick={() => addProviderInstance(provider)}
+          >
+            <PlusIcon className="size-3.5" />
+            Add
+          </Button>
+        </div>
+
+        {instanceRows.length > 0 ? (
+          <div className="space-y-2">
+            {instanceRows.map(([instanceId, instance]) => {
+              const config = instance.config;
+              return (
+                <div
+                  key={instanceId}
+                  className={`${SETTINGS_RADIUS_CLASS_NAME} border border-[color:var(--color-border)] px-3 py-3`}
+                >
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-medium text-foreground">
+                        {instance.displayName || instanceId}
+                      </div>
+                      <div className="truncate text-[11px] text-muted-foreground">{instanceId}</div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <Switch
+                        checked={instance.enabled !== false}
+                        onCheckedChange={(checked) =>
+                          updateProviderInstance(instanceId, { enabled: checked })
+                        }
+                        aria-label={`Enable ${instance.displayName || instanceId}`}
+                      />
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => removeProviderInstance(instanceId)}
+                      >
+                        <XIcon className="size-3.5" />
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <label className="block">
+                      <span className="block text-xs font-medium text-foreground">Label</span>
+                      <DebouncedSettingTextInput
+                        id={`provider-instance-${instanceId}-label`}
+                        size="sm"
+                        variant="soft"
+                        className="mt-1"
+                        value={instance.displayName ?? ""}
+                        onCommit={(nextValue) =>
+                          updateProviderInstance(instanceId, { displayName: nextValue })
+                        }
+                        placeholder="Work"
+                        spellCheck={false}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="block text-xs font-medium text-foreground">{homeLabel}</span>
+                      <DebouncedSettingTextInput
+                        id={`provider-instance-${instanceId}-home`}
+                        size="sm"
+                        variant="soft"
+                        className="mt-1"
+                        value={readConfigString(config, "homePath")}
+                        onCommit={(nextValue) =>
+                          updateProviderInstance(instanceId, {
+                            config: { homePath: nextValue },
+                          })
+                        }
+                        placeholder={homePlaceholder}
+                        spellCheck={false}
+                      />
+                    </label>
+                    {provider === "codex" ? (
+                      <label className="block sm:col-span-2">
+                        <span className="block text-xs font-medium text-foreground">
+                          Shadow auth home
+                        </span>
+                        <DebouncedSettingTextInput
+                          id={`provider-instance-${instanceId}-shadow-home`}
+                          size="sm"
+                          variant="soft"
+                          className="mt-1"
+                          value={readConfigString(config, "shadowHomePath")}
+                          onCommit={(nextValue) =>
+                            updateProviderInstance(instanceId, {
+                              config: { shadowHomePath: nextValue },
+                            })
+                          }
+                          placeholder="~/.codex_work"
+                          spellCheck={false}
+                        />
+                      </label>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderProviderInstallsSection = () => (
     <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
       <SettingsSection title="Provider tools">
@@ -2742,10 +2953,12 @@ function SettingsRouteView() {
                 onClick={() => {
                   updateSettings({
                     claudeBinaryPath: defaults.claudeBinaryPath,
+                    claudeHomePath: defaults.claudeHomePath,
                     codexBinaryPath: defaults.codexBinaryPath,
                     codexHomePath: defaults.codexHomePath,
                     codexAccounts: defaults.codexAccounts,
                     selectedCodexAccountId: defaults.selectedCodexAccountId,
+                    providerInstances: defaults.providerInstances,
                     cursorBinaryPath: defaults.cursorBinaryPath,
                     cursorApiEndpoint: defaults.cursorApiEndpoint,
                     geminiBinaryPath: defaults.geminiBinaryPath,
@@ -2784,7 +2997,8 @@ function SettingsRouteView() {
                     ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
                       settings.codexHomePath !== defaults.codexHomePath
                     : providerSettings.provider === "claudeAgent"
-                      ? settings.claudeBinaryPath !== defaults.claudeBinaryPath
+                      ? settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
+                        settings.claudeHomePath !== defaults.claudeHomePath
                       : providerSettings.provider === "cursor"
                         ? settings.cursorBinaryPath !== defaults.cursorBinaryPath ||
                           settings.cursorApiEndpoint !== defaults.cursorApiEndpoint
@@ -2996,18 +3210,26 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  CODEX_HOME path
+                                  {providerSettings.homePathKey === "claudeHomePath"
+                                    ? "Claude HOME path"
+                                    : "CODEX_HOME path"}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.homePathKey}`}
                                   size="sm"
                                   variant="soft"
                                   className="mt-1"
-                                  value={codexHomePath}
+                                  value={
+                                    providerSettings.homePathKey === "claudeHomePath"
+                                      ? claudeHomePath
+                                      : codexHomePath
+                                  }
                                   onCommit={(nextValue) =>
-                                    updateSettings({
-                                      codexHomePath: nextValue,
-                                    })
+                                    updateSettings(
+                                      providerSettings.homePathKey === "claudeHomePath"
+                                        ? { claudeHomePath: nextValue }
+                                        : { codexHomePath: nextValue },
+                                    )
                                   }
                                   placeholder={providerSettings.homePlaceholder}
                                   spellCheck={false}
@@ -3020,141 +3242,10 @@ function SettingsRouteView() {
                               </label>
                             ) : null}
 
-                            {providerSettings.provider === "codex" ? (
-                              <div className="space-y-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div className="min-w-0">
-                                    <span className="block text-xs font-medium text-foreground">
-                                      Codex account
-                                    </span>
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      Select the account used for new Codex turns.
-                                    </span>
-                                  </div>
-                                  <Button
-                                    type="button"
-                                    size="xs"
-                                    variant="outline"
-                                    onClick={addCodexAccount}
-                                  >
-                                    <PlusIcon className="size-3.5" />
-                                    Add
-                                  </Button>
-                                </div>
-
-                                <SettingsSelectControl
-                                  value={settings.selectedCodexAccountId}
-                                  onValueChange={(value) => {
-                                    updateSettings({ selectedCodexAccountId: value });
-                                  }}
-                                  ariaLabel="Codex account"
-                                  triggerClassName="w-full"
-                                  valueContent={
-                                    <span className="truncate">
-                                      {codexAccountOptions.find(
-                                        (account) => account.id === settings.selectedCodexAccountId,
-                                      )?.label ?? "Default"}
-                                    </span>
-                                  }
-                                >
-                                  {codexAccountOptions.map((account) => (
-                                    <SelectItem hideIndicator key={account.id} value={account.id}>
-                                      <span className="truncate">{account.label}</span>
-                                    </SelectItem>
-                                  ))}
-                                </SettingsSelectControl>
-
-                                {codexAccounts.length > 0 ? (
-                                  <div className="space-y-2">
-                                    {codexAccounts.map((account) => (
-                                      <div
-                                        key={account.id}
-                                        className={`${SETTINGS_RADIUS_CLASS_NAME} border border-[color:var(--color-border)] px-3 py-3`}
-                                      >
-                                        <div className="mb-2 flex items-center justify-between gap-2">
-                                          <div className="min-w-0">
-                                            <div className="truncate text-xs font-medium text-foreground">
-                                              {account.label || account.id}
-                                            </div>
-                                            <div className="truncate text-[11px] text-muted-foreground">
-                                              {account.id}
-                                            </div>
-                                          </div>
-                                          <Button
-                                            type="button"
-                                            size="xs"
-                                            variant="ghost"
-                                            onClick={() => removeCodexAccount(account.id)}
-                                          >
-                                            <XIcon className="size-3.5" />
-                                            Remove
-                                          </Button>
-                                        </div>
-                                        <div className="grid gap-2 sm:grid-cols-2">
-                                          <label className="block">
-                                            <span className="block text-xs font-medium text-foreground">
-                                              Label
-                                            </span>
-                                            <DebouncedSettingTextInput
-                                              id={`codex-account-${account.id}-label`}
-                                              size="sm"
-                                              variant="soft"
-                                              className="mt-1"
-                                              value={account.label}
-                                              onCommit={(nextValue) =>
-                                                updateCodexAccount(account.id, {
-                                                  label: nextValue,
-                                                })
-                                              }
-                                              placeholder="Work"
-                                              spellCheck={false}
-                                            />
-                                          </label>
-                                          <label className="block">
-                                            <span className="block text-xs font-medium text-foreground">
-                                              Shared CODEX_HOME
-                                            </span>
-                                            <DebouncedSettingTextInput
-                                              id={`codex-account-${account.id}-home`}
-                                              size="sm"
-                                              variant="soft"
-                                              className="mt-1"
-                                              value={account.homePath}
-                                              onCommit={(nextValue) =>
-                                                updateCodexAccount(account.id, {
-                                                  homePath: nextValue,
-                                                })
-                                              }
-                                              placeholder={codexHomePath || "~/.codex"}
-                                              spellCheck={false}
-                                            />
-                                          </label>
-                                          <label className="block sm:col-span-2">
-                                            <span className="block text-xs font-medium text-foreground">
-                                              Shadow auth home
-                                            </span>
-                                            <DebouncedSettingTextInput
-                                              id={`codex-account-${account.id}-shadow-home`}
-                                              size="sm"
-                                              variant="soft"
-                                              className="mt-1"
-                                              value={account.shadowHomePath}
-                                              onCommit={(nextValue) =>
-                                                updateCodexAccount(account.id, {
-                                                  shadowHomePath: nextValue,
-                                                })
-                                              }
-                                              placeholder="~/.codex_work"
-                                              spellCheck={false}
-                                            />
-                                          </label>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                ) : null}
-                              </div>
-                            ) : null}
+                            {providerSettings.provider === "codex" ||
+                            providerSettings.provider === "claudeAgent"
+                              ? renderProviderInstancesEditor(providerSettings.provider)
+                              : null}
 
                             {providerSettings.agentDirKey ? (
                               <label

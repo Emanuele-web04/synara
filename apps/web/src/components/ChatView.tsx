@@ -8,6 +8,7 @@ import {
   type ModelSelection,
   type ProjectScript,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProjectEntry,
   type ProjectId,
@@ -285,12 +286,12 @@ import {
 import { promoteThreadCreate } from "~/lib/threadCreatePromotion";
 import {
   getAppModelOptions,
-  getCodexAccountOptions,
   getCodexProviderDiscoveryOptions,
   getCustomBinaryPathForProvider,
   getCustomModelsByProvider,
+  getProviderInstanceOptions,
   getProviderStartOptions,
-  resolveSelectedCodexAccount,
+  resolveDefaultProviderInstanceId,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -887,7 +888,7 @@ export default function ChatView({
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadWorkspace = useStore((store) => store.setThreadWorkspace);
-  const { settings, updateSettings } = useAppSettings();
+  const { settings } = useAppSettings();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
@@ -1737,19 +1738,66 @@ export default function ChatView({
     activeProjectCwd: activeProject?.cwd ?? null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const codexAccounts = useMemo(() => getCodexAccountOptions(settings), [settings]);
-  const selectedCodexAccount = useMemo(() => resolveSelectedCodexAccount(settings), [settings]);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useMemo<ProviderInstanceId>(() => {
+    const sessionInstanceId =
+      activeThread?.session?.provider === selectedProvider
+        ? activeThread.session.providerInstanceId
+        : undefined;
+    if (sessionInstanceId) {
+      return sessionInstanceId;
+    }
+
+    const draftSelection = composerDraft.modelSelectionByProvider[selectedProvider];
+    if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
+      return draftSelection.instanceId;
+    }
+
+    if (
+      activeThread?.modelSelection.provider === selectedProvider &&
+      activeThread.modelSelection.instanceId
+    ) {
+      return activeThread.modelSelection.instanceId;
+    }
+
+    if (
+      activeProject?.defaultModelSelection?.provider === selectedProvider &&
+      activeProject.defaultModelSelection.instanceId
+    ) {
+      return activeProject.defaultModelSelection.instanceId;
+    }
+
+    return resolveDefaultProviderInstanceId(settings, selectedProvider);
+  }, [
+    activeProject?.defaultModelSelection,
+    activeThread?.modelSelection,
+    activeThread?.session?.provider,
+    activeThread?.session?.providerInstanceId,
+    composerDraft.modelSelectionByProvider,
+    selectedProvider,
+    settings,
+  ]);
   const codexDiscoveryOptions = useMemo(
     () => getCodexProviderDiscoveryOptions(settings),
     [settings],
   );
   const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({ provider: "claudeAgent" }),
+    providerModelsQueryOptions({
+      provider: "claudeAgent",
+      instanceId:
+        selectedProvider === "claudeAgent" || lockedProvider === "claudeAgent"
+          ? selectedProviderInstanceId
+          : "claudeAgent",
+    }),
   );
   const codexDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "codex",
-      ...codexDiscoveryOptions,
+      instanceId:
+        selectedProvider === "codex" || lockedProvider === "codex"
+          ? selectedProviderInstanceId
+          : "codex",
+      ...(selectedProvider === "codex" || lockedProvider === "codex" ? codexDiscoveryOptions : {}),
     }),
   );
   const openCodeModelDiscoveryEnabled =
@@ -1761,6 +1809,10 @@ export default function ChatView({
   const cursorDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "cursor",
+      instanceId:
+        selectedProvider === "cursor" || lockedProvider === "cursor"
+          ? selectedProviderInstanceId
+          : "cursor",
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: selectedProvider === "cursor" || lockedProvider === "cursor" || isModelPickerOpen,
@@ -1769,6 +1821,10 @@ export default function ChatView({
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
+      instanceId:
+        selectedProvider === "gemini" || lockedProvider === "gemini"
+          ? selectedProviderInstanceId
+          : "gemini",
       binaryPath: settings.geminiBinaryPath || null,
       enabled: selectedProvider === "gemini" || lockedProvider === "gemini",
     }),
@@ -1776,6 +1832,10 @@ export default function ChatView({
   const grokDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "grok",
+      instanceId:
+        selectedProvider === "grok" || lockedProvider === "grok"
+          ? selectedProviderInstanceId
+          : "grok",
       binaryPath: settings.grokBinaryPath || null,
       enabled: selectedProvider === "grok" || lockedProvider === "grok" || isModelPickerOpen,
     }),
@@ -1783,6 +1843,10 @@ export default function ChatView({
   const openCodeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "opencode",
+      instanceId:
+        selectedProvider === "opencode" || lockedProvider === "opencode"
+          ? selectedProviderInstanceId
+          : "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
@@ -1791,6 +1855,10 @@ export default function ChatView({
   const kiloDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "kilo",
+      instanceId:
+        selectedProvider === "kilo" || lockedProvider === "kilo"
+          ? selectedProviderInstanceId
+          : "kilo",
       binaryPath: settings.kiloBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
@@ -1799,6 +1867,8 @@ export default function ChatView({
   const piDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "pi",
+      instanceId:
+        selectedProvider === "pi" || lockedProvider === "pi" ? selectedProviderInstanceId : "pi",
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       cwd: providerModelDiscoveryCwd,
@@ -1806,12 +1876,30 @@ export default function ChatView({
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "claudeAgent" }),
+    providerAgentsQueryOptions({
+      provider: "claudeAgent",
+      instanceId:
+        selectedProvider === "claudeAgent" || lockedProvider === "claudeAgent"
+          ? selectedProviderInstanceId
+          : "claudeAgent",
+    }),
   );
-  const codexDynamicAgentsQuery = useQuery(providerAgentsQueryOptions({ provider: "codex" }));
+  const codexDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({
+      provider: "codex",
+      instanceId:
+        selectedProvider === "codex" || lockedProvider === "codex"
+          ? selectedProviderInstanceId
+          : "codex",
+    }),
+  );
   const openCodeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "opencode",
+      instanceId:
+        selectedProvider === "opencode" || lockedProvider === "opencode"
+          ? selectedProviderInstanceId
+          : "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
@@ -1820,6 +1908,10 @@ export default function ChatView({
   const kiloDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "kilo",
+      instanceId:
+        selectedProvider === "kilo" || lockedProvider === "kilo"
+          ? selectedProviderInstanceId
+          : "kilo",
       binaryPath: settings.kiloBinaryPath || null,
       cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
@@ -2027,16 +2119,23 @@ export default function ChatView({
         selectedProvider,
         draftModelSelectionForSelectedProvider.model,
         selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
+        { instanceId: selectedProviderInstanceId },
       );
     }
-    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch);
+    return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch, {
+      instanceId: selectedProviderInstanceId,
+    });
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
+    selectedProviderInstanceId,
     selectedProvider,
   ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model
@@ -2873,11 +2972,12 @@ export default function ChatView({
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       binaryPath:
@@ -2914,6 +3014,7 @@ export default function ChatView({
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? settings.piAgentDir || null : null,
@@ -2926,6 +3027,7 @@ export default function ChatView({
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       enabled:
@@ -3231,15 +3333,22 @@ export default function ChatView({
     () =>
       activeThread
         ? resolveAvailableHandoffTargetProviders(activeThread.modelSelection.provider).filter(
-            (provider) => isProviderUsable(findProviderStatus(providerStatuses, provider)),
+            (provider) =>
+              isProviderUsable(
+                findProviderStatus(
+                  providerStatuses,
+                  provider,
+                  resolveDefaultProviderInstanceId(settings, provider),
+                ),
+              ),
           )
         : [],
-    [activeThread, providerStatuses],
+    [activeThread, providerStatuses, settings],
   );
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, selectedProvider),
-    [selectedProvider, providerStatuses],
+    () => findProviderStatus(providerStatuses, selectedProvider, selectedProviderInstanceId),
+    [selectedProvider, selectedProviderInstanceId, providerStatuses],
   );
   const activeProviderHealthBannerDismissalKey = useMemo(
     () => getProviderHealthBannerDismissalKey(activeProviderStatus),
@@ -4528,6 +4637,7 @@ export default function ChatView({
         input.modelSelection !== undefined &&
         (input.modelSelection.model !== serverThread.modelSelection.model ||
           input.modelSelection.provider !== serverThread.modelSelection.provider ||
+          input.modelSelection.instanceId !== serverThread.modelSelection.instanceId ||
           JSON.stringify(input.modelSelection.options ?? null) !==
             JSON.stringify(serverThread.modelSelection.options ?? null))
       ) {
@@ -5932,6 +6042,7 @@ export default function ChatView({
       try {
         const targetAvailability = resolveProviderSendAvailability({
           provider: targetProvider,
+          instanceId: resolveDefaultProviderInstanceId(settings, targetProvider),
           statuses: providerStatuses,
         });
         if (!targetAvailability.usable) {
@@ -5953,7 +6064,7 @@ export default function ChatView({
         });
       }
     },
-    [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
+    [activeThread, createThreadHandoff, handoffDisabled, providerStatuses, settings],
   );
 
   const clearComposerInput = useCallback(
@@ -6800,6 +6911,7 @@ export default function ChatView({
     }
     const sendProviderAvailability = resolveProviderSendAvailability({
       provider: selectedModelSelectionForSend.provider,
+      instanceId: selectedModelSelectionForSend.instanceId,
       statuses: providerStatuses,
     });
     if (!sendProviderAvailability.usable) {
@@ -7204,6 +7316,12 @@ export default function ChatView({
               targetProjectDefaultModelSelectionForSend?.model ||
               DEFAULT_MODEL_BY_PROVIDER.codex,
         selectedModelSelectionForSend.options,
+        {
+          instanceId:
+            selectedModelSelectionForSend.provider === selectedProviderForSend
+              ? selectedModelSelectionForSend.instanceId
+              : selectedProviderInstanceId,
+        },
       );
 
       if (isLocalDraftThread) {
@@ -8074,9 +8192,18 @@ export default function ChatView({
   ]);
 
   const onProviderModelSelect = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
+    (provider: ProviderKind, model: ModelSlug, instanceId?: ProviderInstanceId) => {
       if (!activeThread) return;
       if (lockedProvider !== null && provider !== lockedProvider) {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedInstanceId = instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
+      const lockedInstanceId =
+        lockedProvider !== null && provider === lockedProvider
+          ? (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId)
+          : undefined;
+      if (lockedInstanceId && resolvedInstanceId !== lockedInstanceId) {
         scheduleComposerFocus();
         return;
       }
@@ -8085,10 +8212,14 @@ export default function ChatView({
         availableOptions: modelOptionsByProvider[provider],
         fallback: () => resolveAppModelSelection(provider, customModelsByProvider, model),
       });
-      const nextModelSelection: ModelSelection = {
+      const nextModelSelection: ModelSelection = buildModelSelection(
         provider,
-        model: resolvedModel,
-      };
+        resolvedModel,
+        null,
+        {
+          instanceId: resolvedInstanceId,
+        },
+      );
       setComposerDraftModelSelection(activeThread.id, nextModelSelection);
       if (provider === "cursor" && !showExpandedCursorModelVariants) {
         setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
@@ -8106,17 +8237,11 @@ export default function ChatView({
       setComposerDraftModelSelection,
       setComposerDraftProviderModelOptions,
       setStickyComposerModelSelection,
+      settings,
       showExpandedCursorModelVariants,
       customModelsByProvider,
       modelOptionsByProvider,
     ],
-  );
-  const onCodexAccountSelect = useCallback(
-    (accountId: string) => {
-      updateSettings({ selectedCodexAccountId: accountId });
-      scheduleComposerFocus();
-    },
-    [scheduleComposerFocus, updateSettings],
   );
   const setPromptFromTraits = useCallback(
     (nextPrompt: string) => {
@@ -8246,9 +8371,8 @@ export default function ChatView({
         }}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
-        codexAccounts={codexAccounts}
-        selectedCodexAccountId={selectedCodexAccount.id}
-        onCodexAccountChange={onCodexAccountSelect}
+        providerInstances={providerInstances}
+        selectedProviderInstanceId={selectedProviderInstanceId}
         onProviderModelChange={onProviderModelSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
@@ -8290,9 +8414,8 @@ export default function ChatView({
       }}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
-      codexAccounts={codexAccounts}
-      selectedCodexAccountId={selectedCodexAccount.id}
-      onCodexAccountChange={onCodexAccountSelect}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModels={runtimeModelsByProvider[selectedProvider]}

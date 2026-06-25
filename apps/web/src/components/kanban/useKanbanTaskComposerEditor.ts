@@ -6,6 +6,7 @@
 import type {
   ModelSlug,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -60,7 +61,11 @@ interface UseKanbanTaskComposerEditorInput {
   readonly composerMentions: readonly ProviderMentionReference[];
   readonly scratchThreadId: ThreadId;
   readonly selectedProvider: ProviderKind;
-  readonly handleProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  readonly handleProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   readonly setInteractionMode: Dispatch<SetStateAction<ProviderInteractionMode>>;
   readonly onCreate: () => void;
 }

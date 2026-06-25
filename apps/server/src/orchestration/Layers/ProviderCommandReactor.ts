@@ -437,6 +437,10 @@ const make = Effect.gen(function* () {
         threadId: input.threadId,
         status: "error",
         providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+        providerInstanceId:
+          thread.session?.providerInstanceId ??
+          thread.modelSelection.instanceId ??
+          thread.modelSelection.provider,
         runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: input.detail,
@@ -716,6 +720,8 @@ const make = Effect.gen(function* () {
     }
     const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredProviderInstanceId =
+      desiredModelSelection.instanceId ?? desiredModelSelection.provider;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -741,6 +747,7 @@ const make = Effect.gen(function* () {
       providerService.startSession(threadId, {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
+        providerInstanceId: desiredProviderInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
         modelSelection: desiredModelSelection,
         ...(options?.providerOptions !== undefined
@@ -757,6 +764,7 @@ const make = Effect.gen(function* () {
           threadId,
           status: mapProviderSessionStatusToOrchestrationStatus(session.status),
           providerName: session.provider,
+          providerInstanceId: session.providerInstanceId ?? desiredProviderInstanceId,
           runtimeMode: desiredRuntimeMode,
           // Provider turn ids are not orchestration turn ids.
           activeTurnId: null,
@@ -775,6 +783,14 @@ const make = Effect.gen(function* () {
       const providerChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.provider !== currentProvider;
+      const currentProviderInstanceId =
+        activeSession?.providerInstanceId ??
+        thread.session?.providerInstanceId ??
+        thread.modelSelection.instanceId ??
+        thread.modelSelection.provider;
+      const providerInstanceChanged =
+        requestedModelSelection !== undefined &&
+        desiredProviderInstanceId !== currentProviderInstanceId;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -798,6 +814,7 @@ const make = Effect.gen(function* () {
       if (
         !runtimeModeChanged &&
         !providerChanged &&
+        !providerInstanceChanged &&
         !shouldRestartForModelChange &&
         !shouldRestartForModelSelectionChange &&
         !providerOptionsChanged
@@ -807,6 +824,7 @@ const make = Effect.gen(function* () {
 
       const resumeCursor =
         providerChanged ||
+        providerInstanceChanged ||
         shouldRestartForModelChange ||
         runtimeModeChanged ||
         shouldDropCodexResumeCursorForProviderOptionsChange({
@@ -1439,6 +1457,11 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           status: "starting",
           providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          providerInstanceId:
+            thread.session?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId ??
+            thread.modelSelection.provider,
           runtimeMode:
             thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
           activeTurnId: null,
@@ -1837,6 +1860,11 @@ const make = Effect.gen(function* () {
           threadId: payload.threadId,
           status: "starting",
           providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          providerInstanceId:
+            thread.session?.providerInstanceId ??
+            payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId ??
+            thread.modelSelection.provider,
           runtimeMode: payload.runtimeMode,
           activeTurnId: null,
           lastError: null,
@@ -1903,6 +1931,11 @@ const make = Effect.gen(function* () {
           threadId: event.payload.threadId,
           status: "starting",
           providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          providerInstanceId:
+            thread.session?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId ??
+            thread.modelSelection.provider,
           runtimeMode: event.payload.runtimeMode,
           activeTurnId: null,
           lastError: null,
@@ -1978,6 +2011,7 @@ const make = Effect.gen(function* () {
           threadId: thread.id,
           status: "interrupted",
           providerName: thread.session.providerName ?? null,
+          providerInstanceId: thread.session.providerInstanceId ?? thread.modelSelection.instanceId,
           runtimeMode: thread.session.runtimeMode ?? DEFAULT_RUNTIME_MODE,
           // Preserve the active turn until the provider emits the terminal child event.
           activeTurnId: thread.session.activeTurnId,
@@ -2000,6 +2034,7 @@ const make = Effect.gen(function* () {
         threadId: thread.id,
         status: "stopped",
         providerName: thread.session?.providerName ?? null,
+        providerInstanceId: thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,

@@ -12,6 +12,8 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_SERVER_SETTINGS,
+  ProviderInstanceConfigMap,
+  ProviderInstanceId,
   TrimmedNonEmptyString,
   ProviderKind,
   type ProviderStartOptions,
@@ -135,6 +137,7 @@ const withDefaults =
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  claudeHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
@@ -148,6 +151,7 @@ export const AppSettingsSchema = Schema.Struct({
   selectedCodexAccountId: Schema.String.check(Schema.isMaxLength(64)).pipe(
     withDefaults(() => DEFAULT_CODEX_ACCOUNT_ID),
   ),
+  providerInstances: ProviderInstanceConfigMap.pipe(withDefaults(() => ({}))),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -210,6 +214,7 @@ export const AppSettingsSchema = Schema.Struct({
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
+  textGenerationProviderInstanceId: Schema.optional(ProviderInstanceId),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
@@ -480,6 +485,119 @@ export function resolveSelectedCodexAccount(
   );
 }
 
+export interface ProviderInstanceOption {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: boolean;
+}
+
+const PROVIDER_INSTANCE_PROVIDER_ORDER = [
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "grok",
+  "kilo",
+  "opencode",
+  "pi",
+] as const satisfies ReadonlyArray<ProviderKind>;
+
+function providerInstanceIdForCodexAccount(accountId: string): ProviderInstanceId {
+  return accountId === DEFAULT_CODEX_ACCOUNT_ID ? "codex" : `codex_${accountId}`;
+}
+
+function defaultProviderInstanceLabel(provider: ProviderKind): string {
+  switch (provider) {
+    case "claudeAgent":
+      return "Claude";
+    case "opencode":
+      return "OpenCode";
+    default:
+      return provider.charAt(0).toUpperCase() + provider.slice(1);
+  }
+}
+
+function fallbackProviderInstanceLabel(instanceId: ProviderInstanceId): string {
+  return instanceId
+    .replace(/[_-]+/g, " ")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+export function getProviderInstanceOptions(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+): ProviderInstanceOption[] {
+  const optionsById = new Map<ProviderInstanceId, ProviderInstanceOption>();
+
+  for (const provider of PROVIDER_INSTANCE_PROVIDER_ORDER) {
+    optionsById.set(provider, {
+      instanceId: provider,
+      provider,
+      label: defaultProviderInstanceLabel(provider),
+      enabled: true,
+      isDefault: true,
+    });
+  }
+
+  for (const account of getCodexAccountOptions(settings)) {
+    const instanceId = providerInstanceIdForCodexAccount(account.id);
+    optionsById.set(instanceId, {
+      instanceId,
+      provider: "codex",
+      label: account.label,
+      enabled: true,
+      isDefault: account.isDefault,
+    });
+  }
+
+  for (const [instanceId, raw] of Object.entries(settings.providerInstances)) {
+    if (!Schema.is(ProviderKind)(raw.driver)) {
+      continue;
+    }
+    const config = isRecord(raw.config) ? raw.config : {};
+    const label = raw.displayName?.trim() || fallbackProviderInstanceLabel(instanceId);
+    optionsById.set(instanceId, {
+      instanceId,
+      provider: raw.driver,
+      label,
+      enabled: raw.enabled !== false && config.enabled !== false,
+      isDefault: instanceId === raw.driver,
+    });
+  }
+
+  return Array.from(optionsById.values()).toSorted((left, right) => {
+    const providerDelta =
+      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(left.provider) -
+      PROVIDER_INSTANCE_PROVIDER_ORDER.indexOf(right.provider);
+    if (providerDelta !== 0) {
+      return providerDelta;
+    }
+    if (left.isDefault !== right.isDefault) {
+      return left.isDefault ? -1 : 1;
+    }
+    return left.label.localeCompare(right.label);
+  });
+}
+
+export function resolveDefaultProviderInstanceId(
+  settings: Pick<AppSettings, "codexAccounts" | "codexHomePath" | "selectedCodexAccountId">,
+  provider: ProviderKind,
+): ProviderInstanceId {
+  if (provider !== "codex") {
+    return provider;
+  }
+  return providerInstanceIdForCodexAccount(resolveSelectedCodexAccount(settings).id);
+}
+
 type CodexAccountLaunchSettingsInput = Pick<
   AppSettings,
   "codexAccounts" | "codexBinaryPath" | "codexHomePath" | "selectedCodexAccountId"
@@ -498,6 +616,38 @@ function resolveCodexAccountLaunchSettings(settings: CodexAccountLaunchSettingsI
     homePath: selectedAccount.homePath || settings.codexHomePath,
     shadowHomePath: selectedAccount.shadowHomePath,
     accountId: selectedAccount.id !== DEFAULT_CODEX_ACCOUNT_ID ? selectedAccount.id : "",
+    hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
+  };
+}
+
+function resolveCodexLaunchSettingsForInstance(
+  settings: CodexAccountLaunchSettingsInput,
+  instanceId: ProviderInstanceId | null | undefined,
+): ReturnType<typeof resolveCodexAccountLaunchSettings> {
+  if (!instanceId) {
+    return resolveCodexAccountLaunchSettings(settings);
+  }
+  const binaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
+  if (instanceId === "codex") {
+    return {
+      binaryPath,
+      homePath: settings.codexHomePath,
+      shadowHomePath: "",
+      accountId: "",
+      hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
+    };
+  }
+  const account = getCodexAccountOptions(settings).find(
+    (entry) => providerInstanceIdForCodexAccount(entry.id) === instanceId,
+  );
+  if (!account) {
+    return resolveCodexAccountLaunchSettings(settings);
+  }
+  return {
+    binaryPath,
+    homePath: account.homePath || settings.codexHomePath,
+    shadowHomePath: account.shadowHomePath,
+    accountId: account.id !== DEFAULT_CODEX_ACCOUNT_ID ? account.id : "",
     hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
   };
 }
@@ -529,6 +679,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     claudeBinaryPath: normalizeProviderBinaryPathOverride("claudeAgent", settings.claudeBinaryPath),
+    claudeHomePath: settings.claudeHomePath.trim(),
     codexBinaryPath: normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath),
     codexAccounts,
     selectedCodexAccountId,
@@ -562,6 +713,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
+    claudeHomePath: settings.providers.claudeAgent.homePath,
     codexBinaryPath: settings.providers.codex.binaryPath,
     codexHomePath: settings.providers.codex.homePath,
     codexAccounts: settings.providers.codex.accounts,
@@ -589,7 +741,9 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customKiloModels: settings.providers.kilo.customModels,
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
+    providerInstances: settings.providerInstances,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
+    textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }
@@ -615,6 +769,8 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "codexHomePath") ||
     hasOwn(patch, "codexAccounts") ||
     hasOwn(patch, "selectedCodexAccountId") ||
+    hasOwn(patch, "providerInstances") ||
+    hasOwn(patch, "claudeHomePath") ||
     hasOwn(patch, "kiloBinaryPath") ||
     hasOwn(patch, "kiloServerPassword") ||
     hasOwn(patch, "kiloServerUrl") ||
@@ -636,15 +792,22 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
   }
-  if (hasOwn(patch, "textGenerationModel") || hasOwn(patch, "textGenerationProvider")) {
+  if (
+    hasOwn(patch, "textGenerationModel") ||
+    hasOwn(patch, "textGenerationProvider") ||
+    hasOwn(patch, "textGenerationProviderInstanceId")
+  ) {
     const model = patch.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+    const provider = resolveTextGenerationProvider({
+      ...(patch.textGenerationProvider !== undefined
+        ? { provider: patch.textGenerationProvider }
+        : {}),
+      model,
+    });
+    const instanceId = patch.textGenerationProviderInstanceId?.trim() || provider;
     serverPatch.textGenerationModelSelection = {
-      provider: resolveTextGenerationProvider({
-        ...(patch.textGenerationProvider !== undefined
-          ? { provider: patch.textGenerationProvider }
-          : {}),
-        model,
-      }),
+      provider,
+      instanceId,
       model,
     };
   }
@@ -672,9 +835,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
-  if (hasOwn(patch, "claudeBinaryPath") || hasOwn(patch, "customClaudeModels")) {
+  if (
+    hasOwn(patch, "claudeBinaryPath") ||
+    hasOwn(patch, "claudeHomePath") ||
+    hasOwn(patch, "customClaudeModels")
+  ) {
     providers.claudeAgent = {
       ...(hasOwn(patch, "claudeBinaryPath") ? { binaryPath: patch.claudeBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "claudeHomePath") ? { homePath: patch.claudeHomePath ?? "" } : {}),
       ...(hasOwn(patch, "customClaudeModels")
         ? { customModels: patch.customClaudeModels ?? [] }
         : {}),
@@ -760,6 +928,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   if (Object.keys(providers).length > 0) {
     serverPatch.providers = providers;
   }
+  if (hasOwn(patch, "providerInstances") && patch.providerInstances !== undefined) {
+    serverPatch.providerInstances = patch.providerInstances;
+  }
   return serverPatch;
 }
 
@@ -774,6 +945,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
 
   for (const key of [
     "claudeBinaryPath",
+    "claudeHomePath",
     "codexBinaryPath",
     "codexHomePath",
     "selectedCodexAccountId",
@@ -794,6 +966,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
+    "textGenerationProviderInstanceId",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;
@@ -814,6 +987,10 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     if (normalizedSettings[key].length > 0) {
       patch[key] = normalizedSettings[key] as never;
     }
+  }
+
+  if (Object.keys(normalizedSettings.providerInstances).length > 0) {
+    patch.providerInstances = normalizedSettings.providerInstances;
   }
 
   return appSettingsPatchToServerSettingsPatch(patch);
@@ -980,6 +1157,135 @@ export function getCustomModelOptionsByProvider(
   };
 }
 
+function readProviderInstanceConfigValue(
+  config: unknown,
+  key: string,
+): string | boolean | undefined {
+  if (!isRecord(config)) {
+    return undefined;
+  }
+  const value = config[key];
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
+  }
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function buildProviderStartOptionsFromInstanceConfig(
+  provider: ProviderKind,
+  config: unknown,
+): ProviderStartOptions | undefined {
+  const binaryPath = readProviderInstanceConfigValue(config, "binaryPath");
+  const homePath = readProviderInstanceConfigValue(config, "homePath");
+  switch (provider) {
+    case "codex": {
+      const shadowHomePath = readProviderInstanceConfigValue(config, "shadowHomePath");
+      const accountId = readProviderInstanceConfigValue(config, "accountId");
+      return binaryPath || homePath || shadowHomePath || accountId
+        ? {
+            codex: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof homePath === "string" ? { homePath } : {}),
+              ...(typeof shadowHomePath === "string" ? { shadowHomePath } : {}),
+              ...(typeof accountId === "string" ? { accountId } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "claudeAgent":
+      return binaryPath || homePath
+        ? {
+            claudeAgent: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof homePath === "string" ? { homePath } : {}),
+            },
+          }
+        : undefined;
+    case "cursor": {
+      const apiEndpoint = readProviderInstanceConfigValue(config, "apiEndpoint");
+      return binaryPath || apiEndpoint
+        ? {
+            cursor: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof apiEndpoint === "string" ? { apiEndpoint } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "gemini":
+      return typeof binaryPath === "string" ? { gemini: { binaryPath } } : undefined;
+    case "grok":
+      return typeof binaryPath === "string" ? { grok: { binaryPath } } : undefined;
+    case "kilo": {
+      const serverUrl = readProviderInstanceConfigValue(config, "serverUrl");
+      const serverPassword = readProviderInstanceConfigValue(config, "serverPassword");
+      return binaryPath || serverUrl || serverPassword
+        ? {
+            kilo: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof serverUrl === "string" ? { serverUrl } : {}),
+              ...(typeof serverPassword === "string" ? { serverPassword } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "opencode": {
+      const serverUrl = readProviderInstanceConfigValue(config, "serverUrl");
+      const serverPassword = readProviderInstanceConfigValue(config, "serverPassword");
+      const experimentalWebSockets = readProviderInstanceConfigValue(
+        config,
+        "experimentalWebSockets",
+      );
+      return binaryPath || serverUrl || serverPassword || experimentalWebSockets === true
+        ? {
+            opencode: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof serverUrl === "string" ? { serverUrl } : {}),
+              ...(typeof serverPassword === "string" ? { serverPassword } : {}),
+              ...(experimentalWebSockets === true ? { experimentalWebSockets: true } : {}),
+            },
+          }
+        : undefined;
+    }
+    case "pi": {
+      const agentDir = readProviderInstanceConfigValue(config, "agentDir");
+      return binaryPath || agentDir
+        ? {
+            pi: {
+              ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+              ...(typeof agentDir === "string" ? { agentDir } : {}),
+            },
+          }
+        : undefined;
+    }
+  }
+}
+
+function mergeProviderStartOptionsForApp(
+  base: ProviderStartOptions | undefined,
+  overlay: ProviderStartOptions | undefined,
+): ProviderStartOptions | undefined {
+  if (!base) return overlay;
+  if (!overlay) return base;
+  return {
+    ...base,
+    ...overlay,
+    ...(base.codex || overlay.codex ? { codex: { ...base.codex, ...overlay.codex } } : {}),
+    ...(base.claudeAgent || overlay.claudeAgent
+      ? { claudeAgent: { ...base.claudeAgent, ...overlay.claudeAgent } }
+      : {}),
+    ...(base.cursor || overlay.cursor ? { cursor: { ...base.cursor, ...overlay.cursor } } : {}),
+    ...(base.gemini || overlay.gemini ? { gemini: { ...base.gemini, ...overlay.gemini } } : {}),
+    ...(base.grok || overlay.grok ? { grok: { ...base.grok, ...overlay.grok } } : {}),
+    ...(base.kilo || overlay.kilo ? { kilo: { ...base.kilo, ...overlay.kilo } } : {}),
+    ...(base.opencode || overlay.opencode
+      ? { opencode: { ...base.opencode, ...overlay.opencode } }
+      : {}),
+    ...(base.pi || overlay.pi ? { pi: { ...base.pi, ...overlay.pi } } : {}),
+  };
+}
+
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,
@@ -1001,7 +1307,9 @@ export function getProviderStartOptions(
     | "openCodeServerUrl"
     | "piAgentDir"
     | "piBinaryPath"
-  >,
+  > &
+    Partial<Pick<AppSettings, "claudeHomePath" | "providerInstances">>,
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ProviderStartOptions | undefined {
   const claudeBinaryPath = normalizeProviderBinaryPathOverride(
     "claudeAgent",
@@ -1016,7 +1324,7 @@ export function getProviderStartOptions(
     settings.openCodeBinaryPath,
   );
   const piBinaryPath = normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath);
-  const codexLaunch = resolveCodexAccountLaunchSettings(settings);
+  const codexLaunch = resolveCodexLaunchSettingsForInstance(settings, instanceId);
   const hasOpenCodeStartOptions = Boolean(
     openCodeBinaryPath ||
     settings.openCodeExperimentalWebSockets ||
@@ -1038,10 +1346,11 @@ export function getProviderStartOptions(
           },
         }
       : {}),
-    ...(claudeBinaryPath
+    ...(claudeBinaryPath || settings.claudeHomePath
       ? {
           claudeAgent: {
-            binaryPath: claudeBinaryPath,
+            ...(claudeBinaryPath ? { binaryPath: claudeBinaryPath } : {}),
+            ...(settings.claudeHomePath ? { homePath: settings.claudeHomePath } : {}),
           },
         }
       : {}),
@@ -1098,7 +1407,18 @@ export function getProviderStartOptions(
       : {}),
   };
 
-  return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+  const providerInstance = instanceId ? settings.providerInstances?.[instanceId] : undefined;
+  const instanceOverlay =
+    providerInstance && Schema.is(ProviderKind)(providerInstance.driver)
+      ? buildProviderStartOptionsFromInstanceConfig(
+          providerInstance.driver,
+          providerInstance.config,
+        )
+      : undefined;
+  const mergedProviderOptions = mergeProviderStartOptionsForApp(providerOptions, instanceOverlay);
+  return mergedProviderOptions && Object.keys(mergedProviderOptions).length > 0
+    ? mergedProviderOptions
+    : undefined;
 }
 
 /**

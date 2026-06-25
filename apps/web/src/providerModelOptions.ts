@@ -21,11 +21,16 @@ import type {
   OpenCodeModelSelection,
   PiModelOptions,
   PiModelSelection,
+  ProviderInstanceId,
   ProviderKind,
   ProviderModelOptions,
 } from "@t3tools/contracts";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
+
+export interface ModelSelectionBuildMetadata {
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+}
 
 export interface ProviderModelOption {
   slug: string;
@@ -317,116 +322,159 @@ export function buildModelSelection(
   provider: "codex",
   model: string,
   options?: CodexModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CodexModelSelection;
 export function buildModelSelection(
   provider: "claudeAgent",
   model: string,
   options?: ClaudeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ClaudeModelSelection;
 export function buildModelSelection(
   provider: "cursor",
   model: string,
   options?: CursorModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CursorModelSelection;
 export function buildModelSelection(
   provider: "gemini",
   model: string,
   options?: GeminiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GeminiModelSelection;
 export function buildModelSelection(
   provider: "grok",
   model: string,
   options?: GrokModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GrokModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
   provider: "kilo",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): KiloModelSelection;
 export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection;
+
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection {
   switch (provider) {
     case "codex":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CodexModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as CodexModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "claudeAgent":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as ClaudeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as ClaudeModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "cursor":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CursorModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as CursorModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "gemini":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GeminiModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as GeminiModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "grok":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GrokModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as GrokModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "kilo":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as OpenCodeModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "opencode":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as OpenCodeModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
     case "pi":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as PiModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? {
+              provider,
+              model,
+              options: options as PiModelOptions,
+            }
+          : { provider, model },
+        metadata,
+      );
   }
+}
+
+function attachModelSelectionMetadata<T extends ModelSelection>(
+  selection: T,
+  metadata: ModelSelectionBuildMetadata | null | undefined,
+): T {
+  const instanceId = metadata?.instanceId?.trim();
+  return instanceId ? ({ ...selection, instanceId } as T) : selection;
 }

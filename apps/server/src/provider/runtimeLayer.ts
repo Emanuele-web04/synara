@@ -86,7 +86,12 @@ export function makeServerProviderLayer(): Layer.Layer<
     );
     const providerServiceLayer = makeProviderServiceLive(
       canonicalEventLogger ? { canonicalEventLogger } : undefined,
-    ).pipe(Layer.provide(adapterRegistryLayer), Layer.provide(providerSessionDirectoryLayer));
+    ).pipe(
+      Layer.provide(adapterRegistryLayer),
+      Layer.provide(providerSessionDirectoryLayer),
+      // Provider sessions resolve persisted provider-instance settings before launch.
+      Layer.provide(ServerSettingsLive),
+    );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),
       // Skill toggles live in server settings; the shared ServerSettingsLive

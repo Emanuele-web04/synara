@@ -3,7 +3,7 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderKind } from "@t3tools/contracts";
+import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -61,6 +61,8 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     stickyModelSelectionByProvider[selectedProvider];
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
+  const selectedProviderInstanceId: ProviderInstanceId =
+    draftModelSelection?.instanceId ?? selectedProvider;
   const selectedProviderModelOptions = draftModelSelection?.options;
 
   const previousSelectedProviderRef = useRef<{
@@ -100,9 +102,11 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
   }, [scratchThreadId, selectedProvider]);
 
   const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: ModelSlug) => {
+    (provider: ProviderKind, model: ModelSlug, instanceId?: ProviderInstanceId) => {
       const store = useComposerDraftStore.getState();
-      const nextSelection = buildModelSelection(provider, model);
+      const nextSelection = buildModelSelection(provider, model, null, {
+        instanceId: instanceId ?? provider,
+      });
       // Mirrors the composer: update the scratch draft and persist the sticky selection.
       store.setModelSelection(scratchThreadId, nextSelection);
       store.setStickyModelSelection(nextSelection);
@@ -162,6 +166,7 @@ export function useKanbanTaskScratchDraft(input: { readonly defaultProvider: Pro
     nonPersistedComposerImageIdSet,
     selectedProvider,
     selectedModel,
+    selectedProviderInstanceId,
     selectedProviderModelOptions,
     setPrompt,
     handleProviderModelChange,

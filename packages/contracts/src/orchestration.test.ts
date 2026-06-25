@@ -143,6 +143,22 @@ it.effect("preserves Pi model selections when decoding model selections", () =>
   }),
 );
 
+it.effect("preserves provider instance ids when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+  }),
+);
+
 it.effect("preserves Pi model selections through the JSON codec", () =>
   Effect.gen(function* () {
     const codec = Schema.fromJsonString(ModelSelection);

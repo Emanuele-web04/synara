@@ -18,6 +18,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -112,7 +113,6 @@ export function KanbanNewTaskDialog({
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const projects = useStore((state) => state.projects);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -136,6 +136,7 @@ export function KanbanNewTaskDialog({
     composerMentions,
     nonPersistedComposerImageIdSet,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedProviderModelOptions,
     setPrompt,
@@ -147,6 +148,11 @@ export function KanbanNewTaskDialog({
     removeComposerTerminalContext,
   } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
   const promptRef = useRef(prompt);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
 
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [interactionMode, setInteractionMode] =
@@ -190,6 +196,7 @@ export function KanbanNewTaskDialog({
     selectedRuntimeAgents,
   } = useProviderModelCatalog({
     selectedProvider,
+    selectedProviderInstanceId,
     // Keep discovery warm whenever either picker can open so cursor/codex effort
     // and fast-mode controls are populated, not just the model list.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
@@ -212,6 +219,7 @@ export function KanbanNewTaskDialog({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     taskPreview,
     trimmedPrompt,
@@ -255,6 +263,7 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
@@ -277,14 +286,20 @@ export function KanbanNewTaskDialog({
     }
     const firstOption = modelOptionsByProvider[selectedProvider][0];
     if (firstOption) {
-      useComposerDraftStore
-        .getState()
-        .setModelSelection(
-          scratchThreadId,
-          buildModelSelection(selectedProvider, firstOption.slug),
-        );
+      useComposerDraftStore.getState().setModelSelection(
+        scratchThreadId,
+        buildModelSelection(selectedProvider, firstOption.slug, null, {
+          instanceId: selectedProviderInstanceId,
+        }),
+      );
     }
-  }, [modelOptionsByProvider, scratchThreadId, selectedModel, selectedProvider]);
+  }, [
+    modelOptionsByProvider,
+    scratchThreadId,
+    selectedModel,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
 
   const handleTranscriptReady = useCallback(
     (transcript: string) => {
@@ -517,6 +532,8 @@ export function KanbanNewTaskDialog({
                     loadingModelProviders={loadingModelProviders}
                     hiddenProviders={settings.hiddenProviders}
                     providerOrder={settings.providerOrder}
+                    providerInstances={providerInstances}
+                    selectedProviderInstanceId={selectedProviderInstanceId}
                     onProviderModelChange={handleProviderModelChange}
                     open={isModelPickerOpen}
                     onOpenChange={setIsModelPickerOpen}

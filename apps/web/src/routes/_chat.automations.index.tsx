@@ -180,8 +180,6 @@ function AutomationsRouteView() {
     deleteMutation,
     runsByAutomationId,
   } = useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
-
   const updateDialogForm = (nextForm: AutomationFormState) => {
     setForm(nextForm);
     setDialogWarnings(buildAutomationFormWarnings(nextForm));
@@ -215,6 +213,10 @@ function AutomationsRouteView() {
   const submitForm = () => {
     if (!isFormSubmittable(form)) return;
     if (hasBlockingAutomationDraftWarnings(dialogWarnings, acknowledgedWarningIds)) return;
+    const providerOptionsForDispatch = getProviderStartOptions(
+      settings,
+      form.modelSelection.instanceId ?? form.modelSelection.provider,
+    );
     const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
       dialogWarnings,
       acknowledgedWarningIds,

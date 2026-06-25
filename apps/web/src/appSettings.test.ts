@@ -490,6 +490,131 @@ describe("getProviderStartOptions", () => {
     });
   });
 
+  it("uses an explicit default Codex instance instead of the legacy selected account", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "/Users/you/.codex",
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "",
+              shadowHomePath: "/Users/you/.codex_work",
+            },
+          ],
+          selectedCodexAccountId: "work",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          geminiBinaryPath: "",
+          grokBinaryPath: "",
+          kiloBinaryPath: "",
+          kiloServerPassword: "",
+          kiloServerUrl: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerPassword: "",
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+        },
+        "codex",
+      ),
+    ).toEqual({
+      codex: {
+        homePath: "/Users/you/.codex",
+      },
+    });
+  });
+
+  it("resolves a legacy Codex account instance into account-isolated options", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "/Users/you/.codex",
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "/Users/work/.codex",
+              shadowHomePath: "/Users/work/.codex-shadow",
+            },
+          ],
+          selectedCodexAccountId: "default",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          geminiBinaryPath: "",
+          grokBinaryPath: "",
+          kiloBinaryPath: "",
+          kiloServerPassword: "",
+          kiloServerUrl: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerPassword: "",
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+        },
+        "codex_work",
+      ),
+    ).toEqual({
+      codex: {
+        accountId: "work",
+        homePath: "/Users/work/.codex",
+        shadowHomePath: "/Users/work/.codex-shadow",
+      },
+    });
+  });
+
+  it("overlays explicit Claude provider instance HOME options", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "/usr/local/bin/claude",
+          claudeHomePath: "/Users/base",
+          codexBinaryPath: "",
+          codexHomePath: "",
+          codexAccounts: [],
+          selectedCodexAccountId: "default",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          geminiBinaryPath: "",
+          grokBinaryPath: "",
+          kiloBinaryPath: "",
+          kiloServerPassword: "",
+          kiloServerUrl: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerPassword: "",
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              displayName: "Claude Work",
+              enabled: true,
+              config: {
+                binaryPath: "/custom/bin/claude",
+                homePath: "/Users/work",
+              },
+            },
+          },
+        },
+        "claude_work",
+      ),
+    ).toEqual({
+      claudeAgent: {
+        binaryPath: "/custom/bin/claude",
+        homePath: "/Users/work",
+      },
+    });
+  });
+
   it("emits an empty Codex options object when switching back to default among accounts", () => {
     expect(
       getProviderStartOptions({

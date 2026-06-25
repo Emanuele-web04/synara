@@ -199,7 +199,10 @@ function AutomationDetailView() {
     () => runsByAutomationId.get(automationId) ?? [],
     [runsByAutomationId, automationId],
   );
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, definition?.modelSelection.instanceId),
+    [definition?.modelSelection.instanceId, settings],
+  );
 
   if (!definition) {
     return (
@@ -296,7 +299,10 @@ function AutomationDetailView() {
     const providerOptions = providerOptionsForAutomationModelSelection(
       definition,
       nextModelSelection,
-      providerOptionsForDispatch,
+      getProviderStartOptions(
+        settings,
+        nextModelSelection.instanceId ?? nextModelSelection.provider,
+      ),
     );
     patch({
       modelSelection: nextModelSelection,
@@ -339,11 +345,15 @@ function AutomationDetailView() {
       dialogWarnings,
       acknowledgedWarningIds,
     );
+    const formProviderOptions = getProviderStartOptions(
+      settings,
+      form.modelSelection.instanceId ?? form.modelSelection.provider,
+    );
     updateMutation.mutate(
       updateInputFromForm(
         definition,
         form,
-        providerOptionsForAutomationEdit(definition, form, providerOptionsForDispatch),
+        providerOptionsForAutomationEdit(definition, form, formProviderOptions),
         acknowledgedRisks,
       ),
       {

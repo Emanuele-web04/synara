@@ -6,6 +6,7 @@
 
 import type {
   ProviderAgentDescriptor,
+  ProviderInstanceId,
   ProviderKind,
   ProviderModelDescriptor,
 } from "@t3tools/contracts";
@@ -51,6 +52,7 @@ const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
 export function useProviderModelCatalog(input: {
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | null;
   /**
    * Enables discovery for the on-demand providers (cursor/grok/kilo/opencode/pi)
    * even when they are not selected — pass the picker's open state so their lists
@@ -62,7 +64,8 @@ export function useProviderModelCatalog(input: {
   /** Per-provider selected-model hints so an unknown selection still lists itself. */
   modelHintByProvider?: Partial<Record<ProviderKind, string | null>>;
 }): ProviderModelCatalog {
-  const { selectedProvider, discoveryEnabled, modelHintByProvider } = input;
+  const { selectedProvider, selectedProviderInstanceId, discoveryEnabled, modelHintByProvider } =
+    input;
   const discoveryCwd = input.cwd ?? null;
   const { settings } = useAppSettings();
   const featureFlags = useFeatureFlags();
@@ -72,19 +75,31 @@ export function useProviderModelCatalog(input: {
     () => getCodexProviderDiscoveryOptions(settings),
     [settings],
   );
+  const selectedInstanceQueryOption = (
+    provider: ProviderKind,
+  ): { readonly instanceId?: ProviderInstanceId } => {
+    const instanceId =
+      selectedProvider === provider ? selectedProviderInstanceId?.trim() : undefined;
+    return instanceId ? { instanceId } : {};
+  };
 
   const claudeDynamicModelsQuery = useQuery(
-    providerModelsQueryOptions({ provider: "claudeAgent" }),
+    providerModelsQueryOptions({
+      provider: "claudeAgent",
+      ...selectedInstanceQueryOption("claudeAgent"),
+    }),
   );
   const codexDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "codex",
+      ...selectedInstanceQueryOption("codex"),
       ...codexDiscoveryOptions,
     }),
   );
   const cursorDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "cursor",
+      ...selectedInstanceQueryOption("cursor"),
       binaryPath: settings.cursorBinaryPath || null,
       apiEndpoint: settings.cursorApiEndpoint || null,
       enabled: selectedProvider === "cursor" || discoveryEnabled,
@@ -93,6 +108,7 @@ export function useProviderModelCatalog(input: {
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
+      ...selectedInstanceQueryOption("gemini"),
       binaryPath: settings.geminiBinaryPath || null,
       enabled: selectedProvider === "gemini",
     }),
@@ -100,6 +116,7 @@ export function useProviderModelCatalog(input: {
   const grokDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "grok",
+      ...selectedInstanceQueryOption("grok"),
       binaryPath: settings.grokBinaryPath || null,
       enabled: selectedProvider === "grok" || discoveryEnabled,
     }),
@@ -107,6 +124,7 @@ export function useProviderModelCatalog(input: {
   const openCodeDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "opencode",
+      ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
@@ -115,6 +133,7 @@ export function useProviderModelCatalog(input: {
   const kiloDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "kilo",
+      ...selectedInstanceQueryOption("kilo"),
       binaryPath: settings.kiloBinaryPath || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,
@@ -123,6 +142,7 @@ export function useProviderModelCatalog(input: {
   const piDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "pi",
+      ...selectedInstanceQueryOption("pi"),
       binaryPath: settings.piBinaryPath || null,
       agentDir: settings.piAgentDir || null,
       cwd: discoveryCwd,
@@ -134,15 +154,21 @@ export function useProviderModelCatalog(input: {
   const claudeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "claudeAgent",
+      ...selectedInstanceQueryOption("claudeAgent"),
       enabled: selectedProvider === "claudeAgent",
     }),
   );
   const codexDynamicAgentsQuery = useQuery(
-    providerAgentsQueryOptions({ provider: "codex", enabled: selectedProvider === "codex" }),
+    providerAgentsQueryOptions({
+      provider: "codex",
+      ...selectedInstanceQueryOption("codex"),
+      enabled: selectedProvider === "codex",
+    }),
   );
   const openCodeDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "opencode",
+      ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
@@ -151,6 +177,7 @@ export function useProviderModelCatalog(input: {
   const kiloDynamicAgentsQuery = useQuery(
     providerAgentsQueryOptions({
       provider: "kilo",
+      ...selectedInstanceQueryOption("kilo"),
       binaryPath: settings.kiloBinaryPath || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,

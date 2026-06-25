@@ -2,6 +2,7 @@ import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
+import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -44,6 +45,7 @@ export type CodexServerProviderSettings = typeof CodexServerProviderSettings.Typ
 export const ClaudeServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "claude")),
+  homePath: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   launchArgs: Schema.String.check(Schema.isMaxLength(4096)).pipe(
     Schema.withDecodingDefault(() => ""),
   ),
@@ -124,6 +126,7 @@ export const ServerSettings = Schema.Struct({
     opencode: OpenCodeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
+  providerInstances: ProviderInstanceConfigMap.pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
@@ -132,6 +135,7 @@ export const DEFAULT_SERVER_SETTINGS: ServerSettings = Schema.decodeSync(ServerS
 
 const ModelSelectionPatch = Schema.Struct({
   provider: Schema.optionalKey(ProviderKind),
+  instanceId: Schema.optionalKey(ProviderInstanceId),
   model: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(256))),
   options: Schema.optionalKey(Schema.Unknown),
 });
@@ -160,6 +164,7 @@ export const ServerSettingsPatch = Schema.Struct({
       claudeAgent: Schema.optionalKey(
         Schema.Struct({
           ...ProviderSettingsBasePatch,
+          homePath: Schema.optionalKey(StringSetting),
           launchArgs: Schema.optionalKey(Schema.String.check(Schema.isMaxLength(4096))),
         }),
       ),
@@ -195,6 +200,7 @@ export const ServerSettingsPatch = Schema.Struct({
       ),
     }),
   ),
+  providerInstances: Schema.optionalKey(ProviderInstanceConfigMap),
   skills: Schema.optionalKey(
     Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),

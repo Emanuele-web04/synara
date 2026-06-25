@@ -9,7 +9,10 @@ import { deepMerge, type DeepPartial } from "./Struct";
 function shouldReplaceTextGenerationModelSelection(
   patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
 ): boolean {
-  return Boolean(patch && (patch.provider !== undefined || patch.model !== undefined));
+  return Boolean(
+    patch &&
+    (patch.provider !== undefined || patch.instanceId !== undefined || patch.model !== undefined),
+  );
 }
 
 export function applyServerSettingsPatch(
@@ -23,6 +26,12 @@ export function applyServerSettingsPatch(
   }
 
   const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
+  const instanceId =
+    selectionPatch.instanceId ??
+    (selectionPatch.provider &&
+    selectionPatch.provider !== current.textGenerationModelSelection.provider
+      ? selectionPatch.provider
+      : current.textGenerationModelSelection.instanceId);
   const model =
     selectionPatch.model ??
     (selectionPatch.provider &&
@@ -38,6 +47,7 @@ export function applyServerSettingsPatch(
     ...next,
     textGenerationModelSelection: {
       provider,
+      ...(instanceId !== undefined ? { instanceId } : {}),
       model,
       ...(options !== undefined ? { options } : {}),
     } as ModelSelection,

@@ -314,7 +314,10 @@ export default function GitActionsControl({
 }: GitActionsControlProps) {
   const isPanel = variant === "panel";
   const { settings } = useAppSettings();
-  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptions = useMemo(
+    () => getProviderStartOptions(settings, settings.textGenerationProviderInstanceId),
+    [settings],
+  );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),
   );

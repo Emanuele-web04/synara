@@ -19,6 +19,7 @@ import type {
 } from "@t3tools/contracts";
 import { ServerProviderUpdateError } from "@t3tools/contracts";
 import { parseCodexConfigModelProvider } from "@t3tools/shared/codexConfig";
+import { deriveProviderInstances } from "@t3tools/shared/providerInstances";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { query as claudeQuery, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -1765,10 +1766,39 @@ export function projectProviderStatusesForSettings(
   checkedAt = new Date().toISOString(),
 ): ProviderStatuses {
   const statusByProvider = new Map(statuses.map((status) => [status.provider, status] as const));
+  const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
+  for (const instance of deriveProviderInstances(settings)) {
+    const entries = instancesByProvider.get(instance.driver) ?? [];
+    instancesByProvider.set(instance.driver, [...entries, instance]);
+  }
   const projected: ServerProviderStatus[] = [];
 
   for (const provider of PROVIDERS) {
     const status = statusByProvider.get(provider);
+    const providerInstances = instancesByProvider.get(provider) ?? [];
+    const instances =
+      providerInstances.length > 0
+        ? providerInstances
+        : [
+            {
+              instanceId: provider,
+              driver: provider,
+              displayName: provider,
+              enabled: true,
+            },
+          ];
+    const projectStatusForInstances = (baseStatus: ServerProviderStatus) => {
+      for (const instance of instances) {
+        projected.push({
+          ...baseStatus,
+          instanceId: instance.instanceId,
+          driver: instance.driver,
+          displayName: instance.displayName,
+          enabled: instance.enabled,
+        });
+      }
+    };
+
     if (!isProviderEnabledForSettings(provider, settings)) {
       const disabledStatus = makeDisabledProviderStatus(provider, status?.checkedAt ?? checkedAt);
       const disabledStatusWithAdvisory = {
@@ -1783,7 +1813,7 @@ export function projectProviderStatusesForSettings(
           message: null,
         },
       } satisfies ServerProviderStatus;
-      projected.push(
+      projectStatusForInstances(
         status?.updateState
           ? { ...disabledStatusWithAdvisory, updateState: status.updateState }
           : disabledStatusWithAdvisory,
@@ -1792,7 +1822,25 @@ export function projectProviderStatusesForSettings(
     }
 
     if (status && !isDisabledProviderStatusOverlay(status)) {
-      projected.push(status);
+      for (const instance of instances) {
+        if (instance.enabled) {
+          projected.push({
+            ...status,
+            instanceId: instance.instanceId,
+            driver: instance.driver,
+            displayName: instance.displayName,
+            enabled: true,
+          });
+          continue;
+        }
+        projected.push({
+          ...makeDisabledProviderStatus(provider, status.checkedAt),
+          instanceId: instance.instanceId,
+          driver: instance.driver,
+          displayName: instance.displayName,
+          enabled: false,
+        });
+      }
     }
   }
 

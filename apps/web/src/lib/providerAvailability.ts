@@ -1,5 +1,6 @@
 import {
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@t3tools/contracts";
@@ -88,16 +89,32 @@ export function providerUnavailableReason(status: ServerProviderStatus | null | 
 export function findProviderStatus(
   statuses: readonly ServerProviderStatus[],
   provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
 ): ServerProviderStatus | null {
+  if (instanceId) {
+    return (
+      statuses.find(
+        (status) =>
+          status.provider === provider && (status.instanceId ?? status.provider) === instanceId,
+      ) ??
+      statuses.find(
+        (status) =>
+          status.provider === provider &&
+          (status.instanceId === undefined || status.instanceId === status.provider),
+      ) ??
+      null
+    );
+  }
   return statuses.find((status) => status.provider === provider) ?? null;
 }
 
 // Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
 export function resolveProviderSendAvailability(input: {
   readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | null | undefined;
   readonly statuses: readonly ServerProviderStatus[];
 }): ProviderSendAvailability {
-  const status = findProviderStatus(input.statuses, input.provider);
+  const status = findProviderStatus(input.statuses, input.provider, input.instanceId);
   return {
     provider: input.provider,
     status,

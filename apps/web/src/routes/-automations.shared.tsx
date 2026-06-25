@@ -17,7 +17,7 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
 import {
   ComposerPickerMenuPopup,
   ComposerPickerMenuSubPopup,
@@ -666,8 +666,8 @@ export function AutomationApprovalBanner({
       <AlertTitle>Approval needed</AlertTitle>
       <AlertDescription>
         <span>
-          This automation needs your approval once before Synara can save changes. When a
-          warning blocks manual runs, Run now stays disabled until you approve it.
+          This automation needs your approval once before Synara can save changes. When a warning
+          blocks manual runs, Run now stays disabled until you approve it.
         </span>
         <ul className="flex flex-col gap-1.5">
           {warnings.map((warning) => (
@@ -703,6 +703,8 @@ export function AutomationModelPicker({
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = value.instanceId ?? value.provider;
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [value.provider]: value.model }),
     [value.model, value.provider],
@@ -714,6 +716,7 @@ export function AutomationModelPicker({
   });
   const { modelOptionsByProvider, loadingModelProviders } = useProviderModelCatalog({
     selectedProvider: value.provider,
+    selectedProviderInstanceId,
     discoveryEnabled: open,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider,
@@ -730,9 +733,13 @@ export function AutomationModelPicker({
       loadingModelProviders={loadingModelProviders}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
       open={open}
       onOpenChange={setOpen}
-      onProviderModelChange={(provider, model) => onChange(buildModelSelection(provider, model))}
+      onProviderModelChange={(provider, model, instanceId) =>
+        onChange(buildModelSelection(provider, model, null, { instanceId: instanceId ?? provider }))
+      }
     />
   );
 }

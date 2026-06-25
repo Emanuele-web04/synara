@@ -299,7 +299,13 @@ describe("wsNativeApi", () => {
             accounts: [],
             customModels: [],
           },
-          claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
+          claudeAgent: {
+            enabled: true,
+            binaryPath: "claude",
+            homePath: "",
+            launchArgs: "",
+            customModels: [],
+          },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
@@ -320,6 +326,7 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        providerInstances: {},
         skills: { disabled: [] },
       },
     } as const;

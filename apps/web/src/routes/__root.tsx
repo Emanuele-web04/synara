@@ -1340,10 +1340,10 @@ function EventRouter() {
           queryKey: ["provider-discovery", "models", "cursor"],
         });
         void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo"),
+          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo", null),
         });
         void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode"),
+          queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode", null),
         });
       }
     });
