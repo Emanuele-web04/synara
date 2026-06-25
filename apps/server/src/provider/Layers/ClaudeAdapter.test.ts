@@ -25,7 +25,6 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 
-type ProviderRuntimeContentDeltaEvent = Extract<ProviderRuntimeEvent, { type: "content.delta" }>;
 type ProviderRuntimeItemUpdatedEvent = Extract<ProviderRuntimeEvent, { type: "item.updated" }>;
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
@@ -1000,7 +999,8 @@ describe("ClaudeAdapterLive", () => {
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
-      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 13).pipe(
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
         Stream.runCollect,
         Effect.forkChild,
       );
@@ -1115,9 +1115,9 @@ describe("ClaudeAdapterLive", () => {
           "item.started",
           "item.updated",
           "item.updated",
-          "content.delta",
           "item.completed",
           "item.completed",
+          "turn.completed",
         ],
       );
 
@@ -1183,12 +1183,15 @@ describe("ClaudeAdapterLive", () => {
         );
       }
 
-      const toolResultDelta = runtimeEvents.find(
-        (event) => event.type === "content.delta" && String(event.itemId) === "tool-grep-1",
+      const toolCompleted = runtimeEvents.find(
+        (event) =>
+          event.type === "item.completed" &&
+          event.payload.itemType === "dynamic_tool_call" &&
+          String(event.itemId) === "tool-grep-1",
       );
-      assert.equal(toolResultDelta?.type, "content.delta");
-      if (toolResultDelta?.type === "content.delta") {
-        assert.equal(toolResultDelta.payload.delta, "src/example.ts:1:foo");
+      assert.equal(toolCompleted?.type, "item.completed");
+      if (toolCompleted?.type === "item.completed") {
+        assert.equal(toolCompleted.payload.status, "completed");
       }
 
       const reasoningCompleted = runtimeEvents.find(
@@ -1197,6 +1200,13 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(reasoningCompleted?.type, "item.completed");
       if (reasoningCompleted?.type === "item.completed") {
         assert.equal(String(reasoningCompleted.itemId), `claude-reasoning:${turn.turnId}:0`);
+        assert.equal(reasoningCompleted.payload.status, "completed");
+      }
+
+      const turnCompleted = runtimeEvents.find((event) => event.type === "turn.completed");
+      assert.equal(turnCompleted?.type, "turn.completed");
+      if (turnCompleted?.type === "turn.completed") {
+        assert.equal(turnCompleted.payload.state, "completed");
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
@@ -3337,10 +3347,10 @@ describe("ClaudeAdapterLive", () => {
           "item.completed",
           "item.started",
           "item.updated",
-          "content.delta",
           "item.completed",
           "content.delta",
           "item.completed",
+          "turn.completed",
         ],
       );
 
@@ -3348,14 +3358,23 @@ describe("ClaudeAdapterLive", () => {
         (event) => event.type === "content.delta" && event.payload.streamKind === "assistant_text",
       );
       assert.equal(assistantTextDeltas.length, 2);
-      const toolOutputDelta = runtimeEvents.find(
-        (event): event is ProviderRuntimeContentDeltaEvent =>
-          event.type === "content.delta" &&
-          event.payload.streamKind === "unknown" &&
+      const toolCompleted = runtimeEvents.find(
+        (event) =>
+          event.type === "item.completed" &&
+          event.payload.itemType === "dynamic_tool_call" &&
           String(event.itemId) === "tool-interleaved-1",
       );
-      assert.equal(toolOutputDelta?.type, "content.delta");
-      assert.equal(toolOutputDelta?.payload.delta, "src/example.ts:1:assistant");
+      assert.equal(toolCompleted?.type, "item.completed");
+      if (toolCompleted?.type === "item.completed") {
+        assert.equal(
+          (
+            toolCompleted.payload.data as {
+              result?: { content?: string };
+            }
+          ).result?.content,
+          "src/example.ts:1:assistant",
+        );
+      }
       if (assistantTextDeltas.length !== 2) {
         return;
       }

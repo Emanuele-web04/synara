@@ -20,7 +20,7 @@ import {
   type RuntimeMode,
   TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
+import { Cache, Cause, Deferred, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   buildPromptThreadTitleFallback,
@@ -50,6 +50,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
 import {
@@ -69,6 +70,7 @@ type ProviderIntentEvent = Extract<
   OrchestrationEvent,
   {
     type:
+      | "thread.created"
       | "thread.meta-updated"
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
@@ -78,7 +80,10 @@ type ProviderIntentEvent = Extract<
       | "thread.user-input-response-requested"
       | "thread.conversation-rollback-requested"
       | "thread.message-edit-resend-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-ensure-requested"
+      | "thread.context-inject-requested"
+      | "thread.runtime-action-requested";
   }
 >;
 
@@ -248,6 +253,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const executionRuntimeService = yield* ExecutionRuntimeService;
   const checkpointStore = yield* CheckpointStore;
   const git = yield* GitCore;
   const textGeneration = yield* TextGeneration;
@@ -267,6 +273,25 @@ const make = Effect.gen(function* () {
 
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
+  const recentlyEnsuredSessionThreads = new Map<
+    string,
+    {
+      readonly ensuredAt: number;
+      readonly modelSelection?: ModelSelection;
+      readonly runtimeMode?: RuntimeMode;
+    }
+  >();
+  const inFlightSessionEnsures = new Map<string, Deferred.Deferred<void>>();
+  const providerResumeCursorsByThreadId = new Map<
+    string,
+    {
+      readonly resumeCursor: unknown;
+      readonly provider: ProviderKind;
+      readonly runtimeMode: RuntimeMode;
+      readonly modelSelection: ModelSelection;
+      readonly cwd?: string;
+    }
+  >();
 
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
@@ -332,6 +357,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
+      | "provider.context.inject.failed"
       | "provider.session.stop.failed";
     readonly summary: string;
     readonly detail: string;
@@ -515,6 +541,7 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly cause: ProviderServiceError;
   }) {
+    providerResumeCursorsByThreadId.delete(input.threadId);
     if (providerService.clearSessionResumeCursor) {
       yield* providerService
         .clearSessionResumeCursor({ threadId: input.threadId })
@@ -696,24 +723,63 @@ const make = Effect.gen(function* () {
         ...(options?.providerOptions !== undefined
           ? { providerOptions: options.providerOptions }
           : {}),
+        ...(thread.reviewChatTarget
+          ? { approvalPolicy: "never" as const, sandboxMode: "read-only" as const }
+          : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
       });
 
+    const startProviderSessionWithStaleResumeRetry = (input?: {
+      readonly resumeCursor?: unknown;
+      readonly provider?: ProviderKind;
+    }) =>
+      startProviderSession(input).pipe(
+        Effect.catch((error) => {
+          if (!isStaleCodexResumeError(error)) {
+            return Effect.fail(error);
+          }
+          return Effect.gen(function* () {
+            yield* clearStaleProviderResumeState({ threadId, cause: error });
+            yield* Effect.logWarning(
+              "provider command reactor retrying provider session after stale resume cursor",
+              {
+                threadId,
+                provider: preferredProvider,
+                runtimeMode: desiredRuntimeMode,
+                cause: error.message,
+              },
+            );
+            return yield* startProviderSession(undefined);
+          });
+        }),
+      );
+
     const bindSessionToThread = (session: ProviderSession) =>
-      setThreadSession({
-        threadId,
-        session: {
+      Effect.gen(function* () {
+        if (session.resumeCursor !== undefined) {
+          providerResumeCursorsByThreadId.set(threadId, {
+            resumeCursor: session.resumeCursor,
+            provider: session.provider,
+            runtimeMode: desiredRuntimeMode,
+            modelSelection: desiredModelSelection,
+            ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+          });
+        }
+        yield* setThreadSession({
           threadId,
-          status: mapProviderSessionStatusToOrchestrationStatus(session.status),
-          providerName: session.provider,
-          runtimeMode: desiredRuntimeMode,
-          // Provider turn ids are not orchestration turn ids.
-          activeTurnId: null,
-          lastError: session.lastError ?? null,
-          updatedAt: session.updatedAt,
-        },
-        createdAt,
+          session: {
+            threadId,
+            status: mapProviderSessionStatusToOrchestrationStatus(session.status),
+            providerName: session.provider,
+            runtimeMode: desiredRuntimeMode,
+            // Provider turn ids are not orchestration turn ids.
+            activeTurnId: null,
+            lastError: session.lastError ?? null,
+            updatedAt: session.updatedAt,
+          },
+          createdAt,
+        });
       });
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
@@ -766,7 +832,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelSelectionChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
-      const restartedSession = yield* startProviderSession(
+      const restartedSession = yield* startProviderSessionWithStaleResumeRetry(
         resumeCursor !== undefined ? { resumeCursor } : undefined,
       );
       yield* Effect.logInfo("provider command reactor restarted provider session", {
@@ -814,7 +880,16 @@ const make = Effect.gen(function* () {
       sidechatContextBootstrapThreadIds.add(threadId);
     }
 
-    const startedSession = yield* startProviderSession(undefined);
+    const cachedResumeCursor = providerResumeCursorsByThreadId.get(threadId);
+    const cachedResumeCursorMatches =
+      cachedResumeCursor !== undefined &&
+      cachedResumeCursor.provider === preferredProvider &&
+      cachedResumeCursor.runtimeMode === desiredRuntimeMode &&
+      Equal.equals(cachedResumeCursor.modelSelection, desiredModelSelection) &&
+      cachedResumeCursor.cwd === effectiveCwd;
+    const startedSession = yield* startProviderSessionWithStaleResumeRetry(
+      cachedResumeCursorMatches ? { resumeCursor: cachedResumeCursor.resumeCursor } : undefined,
+    );
     yield* bindSessionToThread(startedSession);
     return startedSession.threadId;
   });
@@ -952,16 +1027,35 @@ const make = Effect.gen(function* () {
             }
           : requestedModelSelection
         : input.modelSelection;
-    const sendQueuedProviderTurn = (messageText: string | undefined) =>
-      providerService.sendTurn({
-        threadId: input.threadId,
-        ...(messageText ? { input: messageText } : {}),
-        ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
-        ...(input.skills !== undefined ? { skills: input.skills } : {}),
-        ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-        ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
-        ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+    const recordTurnResumeCursor = (resumeCursor: unknown | undefined) =>
+      Effect.gen(function* () {
+        if (resumeCursor === undefined || activeSession === undefined) {
+          return;
+        }
+        const resumeCursorCwd =
+          activeSession.cwd ?? (yield* resolveProjectedThreadWorkspaceCwd(thread));
+        providerResumeCursorsByThreadId.set(input.threadId, {
+          resumeCursor,
+          provider: activeSession.provider,
+          runtimeMode: activeSession.runtimeMode ?? input.runtimeMode ?? thread.runtimeMode,
+          modelSelection: requestedModelSelection,
+          ...(resumeCursorCwd !== undefined ? { cwd: resumeCursorCwd } : {}),
+        });
       });
+    const sendQueuedProviderTurn = (messageText: string | undefined) =>
+      providerService
+        .sendTurn({
+          threadId: input.threadId,
+          ...(messageText ? { input: messageText } : {}),
+          ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
+          ...(input.skills !== undefined ? { skills: input.skills } : {}),
+          ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
+          ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
+          ...(input.interactionMode !== undefined
+            ? { interactionMode: input.interactionMode }
+            : {}),
+        })
+        .pipe(Effect.tap((result) => recordTurnResumeCursor(result.resumeCursor)));
 
     const captureMessageStartCheckpoint = Effect.gen(function* () {
       if ((input.dispatchMode ?? "queue") === "steer") {
@@ -972,9 +1066,24 @@ const make = Effect.gen(function* () {
       if (!currentThread) {
         return;
       }
+      if (currentThread.reviewChatTarget !== null) {
+        return;
+      }
 
       const cwd = yield* resolveProjectedThreadWorkspaceCwd(currentThread);
       if (!cwd || !(yield* checkpointStore.isGitRepository(cwd))) {
+        return;
+      }
+
+      const checkpointRef = checkpointRefForThreadMessageStart(
+        input.threadId,
+        MessageId.makeUnsafe(input.messageId),
+      );
+      const checkpointExists = yield* checkpointStore.hasCheckpointRef({
+        cwd,
+        checkpointRef,
+      });
+      if (checkpointExists) {
         return;
       }
 
@@ -982,10 +1091,7 @@ const make = Effect.gen(function* () {
       // the user's submit moment, not an async runtime event.
       yield* checkpointStore.captureCheckpoint({
         cwd,
-        checkpointRef: checkpointRefForThreadMessageStart(
-          input.threadId,
-          MessageId.makeUnsafe(input.messageId),
-        ),
+        checkpointRef,
       });
     }).pipe(
       Effect.catchCause((cause) =>
@@ -1944,9 +2050,160 @@ const make = Effect.gen(function* () {
     });
   });
 
+  const processSessionEnsureRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.session-ensure-requested" }>,
+  ) {
+    const existingEnsure = inFlightSessionEnsures.get(event.payload.threadId);
+    if (existingEnsure !== undefined) {
+      yield* Deferred.await(existingEnsure);
+      return;
+    }
+
+    const deferred = yield* Deferred.make<void>();
+    inFlightSessionEnsures.set(event.payload.threadId, deferred);
+
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread || (thread.session?.status === "running" && thread.session.activeTurnId !== null)) {
+      yield* Deferred.succeed(deferred, undefined);
+      inFlightSessionEnsures.delete(event.payload.threadId);
+      return;
+    }
+
+    const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+    const ensureSession = ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : cachedProviderOptions !== undefined
+          ? { providerOptions: cachedProviderOptions }
+          : {}),
+      runtimeMode: event.payload.runtimeMode,
+    }).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          recentlyEnsuredSessionThreads.set(event.payload.threadId, {
+            ensuredAt: Date.now(),
+            ...(event.payload.modelSelection !== undefined
+              ? { modelSelection: event.payload.modelSelection }
+              : {}),
+            ...(event.payload.runtimeMode !== undefined
+              ? { runtimeMode: event.payload.runtimeMode }
+              : {}),
+          });
+        }),
+      ),
+      Effect.catchCause((cause) =>
+        setThreadSessionError({
+          threadId: event.payload.threadId,
+          runtimeMode: event.payload.runtimeMode,
+          detail: Cause.pretty(cause),
+          createdAt: event.payload.createdAt,
+        }),
+      ),
+    );
+
+    yield* ensureSession.pipe(
+      Effect.ensuring(
+        Deferred.succeed(deferred, undefined).pipe(
+          Effect.flatMap(() =>
+            Effect.sync(() => inFlightSessionEnsures.delete(event.payload.threadId)),
+          ),
+          Effect.ignore,
+        ),
+      ),
+    );
+    if (event.payload.modelSelection !== undefined) {
+      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+    }
+    if (event.payload.providerOptions !== undefined) {
+      threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
+    }
+  });
+
+  const processContextInjectRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.context-inject-requested" }>,
+  ) {
+    const thread = yield* resolveThread(event.payload.threadId);
+    if (!thread) {
+      return;
+    }
+    if (thread.session?.status === "running" && thread.session.activeTurnId !== null) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.inject.failed",
+        summary: "Review context injection skipped",
+        detail: "Cannot inject review context while a provider turn is already running.",
+        turnId: thread.session.activeTurnId,
+        createdAt: event.payload.createdAt,
+      });
+    }
+    if (!providerService.injectThreadItems) {
+      return yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.context.inject.failed",
+        summary: "Review context injection failed",
+        detail: "The active provider does not support thread context injection.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+    }
+
+    const cachedProviderOptions = threadProviderOptions.get(event.payload.threadId);
+    yield* ensureSessionForThread(event.payload.threadId, event.payload.createdAt, {
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.providerOptions !== undefined
+        ? { providerOptions: event.payload.providerOptions }
+        : cachedProviderOptions !== undefined
+          ? { providerOptions: cachedProviderOptions }
+          : {}),
+      runtimeMode: event.payload.runtimeMode,
+    });
+    yield* providerService.injectThreadItems({
+      threadId: event.payload.threadId,
+      items: event.payload.items,
+    });
+    if (event.payload.modelSelection !== undefined) {
+      threadModelSelections.set(event.payload.threadId, event.payload.modelSelection);
+    }
+    if (event.payload.providerOptions !== undefined) {
+      threadProviderOptions.set(event.payload.threadId, event.payload.providerOptions);
+    }
+  });
+
+  const processRuntimeActionRequested = Effect.fnUntraced(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.runtime-action-requested" }>,
+  ) {
+    const { threadId, instanceId, action } = event.payload;
+    switch (action) {
+      case "stop":
+        yield* executionRuntimeService.stop(threadId, instanceId);
+        return;
+      case "destroy":
+        yield* executionRuntimeService.destroy(threadId, instanceId);
+        return;
+      case "snapshot":
+        yield* executionRuntimeService.snapshot(threadId, instanceId);
+        return;
+    }
+  });
+
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.created": {
+          if (event.payload.runtimePlan == null) {
+            return;
+          }
+          yield* executionRuntimeService.applyRuntimePlan({
+            threadId: event.payload.threadId,
+            plan: event.payload.runtimePlan,
+          });
+          return;
+        }
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -2021,6 +2278,35 @@ const make = Effect.gen(function* () {
         case "thread.session-stop-requested":
           yield* processSessionStopRequested(event);
           return;
+        case "thread.session-ensure-requested":
+          yield* processSessionEnsureRequested(event);
+          return;
+        case "thread.context-inject-requested":
+          yield* processContextInjectRequested(event).pipe(
+            Effect.catchCause((cause) =>
+              Effect.gen(function* () {
+                const detail = Cause.pretty(cause);
+                yield* appendProviderFailureActivity({
+                  threadId: event.payload.threadId,
+                  kind: "provider.context.inject.failed",
+                  summary: "Review context injection failed",
+                  detail,
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                });
+                yield* setThreadSessionError({
+                  threadId: event.payload.threadId,
+                  runtimeMode: event.payload.runtimeMode,
+                  detail,
+                  createdAt: event.payload.createdAt,
+                });
+              }),
+            ),
+          );
+          return;
+        case "thread.runtime-action-requested":
+          yield* processRuntimeActionRequested(event);
+          return;
       }
     });
 
@@ -2056,6 +2342,7 @@ const make = Effect.gen(function* () {
   const start: ProviderCommandReactorShape["start"] = Effect.all([
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
+        event.type !== "thread.created" &&
         event.type !== "thread.meta-updated" &&
         event.type !== "thread.runtime-mode-set" &&
         event.type !== "thread.turn-queued" &&
@@ -2065,7 +2352,10 @@ const make = Effect.gen(function* () {
         event.type !== "thread.user-input-response-requested" &&
         event.type !== "thread.conversation-rollback-requested" &&
         event.type !== "thread.message-edit-resend-requested" &&
-        event.type !== "thread.session-stop-requested"
+        event.type !== "thread.session-stop-requested" &&
+        event.type !== "thread.session-ensure-requested" &&
+        event.type !== "thread.context-inject-requested" &&
+        event.type !== "thread.runtime-action-requested"
       ) {
         return Effect.void;
       }

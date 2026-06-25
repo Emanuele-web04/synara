@@ -45,6 +45,7 @@ import {
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
+import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import {
   type ProjectionTurn,
   ProjectionTurnRepository,
@@ -60,6 +61,7 @@ import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
+import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
 import { ServerConfig } from "../../config.ts";
@@ -80,6 +82,7 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
+import { makeMiscProjectors } from "./ProjectionPipeline.projectors.misc.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -89,6 +92,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
+  threadRuntime: "projection.thread-runtime",
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
@@ -586,8 +590,20 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
+  const projectionThreadRuntimeRepository = yield* ProjectionThreadRuntimeRepository;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
+  const { applyThreadRuntimeProjection } = makeMiscProjectors({
+    projectionProjectRepository,
+    projectionThreadRepository,
+    projectionThreadMessageRepository,
+    projectionThreadProposedPlanRepository,
+    projectionThreadActivityRepository,
+    projectionThreadSessionRepository,
+    projectionThreadRuntimeRepository,
+    projectionTurnRepository,
+    projectionPendingApprovalRepository,
+  });
 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -629,6 +645,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             forkSourceThreadId: event.payload.forkSourceThreadId,
             sidechatSourceThreadId: event.payload.sidechatSourceThreadId,
             lastKnownPr: event.payload.lastKnownPr ?? null,
+            reviewChatTarget: event.payload.reviewChatTarget ?? null,
             latestTurnId: null,
             handoff: event.payload.handoff,
             pinnedMessages: null,
@@ -697,6 +714,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               : {}),
             ...(event.payload.lastKnownPr !== undefined
               ? { lastKnownPr: event.payload.lastKnownPr }
+              : {}),
+            ...(event.payload.reviewChatTarget !== undefined
+              ? { reviewChatTarget: event.payload.reviewChatTarget }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
             ...(event.payload.pinnedMessages !== undefined
@@ -1812,6 +1832,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadSessionsProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadRuntime,
+      phase: "hot",
+      apply: applyThreadRuntimeProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
       phase: "hot",
       apply: applyThreadTurnsProjection,
@@ -2078,6 +2103,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
+  Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),

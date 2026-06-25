@@ -1282,8 +1282,8 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-review-chat"),
       input: "What should I review first?",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
     });
-    expect(harness.sendTurn.mock.calls[0]?.[0]).not.toHaveProperty("interactionMode");
     expect(harness.captureCheckpoint).not.toHaveBeenCalled();
   });
 
