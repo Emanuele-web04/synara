@@ -59,6 +59,10 @@ const ProviderRollbackConversationInput = Schema.Struct({
   numTurns: NonNegativeInt,
 });
 
+type StopRuntimeSession = NonNullable<ProviderServiceShape["stopRuntimeSession"]>;
+type StopRuntimeSessionInput = Parameters<StopRuntimeSession>[0];
+type StopRuntimeSessionEffect = ReturnType<StopRuntimeSession>;
+
 function toValidationError(
   operation: string,
   issue: string,
@@ -311,12 +315,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     ): Effect.Effect<A, E, R> =>
       Effect.suspend(() => {
         const existingIdleStop = runtimeIdleStopsInFlight.get(threadId);
-        const displacedIdleStop =
-          existingIdleStop !== undefined || runtimeIdleTimers.has(threadId);
+        const displacedIdleStop = existingIdleStop !== undefined || runtimeIdleTimers.has(threadId);
         const waitForExistingIdleStop =
-          existingIdleStop !== undefined
-            ? Effect.promise(() => existingIdleStop)
-            : Effect.void;
+          existingIdleStop !== undefined ? Effect.promise(() => existingIdleStop) : Effect.void;
         return waitForExistingIdleStop.pipe(
           Effect.tap(() => Effect.sync(() => clearRuntimeIdleTimer(threadId))),
           Effect.flatMap(() => waitForRuntimeIdleStop(threadId)),
@@ -482,22 +483,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const activeTurnId =
           event.type === "turn.started"
             ? (event.turnId ?? null)
-          : event.type === "thread.state.changed" && event.payload.state === "compacted"
+            : event.type === "thread.state.changed" && event.payload.state === "compacted"
               ? (event.turnId ?? currentActiveTurnId)
-            : event.type === "turn.completed" ||
-                event.type === "turn.aborted" ||
-                (event.type === "thread.state.changed" &&
-                  (event.payload.state === "archived" ||
-                    event.payload.state === "closed" ||
-                    event.payload.state === "error")) ||
-                event.type === "session.exited" ||
-                event.type === "runtime.error" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : currentActiveTurnId;
+              : event.type === "turn.completed" ||
+                  event.type === "turn.aborted" ||
+                  (event.type === "thread.state.changed" &&
+                    (event.payload.state === "archived" ||
+                      event.payload.state === "closed" ||
+                      event.payload.state === "error")) ||
+                  event.type === "session.exited" ||
+                  event.type === "runtime.error" ||
+                  (event.type === "session.state.changed" &&
+                    (event.payload.state === "ready" ||
+                      event.payload.state === "stopped" ||
+                      event.payload.state === "error"))
+                ? null
+                : currentActiveTurnId;
         const lastError = runtimeLastErrorForEvent(event);
         const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
 
@@ -1064,9 +1065,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       });
 
     const stopRuntimeSessionInternal = (
-      rawInput,
+      rawInput: StopRuntimeSessionInput,
       expectedIdleGeneration?: symbol,
-    ): ReturnType<NonNullable<ProviderServiceShape["stopRuntimeSession"]>> =>
+    ): StopRuntimeSessionEffect =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
           operation: "ProviderService.stopRuntimeSession",
@@ -1122,9 +1123,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
       });
 
-    const stopRuntimeSession: NonNullable<ProviderServiceShape["stopRuntimeSession"]> = (
-      rawInput,
-    ) =>
+    const stopRuntimeSession: StopRuntimeSession = (rawInput) =>
       stopRuntimeSessionInternal(rawInput);
 
     stopIdleRuntimeSession = (threadId, generation) => {

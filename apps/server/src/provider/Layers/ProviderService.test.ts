@@ -62,6 +62,18 @@ type LegacyProviderRuntimeEvent = {
   readonly [key: string]: unknown;
 };
 
+type ReleaseListSessions = (sessions: ReadonlyArray<ProviderSession>) => void;
+
+// Converts deferred listSessions callbacks into typed release handles for race tests.
+function requireReleaseListSessions(
+  release: ReleaseListSessions | undefined,
+): ReleaseListSessions {
+  if (typeof release !== "function") {
+    assert.fail("Expected listSessions release callback");
+  }
+  return release;
+}
+
 function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
   const sessions = new Map<ThreadId, ProviderSession>();
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
@@ -168,8 +180,8 @@ function makeFakeCodexAdapter(provider: ProviderKind = "codex") {
       Effect.succeed({ threadId, turns: [] }),
   );
 
-  const compactThread = vi.fn((_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
-    Effect.void,
+  const compactThread = vi.fn(
+    (_threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
   const stopAll = vi.fn(
@@ -1101,7 +1113,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(payload !== null && typeof payload === "object", true);
         if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
           assert.equal((payload as Record<string, unknown>).activeTurnId, null);
-          assert.equal((payload as Record<string, unknown>).lastRuntimeEvent, "thread.state.changed");
+          assert.equal(
+            (payload as Record<string, unknown>).lastRuntimeEvent,
+            "thread.state.changed",
+          );
         }
       }
     }),
@@ -1143,7 +1158,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(payload !== null && typeof payload === "object", true);
         if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
           assert.equal((payload as Record<string, unknown>).activeTurnId, turn.turnId);
-          assert.equal((payload as Record<string, unknown>).lastRuntimeEvent, "thread.state.changed");
+          assert.equal(
+            (payload as Record<string, unknown>).lastRuntimeEvent,
+            "thread.state.changed",
+          );
         }
       }
     }),
@@ -1426,58 +1444,60 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
 const idleCleanup = makeProviderServiceLayer({ runtimeIdleStopMs: 100 });
 idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
-  it.effect("stops idle ready runtime using the persisted cursor when the live snapshot omits it", () =>
-    Effect.gen(function* () {
-      const provider = yield* ProviderService;
-      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+  it.effect(
+    "stops idle ready runtime using the persisted cursor when the live snapshot omits it",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const session = yield* provider.startSession(asThreadId("thread-idle-persisted-cursor"), {
-        provider: "codex",
-        threadId: asThreadId("thread-idle-persisted-cursor"),
-        runtimeMode: "full-access",
-      });
+        const session = yield* provider.startSession(asThreadId("thread-idle-persisted-cursor"), {
+          provider: "codex",
+          threadId: asThreadId("thread-idle-persisted-cursor"),
+          runtimeMode: "full-access",
+        });
 
-      const persistedBefore = yield* runtimeRepository.getByThreadId({
-        threadId: session.threadId,
-      });
-      assert.equal(Option.isSome(persistedBefore), true);
-      if (Option.isSome(persistedBefore)) {
-        assert.deepEqual(persistedBefore.value.resumeCursor, session.resumeCursor);
-      }
+        const persistedBefore = yield* runtimeRepository.getByThreadId({
+          threadId: session.threadId,
+        });
+        assert.equal(Option.isSome(persistedBefore), true);
+        if (Option.isSome(persistedBefore)) {
+          assert.deepEqual(persistedBefore.value.resumeCursor, session.resumeCursor);
+        }
 
-      idleCleanup.codex.updateSession(session.threadId, (existing) => {
-        const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
-        return withoutResumeCursor;
-      });
-      yield* idleCleanup.codex.waitForRuntimeSubscribers();
-      idleCleanup.codex.emit({
-        type: "turn.completed",
-        eventId: asEventId("runtime-idle-persisted-cursor-complete"),
-        provider: "codex",
-        createdAt: "2026-02-27T00:04:00.000Z",
-        threadId: session.threadId,
-        payload: { state: "completed" },
-      });
+        idleCleanup.codex.updateSession(session.threadId, (existing) => {
+          const { resumeCursor: _omittedResumeCursor, ...withoutResumeCursor } = existing;
+          return withoutResumeCursor;
+        });
+        yield* idleCleanup.codex.waitForRuntimeSubscribers();
+        idleCleanup.codex.emit({
+          type: "turn.completed",
+          eventId: asEventId("runtime-idle-persisted-cursor-complete"),
+          provider: "codex",
+          createdAt: "2026-02-27T00:04:00.000Z",
+          threadId: session.threadId,
+          payload: { state: "completed" },
+        });
 
-      yield* waitUntil(
-        () => idleCleanup.codex.stopSession.mock.calls.length > 0,
-        500,
-        20,
-        "idle runtime stop",
-      );
+        yield* waitUntil(
+          () => idleCleanup.codex.stopSession.mock.calls.length > 0,
+          500,
+          20,
+          "idle runtime stop",
+        );
 
-      assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 1);
-      assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], session.threadId);
+        assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 1);
+        assert.deepEqual(idleCleanup.codex.stopSession.mock.calls[0]?.[0], session.threadId);
 
-      const persistedAfter = yield* runtimeRepository.getByThreadId({
-        threadId: session.threadId,
-      });
-      assert.equal(Option.isSome(persistedAfter), true);
-      if (Option.isSome(persistedAfter)) {
-        assert.equal(persistedAfter.value.status, "stopped");
-        assert.deepEqual(persistedAfter.value.resumeCursor, session.resumeCursor);
-      }
-    }),
+        const persistedAfter = yield* runtimeRepository.getByThreadId({
+          threadId: session.threadId,
+        });
+        assert.equal(Option.isSome(persistedAfter), true);
+        if (Option.isSome(persistedAfter)) {
+          assert.equal(persistedAfter.value.status, "stopped");
+          assert.deepEqual(persistedAfter.value.resumeCursor, session.resumeCursor);
+        }
+      }),
   );
 
   it.effect("clears a pending idle stop before dispatching new turn work", () =>
@@ -1606,9 +1626,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-fired-new-turn");
       let listSessionsStarted = false;
-      let releaseListSessions:
-        | ((sessions: ReadonlyArray<ProviderSession>) => void)
-        | undefined;
+      let releaseListSessions: ReleaseListSessions | undefined;
 
       idleCleanup.codex.stopSession.mockClear();
       const session = yield* provider.startSession(threadId, {
@@ -1671,8 +1689,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
         .pipe(Effect.forkChild);
 
       const release = releaseListSessions;
-      assert.equal(typeof release, "function");
-      release([staleReadySession]);
+      requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(sendTurnFiber);
       yield* sleep(100);
 
@@ -1828,9 +1845,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-stop-remove-race");
       let listSessionsStarted = false;
-      let releaseListSessions:
-        | ((sessions: ReadonlyArray<ProviderSession>) => void)
-        | undefined;
+      let releaseListSessions: ReleaseListSessions | undefined;
 
       const session = yield* provider.startSession(threadId, {
         provider: "codex",
@@ -1883,8 +1898,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
 
       const stopFiber = yield* provider.stopSession({ threadId }).pipe(Effect.forkChild);
       const release = releaseListSessions;
-      assert.equal(typeof release, "function");
-      release([staleReadySession]);
+      requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(stopFiber);
 
       const binding = yield* directory.getBinding(threadId);
@@ -1898,9 +1912,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
       const threadId = asThreadId("thread-idle-runtime-stop-race");
       let listSessionsStarted = false;
-      let releaseListSessions:
-        | ((sessions: ReadonlyArray<ProviderSession>) => void)
-        | undefined;
+      let releaseListSessions: ReleaseListSessions | undefined;
 
       const session = yield* provider.startSession(threadId, {
         provider: "codex",
@@ -1958,8 +1970,7 @@ idleCleanup.layer("ProviderServiceLive idle cleanup", (it) => {
       }
       const stopFiber = yield* provider.stopRuntimeSession({ threadId }).pipe(Effect.forkChild);
       const release = releaseListSessions;
-      assert.equal(typeof release, "function");
-      release([staleReadySession]);
+      requireReleaseListSessions(release)([staleReadySession]);
       yield* Fiber.join(stopFiber);
 
       assert.equal(idleCleanup.codex.stopSession.mock.calls.length, 1);

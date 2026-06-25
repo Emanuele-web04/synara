@@ -21,10 +21,10 @@ type SpawnSyncLike = (
 ) => { stdout?: string | null; status?: number | null; error?: Error | undefined };
 
 export interface WindowsSafeProcessInput {
-  readonly platform?: NodeJS.Platform;
-  readonly cwd?: string;
-  readonly env?: NodeJS.ProcessEnv;
-  readonly spawnSync?: SpawnSyncLike;
+  readonly platform?: NodeJS.Platform | undefined;
+  readonly cwd?: string | undefined;
+  readonly env?: NodeJS.ProcessEnv | undefined;
+  readonly spawnSync?: SpawnSyncLike | undefined;
 }
 
 export interface WindowsSafeProcessCommand {
@@ -67,9 +67,7 @@ export function isWindowsBatchCommand(command: string): boolean {
 
 function quoteWindowsBatchToken(token: string, label: string): string {
   if (WINDOWS_BATCH_UNSAFE_TOKEN_PATTERN.test(token)) {
-    throw new Error(
-      `Cannot safely execute Windows batch ${label} containing line breaks.`,
-    );
+    throw new Error(`Cannot safely execute Windows batch ${label} containing line breaks.`);
   }
   const escaped = token
     .replace(/%/g, "%%")
@@ -132,7 +130,8 @@ export function resolveWindowsCommandPath(
     return command;
   }
 
-  const candidates = (result.stdout ?? "")
+  const stdout = typeof result.stdout === "string" ? result.stdout : "";
+  const candidates = stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
