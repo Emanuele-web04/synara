@@ -15,14 +15,16 @@ vi.mock("../hooks/useTheme", () => ({
   useTheme: () => ({ resolvedTheme: "light" }),
 }));
 
+const chatMarkdownModulePromise = import("./ChatMarkdown");
+
 async function renderMarkdown(text: string, cwd = "C:\\Users\\LENOVO\\dpcode") {
-  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const { default: ChatMarkdown } = await chatMarkdownModulePromise;
 
   return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} />);
 }
 
 async function renderMarkdownWithHtml(text: string, cwd = "/Users/julius/project") {
-  const { default: ChatMarkdown } = await import("./ChatMarkdown");
+  const { default: ChatMarkdown } = await chatMarkdownModulePromise;
 
   return renderToStaticMarkup(<ChatMarkdown text={text} cwd={cwd} isStreaming={false} allowHtml />);
 }

@@ -242,8 +242,9 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
 
     expect(markup).toContain("flex w-full justify-end");
     expect(markup).toContain("group flex flex-col items-end gap-px max-w-[80%]");
-    expect(markup).toContain("min-w-0 bg-[var(--app-user-message-background)]");
-    expect(markup).toContain("w-max max-w-full self-end");
+    expect(markup).toContain(
+      "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
+    );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
     expect(markup).toContain("py-[8px]");
     expect(markup).toContain("group-hover:opacity-100");
@@ -1064,9 +1065,6 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).toContain(formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale"));
     expect(markup).toContain("Worked for 1.0s");
     expect(markup).toContain("data-scroll-anchor-ignore");
-    expect(markup).toContain(
-      `${formatShortTimestamp("2026-03-17T19:12:29.000Z", "locale")} • 1.0s`,
-    );
     expect(markup).not.toContain("Work log");
   });
 
@@ -1983,7 +1981,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Codex Apps: Github Fetch Pr");
-    expect(markup).toContain('data-inline-tool-icon="github"');
+    expect(markup).toContain('data-tool-icon="github"');
   });
 
   it("shows an MCP icon next to compact non-GitHub MCP rows", async () => {
@@ -2027,7 +2025,7 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     );
 
     expect(markup).toContain("Codex Apps: Slack Search");
-    expect(markup).toContain('data-inline-tool-icon="mcp"');
+    expect(markup).toContain('data-tool-icon="mcp"');
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {

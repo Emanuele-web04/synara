@@ -38,7 +38,7 @@ describe("ComposerImageAttachmentChip", () => {
     );
 
     expect(markup).toContain("CleanShot 2026-04-11 at 20.00.33@2x.png");
-    expect(markup).toContain("size-6");
+    expect(markup).toContain("right-1 top-1 size-5");
     expect(markup).toContain("Preview CleanShot 2026-04-11 at 20.00.33@2x.png");
     expect(markup).toContain("Remove CleanShot 2026-04-11 at 20.00.33@2x.png");
     expect(markup).not.toContain("h-14 w-14");

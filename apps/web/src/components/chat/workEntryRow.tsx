@@ -285,7 +285,7 @@ function toolWorkEntryHeading(workEntry: WorkLogEntry): string {
 }
 
 // Splits compact work labels so the action verb can carry visual emphasis.
-function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
+export function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
   const match = /^(\S+)([\s\S]*)$/.exec(value.trim());
   if (!match?.[1]) {
     return null;

@@ -125,6 +125,7 @@ import {
 } from "../../lib/subagentPresentation";
 import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import { splitWorkEntryActionText } from "./workEntryRow";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -1075,6 +1076,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // -ml-0.5 optically aligns the leading "W" with the reply
                       // text below: the box is already flush, but the W glyph
                       // carries a left side-bearing that reads as an inset.
+                      data-scroll-anchor-ignore
                       className="-ml-0.5 inline-flex items-center gap-1 pb-2 text-left text-muted-foreground/70 transition-colors duration-200 hover:text-muted-foreground/90"
                       style={{ fontSize: chatTypographyStyle.fontSize }}
                     >
@@ -1464,7 +1466,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         >
           {row.createdAt ? (
             <>
-              Working for{" "}
+              {row.label ?? "Working"} for{" "}
               {nowIso ? (
                 (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
               ) : (
@@ -1472,7 +1474,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
             </>
           ) : (
-            "Working..."
+            `${row.label ?? "Working"}...`
           )}
         </div>
       )}
@@ -2268,6 +2270,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = combineWorkEntryDisplayText(heading, preview);
+  const displayTextParts = splitWorkEntryActionText(displayText);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
@@ -2554,7 +2557,21 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
-                    <span data-work-entry-display-text="true">{displayText}</span>
+                    <span data-work-entry-display-text="true">
+                      {displayTextParts ? (
+                        <>
+                          <span
+                            className="font-medium text-muted-foreground/42"
+                            data-work-entry-action-word="true"
+                          >
+                            {displayTextParts.action}
+                          </span>
+                          {displayTextParts.rest}
+                        </>
+                      ) : (
+                        displayText
+                      )}
+                    </span>
                   </p>
                 )}
               </div>
