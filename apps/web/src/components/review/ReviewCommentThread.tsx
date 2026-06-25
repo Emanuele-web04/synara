@@ -6,7 +6,16 @@ import type {
 } from "@t3tools/contracts";
 import { useState } from "react";
 
-import { BotIcon, CheckIcon, MessageCircleIcon, SquarePenIcon, Trash2, XIcon } from "~/lib/icons";
+import {
+  BotIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  MessageCircleIcon,
+  SquarePenIcon,
+  Trash2,
+  XIcon,
+} from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import type { ReviewLineAnnotationData, ReviewLocalDraftAnnotation } from "./reviewAnnotations";
@@ -270,12 +279,36 @@ function SubmittedThread(props: {
 }) {
   const { thread, actions } = props;
   const [replying, setReplying] = useState(false);
+  const [collapsed, setCollapsed] = useState(thread.isResolved);
   const viewerLogin = props.viewer?.login.trim() ?? "";
+  const contentId = `review-submitted-thread-${thread.id}`;
+  const contentVisible = !collapsed || replying;
+
   return (
     <div className={cn(BUBBLE_SHELL_CLASS, "divide-y divide-border/40")}>
       <div className="flex items-center gap-1.5 px-3 py-1.5 text-[11px] text-muted-foreground">
+        <Button
+          type="button"
+          size="icon-xs"
+          variant="ghost"
+          title={collapsed ? "Expand comments" : "Collapse comments"}
+          aria-label={collapsed ? "Expand submitted comments" : "Collapse submitted comments"}
+          aria-expanded={contentVisible}
+          aria-controls={contentId}
+          className="-ms-1 active:scale-[0.96] motion-reduce:active:scale-100"
+          onClick={() => setCollapsed((value) => !value)}
+        >
+          {contentVisible ? (
+            <ChevronDownIcon className="size-3" />
+          ) : (
+            <ChevronRightIcon className="size-3" />
+          )}
+        </Button>
         <MessageCircleIcon className="size-3.5 shrink-0" />
         <span className="font-medium uppercase tracking-wide">Submitted</span>
+        <ReviewPill tone="muted">
+          {thread.comments.length} {thread.comments.length === 1 ? "comment" : "comments"}
+        </ReviewPill>
         {thread.isResolved ? <ReviewPill tone="success">Resolved</ReviewPill> : null}
         <Button
           type="button"
@@ -288,38 +321,142 @@ function SubmittedThread(props: {
           {thread.isResolved ? "Unresolve" : "Resolve"}
         </Button>
       </div>
-      {thread.comments.map((comment, index) => (
-        <SubmittedThreadComment
-          key={comment.id ?? `${comment.author}:${comment.createdAt}:${index}`}
-          comment={comment}
-          canManage={viewerLogin.length > 0 && comment.author === viewerLogin}
-          actions={actions}
-        />
-      ))}
-      {replying ? (
-        <div className="p-2.5">
-          <InlineCommentForm
-            saveLabel="Reply"
-            placeholder="Reply to this thread..."
-            onCancel={() => setReplying(false)}
-            onSave={(body) => {
-              actions.replyRemoteThread(thread, body);
-              setReplying(false);
-            }}
+      <div id={contentId} hidden={!contentVisible}>
+        {thread.comments.map((comment) => (
+          <SubmittedThreadComment
+            key={comment.id ?? `${comment.author}:${comment.createdAt}:${comment.body}`}
+            comment={comment}
+            canManage={viewerLogin.length > 0 && comment.author === viewerLogin}
+            actions={actions}
           />
+        ))}
+        {replying ? (
+          <div className="p-2.5">
+            <InlineCommentForm
+              saveLabel="Reply"
+              placeholder="Reply to this thread..."
+              onCancel={() => setReplying(false)}
+              onSave={(body) => {
+                actions.replyRemoteThread(thread, body);
+                setReplying(false);
+              }}
+            />
+          </div>
+        ) : (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="m-2 self-start active:scale-[0.96] motion-reduce:active:scale-100"
+            onClick={() => {
+              setCollapsed(false);
+              setReplying(true);
+            }}
+          >
+            <MessageCircleIcon className="size-3" />
+            Reply
+          </Button>
+        )}
+      </div>
+      {!contentVisible ? (
+        <div className="px-3 py-2 text-[11px] text-muted-foreground">
+          {thread.isResolved ? "Resolved thread collapsed." : "Thread collapsed."}
         </div>
-      ) : (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          className="m-2 self-start active:scale-[0.96] motion-reduce:active:scale-100"
-          onClick={() => setReplying(true)}
-        >
-          <MessageCircleIcon className="size-3" />
-          Reply
-        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function LocalCommentThread(props: {
+  data: ReviewLocalDraftAnnotation;
+  actions: ReviewCommentThreadActions;
+  viewer: ReviewViewerResult | null;
+}) {
+  const { data, actions } = props;
+  const draft = data.draft;
+  const author = viewerAuthor(props.viewer);
+  const [collapsed, setCollapsed] = useState(false);
+  const contentId = `review-local-thread-${data.path}-${String(data.line)}-${data.side}`;
+  const contentVisible = !collapsed || draft !== null;
+
+  return (
+    <div
+      className={cn(
+        BUBBLE_SHELL_CLASS,
+        data.comments.length === 0 && "border-dashed bg-background/92",
       )}
+    >
+      <div className="flex h-8 items-center gap-2 border-b border-border/40 bg-muted/40 px-3">
+        {data.comments.length > 0 ? (
+          <Button
+            type="button"
+            size="icon-xs"
+            variant="ghost"
+            title={collapsed ? "Expand comments" : "Collapse comments"}
+            aria-label={collapsed ? "Expand comment thread" : "Collapse comment thread"}
+            aria-expanded={contentVisible}
+            aria-controls={contentId}
+            className="-ms-1 active:scale-[0.96] motion-reduce:active:scale-100"
+            onClick={() => setCollapsed((value) => !value)}
+          >
+            {contentVisible ? (
+              <ChevronDownIcon className="size-3" />
+            ) : (
+              <ChevronRightIcon className="size-3" />
+            )}
+          </Button>
+        ) : null}
+        <MessageCircleIcon className="size-3.5 text-muted-foreground/85" aria-hidden="true" />
+        <span className="font-medium text-[12px] text-foreground/90">
+          {data.comments.length > 0 ? "Comment thread" : "Comment"}
+        </span>
+        {data.comments.length > 0 ? (
+          <ReviewPill tone="muted">{data.comments.length}</ReviewPill>
+        ) : null}
+      </div>
+      <div id={contentId} hidden={!contentVisible}>
+        {data.comments.map((comment) => (
+          <SavedCommentBubble
+            key={comment.id}
+            comment={comment}
+            actions={actions}
+            viewer={props.viewer}
+          />
+        ))}
+
+        {draft ? (
+          <div className="border-t border-border/25 p-2.5 first:border-t-0">
+            <InlineCommentForm
+              initialBody={draft.body}
+              busy={draft.status === "saving"}
+              placeholder={
+                data.comments.length > 0 ? "Reply to this thread..." : "Leave a comment..."
+              }
+              saveLabel={data.comments.length > 0 ? "Reply" : "Add comment"}
+              {...(author ? { author } : {})}
+              onCancel={() => actions.cancelDraft(draft.draftId)}
+              onSave={(body) => actions.saveDraft(draft.draftId, body)}
+            />
+          </div>
+        ) : data.comments.length > 0 ? (
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className="mx-2.5 mb-2.5 self-start active:scale-[0.96] motion-reduce:active:scale-100"
+            onClick={() => {
+              setCollapsed(false);
+              actions.startReply(data);
+            }}
+          >
+            <MessageCircleIcon className="size-3" />
+            Reply
+          </Button>
+        ) : null}
+      </div>
+      {!contentVisible ? (
+        <div className="px-3 py-2 text-[11px] text-muted-foreground">Thread collapsed.</div>
+      ) : null}
     </div>
   );
 }
@@ -330,68 +467,21 @@ export function ReviewCommentThread(props: {
   viewer?: ReviewViewerResult | null;
 }) {
   const { data, actions } = props;
-  const author = viewerAuthor(props.viewer ?? null);
 
   if (data.kind === "submitted-thread") {
-    return <SubmittedThread thread={data.thread} actions={actions} viewer={props.viewer ?? null} />;
+    return (
+      <SubmittedThread
+        key={`${data.thread.id}:${data.thread.isResolved ? "resolved" : "unresolved"}`}
+        thread={data.thread}
+        actions={actions}
+        viewer={props.viewer ?? null}
+      />
+    );
   }
 
   if (data.kind === "agent-finding") {
     return <AgentFinding finding={data.finding} actions={actions} />;
   }
 
-  const draft = data.draft;
-  return (
-    <div
-      className={cn(
-        BUBBLE_SHELL_CLASS,
-        data.comments.length === 0 && "border-dashed bg-background/92",
-      )}
-    >
-      <div className="flex h-8 items-center gap-2 border-b border-border/40 bg-muted/40 px-3">
-        <MessageCircleIcon className="size-3.5 text-muted-foreground/85" aria-hidden="true" />
-        <span className="font-medium text-[12px] text-foreground/90">
-          {data.comments.length > 0 ? "Comment thread" : "Comment"}
-        </span>
-        {data.comments.length > 0 ? (
-          <ReviewPill tone="muted">{data.comments.length}</ReviewPill>
-        ) : null}
-      </div>
-      {data.comments.map((comment) => (
-        <SavedCommentBubble
-          key={comment.id}
-          comment={comment}
-          actions={actions}
-          viewer={props.viewer ?? null}
-        />
-      ))}
-
-      {draft ? (
-        <div className="border-t border-border/25 p-2.5 first:border-t-0">
-          <InlineCommentForm
-            initialBody={draft.body}
-            busy={draft.status === "saving"}
-            placeholder={
-              data.comments.length > 0 ? "Reply to this thread..." : "Leave a comment..."
-            }
-            saveLabel={data.comments.length > 0 ? "Reply" : "Add comment"}
-            {...(author ? { author } : {})}
-            onCancel={() => actions.cancelDraft(draft.draftId)}
-            onSave={(body) => actions.saveDraft(draft.draftId, body)}
-          />
-        </div>
-      ) : data.comments.length > 0 ? (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          className="mx-2.5 mb-2.5 self-start active:scale-[0.96] motion-reduce:active:scale-100"
-          onClick={() => actions.startReply(data)}
-        >
-          <MessageCircleIcon className="size-3" />
-          Reply
-        </Button>
-      ) : null}
-    </div>
-  );
+  return <LocalCommentThread data={data} actions={actions} viewer={props.viewer ?? null} />;
 }

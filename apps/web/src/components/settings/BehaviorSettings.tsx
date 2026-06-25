@@ -3,10 +3,23 @@
 // Layer: Settings UI components
 // Exports: BehaviorSettings
 
-import { type AppSettings } from "../../appSettings";
+import { type AppSettings, type ReviewWalkthroughDiffStyle } from "../../appSettings";
 import { Switch } from "../ui/switch";
-import { SettingResetButton } from "./SettingControls";
+import { SettingResetButton, SettingsSegmentedControl } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
+
+const REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS: ReadonlyArray<{
+  value: ReviewWalkthroughDiffStyle;
+  label: string;
+}> = [
+  { value: "auto", label: "Auto" },
+  { value: "unified", label: "Unified" },
+  { value: "split", label: "Split" },
+];
+
+function isReviewWalkthroughDiffStyle(value: string): value is ReviewWalkthroughDiffStyle {
+  return value === "auto" || value === "unified" || value === "split";
+}
 
 export function BehaviorSettings({
   settings,
@@ -72,6 +85,34 @@ export function BehaviorSettings({
                 })
               }
               aria-label="Wrap diff lines by default"
+            />
+          }
+        />
+
+        <SettingsRow
+          title="Walkthrough diff view"
+          description="Choose the default diff layout for PR walkthrough chapters."
+          resetAction={
+            settings.reviewWalkthroughDiffStyle !== defaults.reviewWalkthroughDiffStyle ? (
+              <SettingResetButton
+                label="walkthrough diff view"
+                onClick={() =>
+                  updateSettings({
+                    reviewWalkthroughDiffStyle: defaults.reviewWalkthroughDiffStyle,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.reviewWalkthroughDiffStyle}
+              onValueChange={(value) => {
+                if (!isReviewWalkthroughDiffStyle(value)) return;
+                updateSettings({ reviewWalkthroughDiffStyle: value });
+              }}
+              ariaLabel="Walkthrough diff view preference"
+              options={REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS}
             />
           }
         />

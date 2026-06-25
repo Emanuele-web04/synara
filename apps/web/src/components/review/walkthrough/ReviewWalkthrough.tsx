@@ -12,6 +12,7 @@ import type { ReactElement } from "react";
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
 import { getRenderablePatch, resolveFileDiffPath } from "~/lib/diffRendering";
 import { useTheme } from "~/hooks/useTheme";
+import { useAppSettings } from "~/appSettings";
 import { DiffWorkerPoolProvider } from "../../DiffWorkerPoolProvider";
 import { useReviewViewedFiles } from "../reviewViewedFiles";
 import { ReviewCommentThread } from "../ReviewCommentThread";
@@ -38,6 +39,14 @@ type ReviewWalkthroughProps = {
   body: string | null;
 };
 
+type WalkthroughDiffStyle = "unified" | "split";
+
+function getResponsiveDefaultDiffStyle(): WalkthroughDiffStyle {
+  return typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches
+    ? "split"
+    : "unified";
+}
+
 export function ReviewWalkthrough(props: ReviewWalkthroughProps): ReactElement {
   return (
     <DiffWorkerPoolProvider>
@@ -48,14 +57,17 @@ export function ReviewWalkthrough(props: ReviewWalkthroughProps): ReactElement {
 
 function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | null {
   const { resolvedTheme } = useTheme();
+  const { settings, updateSettings } = useAppSettings();
   const readerSectionRef = useRef<HTMLElement>(null);
   const outerScrollRef = useRef<HTMLDivElement>(null);
   const prevReadingRef = useRef<WalkthroughReading | null>(null);
   const [reading, setReading] = useState<WalkthroughReading>("overview");
-  const [diffStyle, setDiffStyle] = useState<"unified" | "split">(() =>
-    typeof window !== "undefined" && window.matchMedia("(min-width: 1280px)").matches
-      ? "split"
-      : "unified",
+  const diffStyle = useMemo<WalkthroughDiffStyle>(
+    () =>
+      settings.reviewWalkthroughDiffStyle === "auto"
+        ? getResponsiveDefaultDiffStyle()
+        : settings.reviewWalkthroughDiffStyle,
+    [settings.reviewWalkthroughDiffStyle],
   );
   const [completedChapterIds, setCompletedChapterIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -189,6 +201,11 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
   const openChapter = (chapter: ReviewWalkthroughChapter): void => {
     setReading(chapter.id);
   };
+  const toggleDiffStyle = (): void => {
+    updateSettings({
+      reviewWalkthroughDiffStyle: diffStyle === "split" ? "unified" : "split",
+    });
+  };
   const toggleCollapsedFile = (path: string): void => {
     setCollapsedFilePaths((previous) => {
       const next = new Set(previous);
@@ -204,12 +221,7 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden bg-background">
       <div data-walkthrough-controls>
-        <WalkthroughControls
-          diffStyle={diffStyle}
-          onToggleDiffStyle={() =>
-            setDiffStyle((value) => (value === "split" ? "unified" : "split"))
-          }
-        />
+        <WalkthroughControls diffStyle={diffStyle} onToggleDiffStyle={toggleDiffStyle} />
       </div>
       <div
         ref={outerScrollRef}

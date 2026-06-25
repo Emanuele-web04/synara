@@ -101,6 +101,9 @@ export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "update
 export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
 export type UiDensity = typeof UiDensity.Type;
 export { DEFAULT_UI_DENSITY };
+export const ReviewWalkthroughDiffStyle = Schema.Literals(["auto", "unified", "split"]);
+export type ReviewWalkthroughDiffStyle = typeof ReviewWalkthroughDiffStyle.Type;
+export const DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE: ReviewWalkthroughDiffStyle = "auto";
 
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
@@ -154,6 +157,9 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
+  reviewWalkthroughDiffStyle: ReviewWalkthroughDiffStyle.pipe(
+    withDefaults(() => DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE),
+  ),
   // Local-only UI preference: show prompt suggestions under the composer on the
   // empty new-thread landing. Off hides the suggestion list entirely.
   enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
