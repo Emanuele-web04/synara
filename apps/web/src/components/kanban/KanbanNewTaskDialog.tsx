@@ -11,6 +11,7 @@
 import type {
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   RuntimeMode,
 } from "@synara/contracts";
@@ -18,6 +19,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
+  getProviderInstanceOptions,
   getProviderStartOptions,
   resolveAssistantDeliveryMode,
   useAppSettings,
@@ -119,7 +121,6 @@ export function KanbanNewTaskDialog({
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const projects = useStore((state) => state.projects);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -146,6 +147,7 @@ export function KanbanNewTaskDialog({
     pendingImageCount,
     waitForPendingImages,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
     selectedProviderModelOptions,
@@ -158,6 +160,11 @@ export function KanbanNewTaskDialog({
     removeComposerTerminalContext,
   } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
   const promptRef = useRef(prompt);
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
 
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>(DEFAULT_RUNTIME_MODE);
   const [interactionMode, setInteractionMode] =
@@ -188,8 +195,8 @@ export function KanbanNewTaskDialog({
     [providerStatuses],
   );
   const selectedProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, selectedProvider),
-    [providerStatuses, selectedProvider],
+    () => findProviderStatus(providerStatuses, selectedProvider, selectedProviderInstanceId),
+    [providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
 
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
@@ -205,6 +212,7 @@ export function KanbanNewTaskDialog({
     selectedRuntimeAgents,
   } = useProviderModelCatalog({
     selectedProvider,
+    selectedProviderInstanceId,
     // Keep discovery warm whenever either picker can open so cursor/codex effort
     // and fast-mode controls are populated, not just the model list.
     discoveryEnabled: isModelPickerOpen || isTraitsPickerOpen,
@@ -224,14 +232,18 @@ export function KanbanNewTaskDialog({
     [selectedModel, selectedModelSupportsAutoMode, selectedProvider, selectedRuntimeModel],
   );
   const handleProviderModelChange = useCallback(
-    (provider: ProviderKind, model: Parameters<typeof setScratchProviderModel>[1]) => {
+    (
+      provider: ProviderKind,
+      model: Parameters<typeof setScratchProviderModel>[1],
+      instanceId?: ProviderInstanceId,
+    ) => {
       const runtimeModel = resolveRuntimeModelDescriptor({
         provider,
         model,
         runtimeModels: runtimeModelsByProvider[provider],
       });
       setRuntimeMode((current) => normalizeRuntimeModeForProvider(current, provider));
-      setScratchProviderModel(provider, model, runtimeModel?.supportsAutoMode);
+      setScratchProviderModel(provider, model, instanceId, runtimeModel?.supportsAutoMode);
     },
     [runtimeModelsByProvider, setScratchProviderModel],
   );
@@ -263,6 +275,7 @@ export function KanbanNewTaskDialog({
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode: selectedRuntimeModelForCapabilities?.supportsAutoMode,
     taskPreview,
@@ -312,6 +325,7 @@ export function KanbanNewTaskDialog({
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd: selectedProject?.cwd ?? null,
@@ -345,6 +359,7 @@ export function KanbanNewTaskDialog({
             model: firstOption.slug,
             runtimeModels: runtimeModelsByProvider[selectedProvider],
           })?.supportsAutoMode,
+          { instanceId: selectedProviderInstanceId },
         ),
       );
     }
@@ -354,6 +369,7 @@ export function KanbanNewTaskDialog({
     scratchThreadId,
     selectedModel,
     selectedProvider,
+    selectedProviderInstanceId,
   ]);
 
   const handleTranscriptReady = useCallback(
@@ -601,6 +617,8 @@ export function KanbanNewTaskDialog({
                     discoveryErrorsByProvider={discoveryErrorsByProvider}
                     hiddenProviders={settings.hiddenProviders}
                     providerOrder={settings.providerOrder}
+                    providerInstances={providerInstances}
+                    selectedProviderInstanceId={selectedProviderInstanceId}
                     onProviderModelChange={handleProviderModelChange}
                     open={isModelPickerOpen}
                     onOpenChange={setIsModelPickerOpen}

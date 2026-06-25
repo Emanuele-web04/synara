@@ -256,13 +256,23 @@ export default function GitActionsControl({
   const createBranchNameFieldId = useId();
   const { settings } = useAppSettings();
   // Manual memoization kept: this file does not compile under React Compiler (see compile-report).
-  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptions = useMemo(
+    () => getProviderStartOptions(settings, settings.textGenerationProviderInstanceId),
+    [settings],
+  );
   const gitTextGenerationModelSelection = useMemo(
     (): ModelSelection => ({
       provider: settings.textGenerationProvider ?? "codex",
+      ...(settings.textGenerationProviderInstanceId
+        ? { instanceId: settings.textGenerationProviderInstanceId }
+        : {}),
       model: settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
     }),
-    [settings.textGenerationModel, settings.textGenerationProvider],
+    [
+      settings.textGenerationModel,
+      settings.textGenerationProvider,
+      settings.textGenerationProviderInstanceId,
+    ],
   );
   const activeThread = useStore(
     useMemo(() => createThreadSelector(activeThreadId), [activeThreadId]),

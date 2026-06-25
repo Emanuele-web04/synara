@@ -1,5 +1,6 @@
 import {
   type ProjectEntry,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderMentionReference,
   type ProviderNativeCommandDescriptor,
@@ -42,6 +43,7 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 interface ComposerDiscoveryInput {
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   composerTrigger: ComposerTrigger | null;
   composerCommandPicker: "fork-target" | "review-target" | null;
   providerModelDiscoveryCwd: string | null;
@@ -53,6 +55,7 @@ interface ComposerDiscoveryInput {
 export function useComposerDiscovery({
   threadId,
   selectedProvider,
+  selectedProviderInstanceId,
   composerTrigger,
   composerCommandPicker,
   providerModelDiscoveryCwd,
@@ -77,11 +80,12 @@ export function useComposerDiscovery({
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
   const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
+    providerComposerCapabilitiesQueryOptions(selectedProvider, selectedProviderInstanceId),
   );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       binaryPath:
@@ -110,6 +114,7 @@ export function useComposerDiscovery({
   const providerSkillsQuery = useQuery(
     providerSkillsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       agentDir: selectedProvider === "pi" ? piAgentDir || null : null,
@@ -122,6 +127,7 @@ export function useComposerDiscovery({
   const providerPluginsQuery = useQuery(
     providerPluginsQueryOptions({
       provider: selectedProvider,
+      instanceId: selectedProviderInstanceId,
       cwd: composerSkillCwd,
       threadId,
       enabled:

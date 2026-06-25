@@ -10,6 +10,7 @@ import {
   OpenCodeModelOptions,
   PiModelOptions,
 } from "./model";
+import { ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
 import { ProjectKind } from "./project";
 import {
@@ -108,8 +109,12 @@ export const ProviderSandboxMode = Schema.Literals([
 ]);
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 
+const ProviderInstanceIdForDriver = (_provider: ProviderKind) =>
+  Schema.optional(ProviderInstanceId);
+
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
+  instanceId: ProviderInstanceIdForDriver("codex"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CodexModelOptions),
 });
@@ -117,6 +122,7 @@ export type CodexModelSelection = typeof CodexModelSelection.Type;
 
 export const ClaudeModelSelection = Schema.Struct({
   provider: Schema.Literal("claudeAgent"),
+  instanceId: ProviderInstanceIdForDriver("claudeAgent"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(ClaudeModelOptions),
   supportsAutoMode: Schema.optional(Schema.Boolean),
@@ -125,6 +131,7 @@ export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
 export const CursorModelSelection = Schema.Struct({
   provider: Schema.Literal("cursor"),
+  instanceId: ProviderInstanceIdForDriver("cursor"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(CursorModelOptions),
 });
@@ -132,6 +139,7 @@ export type CursorModelSelection = typeof CursorModelSelection.Type;
 
 export const AntigravityModelSelection = Schema.Struct({
   provider: Schema.Literal("antigravity"),
+  instanceId: ProviderInstanceIdForDriver("antigravity"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(AntigravityModelOptions),
 });
@@ -139,6 +147,7 @@ export type AntigravityModelSelection = typeof AntigravityModelSelection.Type;
 
 export const GrokModelSelection = Schema.Struct({
   provider: Schema.Literal("grok"),
+  instanceId: ProviderInstanceIdForDriver("grok"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(GrokModelOptions),
 });
@@ -146,6 +155,7 @@ export type GrokModelSelection = typeof GrokModelSelection.Type;
 
 export const DroidModelSelection = Schema.Struct({
   provider: Schema.Literal("droid"),
+  instanceId: ProviderInstanceIdForDriver("droid"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DroidModelOptions),
 });
@@ -153,6 +163,7 @@ export type DroidModelSelection = typeof DroidModelSelection.Type;
 
 export const OpenCodeModelSelection = Schema.Struct({
   provider: Schema.Literal("opencode"),
+  instanceId: ProviderInstanceIdForDriver("opencode"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(OpenCodeModelOptions),
 });
@@ -160,6 +171,7 @@ export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
 
 export const PiModelSelection = Schema.Struct({
   provider: Schema.Literal("pi"),
+  instanceId: ProviderInstanceIdForDriver("pi"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(PiModelOptions),
 });
@@ -167,6 +179,7 @@ export type PiModelSelection = typeof PiModelSelection.Type;
 
 export const DevinModelSelection = Schema.Struct({
   provider: Schema.Literal("devin"),
+  instanceId: ProviderInstanceIdForDriver("devin"),
   model: TrimmedNonEmptyString,
   options: Schema.optional(DevinModelOptions),
 });
@@ -194,6 +207,7 @@ export const CodexProviderStartOptions = Schema.Struct({
 
 export const ClaudeProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  homePath: Schema.optional(TrimmedNonEmptyString),
   permissionMode: Schema.optional(TrimmedNonEmptyString),
   maxThinkingTokens: Schema.optional(NonNegativeInt),
 });
@@ -585,6 +599,7 @@ export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
   providerName: Schema.NullOr(TrimmedNonEmptyString),
+  providerInstanceId: Schema.optional(ProviderInstanceId),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),

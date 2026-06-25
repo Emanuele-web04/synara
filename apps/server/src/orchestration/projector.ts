@@ -907,6 +907,10 @@ export function projectEvent(
             threadId: thread.id,
             currentSession: thread.session,
             providerName: projectedModelSelection.provider,
+            providerInstanceId:
+              projectedModelSelection.instanceId ??
+              thread.session?.providerInstanceId ??
+              projectedModelSelection.provider,
             requestedRuntimeMode: payload.runtimeMode,
             requestedAt: payload.createdAt,
           });

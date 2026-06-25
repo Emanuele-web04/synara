@@ -20,6 +20,7 @@ import {
   getCustomModelsForProvider,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  getProviderInstanceOptions,
   isGitTextGenerationSettingsDirty,
   patchCustomModels,
 } from "~/appSettings";
@@ -98,8 +99,11 @@ export function ModelsSettingsPanel({
     setShowAllCustomModels(false);
   });
 
-  const { textGenerationModel, textGenerationProvider } = settings;
+  const { textGenerationModel, textGenerationProvider, textGenerationProviderInstanceId } =
+    settings;
   const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
+  const currentGitTextGenerationInstanceId =
+    textGenerationProviderInstanceId ?? currentGitTextGenerationProvider;
   const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
@@ -112,6 +116,7 @@ export function ModelsSettingsPanel({
   });
   const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
     selectedProvider: currentGitTextGenerationProvider,
+    selectedProviderInstanceId: currentGitTextGenerationInstanceId,
     discoveryEnabled: active,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: gitWritingModelHintByProvider,
@@ -127,14 +132,53 @@ export function ModelsSettingsPanel({
     }
     return getGitTextGenerationModelOptions(settings, discoveredOptionsByProvider);
   }, [gitWritingCatalogOptionsByProvider, settings]);
-  const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
+  const providerInstanceOptions = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const gitTextGenerationPickerOptions = useMemo(
+    () =>
+      gitTextGenerationModelOptions.flatMap((option) =>
+        providerInstanceOptions
+          .filter(
+            (instance) =>
+              instance.provider === option.provider &&
+              (instance.enabled || instance.instanceId === currentGitTextGenerationInstanceId),
+          )
+          .map((instance) => ({
+            key: `${instance.instanceId}:${option.provider}:${option.slug}`,
+            value: `${instance.instanceId}:${option.provider}:${option.slug}`,
+            instance,
+            option,
+          })),
+      ),
+    [
+      currentGitTextGenerationInstanceId,
+      gitTextGenerationModelOptions,
+      providerInstanceOptions,
+    ],
+  );
+  const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const isGitTextGenerationModelDirty = isGitTextGenerationSettingsDirty(settings, defaults);
-  const selectedGitTextGenerationModelLabel =
+  const selectedGitTextGenerationPickerOption = gitTextGenerationPickerOptions.find(
+    (entry) => entry.value === currentGitTextGenerationValue,
+  );
+  const selectedGitTextGenerationModelName =
+    selectedGitTextGenerationPickerOption?.option.name ??
     gitTextGenerationModelOptions.find(
       (option) =>
         option.provider === currentGitTextGenerationProvider &&
         option.slug === currentGitTextGenerationModel,
-    )?.name ?? currentGitTextGenerationModel;
+    )?.name ??
+    currentGitTextGenerationModel;
+  const selectedGitTextGenerationInstanceLabel =
+    selectedGitTextGenerationPickerOption?.instance.label ??
+    providerInstanceOptions.find(
+      (option) => option.instanceId === currentGitTextGenerationInstanceId,
+    )?.label;
+  const selectedGitTextGenerationModelLabel =
+    selectedGitTextGenerationInstanceLabel &&
+    selectedGitTextGenerationInstanceLabel !==
+      PROVIDER_DISPLAY_NAMES[currentGitTextGenerationProvider]
+      ? `${selectedGitTextGenerationInstanceLabel} · ${selectedGitTextGenerationModelName}`
+      : selectedGitTextGenerationModelName;
   const selectedCustomModelProviderSettings = CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.find(
     (config) => config.provider === selectedCustomModelProvider,
   )!;
@@ -245,6 +289,8 @@ export function ModelsSettingsPanel({
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
+                    textGenerationProviderInstanceId:
+                      defaults.textGenerationProviderInstanceId,
                     textGenerationModel: defaults.textGenerationModel,
                   })
                 }
@@ -256,12 +302,12 @@ export function ModelsSettingsPanel({
               value={currentGitTextGenerationValue}
               onValueChange={(value) => {
                 if (!value) return;
-                const separatorIndex = value.indexOf(":");
-                const provider = value.slice(0, separatorIndex) as ProviderKind;
-                const model = value.slice(separatorIndex + 1);
-                if (!provider || !model) return;
+                const [instanceId, provider, ...modelParts] = value.split(":");
+                const model = modelParts.join(":");
+                if (!instanceId || !provider || !model) return;
                 updateSettings({
-                  textGenerationProvider: provider,
+                  textGenerationProvider: provider as ProviderKind,
+                  textGenerationProviderInstanceId: instanceId,
                   textGenerationModel: model,
                 });
               }}
@@ -269,13 +315,9 @@ export function ModelsSettingsPanel({
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
-              {gitTextGenerationModelOptions.map((option) => (
-                <SelectItem
-                  hideIndicator
-                  key={`${option.provider}:${option.slug}`}
-                  value={`${option.provider}:${option.slug}`}
-                >
-                  {PROVIDER_DISPLAY_NAMES[option.provider]} / {option.name}
+              {gitTextGenerationPickerOptions.map(({ instance, key, option, value }) => (
+                <SelectItem hideIndicator key={key} value={value}>
+                  {instance.label} / {option.name}
                 </SelectItem>
               ))}
             </SettingsSelectControl>

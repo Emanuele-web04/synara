@@ -1236,6 +1236,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               Option.getOrNull(currentSession)?.providerName ??
               event.payload.modelSelection?.provider ??
               null,
+            providerInstanceId:
+              Option.getOrNull(thread)?.modelSelection.instanceId ??
+              Option.getOrNull(currentSession)?.providerInstanceId ??
+              event.payload.modelSelection?.instanceId,
             requestedRuntimeMode: event.payload.runtimeMode,
             requestedAt: event.payload.createdAt,
           });
@@ -1250,6 +1254,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             threadId: event.payload.threadId,
             status: event.payload.session.status,
             providerName: event.payload.session.providerName,
+            ...(event.payload.session.providerInstanceId
+              ? { providerInstanceId: event.payload.session.providerInstanceId }
+              : {}),
             runtimeMode: event.payload.session.runtimeMode,
             activeTurnId: event.payload.session.activeTurnId,
             lastError: event.payload.session.lastError,

@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type ModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
@@ -15,7 +16,11 @@ import {
   serverConfigQueryOptions,
 } from "~/lib/serverReactQuery";
 import type { AppSettings } from "../../appSettings";
-import { getProviderStartOptions } from "../../appSettings";
+import {
+  getProviderInstanceOptions,
+  getProviderStartOptions,
+  resolveDefaultProviderInstanceId,
+} from "../../appSettings";
 import { useComposerThreadDraft, useEffectiveComposerModelState } from "../../composerDraftStore";
 import { buildSearchableModelOptions } from "../../hooks/useComposerCommandMenuItems";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
@@ -95,6 +100,40 @@ export function useChatProviderModels({
       settings.providerOrder,
     ],
   );
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceId = useMemo<ProviderInstanceId>(() => {
+    const sessionInstanceId =
+      activeThread?.session?.provider === selectedProvider
+        ? activeThread.session.providerInstanceId
+        : undefined;
+    if (sessionInstanceId) return sessionInstanceId;
+
+    const draftSelection = composerDraft.modelSelectionByProvider[selectedProvider];
+    if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
+      return draftSelection.instanceId;
+    }
+    if (
+      activeThread?.modelSelection.provider === selectedProvider &&
+      activeThread.modelSelection.instanceId
+    ) {
+      return activeThread.modelSelection.instanceId;
+    }
+    if (
+      activeProject?.defaultModelSelection?.provider === selectedProvider &&
+      activeProject.defaultModelSelection.instanceId
+    ) {
+      return activeProject.defaultModelSelection.instanceId;
+    }
+    return resolveDefaultProviderInstanceId(settings, selectedProvider);
+  }, [
+    activeProject?.defaultModelSelection,
+    activeThread?.modelSelection,
+    activeThread?.session?.provider,
+    activeThread?.session?.providerInstanceId,
+    composerDraft.modelSelectionByProvider,
+    selectedProvider,
+    settings,
+  ]);
 
   const composerModelHintByProvider = useMemo<Record<ProviderKind, string | null>>(() => {
     const threadModelSelection = activeThread?.modelSelection ?? null;
@@ -138,6 +177,7 @@ export function useChatProviderModels({
     selectedProviderRuntimeModelDiscoveryPending,
   } = useProviderModelCatalog({
     selectedProvider,
+    selectedProviderInstanceId,
     discoveryEnabled: isModelPickerOpen,
     cwd: providerModelDiscoveryCwd,
     modelHintByProvider: composerModelHintByProvider,
@@ -200,6 +240,7 @@ export function useChatProviderModels({
         selectedProvider,
         draftModelSelectionForSelectedProvider.model,
         selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
+        { instanceId: selectedProviderInstanceId },
       );
     }
     return buildModelSelection(
@@ -207,15 +248,20 @@ export function useChatProviderModels({
       selectedModel,
       selectedModelOptionsForDispatch,
       selectedProvider === "claudeAgent" ? selectedRuntimeModel?.supportsAutoMode : undefined,
+      { instanceId: selectedProviderInstanceId },
     );
   }, [
     draftModelSelectionForSelectedProvider,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedRuntimeModel,
   ]);
-  const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerOptionsForDispatch = useMemo(
+    () => getProviderStartOptions(settings, selectedProviderInstanceId),
+    [selectedProviderInstanceId, settings],
+  );
   const selectedModelForPicker =
     selectedModelSelection.provider === selectedProvider
       ? selectedModelSelection.model
@@ -242,6 +288,8 @@ export function useChatProviderModels({
     selectedProvider === "devin";
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
+    providerInstances,
+    selectedProviderInstanceId,
     selectedModel,
     persistedModelSelection: persistedComposerModelSelection,
     draftModelSelection: draftModelSelectionForSelectedProvider,

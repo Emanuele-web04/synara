@@ -226,6 +226,14 @@ function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationTh
   };
 }
 
+function readModelSelectionProviderInstanceId(
+  modelSelection:
+    | OrchestrationThread["modelSelection"]
+    | OrchestrationThreadShell["modelSelection"],
+): string | undefined {
+  return "instanceId" in modelSelection ? modelSelection.instanceId : undefined;
+}
+
 /**
  * PERF: ingesting one runtime event used to load the full thread detail, which
  * decodes every message's text. For a long turn that streams a large output
@@ -2287,6 +2295,10 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               status,
               providerName: event.provider,
+              providerInstanceId:
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
@@ -2695,6 +2707,10 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               status: "error",
               providerName: event.provider,
+              providerInstanceId:
+                event.providerInstanceId ??
+                thread.session?.providerInstanceId ??
+                readModelSelectionProviderInstanceId(thread.modelSelection),
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,

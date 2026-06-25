@@ -5,6 +5,8 @@
 import {
   DEFAULT_CODEX_ACCOUNT_ID,
   PROVIDER_DISPLAY_NAMES,
+  type ProviderInstanceConfig,
+  type ProviderInstanceConfigMap,
   type ProviderKind,
   type ServerProviderStatus,
   type ServerSettings,
@@ -84,6 +86,7 @@ import { SettingsListRow, SettingsRow, SettingsSection } from "./SettingsPanelPr
 
 type ProviderInstallTextKey =
   | "claudeBinaryPath"
+  | "claudeHomePath"
   | "codexBinaryPath"
   | "codexHomePath"
   | "cursorBinaryPath"
@@ -184,6 +187,13 @@ const PROVIDER_INSTALL_SETTINGS: readonly ProviderInstallSettings[] = [
             Leave blank to use <code>claude</code> from your PATH.
           </>
         ),
+      },
+      {
+        kind: "text",
+        settingsKey: "claudeHomePath",
+        label: "Claude HOME path",
+        placeholder: "Claude HOME",
+        description: "Optional HOME directory for this Claude account.",
       },
     ],
   },
@@ -392,6 +402,20 @@ function isProviderInstallConfigDirty(
 ): boolean {
   return (
     config.fields.some((field) => isProviderInstallFieldDirty(field, settings, defaults)) ||
+    JSON.stringify(
+      Object.fromEntries(
+        Object.entries(settings.providerInstances).filter(
+          ([, instance]) => instance.driver === config.provider,
+        ),
+      ),
+    ) !==
+      JSON.stringify(
+        Object.fromEntries(
+          Object.entries(defaults.providerInstances).filter(
+            ([, instance]) => instance.driver === config.provider,
+          ),
+        ),
+      ) ||
     (config.provider === "codex" &&
       (settings.selectedCodexAccountId !== defaults.selectedCodexAccountId ||
         JSON.stringify(settings.codexAccounts) !== JSON.stringify(defaults.codexAccounts)))
@@ -418,6 +442,9 @@ function createProviderInstallDisclosureState(
           ? settings[field.configuredKey]
           : Boolean(settings[field.settingsKey]),
       ) ||
+        Object.values(settings.providerInstances).some(
+          (instance) => instance.driver === config.provider,
+        ) ||
         (config.provider === "codex" &&
           (settings.codexAccounts.length > 0 ||
             settings.selectedCodexAccountId !== DEFAULT_CODEX_ACCOUNT_ID)),
@@ -441,6 +468,7 @@ export function createProviderInstallResetPatch(defaults: AppSettings): Partial<
     ...fieldPatch,
     codexAccounts: defaults.codexAccounts,
     selectedCodexAccountId: defaults.selectedCodexAccountId,
+    providerInstances: defaults.providerInstances,
   };
 }
 
@@ -830,6 +858,197 @@ function CodexAccountsControl(props: {
   );
 }
 
+function ProviderInstancesControl(props: {
+  provider: Extract<ProviderKind, "codex" | "claudeAgent">;
+  settings: AppSettings;
+  updateSettings: (patch: Partial<AppSettings>) => void;
+}) {
+  const instances = Object.entries(props.settings.providerInstances).filter(
+    ([instanceId, config]) => config.driver === props.provider && instanceId !== props.provider,
+  );
+  const providerLabel = PROVIDER_DISPLAY_NAMES[props.provider];
+
+  const updateInstances = (next: Record<string, ProviderInstanceConfig>) => {
+    props.updateSettings({ providerInstances: next as ProviderInstanceConfigMap });
+  };
+  const addInstance = () => {
+    const next = { ...props.settings.providerInstances } as Record<
+      string,
+      ProviderInstanceConfig
+    >;
+    const prefix = props.provider === "claudeAgent" ? "claude" : "codex";
+    let index = 2;
+    let instanceId = `${prefix}_${index}`;
+    while (Object.prototype.hasOwnProperty.call(next, instanceId)) {
+      index += 1;
+      instanceId = `${prefix}_${index}`;
+    }
+    next[instanceId] = {
+      driver: props.provider,
+      displayName: `${providerLabel} ${index}`,
+      enabled: true,
+      config:
+        props.provider === "codex"
+          ? {
+              binaryPath: props.settings.codexBinaryPath,
+              homePath: props.settings.codexHomePath,
+              shadowHomePath: "",
+            }
+          : {
+              binaryPath: props.settings.claudeBinaryPath,
+              homePath: props.settings.claudeHomePath,
+            },
+    };
+    updateInstances(next);
+  };
+  const updateInstance = (
+    instanceId: string,
+    patch: {
+      readonly displayName?: string | undefined;
+      readonly enabled?: boolean | undefined;
+      readonly config?: Record<string, unknown> | undefined;
+    },
+  ) => {
+    const existing = props.settings.providerInstances[instanceId];
+    if (!existing) return;
+    const existingConfig =
+      existing.config && typeof existing.config === "object" && !Array.isArray(existing.config)
+        ? (existing.config as Record<string, unknown>)
+        : {};
+    const { displayName: _existingDisplayName, ...existingWithoutDisplayName } = existing;
+    const displayName = patch.displayName?.trim();
+    updateInstances({
+      ...props.settings.providerInstances,
+      [instanceId]: {
+        ...(patch.displayName !== undefined && !displayName
+          ? existingWithoutDisplayName
+          : existing),
+        ...(patch.displayName !== undefined
+          ? displayName
+            ? { displayName }
+            : {}
+          : {}),
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(patch.config ? { config: { ...existingConfig, ...patch.config } } : {}),
+      },
+    });
+  };
+  const readConfigString = (config: unknown, key: string): string => {
+    if (!config || typeof config !== "object" || Array.isArray(config)) return "";
+    const value = (config as Record<string, unknown>)[key];
+    return typeof value === "string" ? value : "";
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="min-w-0">
+          <span className="block text-xs font-medium text-foreground">Provider instances</span>
+          <span className="mt-1 block text-xs text-muted-foreground">
+            {props.provider === "codex"
+              ? "Add a separately routed Codex instance with its own home or shadow auth home."
+              : "Add a separate Claude account with its own HOME directory."}
+          </span>
+        </div>
+        <Button type="button" size="xs" variant="outline" onClick={addInstance}>
+          <PlusIcon className="size-3.5" />
+          Add
+        </Button>
+      </div>
+
+      {instances.map(([instanceId, instance]) => (
+        <div
+          key={instanceId}
+          className={cn(
+            SETTINGS_OUTLINED_SURFACE_CLASS_NAME,
+            SETTINGS_INSET_RADIUS_CLASS_NAME,
+            "px-3 py-3",
+          )}
+        >
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-xs font-medium text-foreground">
+                {instance.displayName || instanceId}
+              </div>
+              <div className="truncate text-[11px] text-muted-foreground">{instanceId}</div>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <Switch
+                checked={instance.enabled !== false}
+                onCheckedChange={(enabled) => updateInstance(instanceId, { enabled })}
+                aria-label={`Enable ${instance.displayName || instanceId}`}
+              />
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                onClick={() => {
+                  const next = { ...props.settings.providerInstances } as Record<
+                    string,
+                    ProviderInstanceConfig
+                  >;
+                  delete next[instanceId];
+                  updateInstances(next);
+                }}
+              >
+                <XIcon className="size-3.5" />
+                Remove
+              </Button>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <label className="block">
+              <span className="block text-xs font-medium text-foreground">Label</span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-label`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={instance.displayName ?? ""}
+                onCommit={(displayName) => updateInstance(instanceId, { displayName })}
+                placeholder="Work"
+                spellCheck={false}
+              />
+            </label>
+            <label className="block">
+              <span className="block text-xs font-medium text-foreground">
+                {props.provider === "codex" ? "CODEX_HOME" : "HOME"}
+              </span>
+              <DebouncedSettingTextInput
+                id={`provider-instance-${instanceId}-home`}
+                size="sm"
+                variant="soft"
+                className="mt-1"
+                value={readConfigString(instance.config, "homePath")}
+                onCommit={(homePath) => updateInstance(instanceId, { config: { homePath } })}
+                placeholder={props.provider === "codex" ? props.settings.codexHomePath : "~"}
+                spellCheck={false}
+              />
+            </label>
+            {props.provider === "codex" ? (
+              <label className="block sm:col-span-2">
+                <span className="block text-xs font-medium text-foreground">Shadow auth home</span>
+                <DebouncedSettingTextInput
+                  id={`provider-instance-${instanceId}-shadow-home`}
+                  size="sm"
+                  variant="soft"
+                  className="mt-1"
+                  value={readConfigString(instance.config, "shadowHomePath")}
+                  onCommit={(shadowHomePath) =>
+                    updateInstance(instanceId, { config: { shadowHomePath } })
+                  }
+                  placeholder="~/.codex_work"
+                  spellCheck={false}
+                />
+              </label>
+            ) : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ProviderToolRow(props: {
   config: ProviderInstallSettings;
   open: boolean;
@@ -959,6 +1178,13 @@ function ProviderToolRow(props: {
               ))}
               {props.config.provider === "codex" ? (
                 <CodexAccountsControl
+                  settings={props.settings}
+                  updateSettings={props.updateSettings}
+                />
+              ) : null}
+              {props.config.provider === "codex" || props.config.provider === "claudeAgent" ? (
+                <ProviderInstancesControl
+                  provider={props.config.provider}
                   settings={props.settings}
                   updateSettings={props.updateSettings}
                 />

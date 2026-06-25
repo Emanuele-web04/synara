@@ -26,12 +26,17 @@ import {
   type OpenCodeModelSelection,
   type PiModelOptions,
   type PiModelSelection,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelOptions,
 } from "@synara/contracts";
 import { normalizeCursorModelVariantBaseId } from "./cursorModelVariants";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
+
+export interface ModelSelectionBuildMetadata {
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+}
 
 export interface ProviderModelOption {
   slug: string;
@@ -387,131 +392,139 @@ export function buildModelSelection(
   provider: "codex",
   model: string,
   options?: CodexModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CodexModelSelection;
 export function buildModelSelection(
   provider: "claudeAgent",
   model: string,
   options?: ClaudeModelOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ClaudeModelSelection;
 export function buildModelSelection(
   provider: "cursor",
   model: string,
   options?: CursorModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CursorModelSelection;
 export function buildModelSelection(
   provider: "antigravity",
   model: string,
   options?: AntigravityModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): AntigravityModelSelection;
 export function buildModelSelection(
   provider: "grok",
   model: string,
   options?: GrokModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GrokModelSelection;
 export function buildModelSelection(
   provider: "droid",
   model: string,
   options?: DroidModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): DroidModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
 export function buildModelSelection(
   provider: "devin",
   model: string,
   options?: DevinModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): DevinModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
-  supportsAutoMode?: boolean | undefined,
+  supportsAutoModeOrMetadata?: boolean | ModelSelectionBuildMetadata | undefined,
+  explicitMetadata?: ModelSelectionBuildMetadata,
 ): ModelSelection {
+  const supportsAutoMode =
+    typeof supportsAutoModeOrMetadata === "boolean" ? supportsAutoModeOrMetadata : undefined;
+  const metadata =
+    typeof supportsAutoModeOrMetadata === "object"
+      ? supportsAutoModeOrMetadata
+      : explicitMetadata;
   switch (provider) {
     case "antigravity":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as AntigravityModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? { provider, model, options: options as AntigravityModelOptions }
+          : { provider, model },
+        metadata,
+      );
     case "codex":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CodexModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as CodexModelOptions } : { provider, model },
+        metadata,
+      );
     case "claudeAgent":
-      return {
-        provider,
-        model,
-        ...(options ? { options: options as ClaudeModelOptions } : {}),
-        ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
-      };
+      return attachModelSelectionMetadata(
+        {
+          provider,
+          model,
+          ...(options ? { options: options as ClaudeModelOptions } : {}),
+          ...(typeof supportsAutoMode === "boolean" ? { supportsAutoMode } : {}),
+        },
+        metadata,
+      );
     case "cursor":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CursorModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as CursorModelOptions } : { provider, model },
+        metadata,
+      );
     case "devin":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DevinModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as DevinModelOptions } : { provider, model },
+        metadata,
+      );
     case "grok":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GrokModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as GrokModelOptions } : { provider, model },
+        metadata,
+      );
     case "droid":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DroidModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as DroidModelOptions } : { provider, model },
+        metadata,
+      );
     case "opencode":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options
+          ? { provider, model, options: options as OpenCodeModelOptions }
+          : { provider, model },
+        metadata,
+      );
     case "pi":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as PiModelOptions,
-          }
-        : { provider, model };
+      return attachModelSelectionMetadata(
+        options ? { provider, model, options: options as PiModelOptions } : { provider, model },
+        metadata,
+      );
   }
+}
+
+function attachModelSelectionMetadata<T extends ModelSelection>(
+  selection: T,
+  metadata: ModelSelectionBuildMetadata | null | undefined,
+): T {
+  const instanceId = metadata?.instanceId?.trim();
+  return instanceId ? ({ ...selection, instanceId } as T) : selection;
 }

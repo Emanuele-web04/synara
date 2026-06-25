@@ -11,6 +11,7 @@ import {
   type ModelSlug,
   type PinnedMessage,
   type ProjectScript,
+  type ProviderInstanceId,
   type ProviderKind,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
@@ -71,10 +72,9 @@ import {
 } from "~/projectInstructionsStore";
 import { projectScriptRuntimeEnv } from "~/projectScripts";
 import {
-  getCodexAccountOptions,
   resolveAppModelSelection,
   resolveAssistantDeliveryMode,
-  resolveSelectedCodexAccount,
+  resolveDefaultProviderInstanceId,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -377,6 +377,7 @@ function getProviderHealthBannerDismissalKey(status: ServerProviderStatus | null
   }
   return [
     status.provider,
+    status.instanceId ?? status.provider,
     status.status,
     status.available ? "available" : "unavailable",
     status.authStatus,
@@ -1206,6 +1207,8 @@ export default function ChatView({
     lockedProvider,
     serverConfigQuery,
     selectedProvider,
+    providerInstances,
+    selectedProviderInstanceId,
     providerModelDiscoveryCwd,
     customModelsByProvider,
     modelOptionsByProvider,
@@ -1233,11 +1236,6 @@ export default function ChatView({
     isModelPickerOpen,
     resolvedThreadWorktreePath,
   });
-  const codexAccounts = useMemo(() => getCodexAccountOptions(settings), [settings]);
-  const selectedCodexAccount = useMemo(
-    () => resolveSelectedCodexAccount(settings),
-    [settings],
-  );
   const {
     selectedComposerSkills,
     selectedComposerMentions,
@@ -1855,6 +1853,7 @@ export default function ChatView({
   } = useComposerDiscovery({
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     composerTrigger,
     composerCommandPicker,
     providerModelDiscoveryCwd,
@@ -2088,8 +2087,8 @@ export default function ChatView({
   );
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, selectedProvider),
-    [selectedProvider, providerStatuses],
+    () => findProviderStatus(providerStatuses, selectedProvider, selectedProviderInstanceId),
+    [selectedProvider, selectedProviderInstanceId, providerStatuses],
   );
   const activeProviderHealthBannerDismissalKey = useMemo(
     () => getProviderHealthBannerDismissalKey(activeProviderStatus),
@@ -2384,13 +2383,6 @@ export default function ChatView({
       focusComposer();
     });
   }, [pendingComposerFocusRef, focusComposer]);
-  const onCodexAccountSelect = useCallback(
-    (accountId: string) => {
-      updateSettings({ selectedCodexAccountId: accountId });
-      scheduleComposerFocus();
-    },
-    [scheduleComposerFocus, updateSettings],
-  );
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -3283,9 +3275,18 @@ export default function ChatView({
   }, [activeThreadId, markWorkflowRunDismissed, workflowRunState]);
 
   const onProviderModelSelect = useCallback(
-    async (provider: ProviderKind, model: ModelSlug) => {
+    async (provider: ProviderKind, model: ModelSlug, instanceId?: ProviderInstanceId) => {
       if (!activeThread) return;
       if (lockedProvider !== null && provider !== lockedProvider) {
+        scheduleComposerFocus();
+        return;
+      }
+      const resolvedInstanceId = instanceId ?? resolveDefaultProviderInstanceId(settings, provider);
+      const lockedInstanceId =
+        lockedProvider !== null && provider === lockedProvider
+          ? (activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId)
+          : undefined;
+      if (lockedInstanceId && resolvedInstanceId !== lockedInstanceId) {
         scheduleComposerFocus();
         return;
       }
@@ -3304,8 +3305,9 @@ export default function ChatView({
         resolvedModel,
         undefined,
         provider === "claudeAgent" ? runtimeModel?.supportsAutoMode : undefined,
+        { instanceId: resolvedInstanceId },
       );
-      const providerStatus = findProviderStatus(providerStatuses, provider);
+      const providerStatus = findProviderStatus(providerStatuses, provider, resolvedInstanceId);
       const nextRuntimeMode =
         runtimeMode === "auto" &&
         !providerModelSupportsAutoRuntimeMode(provider, runtimeModel, providerStatus)
@@ -3343,6 +3345,7 @@ export default function ChatView({
       runtimeMode,
       runtimeModelsByProvider,
       scheduleComposerFocus,
+      settings,
       setComposerDraftModelSelectionAndSticky,
       setComposerDraftProviderModelOptions,
     ],
@@ -4076,9 +4079,8 @@ export default function ChatView({
         discoveryErrorsByProvider={discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
         providerOrder={settings.providerOrder}
-        codexAccounts={codexAccounts}
-        selectedCodexAccountId={selectedCodexAccount.id}
-        onCodexAccountChange={onCodexAccountSelect}
+        providerInstances={providerInstances}
+        selectedProviderInstanceId={selectedProviderInstanceId}
         onProviderModelChange={onProviderModelSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
@@ -4117,9 +4119,8 @@ export default function ChatView({
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}
       providerOrder={settings.providerOrder}
-      codexAccounts={codexAccounts}
-      selectedCodexAccountId={selectedCodexAccount.id}
-      onCodexAccountChange={onCodexAccountSelect}
+      providerInstances={providerInstances}
+      selectedProviderInstanceId={selectedProviderInstanceId}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModels={runtimeModelsByProvider[selectedProvider]}

@@ -34,6 +34,12 @@ import {
   type ProviderSession,
 } from "@synara/contracts";
 import {
+  mergeProviderStartOptions,
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
+import {
   providerSupportsAutoRuntimeMode,
   unsupportedAutoRuntimeModeMessage,
 } from "@synara/shared/runtimeMode";
@@ -95,6 +101,7 @@ import {
   AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED,
   AGENT_GATEWAY_TURN_AUTHORITY_RETIRED,
 } from "../../agentGateway/sessionLease.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const isStaleDevinSessionLoadError = (
   provider: ProviderKind,
@@ -253,6 +260,7 @@ function toRuntimePayloadFromSession(
   extra?: {
     readonly modelSelection?: unknown;
     readonly providerOptions?: unknown;
+    readonly providerInstanceId?: string;
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly lifecycleGeneration?: string;
@@ -261,6 +269,7 @@ function toRuntimePayloadFromSession(
   return {
     cwd: session.cwd ?? null,
     model: session.model ?? null,
+    providerInstanceId: session.providerInstanceId ?? extra?.providerInstanceId ?? session.provider,
     activeTurnId: nonEmptyTrimmed(session.activeTurnId) ?? null,
     // `thread.session.set` types both as trimmed-non-empty-or-null, so a blank
     // provider string has to become an explicit "absent" rather than reaching
@@ -290,6 +299,17 @@ function readPersistedProviderOptions(
 ): ProviderStartOptions | undefined {
   const raw = runtimePayloadRecord(runtimePayload).providerOptions;
   return Option.getOrUndefined(Schema.decodeUnknownOption(ProviderStartOptions)(raw));
+}
+
+function readPersistedProviderInstanceId(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw =
+    "providerInstanceId" in runtimePayload ? runtimePayload.providerInstanceId : undefined;
+  return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : undefined;
 }
 
 function readPersistedCwd(
@@ -409,6 +429,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
+    const serverSettings = yield* ServerSettingsService;
     type ResolvedProviderSessionStartInput = ProviderSessionStartInput & {
       readonly provider: ProviderKind;
     };
@@ -661,6 +682,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    const resolveLaunchProviderInstance = (input: {
+      readonly operation: string;
+      readonly provider: ProviderSessionStartInput["provider"];
+      readonly providerInstanceId?: string | undefined;
+      readonly modelSelection?: ModelSelection | undefined;
+      readonly providerOptions?: ProviderStartOptions | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const provider = input.provider ?? input.modelSelection?.provider ?? "codex";
+        const requestedInstanceId =
+          input.providerInstanceId ??
+          (input.modelSelection ? resolveModelSelectionInstanceId(input.modelSelection) : provider);
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError((cause) =>
+            toValidationError(input.operation, "Failed to load provider instance settings.", cause),
+          ),
+        );
+        const instance = resolveProviderInstance(settings, {
+          instanceId: requestedInstanceId,
+          provider,
+        });
+        if (!instance.enabled) {
+          return yield* toValidationError(
+            input.operation,
+            `Provider instance '${instance.displayName}' is disabled in Settings > Providers.`,
+          );
+        }
+        if (input.modelSelection && input.modelSelection.provider !== instance.driver) {
+          return yield* toValidationError(
+            input.operation,
+            `Model selection provider '${input.modelSelection.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
+          );
+        }
+        return {
+          instance,
+          providerOptions: mergeProviderStartOptions(
+            input.providerOptions,
+            providerStartOptionsFromInstance(instance),
+          ),
+        } as const;
+      });
+
     const runIdleSensitiveProviderWork = <A, E, R>(
       threadId: ThreadId,
       effect: Effect.Effect<A, E, R>,
@@ -755,6 +818,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
     };
 
+    const withProviderInstanceId = (event: ProviderRuntimeEvent) =>
+      event.providerInstanceId
+        ? Effect.succeed(event)
+        : directory.getBinding(event.threadId).pipe(
+            Effect.map((binding) => {
+              const providerInstanceId = Option.getOrUndefined(binding)?.providerInstanceId;
+              return providerInstanceId ? { ...event, providerInstanceId } : event;
+            }),
+            Effect.catch((error) =>
+              Effect.logWarning("failed to read provider runtime binding for event publish", {
+                threadId: event.threadId,
+                provider: event.provider,
+                error,
+              }).pipe(Effect.as(event)),
+            ),
+          );
+
     const persistCanonicalRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<PersistedProviderRuntimeEvent | undefined, unknown> => {
@@ -788,6 +868,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly lifecycleGeneration?: string;
         readonly modelSelection?: unknown;
         readonly providerOptions?: unknown;
+        readonly providerInstanceId?: string;
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
         readonly runtimePayload?: Record<string, unknown>;
@@ -796,6 +877,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       directory.upsert({
         threadId,
         provider: session.provider,
+        providerInstanceId: session.providerInstanceId ?? extra?.providerInstanceId,
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(extra?.lifecycleGeneration !== undefined
@@ -817,6 +899,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         ? directory.upsert({
             threadId,
             provider: session.provider,
+            providerInstanceId: session.providerInstanceId,
             runtimeMode: session.runtimeMode,
             status: "stopped",
             ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
@@ -920,6 +1003,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     interface StartedTurnPersistenceInput {
       readonly threadId: ThreadId;
       readonly provider: ProviderRuntimeBinding["provider"];
+      readonly providerInstanceId?: ProviderRuntimeBinding["providerInstanceId"];
       readonly turnId: string;
       readonly generation: number;
       readonly resumeCursor?: unknown;
@@ -1030,6 +1114,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* directory.upsert({
               threadId: input.threadId,
               provider: input.provider,
+              providerInstanceId: input.providerInstanceId,
               status: "stopped",
               ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
               ...(input.modelSelection !== undefined
@@ -1047,6 +1132,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           yield* directory.upsert({
             threadId: input.threadId,
             provider: input.provider,
+            providerInstanceId: input.providerInstanceId,
             status: "running",
             ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
             runtimePayload: {
@@ -1252,6 +1338,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* directory.upsert({
               threadId: event.threadId,
               provider: binding.provider,
+              providerInstanceId: binding.providerInstanceId,
               ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
               ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
               status: preserveShutdownStop ? "stopped" : eventStatus,
@@ -1313,16 +1400,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       Effect.uninterruptible(
         Effect.suspend(() => {
           const journalAndPublish = (acceptedEvent: ProviderRuntimeEvent) =>
-            persistCanonicalRuntimeEvent(acceptedEvent).pipe(
-              Effect.flatMap((persisted) =>
-                Effect.sync(() => {
-                  if (acceptedEvent.type === "turn.started") {
-                    reconcileRuntimeIdleTimer(acceptedEvent);
-                  }
-                }).pipe(
-                  Effect.andThen(updateSessionBindingFromRuntimeEvent(acceptedEvent)),
-                  Effect.andThen(publishRuntimeEvent(acceptedEvent, persisted)),
-                  Effect.andThen(scheduleRetiredGatewaySessionRecovery(acceptedEvent)),
+            withProviderInstanceId(acceptedEvent).pipe(
+              Effect.flatMap((canonicalEvent) =>
+                persistCanonicalRuntimeEvent(canonicalEvent).pipe(
+                  Effect.flatMap((persisted) =>
+                    Effect.sync(() => {
+                      if (canonicalEvent.type === "turn.started") {
+                        reconcileRuntimeIdleTimer(canonicalEvent);
+                      }
+                    }).pipe(
+                      Effect.andThen(updateSessionBindingFromRuntimeEvent(canonicalEvent)),
+                      Effect.andThen(publishRuntimeEvent(canonicalEvent, persisted)),
+                      Effect.andThen(scheduleRetiredGatewaySessionRecovery(canonicalEvent)),
+                    ),
+                  ),
                 ),
               ),
             );
@@ -1480,8 +1571,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return yield* lifecycle.run(threadId, (lease) =>
           Effect.gen(function* () {
             const binding = yield* getCurrentBinding();
-            const adapter = yield* registry.getByProvider(binding.provider);
             const hasPersistedResumeCursor = hasResumeCursor(binding.resumeCursor);
+            const persistedCwd = readPersistedCwd(binding.runtimePayload);
+            const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
+            const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
+            const persistedProviderInstanceId =
+              binding.providerInstanceId ??
+              readPersistedProviderInstanceId(binding.runtimePayload) ??
+              (persistedModelSelection
+                ? resolveModelSelectionInstanceId(persistedModelSelection)
+                : binding.provider);
+            const resolved = yield* resolveLaunchProviderInstance({
+              operation: input.operation,
+              provider: binding.provider,
+              providerInstanceId: persistedProviderInstanceId,
+              ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+              ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
+            });
+            const adapter = yield* registry.getByProvider(resolved.instance.driver);
             const requiresCredentialRotation =
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
@@ -1514,23 +1621,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               );
             }
 
-            const persistedCwd = readPersistedCwd(binding.runtimePayload);
-            const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
-            const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
             yield* validateAutoRuntimeMode(
               input.operation,
-              binding.provider,
+              resolved.instance.driver,
               binding.runtimeMode ?? "full-access",
             );
-            yield* ensureProviderEnabled(binding.provider, input.operation);
+            yield* ensureProviderEnabled(resolved.instance.driver, input.operation);
 
             const resumeStartInput = {
               threadId,
-              provider: binding.provider,
+              provider: resolved.instance.driver,
+              providerInstanceId: resolved.instance.instanceId,
               lifecycleGeneration: lease.generation,
               ...(persistedCwd ? { cwd: persistedCwd } : {}),
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
-              ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
+              ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
               ...(hasPersistedResumeCursor ? { resumeCursor: binding.resumeCursor } : {}),
               runtimeMode: binding.runtimeMode ?? "full-access",
             };
@@ -1543,11 +1648,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 `Adapter/provider mismatch while recovering thread '${threadId}'. Expected '${adapter.provider}', received '${resumed.provider}'.`,
               );
             }
+            const resumedWithInstance: ProviderSession = {
+              ...resumed,
+              providerInstanceId: resolved.instance.instanceId,
+            };
 
             yield* withBindingWriteLock(
               threadId,
-              upsertSessionBinding(resumed, threadId, {
+              upsertSessionBinding(resumedWithInstance, threadId, {
                 lifecycleGeneration: lease.generation,
+                ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
+                ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -1672,6 +1783,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
             return {
               adapter: liveAdapter,
+              providerInstanceId: liveAdapter.provider,
               isActive: true,
               lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
             } as const;
@@ -1709,6 +1821,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         ) {
           return {
             adapter,
+            providerInstanceId: binding.providerInstanceId ?? binding.provider,
             isActive: true,
             lifecycleGeneration: binding.lifecycleGeneration,
           } as const;
@@ -1717,6 +1830,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (!input.allowRecovery) {
           return {
             adapter,
+            providerInstanceId: binding.providerInstanceId ?? binding.provider,
             isActive: false,
             lifecycleGeneration: binding.lifecycleGeneration,
           } as const;
@@ -1724,6 +1838,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
         return {
           adapter: yield* recoverSessionForThread({ binding, operation: input.operation }),
+          providerInstanceId: binding.providerInstanceId ?? binding.provider,
           isActive: true,
           lifecycleGeneration: lifecycle.currentGeneration(input.threadId),
         } as const;
@@ -1769,31 +1884,55 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         return yield* lifecycle.run(threadId, (lease) =>
           Effect.gen(function* () {
             const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+            const requestedProviderInstanceId =
+              input.providerInstanceId ?? input.modelSelection?.instanceId ?? input.provider;
+            const persistedProviderInstanceId = persistedBinding
+              ? (persistedBinding.providerInstanceId ??
+                readPersistedProviderInstanceId(persistedBinding.runtimePayload) ??
+                persistedBinding.provider)
+              : undefined;
+            const persistedBindingMatchesRequest =
+              persistedBinding?.provider === input.provider &&
+              persistedProviderInstanceId === requestedProviderInstanceId;
+            const persistedProviderOptions = persistedBindingMatchesRequest
+              ? readPersistedProviderOptions(persistedBinding.runtimePayload)
+              : undefined;
+            const resolved = yield* resolveLaunchProviderInstance({
+              operation: "ProviderService.startSession",
+              provider: input.provider,
+              providerInstanceId: requestedProviderInstanceId,
+              ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+              ...(input.providerOptions ?? persistedProviderOptions
+                ? { providerOptions: input.providerOptions ?? persistedProviderOptions }
+                : {}),
+            });
+            const bindingMatchesResolvedInstance =
+              persistedBinding?.provider === resolved.instance.driver &&
+              persistedProviderInstanceId === resolved.instance.instanceId;
             const effectiveResumeCursor =
               input.forkSourceResumeCursor !== undefined
                 ? undefined
                 : (input.resumeCursor ??
-                  (persistedBinding?.provider === input.provider
+                  (persistedBinding && bindingMatchesResolvedInstance
                     ? persistedBinding.resumeCursor
                     : undefined));
             const persistedPriorTranscriptBootstrapPending =
-              persistedBinding?.provider === input.provider &&
+              persistedBinding !== undefined &&
+              bindingMatchesResolvedInstance &&
               runtimePayloadRecord(persistedBinding.runtimePayload)[
                 PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING
               ] === true;
             const { resumeCursor: _inputResumeCursor, ...adapterStartInput } = input;
-            const effectiveProviderOptions =
-              input.providerOptions ??
-              (persistedBinding?.provider === input.provider
-                ? readPersistedProviderOptions(persistedBinding.runtimePayload)
-                : undefined);
-            const adapter = yield* registry.getByProvider(input.provider);
+            const effectiveProviderOptions = resolved.providerOptions;
+            const adapter = yield* registry.getByProvider(resolved.instance.driver);
             let replacementStarted = false;
             const startupLifecycle = new ProviderStartupLifecycle();
             const startAndPersistReplacement = Effect.gen(function* () {
-              yield* ensureProviderEnabled(input.provider, "ProviderService.startSession");
+              yield* ensureProviderEnabled(resolved.instance.driver, "ProviderService.startSession");
               const resolvedAdapterStartInput = {
                 ...adapterStartInput,
+                provider: resolved.instance.driver,
+                providerInstanceId: resolved.instance.instanceId,
                 lifecycleGeneration: lease.generation,
                 ...(effectiveProviderOptions !== undefined
                   ? { providerOptions: effectiveProviderOptions }
@@ -1874,12 +2013,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   `Adapter/provider mismatch: requested '${adapter.provider}', received '${session.provider}'.`,
                 );
               }
+              const sessionWithInstance: ProviderSession = {
+                ...session,
+                providerInstanceId: resolved.instance.instanceId,
+              };
 
               yield* withBindingWriteLock(
                 threadId,
-                upsertSessionBinding(session, threadId, {
+                upsertSessionBinding(sessionWithInstance, threadId, {
                   modelSelection: input.modelSelection,
                   providerOptions: effectiveProviderOptions,
+                  providerInstanceId: resolved.instance.instanceId,
                   lifecycleGeneration: lease.generation,
                   runtimePayload: {
                     [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
@@ -1904,14 +2048,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               }
 
               return {
-                session,
+                session: sessionWithInstance,
                 nativeResumeAttempted,
                 nativeResumeSucceeded,
                 priorTranscriptBootstrapPending,
               };
             });
 
-            if (!persistedBinding || persistedBinding.provider === input.provider) {
+            if (!persistedBinding || bindingMatchesResolvedInstance) {
               return yield* startAndPersistReplacement;
             }
 
@@ -1944,6 +2088,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                       const restored = yield* previousAdapter.startSession({
                         threadId,
                         provider: persistedBinding.provider,
+                        ...(persistedProviderInstanceId
+                          ? { providerInstanceId: persistedProviderInstanceId }
+                          : {}),
                         lifecycleGeneration: previousGeneration,
                         runtimeMode: persistedBinding.runtimeMode ?? "full-access",
                         ...(previousCwd !== undefined ? { cwd: previousCwd } : {}),
@@ -1963,9 +2110,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                           `Adapter/provider mismatch while restoring '${previousAdapter.provider}': received '${restored.provider}'.`,
                         );
                       }
+                      const restoredWithInstance: ProviderSession = {
+                        ...restored,
+                        ...(persistedProviderInstanceId
+                          ? { providerInstanceId: persistedProviderInstanceId }
+                          : {}),
+                      };
                       yield* withBindingWriteLock(
                         threadId,
-                        upsertSessionBinding(restored, threadId, {
+                        upsertSessionBinding(restoredWithInstance, threadId, {
                           lifecycleGeneration: previousGeneration,
                           modelSelection: previousModelSelection,
                           providerOptions: previousProviderOptions,
@@ -2045,17 +2198,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return null;
         }
 
-        const effectiveProviderOptions =
-          input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload);
+        const sourceProviderInstanceId =
+          sourceBinding.providerInstanceId ??
+          readPersistedProviderInstanceId(sourceBinding.runtimePayload) ??
+          (input.modelSelection
+            ? resolveModelSelectionInstanceId(input.modelSelection)
+            : sourceBinding.provider);
+        const resolvedSource = yield* resolveLaunchProviderInstance({
+          operation: "ProviderService.forkThread",
+          provider: sourceBinding.provider,
+          providerInstanceId: sourceProviderInstanceId,
+          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+          providerOptions:
+            input.providerOptions ?? readPersistedProviderOptions(sourceBinding.runtimePayload),
+        });
+        const effectiveProviderOptions = resolvedSource.providerOptions;
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
         const targetCwd = input.cwd ?? sourceCwd;
         yield* validateAutoRuntimeMode(
           "ProviderService.forkThread",
-          sourceBinding.provider,
+          resolvedSource.instance.driver,
           input.runtimeMode,
         );
 
-        const adapter = yield* registry.getByProvider(sourceBinding.provider);
+        const adapter = yield* registry.getByProvider(resolvedSource.instance.driver);
         if (!adapter.forkThread) {
           return null;
         }
@@ -2106,8 +2272,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* lifecycle.run(input.threadId, (lease) =>
           Effect.gen(function* () {
             if (forkedSession) {
-              yield* upsertSessionBinding(forkedSession, input.threadId, {
+              const forkedSessionWithInstance: ProviderSession = {
+                ...forkedSession,
+                providerInstanceId: resolvedSource.instance.instanceId,
+              };
+              yield* upsertSessionBinding(forkedSessionWithInstance, input.threadId, {
                 lifecycleGeneration: lease.generation,
+                providerInstanceId: resolvedSource.instance.instanceId,
                 ...(input.modelSelection !== undefined
                   ? { modelSelection: input.modelSelection }
                   : {}),
@@ -2121,6 +2292,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               yield* directory.upsert({
                 threadId: input.threadId,
                 provider: adapter.provider,
+                providerInstanceId: resolvedSource.instance.instanceId,
                 runtimeMode: input.runtimeMode,
                 status: "stopped",
                 lifecycleGeneration: lease.generation,
@@ -2176,6 +2348,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistenceInput: StartedTurnPersistenceInput = {
               threadId: input.threadId,
               provider: routed.adapter.provider,
+              providerInstanceId: routed.providerInstanceId,
               turnId: String(turn.turnId),
               generation,
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
@@ -2238,6 +2411,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistenceInput: StartedTurnPersistenceInput = {
               threadId: input.threadId,
               provider: routed.adapter.provider,
+              providerInstanceId: routed.providerInstanceId,
               turnId: String(turn.turnId),
               generation,
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
@@ -2279,6 +2453,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistenceInput: StartedTurnPersistenceInput = {
               threadId: input.threadId,
               provider: routed.adapter.provider,
+              providerInstanceId: routed.providerInstanceId,
               turnId: String(turn.turnId),
               generation,
               ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
@@ -2733,6 +2908,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               directory.upsert({
                 threadId: input.threadId,
                 provider: binding.provider,
+                providerInstanceId: binding.providerInstanceId,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
                 ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: "stopped",
@@ -2946,12 +3122,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const overrides: {
             resumeCursor?: ProviderSession["resumeCursor"];
             runtimeMode?: ProviderSession["runtimeMode"];
+            providerInstanceId?: ProviderSession["providerInstanceId"];
           } = {};
           if (session.resumeCursor === undefined && binding.resumeCursor !== undefined) {
             overrides.resumeCursor = binding.resumeCursor;
           }
           if (binding.runtimeMode !== undefined) {
             overrides.runtimeMode = binding.runtimeMode;
+          }
+          if (binding.providerInstanceId !== undefined) {
+            overrides.providerInstanceId = binding.providerInstanceId;
           }
           return Object.assign({}, session, overrides);
         });
@@ -3027,6 +3207,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               yield* directory.upsert({
                 threadId: input.threadId,
                 provider: binding.provider,
+                providerInstanceId: binding.providerInstanceId,
                 ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
                 ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
                 status: "stopped",

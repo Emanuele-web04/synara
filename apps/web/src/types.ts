@@ -25,6 +25,7 @@ import type {
   MessageId,
   ProviderMentionReference,
   ProviderSkillReference,
+  ProviderInstanceId,
   ProviderKind,
   CheckpointRef,
   ProviderInteractionMode,
@@ -378,6 +379,7 @@ export interface ComposerThreadMentionSource {
 
 export interface ThreadSession {
   provider: ProviderKind;
+  providerInstanceId?: ProviderInstanceId;
   status: SessionPhase | "error" | "closed";
   activeTurnId?: TurnId | undefined;
   createdAt: string;

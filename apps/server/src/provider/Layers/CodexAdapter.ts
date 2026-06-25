@@ -2078,7 +2078,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               : {}),
             cause,
           }),
-      }).pipe(Effect.map((session) => session));
+      }).pipe(
+        Effect.map((session) => ({
+          ...session,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+        })),
+      );
     };
 
     const sendTurn: CodexAdapterShape["sendTurn"] = (input) =>

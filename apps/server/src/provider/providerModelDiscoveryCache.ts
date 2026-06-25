@@ -38,7 +38,11 @@ export const PROVIDER_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64;
 
 export interface ProviderModelDiscoveryCacheKey {
   readonly provider: ProviderListModelsInput["provider"];
+  readonly instanceId: string | null;
   readonly binaryPath: string | null;
+  readonly homePath: string | null;
+  readonly shadowHomePath: string | null;
+  readonly accountId: string | null;
   readonly apiEndpoint: string | null;
   readonly agentDir: string | null;
   readonly cwd: string | null;
@@ -77,7 +81,11 @@ export function providerModelDiscoveryCacheKey(
 ): ProviderModelDiscoveryCacheKey {
   return {
     provider: input.provider,
+    instanceId: input.instanceId ?? null,
     binaryPath: input.binaryPath ?? null,
+    homePath: input.homePath ?? null,
+    shadowHomePath: input.shadowHomePath ?? null,
+    accountId: input.accountId ?? null,
     apiEndpoint: input.apiEndpoint ?? null,
     agentDir: input.agentDir ?? null,
     cwd: input.cwd ?? null,
@@ -85,7 +93,17 @@ export function providerModelDiscoveryCacheKey(
 }
 
 const serializeKey = (key: ProviderModelDiscoveryCacheKey): string =>
-  JSON.stringify([key.provider, key.binaryPath, key.apiEndpoint, key.agentDir, key.cwd]);
+  JSON.stringify([
+    key.provider,
+    key.instanceId,
+    key.binaryPath,
+    key.homePath,
+    key.shadowHomePath,
+    key.accountId,
+    key.apiEndpoint,
+    key.agentDir,
+    key.cwd,
+  ]);
 
 /**
  * Only a non-empty, error-free catalog is worth remembering as "good". Static

@@ -7,6 +7,7 @@ import type {
   ModelSlug,
   ProviderAgentDescriptor,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderMentionReference,
   ProviderSkillReference,
@@ -46,6 +47,7 @@ interface UseKanbanTaskComposerMenuInput {
   readonly composerMentions: readonly ProviderMentionReference[];
   readonly scratchThreadId: ThreadId;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly modelOptionsByProvider: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
@@ -58,7 +60,11 @@ interface UseKanbanTaskComposerMenuInput {
   readonly hiddenProviders: readonly ProviderKind[];
   readonly providerOrder: readonly ProviderKind[];
   readonly piAgentDir: string | null;
-  readonly handleProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  readonly handleProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   readonly setInteractionMode: Dispatch<SetStateAction<ProviderInteractionMode>>;
   readonly onCreate: () => void;
 }
@@ -75,6 +81,7 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     composerMentions,
     scratchThreadId,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,
@@ -111,6 +118,7 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
   } = useKanbanTaskComposerDiscovery({
     composerTrigger,
     selectedProvider,
+    selectedProviderInstanceId,
     modelOptionsByProvider,
     selectedRuntimeAgents,
     selectedProjectCwd,

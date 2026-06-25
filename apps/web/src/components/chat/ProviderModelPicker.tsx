@@ -3,15 +3,19 @@
 // Layer: Chat composer presentation
 // Depends on: provider availability metadata, shared menu primitives, and picker trigger styling.
 
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
+import {
+  type ModelSlug,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+} from "@synara/contracts";
 import { resolveSelectableModel } from "@synara/shared/model";
 import * as Schema from "effect/Schema";
-import { useDeferredValue, useEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { appHistory } from "../../appNavigation";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
-import type { ResolvedCodexAccount } from "../../appSettings";
 import {
   Menu,
   MenuItem,
@@ -122,6 +126,43 @@ const SEARCHABLE_MODEL_PICKER_THRESHOLD = 15;
 const FavoriteModelSlugs = Schema.Array(Schema.String);
 const EMPTY_FAVORITE_MODEL_SLUGS: ReadonlyArray<string> = [];
 
+export interface ProviderModelPickerInstance {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: boolean;
+}
+
+function defaultProviderInstance(provider: ProviderKind): ProviderModelPickerInstance {
+  return {
+    instanceId: provider,
+    provider,
+    label: provider === "claudeAgent" ? "Claude" : provider,
+    enabled: true,
+    isDefault: true,
+  };
+}
+
+function findProviderStatusForInstance(input: {
+  providers: ReadonlyArray<ServerProviderStatus> | undefined;
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+}): ServerProviderStatus | undefined {
+  return (
+    input.providers?.find(
+      (entry) =>
+        entry.provider === input.provider &&
+        (entry.instanceId ?? entry.provider) === input.instanceId,
+    ) ??
+    input.providers?.find(
+      (entry) =>
+        entry.provider === input.provider &&
+        (entry.instanceId === undefined || entry.instanceId === entry.provider),
+    )
+  );
+}
+
 // Keeps persisted favorite slugs compact and stable while preserving the user's order.
 function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
   const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
@@ -184,11 +225,14 @@ type ProviderModelMenuItemsProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
-  selectedCodexAccountId?: string;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
   disabled?: boolean;
-  onCodexAccountChange?: (accountId: string) => void;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
@@ -219,6 +263,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
+  const selectedProviderInstanceId = props.selectedProviderInstanceId ?? props.provider;
   const hiddenProviders = props.hiddenProviders;
   const providerOrder = props.providerOrder;
   const hiddenProviderSet = new Set<ProviderKind>(hiddenProviders ?? []);
@@ -243,7 +288,90 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     opencode: openCodeFavoriteModelSlugSet,
     pi: piFavoriteModelSlugSet,
   };
-  const handleModelChange = (provider: ProviderKind, value: string) => {
+
+  const providerInstancesByProvider = useMemo(() => {
+    const map = new Map<ProviderKind, ProviderModelPickerInstance[]>();
+    for (const provider of AVAILABLE_PROVIDER_OPTIONS.map((option) => option.value)) {
+      map.set(provider, []);
+    }
+    for (const instance of props.providerInstances ?? []) {
+      const entries = map.get(instance.provider);
+      if (entries) {
+        entries.push(instance);
+      }
+    }
+    for (const provider of AVAILABLE_PROVIDER_OPTIONS.map((option) => option.value)) {
+      const entries = map.get(provider);
+      if (!entries || entries.length === 0) {
+        map.set(provider, [defaultProviderInstance(provider)]);
+        continue;
+      }
+      entries.sort((left, right) => {
+        if (left.isDefault !== right.isDefault) {
+          return left.isDefault ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      });
+    }
+    return map;
+  }, [props.providerInstances]);
+
+  const getProviderInstances = useCallback(
+    (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+      providerInstancesByProvider.get(provider) ?? [defaultProviderInstance(provider)],
+    [providerInstancesByProvider],
+  );
+
+  const getSelectedInstanceIdForProvider = useCallback(
+    (provider: ProviderKind): ProviderInstanceId => {
+      const instances = getProviderInstances(provider);
+      if (
+        activeProvider === provider &&
+        instances.some((instance) => instance.instanceId === selectedProviderInstanceId)
+      ) {
+        return selectedProviderInstanceId;
+      }
+      return (
+        instances.find((instance) => instance.isDefault)?.instanceId ?? instances[0]!.instanceId
+      );
+    },
+    [activeProvider, getProviderInstances, selectedProviderInstanceId],
+  );
+
+  const resolveInstanceAvailability = useCallback(
+    (instance: ProviderModelPickerInstance): { disabled: boolean; label: string | null } => {
+      if (!instance.enabled) {
+        return { disabled: true, label: "Disabled" };
+      }
+      return resolveLiveProviderAvailability(
+        findProviderStatusForInstance({
+          providers: props.providers,
+          provider: instance.provider,
+          instanceId: instance.instanceId,
+        }),
+      );
+    },
+    [props.providers],
+  );
+
+  const resolveProviderOptionAvailability = useCallback(
+    (provider: ProviderKind): { disabled: boolean; label: string | null } => {
+      const instanceAvailabilities = getProviderInstances(provider).map(
+        resolveInstanceAvailability,
+      );
+      if (instanceAvailabilities.some((availability) => !availability.disabled)) {
+        return { disabled: false, label: null };
+      }
+      return instanceAvailabilities[0] ?? { disabled: true, label: "Unavailable" };
+    },
+    [getProviderInstances, resolveInstanceAvailability],
+  );
+
+  const handleModelChange = (
+    provider: ProviderKind,
+    value: string,
+    instanceId = getSelectedInstanceIdForProvider(provider),
+  ) => {
     if (props.disabled) return;
     if (!value) return;
     const resolvedModel = resolveSelectableModel(
@@ -252,32 +380,63 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       props.modelOptionsByProvider[provider],
     );
     if (!resolvedModel) return;
-    props.onProviderModelChange(provider, resolvedModel);
+    props.onProviderModelChange(provider, resolvedModel, instanceId);
     onAfterSelection?.();
   };
-  const renderCodexAccountRadioGroup = () => {
-    const accounts = props.codexAccounts ?? [];
-    if (accounts.length <= 1 || !props.onCodexAccountChange) {
+
+  const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
+    if (props.disabled || !instanceId) return;
+    const model =
+      activeProvider === provider
+        ? props.model
+        : (props.modelOptionsByProvider[provider][0]?.slug ?? "");
+    if (!model) return;
+    const resolvedModel = resolveSelectableModel(
+      provider,
+      model,
+      props.modelOptionsByProvider[provider],
+    );
+    if (!resolvedModel) return;
+    props.onProviderModelChange(provider, resolvedModel, instanceId);
+    onAfterSelection?.();
+  };
+
+  const renderProviderInstanceRadioGroup = (provider: ProviderKind) => {
+    const instances = getProviderInstances(provider);
+    if (instances.length <= 1) {
       return null;
     }
     return (
       <>
         <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
-          Account
+          Instance
         </div>
         <MenuRadioGroup
-          value={props.selectedCodexAccountId ?? accounts[0]?.id ?? ""}
+          value={getSelectedInstanceIdForProvider(provider)}
           onValueChange={(value) => {
-            if (props.disabled || !value) return;
-            props.onCodexAccountChange?.(value);
-            onAfterSelection?.();
+            if (props.disabled || !value) {
+              return;
+            }
+            handleInstanceChange(provider, value);
           }}
         >
-          {accounts.map((account) => (
-            <MenuRadioItem key={account.id} value={account.id}>
-              <span className="truncate">{account.label}</span>
-            </MenuRadioItem>
-          ))}
+          {instances.map((instance) => {
+            const availability = resolveInstanceAvailability(instance);
+            return (
+              <MenuRadioItem
+                key={instance.instanceId}
+                value={instance.instanceId}
+                disabled={availability.disabled}
+              >
+                <span className="truncate">{instance.label}</span>
+                {availability.label ? (
+                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                    {availability.label}
+                  </span>
+                ) : null}
+              </MenuRadioItem>
+            );
+          })}
         </MenuRadioGroup>
         <MenuSeparator />
       </>
@@ -410,7 +569,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   if (props.lockedProvider !== null) {
     return (
       <>
-        {props.lockedProvider === "codex" ? renderCodexAccountRadioGroup() : null}
+        {renderProviderInstanceRadioGroup(props.lockedProvider)}
         {renderModelRadioGroup(props.lockedProvider)}
       </>
     );
@@ -420,8 +579,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     <>
       {visibleAvailableProviderOptions.map((option) => {
         const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
-        const liveProvider = props.providers?.find((entry) => entry.provider === option.value);
-        const availability = resolveLiveProviderAvailability(liveProvider);
+        const availability = resolveProviderOptionAvailability(option.value);
         if (availability.disabled) {
           return (
             <MenuItem key={option.value} disabled>
@@ -455,7 +613,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               fixedWidth
               className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
             >
-              {option.value === "codex" ? renderCodexAccountRadioGroup() : null}
+              {renderProviderInstanceRadioGroup(option.value)}
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
@@ -484,6 +642,25 @@ export function resolveProviderModelLabel(input: {
   });
 }
 
+export function resolveProviderInstanceLabel(input: {
+  provider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | undefined;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
+}): string | null {
+  const instances =
+    input.providerInstances?.filter((instance) => instance.provider === input.provider) ?? [];
+  if (instances.length <= 1) {
+    return null;
+  }
+  const selectedInstanceId = input.selectedProviderInstanceId ?? input.provider;
+  return (
+    instances.find((instance) => instance.instanceId === selectedInstanceId)?.label ??
+    instances.find((instance) => instance.isDefault)?.label ??
+    instances[0]?.label ??
+    null
+  );
+}
+
 export function getProviderIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string = "text-muted-foreground/70",
@@ -501,8 +678,8 @@ type ProviderModelPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
-  selectedCodexAccountId?: string;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
   activeProviderIconClassName?: string;
   compact?: boolean;
   // Icon-only trigger for narrow composers; the model name moves to title/sr-only.
@@ -512,8 +689,11 @@ type ProviderModelPickerProps = {
   onOpenChange?: (open: boolean) => void;
   onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
-  onCodexAccountChange?: (accountId: string) => void;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
 };
 
 export const ProviderModelPicker = function ProviderModelPicker(props: ProviderModelPickerProps) {
@@ -528,6 +708,14 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
+  const selectedInstanceLabel = resolveProviderInstanceLabel({
+    provider: activeProvider,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
+    providerInstances: props.providerInstances,
+  });
+  const triggerLabel = selectedInstanceLabel
+    ? `${selectedInstanceLabel} · ${selectedModelLabel}`
+    : selectedModelLabel;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = (nextOpen: boolean) => {
@@ -577,7 +765,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           )}
         />
       }
-      label={selectedModelLabel}
+      label={triggerLabel}
     />
   );
 
@@ -595,7 +783,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
       {props.shortcutLabel ? (
         <Tooltip>
           <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
-            <span className="sr-only">{selectedModelLabel}</span>
+            <span className="sr-only">{triggerLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
@@ -611,7 +799,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
         </Tooltip>
       ) : (
         <MenuTrigger render={triggerButton}>
-          <span className="sr-only">{selectedModelLabel}</span>
+          <span className="sr-only">{triggerLabel}</span>
         </MenuTrigger>
       )}
       <ComposerPickerMenuPopup align="start" fixedWidth>
@@ -629,14 +817,11 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-          {...(props.codexAccounts ? { codexAccounts: props.codexAccounts } : {})}
-          {...(props.selectedCodexAccountId
-            ? { selectedCodexAccountId: props.selectedCodexAccountId }
+          {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+          {...(props.selectedProviderInstanceId
+            ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
             : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-          {...(props.onCodexAccountChange
-            ? { onCodexAccountChange: props.onCodexAccountChange }
-            : {})}
           onProviderModelChange={props.onProviderModelChange}
           onAfterSelection={handleAfterSelection}
         />

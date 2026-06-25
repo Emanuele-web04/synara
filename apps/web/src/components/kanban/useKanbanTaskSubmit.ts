@@ -8,6 +8,7 @@ import type {
   ModelSlug,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
@@ -30,6 +31,7 @@ interface UseKanbanTaskSubmitInput {
   readonly selectedProjectId: ProjectId | null;
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly selectedModel: ModelSlug | null;
   readonly selectedModelSupportsAutoMode: boolean | undefined;
   readonly taskPreview: string;
@@ -53,6 +55,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     selectedModelSupportsAutoMode,
     taskPreview,
@@ -113,6 +116,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       selectedProvider === "claudeAgent"
         ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
         : undefined,
+      { instanceId: storedModelSelection?.instanceId ?? selectedProviderInstanceId },
     );
     const taskInput = {
       projectId: selectedProjectId,
@@ -138,6 +142,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: modelSelection.provider,
+      instanceId: modelSelection.instanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });

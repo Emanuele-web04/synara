@@ -7,6 +7,7 @@
 import {
   type ModelSlug,
   type ProviderAgentDescriptor,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderModelDescriptor,
   type ProviderModelOptions,
@@ -17,7 +18,6 @@ import { useState } from "react";
 
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
-import type { ResolvedCodexAccount } from "../../appSettings";
 import { type ProviderModelOption } from "../../providerModelOptions";
 import { Button } from "../ui/button";
 import { Menu, MenuSeparator, MenuSub, MenuSubTrigger, MenuTrigger } from "../ui/menu";
@@ -40,6 +40,8 @@ import {
 import {
   getProviderIconClassName,
   ProviderModelMenuItems,
+  type ProviderModelPickerInstance,
+  resolveProviderInstanceLabel,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
 import { hasComposerAgentControls, TraitsMenuContent } from "./TraitsPicker";
@@ -57,8 +59,8 @@ type ComposerModelEffortPickerProps = {
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
-  codexAccounts?: ReadonlyArray<ResolvedCodexAccount>;
-  selectedCodexAccountId?: string;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
   compact?: boolean;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
@@ -69,8 +71,11 @@ type ComposerModelEffortPickerProps = {
   // effort ladder as a stepped slider card with the model list behind its label.
   // Models without an effort ladder always fall back to the menu layout.
   effortControl?: ComposerEffortControl;
-  onCodexAccountChange?: (accountId: string) => void;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   onSelectionCommitted?: () => void;
 
   // Traits/effort/speed data.
@@ -112,6 +117,14 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
   });
+  const selectedInstanceLabel = resolveProviderInstanceLabel({
+    provider: activeProvider,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
+    providerInstances: props.providerInstances,
+  });
+  const triggerModelLabel = selectedInstanceLabel
+    ? `${selectedInstanceLabel} · ${modelLabel}`
+    : modelLabel;
 
   const traitSelection = getComposerTraitSelection(
     props.provider,
@@ -147,7 +160,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
   };
 
   const hiddenTriggerTitle = [
-    props.hideModelLabel ? modelLabel : null,
+    props.hideModelLabel ? triggerModelLabel : null,
     props.hideStatusLabel ? triggerStatusLabel : null,
   ]
     .filter((part): part is string => typeof part === "string" && part.length > 0)
@@ -178,9 +191,11 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
         )}
       />
       {props.hideModelLabel ? (
-        <span className="sr-only">{modelLabel}</span>
+        <span className="sr-only">{triggerModelLabel}</span>
       ) : (
-        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{modelLabel}</span>
+        <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+          {triggerModelLabel}
+        </span>
       )}
       {showsFastBadge ? (
         <FastModeIcon
@@ -228,14 +243,11 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
           : {})}
         {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
         {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
-        {...(props.codexAccounts ? { codexAccounts: props.codexAccounts } : {})}
-        {...(props.selectedCodexAccountId
-          ? { selectedCodexAccountId: props.selectedCodexAccountId }
+        {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+        {...(props.selectedProviderInstanceId
+          ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
           : {})}
         {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
-        {...(props.onCodexAccountChange
-          ? { onCodexAccountChange: props.onCodexAccountChange }
-          : {})}
         onProviderModelChange={props.onProviderModelChange}
         onAfterSelection={onAfterSelection}
       />
@@ -334,7 +346,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
                   aria-hidden="true"
                   className={cn("size-3 shrink-0", getProviderIconClassName(activeProvider))}
                 />
-                <span className="truncate">{modelLabel}</span>
+                <span className="truncate">{triggerModelLabel}</span>
               </MenuSubTrigger>
               {renderModelSubmenuPopup(handleAfterModelSelection)}
             </MenuSub>
