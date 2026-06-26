@@ -17,7 +17,7 @@ import {
   DiffIcon,
   EllipsisIcon,
   FolderIcon,
-  FolderOpenIcon,
+  FoldersIcon,
   GitBranchIcon,
   GitCommitIcon,
   ListChecksIcon,
@@ -411,11 +411,7 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
             title={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
             onClick={props.onToggleFileTree}
           >
-            {props.fileTreeOpen ? (
-              <FolderOpenIcon className="size-3.5" />
-            ) : (
-              <FolderIcon className="size-3.5" />
-            )}
+            <FoldersIcon className="size-3.5" />
           </IconButton>
         </div>
 

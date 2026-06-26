@@ -9,9 +9,8 @@ import { memo, useCallback, useState } from "react";
 
 import type { ChatFileReference } from "~/lib/chatReferences";
 import type { FileCommentSelection } from "~/lib/fileComments";
-import { SearchIcon } from "~/lib/icons";
+import { FoldersIcon, SearchIcon } from "~/lib/icons";
 import { WorkspaceFilePreview } from "../WorkspaceFilePreview";
-import { FileEntryIcon } from "./FileEntryIcon";
 import { PanelStateMessage } from "./PanelStateMessage";
 import {
   ExplorerActivityBarButton,
@@ -85,12 +84,7 @@ export const DockExplorerPane = memo(function DockExplorerPane(props: {
           active={filesActive}
           onClick={() => handleSelectActivity("files")}
         >
-          <FileEntryIcon
-            pathValue="Files"
-            kind="directory"
-            expanded={activity === "files"}
-            className="size-5"
-          />
+          <FoldersIcon className="size-5" />
         </ExplorerActivityBarButton>
         <ExplorerActivityBarButton
           label={searchActive ? "Hide search sidebar" : "Search files"}

@@ -22,6 +22,7 @@ import {
   ChatBubbleIcon,
   ChevronDownIcon,
   DiffIcon,
+  FoldersIcon,
   PanelRightCloseIcon,
   SearchIcon,
 } from "~/lib/icons";
@@ -335,12 +336,7 @@ function EditorActivityBar(props: {
         active={filesActive}
         onClick={() => props.onSelectItem("file")}
       >
-        <FileEntryIcon
-          pathValue="Files"
-          kind="directory"
-          expanded={props.centerMode === "file"}
-          className="size-5"
-        />
+        <FoldersIcon className="size-5" />
       </ExplorerActivityBarButton>
       <ExplorerActivityBarButton
         label={diffActive ? "Hide diff sidebar" : "Diff"}

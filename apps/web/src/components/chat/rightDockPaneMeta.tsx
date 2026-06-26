@@ -9,7 +9,7 @@ import type { LucideIcon } from "~/lib/icons";
 import {
   DiffIcon,
   FileIcon,
-  FolderIcon,
+  FoldersIcon,
   GitCommitIcon,
   GlobeIcon,
   InfoIcon,
@@ -32,7 +32,7 @@ export interface RightDockPaneMeta {
 export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> = {
   browser: { label: "Browser", Icon: GlobeIcon },
   diff: { label: "Diff", Icon: DiffIcon },
-  explorer: { label: "Explorer", Icon: FolderIcon },
+  explorer: { label: "Explorer", Icon: FoldersIcon },
   file: { label: "File", Icon: FileIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
   sidechat: { label: "Side", Icon: MessageCircleIcon },

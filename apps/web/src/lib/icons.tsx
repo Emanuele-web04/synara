@@ -171,6 +171,10 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
+// Stacked "folders" glyph used as the single representation of a file tree /
+// explorer surface (right-dock explorer, editor Files activity, diff file-tree
+// toggle). Central "reversed" outline asset so it matches the rest of the chrome.
+export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 export const GitForkIcon = centralIconWrapper("fork");

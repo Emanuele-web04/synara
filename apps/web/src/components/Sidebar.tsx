@@ -520,30 +520,30 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon aria-hidden="true" className={sidebarGlyphClass("meta", className)} />;
 }
 
-// Trailing status indicator shown in the timestamp slot: spinner while working,
-// check when completed, otherwise a colored status dot. Replaces the relative
-// timestamp whenever the thread has an active/unseen status.
-function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatusPill }) {
-  if (threadStatus.label === "Completed") {
+// Trailing row status: spinner while working, check when completed, otherwise a
+// colored status dot. Thread rows and project headers use the same glyph so a
+// collapsed project still advertises active child chats.
+function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
+  if (status.label === "Completed") {
     return (
       <HiOutlineCheckCircle
         aria-hidden="true"
-        className={cn("size-3.5 shrink-0", threadStatus.colorClass)}
+        className={cn("size-3.5 shrink-0", status.colorClass)}
       />
     );
   }
-  if (threadStatus.pulse) {
+  if (status.pulse) {
     return <ThreadRunningSpinner />;
   }
   return (
     <span
       aria-hidden="true"
-      className={cn("size-1.5 shrink-0 rounded-full", threadStatus.dotClass)}
+      className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
     />
   );
 }
 
-/** Pulsing green dot shown before a thread or project name while a dev run is live. */
+/** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
     <span
@@ -4698,7 +4698,7 @@ export default function Sidebar() {
               input.timestampToneClassName,
             )}
           >
-            <ThreadStatusTrailingGlyph threadStatus={input.threadStatus} />
+            <SidebarStatusTrailingGlyph status={input.threadStatus} />
           </span>
         ) : null}
         {input.hoverActions}
@@ -5315,21 +5315,10 @@ export default function Sidebar() {
                 className={projectFolderIconClassName}
               >
                 <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
-                {projectStatus ? (
-                  <span
-                    aria-hidden="true"
-                    title={projectStatus.label}
-                    className={cn(
-                      "absolute -right-0.5 top-0.5 size-1.5 rounded-full",
-                      projectStatus.dotClass,
-                      projectStatus.pulse ? "animate-pulse" : "",
-                    )}
-                  />
-                ) : null}
               </SidebarLeadingIcon>
               <div
                 className={cn(
-                  "flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
+                  "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
                   projectToolbarReserveClassName,
                 )}
               >
@@ -5347,24 +5336,20 @@ export default function Sidebar() {
                   </span>
                 ) : null}
               </div>
-              {/* Run status sits at the trailing edge (like the thread archive zone),
-                  not wedged between the pin and the name. It fades out the moment the
-                  hover toolbar reveals so the actions replace it instead of crowding
-                  it — same rule as thread rows.
-
-                  The fade lives on this wrapper, not on the dot: the dot pulses via
-                  `animate-pulse`, whose keyframes animate `opacity` and would override a
-                  static `opacity-0` set on the same element. Collapsing the parent's
-                  opacity hides the whole subtree regardless of the child animation —
-                  the same reason the leading status dot hides via its container. */}
-              {isProjectRunning ? (
+              {/* Dev-run and child-chat status share the trailing resting slot. The
+                  chat status stays far-right, while the dev-server dot sits just to
+                  its left when both are present. */}
+              {isProjectRunning || projectStatus ? (
                 <span
+                  aria-label={projectStatus ? `Project status: ${projectStatus.label}` : undefined}
+                  title={projectStatus?.label}
                   className={cn(
-                    "ml-auto inline-flex shrink-0 self-center",
+                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-1 self-center",
                     sidebarHoverRevealHideClassName("project-header"),
                   )}
                 >
-                  <ProjectRunIndicatorDot />
+                  {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
+                  {projectStatus ? <SidebarStatusTrailingGlyph status={projectStatus} /> : null}
                 </span>
               ) : null}
             </SidebarMenuButton>

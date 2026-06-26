@@ -1646,47 +1646,112 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
-/* Lightweight text shimmer for the "Working for …" status line.
-   CSS-only: clips an animated gradient to the glyphs so there is no JS timer
-   or React re-render driving the effect. Edges use currentColor (the muted
-   text color set via Tailwind) so non-highlighted text matches the original
-   exactly, and a brighter band sweeps across once per cycle. */
-.working-shimmer {
-  background-image: linear-gradient(
-    100deg,
-    currentColor 0%,
-    currentColor 46%,
-    color-mix(in srgb, currentColor, white 62%) 50%,
-    currentColor 54%,
-    currentColor 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: working-shimmer 3.3s linear infinite;
+/* Text shimmer utility — vendored verbatim from shadcn 4.12.0
+   (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
+   imported because it would clash with this project's custom theme, so the
+   self-contained shimmer block lives here instead. Applied on the
+   "Working for …" status line via the `shimmer` class. Provides `shimmer`,
+   `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
+   `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
+   Docs: https://ui.shadcn.com/docs/utils/shimmer */
+@property --shimmer-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 20deg;
+}
+@property --shimmer-image {
+  syntax: "*";
+  inherits: false;
+}
+@property --shimmer-text-fill {
+  syntax: "*";
+  inherits: false;
 }
 
-/* Slow, delicate sweep across the whole word over the first ~85% of the cycle
-   (~2.8s), then a short ~0.5s pause before it repeats. The start/end positions
-   (108% / -8%) park the band exactly at the word's left/right edges, so the
-   visible sweep spans every glyph with no off-screen dead time and the loop
-   restart is invisible. Two segments keep the sweep speed and the pause
-   independently tunable. */
-@keyframes working-shimmer {
-  0% {
-    background-position: 108% 0;
+@theme inline {
+  @keyframes tw-shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+    }
   }
-  85% {
-    background-position: -8% 0;
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(--shimmer-color, oklch(from currentColor l c h / calc(alpha* 0.2)));
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
+
+  @variant dark {
+    --_highlight: var(
+      --shimmer-color,
+      oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4))
+    );
   }
-  100% {
-    background-position: -8% 0;
+
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    animation-direction: reverse;
   }
+}
+
+@utility shimmer-once {
+  animation-iteration-count: 1;
+}
+
+@utility shimmer-reverse {
+  animation-direction: reverse;
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility shimmer-color-* {
+  --shimmer-color: --value(--color, [color]);
+  --shimmer-color: color-mix(
+    in oklch,
+    --value(--color, [color]) calc(--modifier(integer) * 1%),
+    transparent
+  );
+}
+
+@utility shimmer-duration-* {
+  --shimmer-duration: calc(--value(integer) * 1ms);
+}
+
+@utility shimmer-spread-* {
+  --shimmer-spread: calc(var(--spacing) * --value(integer));
+  --shimmer-spread: --value([length], [percentage]);
+}
+
+@utility shimmer-angle-* {
+  --shimmer-angle: calc(--value(integer) * 1deg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .working-shimmer {
+  .shimmer {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
