@@ -68,6 +68,26 @@ describe("providerModelDiscoveryInvalidationFingerprint", () => {
     ).not.toBe(previous);
   });
 
+  it("distinguishes same-provider instances", () => {
+    const previous = providerModelDiscoveryInvalidationFingerprint([
+      {
+        ...BASE_PROVIDER_STATUS,
+        instanceId: "cursor_personal",
+        driver: "cursor",
+      },
+    ]);
+
+    expect(
+      providerModelDiscoveryInvalidationFingerprint([
+        {
+          ...BASE_PROVIDER_STATUS,
+          instanceId: "cursor_work",
+          driver: "cursor",
+        },
+      ]),
+    ).not.toBe(previous);
+  });
+
   it("is stable across provider ordering", () => {
     const codexStatus = {
       ...BASE_PROVIDER_STATUS,

@@ -1444,22 +1444,15 @@ export function patchCustomModelsForProviderInstance(
   instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
   models: string[],
 ): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
-  if (instance.isDefault || instance.instanceId === instance.provider) {
-    return patchCustomModels(instance.provider, models);
-  }
-
   const existing = settings.providerInstances[instance.instanceId];
-  if (!existing) {
-    return {};
-  }
 
   return {
     providerInstances: {
       ...settings.providerInstances,
       [instance.instanceId]: {
-        ...existing,
+        ...(existing ?? { driver: instance.provider, enabled: true }),
         config: {
-          ...(isRecord(existing.config) ? existing.config : {}),
+          ...(isRecord(existing?.config) ? existing.config : {}),
           customModels: models,
         },
       },
@@ -1493,7 +1486,7 @@ export function getCustomModelsForProviderInstance(
   if (Array.isArray(instanceCustomModels)) {
     return instanceCustomModels.filter((entry): entry is string => typeof entry === "string");
   }
-  if (instance.isDefault || instance.provider === "codex") {
+  if (instance.isDefault || instance.instanceId === instance.provider) {
     return getCustomModelsForProvider(settings, instance.provider);
   }
   return [];
@@ -1754,6 +1747,15 @@ function mergeProviderStartOptionsForApp(
   };
 }
 
+function omitProviderStartOptions(
+  providerOptions: ProviderStartOptions,
+  provider: ProviderKind,
+): ProviderStartOptions {
+  const { [provider]: _omittedProviderOptions, ...remainingProviderOptions } = providerOptions;
+  void _omittedProviderOptions;
+  return remainingProviderOptions as ProviderStartOptions;
+}
+
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,
@@ -1884,7 +1886,19 @@ export function getProviderStartOptions(
           providerInstance.config,
         )
       : undefined;
-  const mergedProviderOptions = mergeProviderStartOptionsForApp(providerOptions, instanceOverlay);
+  // An explicitly configured instance is a complete launch boundary for its
+  // driver. Do not inherit the legacy/default driver's paths, account, or
+  // connection settings into another instance that happens to use it.
+  const providerOptionsBase =
+    providerInstance &&
+    Schema.is(ProviderKind)(providerInstance.driver) &&
+    instanceId !== providerInstance.driver
+      ? omitProviderStartOptions(providerOptions, providerInstance.driver)
+      : providerOptions;
+  const mergedProviderOptions = mergeProviderStartOptionsForApp(
+    providerOptionsBase,
+    instanceOverlay,
+  );
   return mergedProviderOptions && Object.keys(mergedProviderOptions).length > 0
     ? mergedProviderOptions
     : undefined;

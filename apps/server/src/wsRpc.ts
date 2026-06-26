@@ -107,7 +107,6 @@ import { ProviderDiscoveryService } from "./provider/Services/ProviderDiscoveryS
 import { discoverSkillsCatalog, synaraSkillsDir } from "./provider/skillsCatalog";
 import { recoverUnregisteredGitHubCheckout } from "./project/githubProjectRegistration";
 import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry";
-import { getEnabledProviderAdapter } from "./provider/enabledProviderAdapter";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { listProviderUsage } from "./providerUsage";
@@ -1805,37 +1804,69 @@ const makeWsRpcHandlersLayer = () =>
           ),
         [WS_METHODS.serverPrewarmVoice]: (input) =>
           rpcEffect(
-            getEnabledProviderAdapter(input.provider, serverSettings, providerAdapterRegistry).pipe(
-              Effect.flatMap((adapter) =>
-                adapter.prewarmVoice
-                  ? adapter.prewarmVoice(input)
-                  : Effect.fail(
-                      new Error(
-                        `Voice transcription is unavailable for provider '${input.provider}'.`,
-                      ),
-                    ),
-              ),
-            ),
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const instance = resolveProviderInstance(settings, {
+                provider: input.provider,
+                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+              });
+              if (!instance || instance.driver !== input.provider || !instance.enabled) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+                  ),
+                );
+              }
+              const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+              if (!adapter.prewarmVoice) {
+                return yield* Effect.fail(
+                  new Error(`Voice transcription is unavailable for provider '${input.provider}'.`),
+                );
+              }
+              const { providerOptions: _ignoredProviderOptions, ...prewarmInput } = input;
+              void _ignoredProviderOptions;
+              const providerOptions = providerStartOptionsFromInstance(instance);
+              return yield* adapter.prewarmVoice({
+                ...prewarmInput,
+                providerInstanceId: instance.instanceId,
+                ...(providerOptions ? { providerOptions } : {}),
+              });
+            }),
             "Voice transcription prewarm failed",
           ),
         [WS_METHODS.serverTranscribeVoice]: (input) =>
           rpcEffect(
             voiceUploadAdmissionGate.run(
-              getEnabledProviderAdapter(
-                input.provider,
-                serverSettings,
-                providerAdapterRegistry,
-              ).pipe(
-                Effect.flatMap((adapter) =>
-                  adapter.transcribeVoice
-                    ? adapter.transcribeVoice(input)
-                    : Effect.fail(
-                        new Error(
-                          `Voice transcription is unavailable for provider '${input.provider}'.`,
-                        ),
-                      ),
-                ),
-              ),
+              Effect.gen(function* () {
+                const settings = yield* serverSettings.getSettings;
+                const instance = resolveProviderInstance(settings, {
+                  provider: input.provider,
+                  ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+                });
+                if (!instance || instance.driver !== input.provider || !instance.enabled) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+                    ),
+                  );
+                }
+                const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+                if (!adapter.transcribeVoice) {
+                  return yield* Effect.fail(
+                    new Error(
+                      `Voice transcription is unavailable for provider '${input.provider}'.`,
+                    ),
+                  );
+                }
+                const { providerOptions: _ignoredProviderOptions, ...transcriptionInput } = input;
+                void _ignoredProviderOptions;
+                const providerOptions = providerStartOptionsFromInstance(instance);
+                return yield* adapter.transcribeVoice({
+                  ...transcriptionInput,
+                  providerInstanceId: instance.instanceId,
+                  ...(providerOptions ? { providerOptions } : {}),
+                });
+              }),
             ),
             "Voice transcription failed",
           ),

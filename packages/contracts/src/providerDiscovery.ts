@@ -78,6 +78,7 @@ export const ProviderListSkillsInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsInput = typeof ProviderListSkillsInput.Type;
@@ -217,6 +218,7 @@ export const ProviderListPluginsInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceRemoteSync: Schema.optional(Schema.Boolean),
   forceReload: Schema.optional(Schema.Boolean),
 });
@@ -243,6 +245,7 @@ export const ProviderReadPluginInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 

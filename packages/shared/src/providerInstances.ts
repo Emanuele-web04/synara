@@ -141,10 +141,20 @@ function stableSlugHash(value: string): string {
   return (hash >>> 0).toString(36).padStart(7, "0");
 }
 
+function slugCodexAccountId(accountId: string): string {
+  const slug = accountId
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug.length > 0 ? slug : "account";
+}
+
 export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
   const normalizedAccountId = accountId.trim();
-  const raw = `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId}`;
-  if (raw.length <= PROVIDER_INSTANCE_ID_MAX_CHARS) {
+  const slug = slugCodexAccountId(normalizedAccountId);
+  const raw = `${CODEX_ACCOUNT_INSTANCE_PREFIX}${slug}`;
+  if (raw.length <= PROVIDER_INSTANCE_ID_MAX_CHARS && slug === normalizedAccountId) {
     return raw;
   }
   const hash = stableSlugHash(normalizedAccountId);
@@ -153,10 +163,7 @@ export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
     CODEX_ACCOUNT_INSTANCE_PREFIX.length -
     "_".length -
     hash.length;
-  return `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId.slice(
-    0,
-    availableAccountChars,
-  )}_${hash}`;
+  return `${CODEX_ACCOUNT_INSTANCE_PREFIX}${slug.slice(0, availableAccountChars)}_${hash}`;
 }
 
 function legacyProviderConfig(

@@ -2296,6 +2296,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
             ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
           }),
@@ -2319,6 +2320,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
             ...(input.forceRemoteSync !== undefined
               ? { forceRemoteSync: input.forceRemoteSync }
@@ -2347,6 +2349,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           }),
         catch: (cause) =>
@@ -2368,6 +2371,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           }),
         catch: (cause) =>
@@ -2381,7 +2385,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const transcribeVoice: NonNullable<CodexAdapterShape["transcribeVoice"]> = (input) =>
       Effect.tryPromise({
-        try: () => manager.transcribeVoice(input),
+        try: () =>
+          manager.transcribeVoice({
+            ...input,
+            ...(input.providerOptions?.codex ? { codexOptions: input.providerOptions.codex } : {}),
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,
@@ -2397,6 +2405,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           manager.prewarmVoice({
             cwd: input.cwd,
             ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+            ...(input.providerOptions?.codex ? { codexOptions: input.providerOptions.codex } : {}),
           }),
         catch: (cause) =>
           new ProviderAdapterRequestError({

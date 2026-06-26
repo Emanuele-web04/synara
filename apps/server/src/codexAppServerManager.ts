@@ -1045,6 +1045,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private voiceAuthCache:
     | {
+        readonly optionsKey: string;
         readonly loadedAt: number;
         readonly promise: Promise<CodexVoiceTranscriptionAuthContext>;
       }
@@ -2668,7 +2669,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async transcribeVoice(
-    input: ServerVoiceTranscriptionInput,
+    input: ServerVoiceTranscriptionInput & { codexOptions?: CodexDiscoveryOptions },
   ): Promise<ServerVoiceTranscriptionResult> {
     return transcribeVoiceWithChatGptSession({
       request: input,
@@ -2676,6 +2677,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.resolveVoiceTranscriptionAuth({
           cwd: input.cwd,
           ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.codexOptions ? { codexOptions: input.codexOptions } : {}),
           refreshToken,
         }),
     });
@@ -2684,11 +2686,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async prewarmVoice(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
   }): Promise<{ readonly ready: true }> {
     void prewarmChatGptVoiceTranscriptionConnection().catch(() => undefined);
     await this.resolveVoiceTranscriptionAuth({
       ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+      ...(input.codexOptions !== undefined ? { codexOptions: input.codexOptions } : {}),
       refreshToken: false,
     });
     return { ready: true };
@@ -2754,7 +2758,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const normalizedCwd = cwd?.trim() || undefined;
     const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
     const isCompatibleContext = (context: CodexSessionContext): boolean =>
-      optionsKey === "__default__" ||
       codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
     if (normalizedThreadId) {
       try {
@@ -2800,19 +2803,22 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
+    const optionsKey = codexDiscoveryOptionsCacheKey(input.codexOptions);
     const cached = this.voiceAuthCache;
     if (
       !input.refreshToken &&
       cached &&
+      cached.optionsKey === optionsKey &&
       Date.now() - cached.loadedAt < CODEX_VOICE_AUTH_CACHE_TTL_MS
     ) {
       return cached.promise;
     }
 
     const promise = this.loadVoiceTranscriptionAuth(input);
-    this.voiceAuthCache = { loadedAt: Date.now(), promise };
+    this.voiceAuthCache = { optionsKey, loadedAt: Date.now(), promise };
     try {
       return await promise;
     } catch (error) {
@@ -2826,6 +2832,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async loadVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
     // Auth is account-scoped, so a live thread session remains reusable even when
@@ -2835,14 +2842,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (normalizedThreadId) {
       try {
         const candidate = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
-        if (this.isContextInitializedAndRoutable(candidate)) {
+        if (
+          this.isContextInitializedAndRoutable(candidate) &&
+          codexDiscoveryOptionsCacheKey(candidate.codexOptions) ===
+            codexDiscoveryOptionsCacheKey(input.codexOptions)
+        ) {
           context = candidate;
         }
       } catch {
         // A draft or closed thread can still use a cwd-scoped discovery session.
       }
     }
-    const authContext = context ?? (await this.resolveContextForDiscovery(undefined, input.cwd));
+    const authContext =
+      context ??
+      (await this.resolveContextForDiscovery(undefined, input.cwd, input.codexOptions));
     const readAuthStatus = async (refreshToken: boolean) => {
       const response = await this.sendRequest<Record<string, unknown>>(
         authContext,

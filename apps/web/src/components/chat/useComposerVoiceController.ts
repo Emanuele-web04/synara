@@ -3,7 +3,12 @@
 // Layer: Chat composer hook
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
-import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@synara/contracts";
+import {
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ThreadId,
+} from "@synara/contracts";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { Project } from "../../types";
@@ -39,6 +44,7 @@ export interface UseComposerVoiceControllerOptions {
   activeThreadId: ThreadId | null;
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
@@ -77,6 +83,7 @@ export function useComposerVoiceController(
     activeThreadId,
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     activeProviderStatus,
     pendingUserInputCount,
     onTranscriptReady,
@@ -98,6 +105,7 @@ export function useComposerVoiceController(
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const voiceProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
   const voiceRecordingStartedAtRef = useRef<number | null>(null);
   const failureCopy = {
     ...DEFAULT_FAILURE_COPY,
@@ -108,7 +116,8 @@ export function useComposerVoiceController(
   useLayoutEffect(() => {
     voiceThreadIdRef.current = threadId;
     voiceProviderRef.current = selectedProvider;
-  }, [threadId, selectedProvider]);
+    voiceProviderInstanceRef.current = selectedProviderInstanceId;
+  }, [threadId, selectedProvider, selectedProviderInstanceId]);
 
   const voiceRecordingDurationLabel = formatVoiceRecordingDuration(voiceRecordingDurationMs);
   const { canStartVoiceNotes, showVoiceNotesControl } = deriveComposerVoiceState({
@@ -129,7 +138,7 @@ export function useComposerVoiceController(
         setIsVoiceTranscribing(false);
       }
     });
-  }, [cancelVoiceRecording, selectedProvider, threadId]);
+  }, [cancelVoiceRecording, selectedProvider, selectedProviderInstanceId, threadId]);
 
   useEffect(
     () => () => {
@@ -212,6 +221,8 @@ export function useComposerVoiceController(
       void api?.server
         .prewarmVoice?.({
           provider: "codex",
+          providerInstanceId:
+            selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
           cwd: activeProject.cwd,
           ...(activeThreadId ? { threadId: activeThreadId } : {}),
         })
@@ -251,10 +262,12 @@ export function useComposerVoiceController(
     voiceTranscriptionRequestIdRef.current = requestId;
     const requestThreadId = threadId;
     const requestProvider = selectedProvider;
+    const requestProviderInstanceId = selectedProviderInstanceId;
     const isCurrentVoiceRequest = () =>
       voiceTranscriptionRequestIdRef.current === requestId &&
       voiceThreadIdRef.current === requestThreadId &&
-      voiceProviderRef.current === requestProvider;
+      voiceProviderRef.current === requestProvider &&
+      voiceProviderInstanceRef.current === requestProviderInstanceId;
 
     // Promise chain instead of async/try-catch-finally: React Compiler does
     // not yet support try/finally, and it would skip optimizing this hook.
@@ -273,6 +286,8 @@ export function useComposerVoiceController(
         return api.server
           .transcribeVoice({
             provider: "codex",
+            providerInstanceId:
+              selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
             cwd: activeProject.cwd,
             ...(activeThreadId ? { threadId: activeThreadId } : {}),
             ...payload,

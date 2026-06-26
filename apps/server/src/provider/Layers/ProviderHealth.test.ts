@@ -2080,6 +2080,20 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("accepts a configured external OpenCode server without probing the CLI", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus(undefined, undefined, {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "secret",
+          experimentalWebSockets: true,
+        });
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authType, "serverPassword");
+        assert.match(status.message ?? "", /experimental WebSockets enabled/);
+      }).pipe(Effect.provide(failingSpawnerLayer("OpenCode CLI must not be probed"))),
+    );
+
     it.effect("returns unavailable when opencode is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkOpenCodeProviderStatus;

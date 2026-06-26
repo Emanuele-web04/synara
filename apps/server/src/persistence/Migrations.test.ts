@@ -305,6 +305,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadSessionProviderInstance"],
+        [105, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -360,6 +362,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 101, name: "RemoveTranscriptMarkers" },
           { migration_id: 102, name: "ProjectionThreadMessagesTurnBoundary" },
           { migration_id: 103, name: "ClaudeTokenAccounting" },
+          { migration_id: 104, name: "ProjectionThreadSessionProviderInstance" },
+          { migration_id: 105, name: "ProviderSessionRuntimeInstanceId" },
         ],
       );
       const preserved = yield* sql<{ readonly count: number }>`
@@ -456,6 +460,8 @@ agentGatewayRetentionLegacyLayer(
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadSessionProviderInstance"],
+          [105, "ProviderSessionRuntimeInstanceId"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -554,6 +560,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadSessionProviderInstance"],
+        [105, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -593,6 +601,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadSessionProviderInstance"],
+          [105, "ProviderSessionRuntimeInstanceId"],
         ],
       );
 
@@ -686,6 +696,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [101, "RemoveTranscriptMarkers"],
         [102, "ProjectionThreadMessagesTurnBoundary"],
         [103, "ClaudeTokenAccounting"],
+        [104, "ProjectionThreadSessionProviderInstance"],
+        [105, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -721,6 +733,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [101, "RemoveTranscriptMarkers"],
           [102, "ProjectionThreadMessagesTurnBoundary"],
           [103, "ClaudeTokenAccounting"],
+          [104, "ProjectionThreadSessionProviderInstance"],
+          [105, "ProviderSessionRuntimeInstanceId"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`

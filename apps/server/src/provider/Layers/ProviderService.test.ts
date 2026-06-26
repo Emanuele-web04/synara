@@ -2728,6 +2728,63 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("does not adopt a live same-driver session from a different provider instance", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-cross-instance-recovery");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_personal: {
+            driver: "codex",
+            displayName: "Codex Personal",
+            enabled: true,
+          },
+          codex_work: {
+            driver: "codex",
+            displayName: "Codex Work",
+            enabled: true,
+          },
+        },
+      });
+
+      const initial = yield* provider.startSession(threadId, {
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+        cwd: "/tmp/project-work",
+        runtimeMode: "full-access",
+      });
+      yield* routing.codex.stopSession(threadId);
+      yield* routing.codex.adapter.startSession({
+        provider: "codex",
+        providerInstanceId: "codex_personal",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.stopSession.mockClear();
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId,
+        input: "continue on the work account",
+        attachments: [],
+      });
+
+      assert.equal(routing.codex.stopSession.mock.calls.length, 1);
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof resumedStartInput === "object" && resumedStartInput !== null, true);
+      if (resumedStartInput && typeof resumedStartInput === "object") {
+        assert.equal(resumedStartInput.providerInstanceId, "codex_work");
+        assert.deepEqual(resumedStartInput.resumeCursor, initial.resumeCursor);
+      }
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;

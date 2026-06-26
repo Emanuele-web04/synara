@@ -101,6 +101,10 @@ function makeFakeCodexBinary(dir: string) {
         '  printf "%s\\n" "missing auth.json in CODEX_HOME" >&2',
         "  exit 6",
         "fi",
+        'if [ "$SYNARA_FAKE_CODEX_FORBID_AUTH_JSON" = "1" ] && [ -f "$CODEX_HOME/auth.json" ]; then',
+        '  printf "%s\\n" "unexpected auth.json in CODEX_HOME" >&2',
+        "  exit 11",
+        "fi",
         'if [ -n "$SYNARA_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN" ]; then',
         '  grep -F -- "$SYNARA_FAKE_CODEX_CODEX_HOME_CONFIG_MUST_CONTAIN" "$CODEX_HOME/config.toml" >/dev/null || {',
         '    printf "%s\\n" "CODEX_HOME config missing expected content" >&2',
@@ -138,6 +142,7 @@ function withFakeCodexEnv<A, E, R>(
     stdinMustNotContain?: string;
     requireCodexHome?: boolean;
     requireAuthJson?: boolean;
+    forbidAuthJson?: boolean;
     requireSkipGitRepoCheck?: boolean;
     requireApprovalNever?: boolean;
     codexHomeConfigMustContain?: string;
@@ -161,6 +166,7 @@ function withFakeCodexEnv<A, E, R>(
       const previousStdinMustNotContain = process.env.SYNARA_FAKE_CODEX_STDIN_MUST_NOT_CONTAIN;
       const previousRequireCodexHome = process.env.SYNARA_FAKE_CODEX_REQUIRE_CODEX_HOME;
       const previousRequireAuthJson = process.env.SYNARA_FAKE_CODEX_REQUIRE_AUTH_JSON;
+      const previousForbidAuthJson = process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON;
       const previousRequireSkipGitRepoCheck =
         process.env.SYNARA_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK;
       const previousRequireApprovalNever = process.env.SYNARA_FAKE_CODEX_REQUIRE_APPROVAL_NEVER;
@@ -218,6 +224,12 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.SYNARA_FAKE_CODEX_REQUIRE_AUTH_JSON;
         }
 
+        if (input.forbidAuthJson) {
+          process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON = "1";
+        } else {
+          delete process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON;
+        }
+
         if (input.requireSkipGitRepoCheck) {
           process.env.SYNARA_FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK = "1";
         } else {
@@ -256,6 +268,7 @@ function withFakeCodexEnv<A, E, R>(
         previousStdinMustNotContain,
         previousRequireCodexHome,
         previousRequireAuthJson,
+        previousForbidAuthJson,
         previousRequireSkipGitRepoCheck,
         previousRequireApprovalNever,
         previousCodexHomeConfigMustContain,
@@ -320,6 +333,12 @@ function withFakeCodexEnv<A, E, R>(
           delete process.env.SYNARA_FAKE_CODEX_REQUIRE_AUTH_JSON;
         } else {
           process.env.SYNARA_FAKE_CODEX_REQUIRE_AUTH_JSON = previous.previousRequireAuthJson;
+        }
+
+        if (previous.previousForbidAuthJson === undefined) {
+          delete process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON;
+        } else {
+          process.env.SYNARA_FAKE_CODEX_FORBID_AUTH_JSON = previous.previousForbidAuthJson;
         }
 
         if (previous.previousRequireSkipGitRepoCheck === undefined) {
@@ -830,6 +849,46 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
               }),
             ),
           );
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not copy default auth into account-only text-generation homes", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const customCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "synara-account-only-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(customCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: {
+              homePath: customCodexHome,
+              accountId: "work",
+            },
+          },
+        });
 
         expect(generated.subject).toBe("Add important change");
       }),

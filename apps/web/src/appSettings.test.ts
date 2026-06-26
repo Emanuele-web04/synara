@@ -892,6 +892,79 @@ describe("getProviderStartOptions", () => {
     });
   });
 
+  it("does not inherit the selected Codex account into a custom Codex instance", () => {
+    const result = getProviderStartOptions(
+      {
+        claudeBinaryPath: "",
+        codexBinaryPath: "",
+        codexHomePath: "/Users/default/.codex",
+        codexAccounts: [
+          {
+            id: "selected",
+            label: "Selected",
+            homePath: "/Users/selected/.codex",
+            shadowHomePath: "/Users/selected/.codex-shadow",
+          },
+        ],
+        selectedCodexAccountId: "selected",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        devinBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: { homePath: "/Users/work/.codex" },
+          },
+        },
+      },
+      "codex_work",
+    );
+
+    expect(result).toEqual({ codex: { homePath: "/Users/work/.codex" } });
+  });
+
+  it("keeps legacy launch settings for a configured default instance", () => {
+    const result = getProviderStartOptions(
+      {
+        claudeBinaryPath: "/opt/bin/claude",
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexAccounts: [],
+        selectedCodexAccountId: "default",
+        cursorApiEndpoint: "",
+        cursorBinaryPath: "",
+        devinBinaryPath: "",
+        antigravityBinaryPath: "",
+        grokBinaryPath: "",
+        droidBinaryPath: "",
+        openCodeBinaryPath: "",
+        openCodeExperimentalWebSockets: false,
+        openCodeServerUrl: "",
+        piAgentDir: "",
+        piBinaryPath: "",
+        providerInstances: {
+          claudeAgent: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { customModels: ["claude/custom"] },
+          },
+        },
+      },
+      "claudeAgent",
+    );
+
+    expect(result).toEqual({ claudeAgent: { binaryPath: "/opt/bin/claude" } });
+  });
+
   it("emits an empty Codex options object when switching back to default among accounts", () => {
     expect(
       getProviderStartOptions({
@@ -1068,6 +1141,24 @@ describe("provider-indexed custom model settings", () => {
     expect(CUSTOM_MODEL_EDITOR_PROVIDER_SETTINGS.map((config) => config.provider)).not.toContain(
       "droid",
     );
+  });
+
+  it("stores default-instance custom models in the provider instance map", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        { providerInstances: {} },
+        { instanceId: "claudeAgent", provider: "claudeAgent", isDefault: true },
+        ["claude/default-instance"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { customModels: ["claude/default-instance"] },
+        },
+      },
+    });
   });
 
   it("reads custom models for each provider", () => {

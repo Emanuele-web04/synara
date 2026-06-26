@@ -1455,12 +1455,58 @@ export const makeCheckDroidProviderStatus = (
 
 // ── OpenCode health check ───────────────────────────────────────────
 
+function openCodeExternalServerStatus(input: {
+  readonly checkedAt: string;
+  readonly serverUrl: string;
+  readonly hasServerPassword: boolean;
+  readonly experimentalWebSockets?: boolean | undefined;
+}): ServerProviderStatus {
+  try {
+    new URL(input.serverUrl);
+  } catch {
+    return {
+      provider: OPENCODE_PROVIDER,
+      status: "error",
+      available: false,
+      authStatus: "unknown",
+      checkedAt: input.checkedAt,
+      message: "Configured OpenCode server URL is invalid.",
+    } satisfies ServerProviderStatus;
+  }
+
+  return {
+    provider: OPENCODE_PROVIDER,
+    status: "ready",
+    available: true,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    ...(input.hasServerPassword
+      ? { authType: "serverPassword", authLabel: "Configured server password" }
+      : {}),
+    message: `OpenCode will use the configured server at ${input.serverUrl}${input.experimentalWebSockets ? " with experimental WebSockets enabled" : ""}.`,
+  } satisfies ServerProviderStatus;
+}
+
 export const makeCheckOpenCodeProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
+  connection?: {
+    readonly serverUrl?: string | undefined;
+    readonly serverPassword?: string | undefined;
+    readonly experimentalWebSockets?: boolean | undefined;
+  },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
+    const configuredServerUrl = nonEmptyTrimmed(connection?.serverUrl);
+    if (configuredServerUrl) {
+      return openCodeExternalServerStatus({
+        checkedAt,
+        serverUrl: configuredServerUrl,
+        hasServerPassword: nonEmptyTrimmed(connection?.serverPassword) !== undefined,
+        experimentalWebSockets: connection?.experimentalWebSockets,
+      });
+    }
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
     const probeEnv = makeProviderProbeEnv(OPENCODE_PROVIDER, environment);
 
@@ -2131,9 +2177,10 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, ...withoutAuthMetadata } = projected;
+  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
   void authType;
   void authLabel;
+  void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,
     status: projected.status === "ready" ? "warning" : projected.status,
@@ -2338,6 +2385,10 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
               provider: instance.driver,
               instanceId: instance.instanceId,
             }),
+            {
+              provider: instance.driver,
+              instanceId: instance.instanceId,
+            },
           ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
         { concurrency: "unbounded" },
       ).pipe(
@@ -2395,6 +2446,13 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       ): string | undefined => {
         const value = instance.config[key];
         return typeof value === "string" ? nonEmptyTrimmed(value) : undefined;
+      };
+      const readInstanceConfigBoolean = (
+        instance: ResolvedProviderInstance,
+        key: string,
+      ): boolean | undefined => {
+        const value = instance.config[key];
+        return typeof value === "boolean" ? value : undefined;
       };
 
       const resolveProviderInstanceTarget = (
@@ -2655,7 +2713,14 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           case "opencode":
             return checkProviderInstanceWhenEnabled(
               instance,
-              makeCheckOpenCodeProviderStatus(binaryPath, instance.environment),
+              makeCheckOpenCodeProviderStatus(binaryPath, instance.environment, {
+                serverUrl: readInstanceConfigString(instance, "serverUrl"),
+                serverPassword: readInstanceConfigString(instance, "serverPassword"),
+                experimentalWebSockets: readInstanceConfigBoolean(
+                  instance,
+                  "experimentalWebSockets",
+                ),
+              }),
             );
           case "pi":
             return checkProviderInstanceWhenEnabled(
@@ -3060,7 +3125,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
         });
 
         return yield* commandCoordinator.withCommandLock({
-          targetKey: provider,
+          targetKey: `instance:${providerStatusKey(target)}`,
           lockKey: update.lockKey,
           onQueued: setProviderUpdateState(
             target,

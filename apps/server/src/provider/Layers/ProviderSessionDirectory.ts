@@ -85,7 +85,9 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                 Option.some({
                   threadId: value.threadId,
                   provider,
-                  providerInstanceId: readProviderInstanceId(provider, value.runtimePayload),
+                  providerInstanceId:
+                    value.providerInstanceId ??
+                    readProviderInstanceId(provider, value.runtimePayload),
                   adapterKey: value.adapterKey,
                   runtimeMode: value.runtimeMode,
                   status: value.status,
@@ -128,10 +130,9 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     const providerChanged =
       existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
     const compatibleRuntime = providerChanged ? undefined : existingRuntime;
-    const previousProviderInstanceId = readProviderInstanceId(
-      binding.provider,
-      compatibleRuntime?.runtimePayload,
-    );
+    const previousProviderInstanceId =
+      compatibleRuntime?.providerInstanceId ??
+      readProviderInstanceId(binding.provider, compatibleRuntime?.runtimePayload);
     const providerInstanceId =
       binding.providerInstanceId ?? previousProviderInstanceId;
     const providerInstanceChanged =
@@ -140,6 +141,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       .upsert({
         threadId: resolvedThreadId,
         providerName: binding.provider,
+        providerInstanceId,
         adapterKey:
           binding.adapterKey ??
           (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
@@ -201,7 +203,8 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               Option.some({
                 threadId: row.threadId,
                 provider,
-                providerInstanceId: readProviderInstanceId(provider, row.runtimePayload),
+                providerInstanceId:
+                  row.providerInstanceId ?? readProviderInstanceId(provider, row.runtimePayload),
                 adapterKey: row.adapterKey,
                 runtimeMode: row.runtimeMode,
                 status: row.status,
