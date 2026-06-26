@@ -1361,6 +1361,133 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for the default provider instance into providerInstances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          claudeBinaryPath: "/opt/bin/claude",
+          claudeHomePath: "/tmp/claude-default",
+          codexHomePath: "",
+          providerInstances: {},
+          selectedCodexAccountId: "default",
+        },
+        {
+          instanceId: "claudeAgent",
+          provider: "claudeAgent",
+          isDefault: true,
+        },
+        ["claude/default-instance"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: {
+            binaryPath: "/opt/bin/claude",
+            homePath: "/tmp/claude-default",
+            customModels: ["claude/default-instance"],
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves server settings when saving custom models for default provider instances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          openCodeBinaryPath: "/opt/bin/opencode",
+          openCodeExperimentalWebSockets: true,
+          openCodeServerPassword: "server-secret",
+          openCodeServerUrl: "http://127.0.0.1:4096",
+          providerInstances: {},
+          selectedCodexAccountId: "default",
+        },
+        {
+          instanceId: "opencode",
+          provider: "opencode",
+          isDefault: true,
+        },
+        ["openrouter/custom-opencode"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        opencode: {
+          driver: "opencode",
+          enabled: true,
+          config: {
+            binaryPath: "/opt/bin/opencode",
+            experimentalWebSockets: true,
+            serverPassword: "server-secret",
+            serverUrl: "http://127.0.0.1:4096",
+            customModels: ["openrouter/custom-opencode"],
+          },
+        },
+      },
+    });
+  });
+
+  it("materializes Codex account-derived instances when saving custom models", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [
+            {
+              id: "work",
+              label: "Work",
+              homePath: "/tmp/codex-work",
+              shadowHomePath: "/tmp/codex-shadow",
+            },
+          ],
+          codexBinaryPath: "/opt/bin/codex",
+          codexHomePath: "/tmp/codex-default",
+          providerInstances: {},
+          selectedCodexAccountId: "work",
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          isDefault: false,
+        },
+        ["custom/work-codex"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        codex_work: {
+          driver: "codex",
+          enabled: true,
+          displayName: "Work",
+          config: {
+            binaryPath: "/opt/bin/codex",
+            homePath: "/tmp/codex-work",
+            shadowHomePath: "/tmp/codex-shadow",
+            accountId: "work",
+            customModels: ["custom/work-codex"],
+          },
+        },
+      },
+    });
+  });
+
+  it("drops stale redaction markers when replacing provider instance secrets", () => {
+    expect(
+      mergeProviderInstanceConfigPatch(
+        {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "",
+          serverPasswordRedacted: true,
+        },
+        { serverPassword: "new-secret" },
+      ),
+    ).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "new-secret",
+    });
+  });
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
