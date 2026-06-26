@@ -6,6 +6,8 @@ import {
   EventId,
   MessageId,
   type ModelSelection,
+  type NativeApi,
+  type OrchestrationShellSnapshot,
   type ProjectScript,
   type ModelSlug,
   type ProviderKind,
@@ -48,7 +50,10 @@ import {
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
 } from "@t3tools/shared/threadEnvironment";
-import { deriveAssociatedWorktreeMetadata } from "@t3tools/shared/threadWorkspace";
+import {
+  deriveAssociatedWorktreeMetadata,
+  workspaceRootsEqual,
+} from "@t3tools/shared/threadWorkspace";
 import {
   useCallback,
   useEffect,
@@ -108,8 +113,13 @@ import {
 import { isElectron } from "../env";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
-import { isHomeChatContainerProject } from "../lib/chatProjects";
+import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
+import {
+  createOrRecoverProjectFromPath,
+  PROJECT_CREATE_EXISTING_SYNC_ERROR,
+  PROJECT_CREATE_SYNC_ERROR,
+} from "../lib/projectCreation";
 import {
   maybeResolveBrowserPromptAttachment,
   type BrowserPromptAttachmentResolution,
@@ -535,6 +545,45 @@ const EMPTY_COMPOSER_SUGGESTIONS: ComposerSuggestion[] = [];
 const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
 const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
   EMPTY_SUGGESTION_SOURCE_THREADS;
+const LOCAL_PROJECT_DRAFT_CONTEXT = {
+  envMode: "local",
+  worktreePath: null,
+  branch: null,
+  lastKnownPr: null,
+} as const;
+const DRAFT_PROJECT_SYNC_MAX_ATTEMPTS = 6;
+const DRAFT_PROJECT_SYNC_DELAY_MS = 50;
+
+function waitForDraftProjectSyncDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+// Waits for a project to appear in the shell snapshot before a local draft points at it.
+async function waitForShellProjectById(
+  api: NativeApi,
+  projectId: ProjectId,
+): Promise<{
+  project: OrchestrationShellSnapshot["projects"][number] | null;
+  snapshot: OrchestrationShellSnapshot | null;
+}> {
+  let latestSnapshot: OrchestrationShellSnapshot | null = null;
+  for (let attempt = 1; attempt <= DRAFT_PROJECT_SYNC_MAX_ATTEMPTS; attempt += 1) {
+    const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
+    if (snapshot) {
+      latestSnapshot = snapshot;
+      const project = snapshot.projects.find((candidate) => candidate.id === projectId) ?? null;
+      if (project) {
+        return { project, snapshot };
+      }
+    }
+    if (attempt < DRAFT_PROJECT_SYNC_MAX_ATTEMPTS) {
+      await waitForDraftProjectSyncDelay(DRAFT_PROJECT_SYNC_DELAY_MS * attempt);
+    }
+  }
+  return { project: null, snapshot: latestSnapshot };
+}
 
 function automationScheduleActivityPayload(schedule: AutomationSchedule) {
   switch (schedule.type) {
@@ -1002,6 +1051,9 @@ export default function ChatView({
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
+  const moveDraftThreadToProject = useComposerDraftStore(
+    (store) => store.moveDraftThreadToProject,
+  );
   const getDraftThreadByProjectId = useComposerDraftStore(
     (store) => store.getDraftThreadByProjectId,
   );
@@ -8356,11 +8408,47 @@ export default function ChatView({
     ],
   );
 
+  const moveEmptyDraftToLocalProject = useCallback(
+    (projectId: ProjectId) => {
+      moveDraftThreadToProject(threadId, projectId, LOCAL_PROJECT_DRAFT_CONTEXT);
+      scheduleComposerFocus();
+    },
+    [moveDraftThreadToProject, scheduleComposerFocus, threadId],
+  );
+
   const handleResetWorkspaceToHome = useCallback(() => {
     if (isLocalDraftThread) {
+      if (!isHomeChatContainer) {
+        return (async () => {
+          if (!homeDir) {
+            throw new Error("Home folder is not available yet.");
+          }
+          const homeProjectId = await ensureHomeChatProject({ homeDir, chatWorkspaceRoot });
+          if (!homeProjectId) {
+            throw new Error("Unable to prepare a normal chat.");
+          }
+          const api = readNativeApi();
+          if (!api) {
+            throw new Error("App is still connecting. Try again in a moment.");
+          }
+          const hasHomeProjectInStore = useStore
+            .getState()
+            .projects.some((project) => project.id === homeProjectId);
+          if (!hasHomeProjectInStore) {
+            const { project, snapshot } = await waitForShellProjectById(api, homeProjectId);
+            if (!project || !snapshot) {
+              throw new Error(PROJECT_CREATE_SYNC_ERROR);
+            }
+            syncServerShellSnapshot(snapshot);
+          }
+          moveEmptyDraftToLocalProject(homeProjectId);
+        })();
+      }
       setDraftThreadContext(threadId, {
         envMode: "local",
         worktreePath: null,
+        branch: null,
+        lastKnownPr: null,
       });
       scheduleComposerFocus();
       return;
@@ -8385,11 +8473,16 @@ export default function ChatView({
     scheduleComposerFocus();
   }, [
     activeThread,
+    chatWorkspaceRoot,
     hasNativeUserMessages,
+    homeDir,
+    isHomeChatContainer,
     isLocalDraftThread,
+    moveEmptyDraftToLocalProject,
     scheduleComposerFocus,
     setDraftThreadContext,
     setStoreThreadWorkspace,
+    syncServerShellSnapshot,
     threadId,
   ]);
 
@@ -8419,6 +8512,77 @@ export default function ChatView({
       setDraftThreadContext,
       setStoreThreadWorkspace,
       threadId,
+    ],
+  );
+
+  const handleSelectProjectForEmptyDraft = useCallback(
+    (projectId: ProjectId) => {
+      if (!isLocalDraftThread) {
+        return;
+      }
+      const project = useStore
+        .getState()
+        .projects.find((candidate) => candidate.id === projectId && candidate.kind === "project");
+      if (!project) {
+        throw new Error("Selected project is not available.");
+      }
+      if (draftThread?.projectId === projectId) {
+        scheduleComposerFocus();
+        return;
+      }
+      moveEmptyDraftToLocalProject(projectId);
+    },
+    [
+      draftThread?.projectId,
+      isLocalDraftThread,
+      moveEmptyDraftToLocalProject,
+      scheduleComposerFocus,
+    ],
+  );
+
+  const handleCreateProjectFromPickerPath = useCallback(
+    async (workspaceRoot: string) => {
+      if (!isLocalDraftThread) {
+        return;
+      }
+      const api = readNativeApi();
+      if (!api) {
+        throw new Error("App is still connecting. Try again in a moment.");
+      }
+
+      const existingProject = useStore
+        .getState()
+        .projects.find(
+          (project) =>
+            project.kind === "project" && workspaceRootsEqual(project.cwd, workspaceRoot),
+        );
+      if (existingProject) {
+        handleSelectProjectForEmptyDraft(existingProject.id);
+        return;
+      }
+
+      const creationResult = await createOrRecoverProjectFromPath({
+        api,
+        workspaceRoot,
+        createIfMissing: false,
+        loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
+      });
+      if (creationResult.snapshot) {
+        syncServerShellSnapshot(creationResult.snapshot);
+      }
+      if (!creationResult.created && !creationResult.project) {
+        throw new Error(PROJECT_CREATE_EXISTING_SYNC_ERROR);
+      }
+      if (!creationResult.project) {
+        throw new Error(PROJECT_CREATE_SYNC_ERROR);
+      }
+      moveEmptyDraftToLocalProject(creationResult.project.id);
+    },
+    [
+      handleSelectProjectForEmptyDraft,
+      isLocalDraftThread,
+      moveEmptyDraftToLocalProject,
+      syncServerShellSnapshot,
     ],
   );
 
@@ -9270,8 +9434,10 @@ export default function ChatView({
   };
   const showEmptyLandingBranchToolbar =
     isCenteredEmptyLanding && Boolean(activeProject) && !isHomeChatContainer && isGitRepo;
+  const showEmptyLandingProjectPicker =
+    isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
   const emptyLandingProjectChip =
-    !isEmptyChatLanding && activeProjectDisplayName ? (
+    !isEmptyChatLanding && !showEmptyLandingProjectPicker && activeProjectDisplayName ? (
       <span className="inline-flex min-w-0 max-w-56 shrink items-center gap-2 overflow-hidden rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)] sm:max-w-64">
         <FolderClosed className="size-3.5 shrink-0" />
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
@@ -9279,7 +9445,10 @@ export default function ChatView({
     ) : null;
   const emptyLandingControls =
     isCenteredEmptyLanding &&
-    (isEmptyChatLanding || emptyLandingProjectChip || showEmptyLandingBranchToolbar) ? (
+    (isEmptyChatLanding ||
+      showEmptyLandingProjectPicker ||
+      emptyLandingProjectChip ||
+      showEmptyLandingBranchToolbar) ? (
       <div
         className={cn(
           "chat-composer-shell relative mt-0 flex flex-wrap items-center gap-x-2 gap-y-1 !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-2 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-['']",
@@ -9293,6 +9462,18 @@ export default function ChatView({
             showResetToHome={Boolean(resolvedThreadWorktreePath)}
             selectedWorkspaceRoot={resolvedThreadWorktreePath}
             onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+            onResetToHome={handleResetWorkspaceToHome}
+          />
+        ) : showEmptyLandingProjectPicker ? (
+          <ProjectPicker
+            align="start"
+            side="top"
+            selectionMode="project"
+            selectedProjectId={activeProject.id}
+            selectedWorkspaceRoot={activeProject.cwd}
+            showResetToHome
+            onSelectProject={handleSelectProjectForEmptyDraft}
+            onCreateProjectFromPath={handleCreateProjectFromPickerPath}
             onResetToHome={handleResetWorkspaceToHome}
           />
         ) : (

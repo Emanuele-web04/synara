@@ -510,6 +510,7 @@ export default function BranchToolbar({
           branchCwd={branchCwd}
           effectiveEnvMode={effectiveEnvMode}
           envLocked={envLocked}
+          hasServerThread={hasServerThread}
           onSetThreadWorkspace={setThreadWorkspace}
           variant={variant}
           {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}

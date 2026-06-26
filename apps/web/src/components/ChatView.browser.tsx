@@ -35,6 +35,7 @@ import {
   removeInlineTerminalContextPlaceholder,
 } from "../lib/terminalContext";
 import { isMacPlatform } from "../lib/utils";
+import { readNativeApi } from "../nativeApi";
 import { getRouter } from "../router";
 import { useSplitViewStore } from "../splitViewStore";
 import { useStore } from "../store";
@@ -55,6 +56,8 @@ const OTHER_THREAD_ID = "thread-browser-test-other" as ThreadId;
 const THREAD_TITLE = "Browser test thread";
 const UUID_ROUTE_RE = /^\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PROJECT_ID = "project-1" as ProjectId;
+const OTHER_PROJECT_ID = "project-2" as ProjectId;
+const HOME_PROJECT_ID = "project-home" as ProjectId;
 const NOW_ISO = "2026-03-04T12:00:00.000Z";
 const BASE_TIME_MS = Date.parse(NOW_ISO);
 const ATTACHMENT_SVG = "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='300'></svg>";
@@ -543,6 +546,52 @@ function createDraftOnlySnapshot(): OrchestrationReadModel {
   };
 }
 
+function withOpenProjectPickerFixtures(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    projects: [
+      ...snapshot.projects,
+      {
+        id: OTHER_PROJECT_ID,
+        kind: "project",
+        title: "Other Project",
+        workspaceRoot: "/repo/other",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        scripts: [],
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
+  };
+}
+
+function withHomeChatProject(snapshot: OrchestrationReadModel): OrchestrationReadModel {
+  return {
+    ...snapshot,
+    projects: [
+      ...snapshot.projects,
+      {
+        id: HOME_PROJECT_ID,
+        kind: "chat",
+        title: "Home",
+        workspaceRoot: "/Users/tester",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5",
+        },
+        scripts: [],
+        createdAt: NOW_ISO,
+        updatedAt: NOW_ISO,
+        deletedAt: null,
+      },
+    ],
+  };
+}
+
 function withProjectScripts(
   snapshot: OrchestrationReadModel,
   scripts: OrchestrationReadModel["projects"][number]["scripts"],
@@ -839,6 +888,56 @@ function createSnapshotWithInlineToolOverflow(options: {
   };
 }
 
+function recordProjectCreateCommand(command: unknown): boolean {
+  if (
+    !command ||
+    typeof command !== "object" ||
+    !("type" in command) ||
+    command.type !== "project.create" ||
+    !("projectId" in command) ||
+    !("workspaceRoot" in command) ||
+    !("title" in command)
+  ) {
+    return false;
+  }
+
+  const projectId = command.projectId as ProjectId;
+  fixture = {
+    ...fixture,
+    snapshot: {
+      ...fixture.snapshot,
+      snapshotSequence: fixture.snapshot.snapshotSequence + 1,
+      projects: [
+        ...fixture.snapshot.projects.filter((project) => project.id !== projectId),
+        {
+          id: projectId,
+          kind: "kind" in command && command.kind === "chat" ? "chat" : "project",
+          title: String(command.title),
+          workspaceRoot: String(command.workspaceRoot),
+          defaultModelSelection:
+            "defaultModelSelection" in command &&
+            command.defaultModelSelection &&
+            typeof command.defaultModelSelection === "object"
+              ? (command.defaultModelSelection as OrchestrationReadModel["projects"][number]["defaultModelSelection"])
+              : {
+                  provider: "codex" as const,
+                  model: "gpt-5",
+                },
+          scripts: [],
+          createdAt:
+            "createdAt" in command && typeof command.createdAt === "string"
+              ? command.createdAt
+              : NOW_ISO,
+          updatedAt: NOW_ISO,
+          deletedAt: null,
+        },
+      ],
+      updatedAt: NOW_ISO,
+    },
+  };
+  return true;
+}
+
 function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
   const tag = body._tag;
   if (tag === ORCHESTRATION_WS_METHODS.getShellSnapshot) {
@@ -848,6 +947,9 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     return fixture.snapshot;
   }
   if (tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+    if (recordProjectCreateCommand(body.command)) {
+      return { sequence: fixture.snapshot.snapshotSequence };
+    }
     return { sequence: fixture.snapshot.snapshotSequence + 1 };
   }
   if (tag === WS_METHODS.automationCreate) {
@@ -3112,7 +3214,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
     try {
       // Wait for the sidebar to render with the project.
-      const newThreadButton = page.getByTestId("new-thread-button");
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
       await expect.element(newThreadButton).toBeInTheDocument();
 
       await newThreadButton.click();
@@ -3148,6 +3250,247 @@ describe("ChatView timeline estimator parity (full app)", () => {
       // The empty thread view and composer should still be visible.
       await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
     } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("lets an empty project draft switch to another open project", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withOpenProjectPickerFixtures(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-project-picker-switch-test" as MessageId,
+          targetText: "project picker switch test",
+        }),
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      useComposerDraftStore.getState().setDraftThreadContext(newThreadId, {
+        envMode: "worktree",
+        branch: "feature/keep-out",
+        worktreePath: "/repo/project/.worktrees/feature-keep-out",
+      });
+      useComposerDraftStore.getState().setProjectDraftThreadId(OTHER_PROJECT_ID, OTHER_THREAD_ID);
+      useComposerDraftStore.getState().setPrompt(OTHER_THREAD_ID, "replace this other draft");
+
+      const projectPickerTrigger = page.getByTestId("project-picker-trigger");
+      await expect.element(projectPickerTrigger).toHaveTextContent("project");
+      await projectPickerTrigger.click();
+
+      await expect.element(page.getByText("New project")).toBeInTheDocument();
+      await expect.element(page.getByText("Don't work in a project")).toBeInTheDocument();
+      await expect.element(page.getByText("Folders on this Mac")).not.toBeInTheDocument();
+
+      const currentProjectOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="combobox-item"]')).find(
+            (item) => item.textContent?.trim() === "project",
+          ) ?? null,
+        "Unable to find current project option.",
+      );
+      currentProjectOption.click();
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            projectId: PROJECT_ID,
+            envMode: "worktree",
+            branch: "feature/keep-out",
+            worktreePath: "/repo/project/.worktrees/feature-keep-out",
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await projectPickerTrigger.click();
+      await page.getByText("other", { exact: true }).click();
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            projectId: OTHER_PROJECT_ID,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+          });
+          expect(useComposerDraftStore.getState().getDraftThread(OTHER_THREAD_ID)).toBeNull();
+          expect(
+            useComposerDraftStore.getState().draftsByThreadId[OTHER_THREAD_ID],
+          ).toBeUndefined();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("can detach an empty project draft back to a normal chat before first send", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-project-picker-home-test" as MessageId,
+          targetText: "project picker home test",
+        }),
+      ),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+      },
+    });
+
+    try {
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const projectPickerTrigger = page.getByTestId("project-picker-trigger");
+      await expect.element(projectPickerTrigger).toBeInTheDocument();
+      await projectPickerTrigger.click();
+      await page.getByText("Don't work in a project").click();
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            projectId: HOME_PROJECT_ID,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("creates and selects a new project from an empty project draft without navigating away", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-project-picker-new-test" as MessageId,
+        targetText: "project picker new test",
+      }),
+    });
+    const previousNativeApi = window.nativeApi;
+    const wsNativeApi = readNativeApi();
+    expect(wsNativeApi).toBeDefined();
+    const pickFolder = vi.fn(async () => "/repo/new-project");
+    let createdProjectId: ProjectId | null = null;
+    const dispatchCommand = vi.fn(async (command: unknown) => {
+      wsRequests.push({
+        _tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+        command,
+      });
+      if (recordProjectCreateCommand(command)) {
+        if (command && typeof command === "object" && "projectId" in command) {
+          createdProjectId = command.projectId as ProjectId;
+        }
+        return { sequence: fixture.snapshot.snapshotSequence };
+      }
+      return { sequence: fixture.snapshot.snapshotSequence + 1 };
+    });
+    Object.defineProperty(window, "nativeApi", {
+      configurable: true,
+      value: {
+        ...wsNativeApi,
+        dialogs: {
+          ...wsNativeApi?.dialogs,
+          pickFolder,
+        },
+        orchestration: {
+          ...wsNativeApi?.orchestration,
+          dispatchCommand,
+          getShellSnapshot: vi.fn(async () => createShellSnapshotFromReadModel(fixture.snapshot)),
+        },
+      },
+    });
+
+    try {
+      const newThreadButton = page.getByLabelText("Create new thread in Project");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const projectPickerTrigger = page.getByTestId("project-picker-trigger");
+      await expect.element(projectPickerTrigger).toBeInTheDocument();
+      await projectPickerTrigger.click();
+      await page.getByText("New project").click();
+      await vi.waitFor(() => {
+        expect(pickFolder).toHaveBeenCalledTimes(1);
+      });
+
+      await vi.waitFor(
+        () => {
+          const projectCreateRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              "command" in request &&
+              request.command &&
+              typeof request.command === "object" &&
+              "type" in request.command &&
+              request.command.type === "project.create" &&
+              "workspaceRoot" in request.command &&
+              request.command.workspaceRoot === "/repo/new-project",
+          );
+          expect(projectCreateRequest).toBeDefined();
+          expect(createdProjectId).not.toBeNull();
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)).toMatchObject({
+            projectId: createdProjectId,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      expect(mounted.router.state.location.pathname).toBe(newThreadPath);
+    } finally {
+      if (previousNativeApi) {
+        Object.defineProperty(window, "nativeApi", {
+          configurable: true,
+          value: previousNativeApi,
+        });
+      } else {
+        Reflect.deleteProperty(window, "nativeApi");
+      }
       await mounted.cleanup();
     }
   });
