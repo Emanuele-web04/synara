@@ -190,6 +190,10 @@ function shouldKeepActivityForWorkLog(
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
 ): boolean {
+  if (activity.kind === "context-compaction" && activity.turnId === null) {
+    return true;
+  }
+
   if (activity.kind === "automation.created") {
     return true;
   }

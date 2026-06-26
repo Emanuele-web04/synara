@@ -16,6 +16,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type ProjectDevServerEvent,
+  type ReviewUpdatedPayload,
   type ServerConfigStreamEvent,
   type ServerLifecycleStreamEvent,
   type ServerProviderStatusesUpdatedPayload,
@@ -439,6 +440,13 @@ export class WsTransport {
             (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.reviewUpdated) {
+          this.startStream(
+            "review.updates",
+            client[WS_METHODS.subscribeReviewUpdates]({}),
+            (event: ReviewUpdatedPayload) => this.emit(WS_CHANNELS.reviewUpdated, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             "orchestration.domain",
@@ -466,6 +474,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
     else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
+    else if (channel === WS_CHANNELS.reviewUpdated) this.stopStream("review.updates");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }

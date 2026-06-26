@@ -477,6 +477,33 @@ describe("wsNativeApi", () => {
     expect(onAutomationEvent).toHaveBeenCalledWith(event);
   });
 
+  it("forwards review update stream events through the review listener", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onReviewUpdated = vi.fn();
+    const unsubscribe = api.review.onUpdated(onReviewUpdated);
+    const event = {
+      _tag: "boardLanes",
+      cwd: "/repo",
+      repositoryId: "repo-1",
+      fetchedAt: 1,
+    } as const;
+
+    emitPush(WS_CHANNELS.reviewUpdated, event);
+    unsubscribe();
+    emitPush(WS_CHANNELS.reviewUpdated, {
+      _tag: "boardLanes",
+      cwd: "/repo",
+      repositoryId: "repo-1",
+      fetchedAt: 2,
+    });
+
+    expect(requestMock).not.toHaveBeenCalledWith(WS_METHODS.subscribeReviewUpdates, {});
+    expect(onReviewUpdated).toHaveBeenCalledTimes(1);
+    expect(onReviewUpdated).toHaveBeenCalledWith(event);
+  });
+
   it("wraps orchestration dispatch commands in the command envelope", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");

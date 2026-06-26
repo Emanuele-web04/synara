@@ -2128,9 +2128,24 @@ export default function ChatView({
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isConnecting = isLocalConnecting || phase === "connecting";
+  const workLogVisibleTurnIds = useMemo(() => {
+    const turnIds = new Set<TurnId>();
+    for (const message of activeThread?.messages ?? []) {
+      if (message.turnId) {
+        turnIds.add(message.turnId);
+      }
+    }
+    if (activeLatestTurn?.turnId) {
+      turnIds.add(activeLatestTurn.turnId);
+    }
+    return turnIds;
+  }, [activeLatestTurn?.turnId, activeThread?.messages]);
   const rawWorkLogEntries = useMemo(
-    () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
-    [activeLatestTurn?.turnId, threadActivities],
+    () =>
+      deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined, {
+        visibleTurnIds: workLogVisibleTurnIds,
+      }),
+    [activeLatestTurn?.turnId, threadActivities, workLogVisibleTurnIds],
   );
   const hasWorkLogSubagents = useMemo(
     () => rawWorkLogEntries.some((entry) => (entry.subagents?.length ?? 0) > 0),

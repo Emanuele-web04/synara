@@ -3829,6 +3829,9 @@ describe("deriveWorkLogEntries context window handling", () => {
         }),
       ],
       TurnId.makeUnsafe("turn-1"),
+      {
+        visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+      },
     );
 
     expect(entries).toHaveLength(1);

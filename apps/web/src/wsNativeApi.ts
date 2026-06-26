@@ -633,7 +633,6 @@ export function createWsNativeApi(): NativeApi {
       moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),
       onUpdated: (callback) => {
         reviewUpdatedListeners.add(callback);
-        void transport.request(WS_METHODS.subscribeReviewUpdates, {});
         return () => {
           reviewUpdatedListeners.delete(callback);
         };
