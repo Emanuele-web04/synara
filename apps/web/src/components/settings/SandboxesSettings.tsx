@@ -14,6 +14,8 @@ import {
 import { SettingResetButton, SettingsSelectControl } from "./SettingControls";
 import { SettingsRow, SettingsSection } from "./SettingsPanelPrimitives";
 
+const NO_DEFAULT_REMOTE_PROVIDER_VALUE = "__no-default-remote-provider__";
+
 const sandboxRuntimeTextFields: ReadonlyArray<{
   appKey:
     | "sandboxRuntimeCpu"
@@ -84,8 +86,17 @@ export function SandboxesSettings({
           }
           control={
             <SettingsSelectControl
-              value={settings.sandboxDefaultRemoteProvider}
-              onValueChange={(value) => updateSettings({ sandboxDefaultRemoteProvider: value })}
+              value={
+                settings.sandboxDefaultRemoteProvider.length > 0
+                  ? settings.sandboxDefaultRemoteProvider
+                  : NO_DEFAULT_REMOTE_PROVIDER_VALUE
+              }
+              onValueChange={(value) =>
+                updateSettings({
+                  sandboxDefaultRemoteProvider:
+                    value === NO_DEFAULT_REMOTE_PROVIDER_VALUE ? "" : value,
+                })
+              }
               ariaLabel="Default remote provider"
               valueContent={
                 SANDBOX_DEFAULT_PROVIDER_OPTIONS.find(
@@ -94,7 +105,11 @@ export function SandboxesSettings({
               }
             >
               {SANDBOX_DEFAULT_PROVIDER_OPTIONS.map((option) => (
-                <SelectItem hideIndicator key={option.value || "none"} value={option.value}>
+                <SelectItem
+                  hideIndicator
+                  key={option.value || "none"}
+                  value={option.value.length > 0 ? option.value : NO_DEFAULT_REMOTE_PROVIDER_VALUE}
+                >
                   {option.label}
                 </SelectItem>
               ))}
