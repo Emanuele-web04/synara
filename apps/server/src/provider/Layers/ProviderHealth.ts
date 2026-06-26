@@ -53,6 +53,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "../codexCliVersion";
+import { buildClaudeProcessEnv } from "../claudeEnvironment";
 import { ServerConfig } from "../../config";
 import { ServerSettingsService } from "../../serverSettings";
 import { isWindowsShellCommandMissingResult } from "../../shell-command-detection";
@@ -916,11 +917,7 @@ function makeClaudeProbeEnv(
   environment?: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
-  return {
-    ...process.env,
-    ...(environment ?? {}),
-    ...(normalizedHomePath ? { HOME: normalizedHomePath } : {}),
-  };
+  return buildClaudeProcessEnv(normalizedHomePath, environment);
 }
 
 const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>

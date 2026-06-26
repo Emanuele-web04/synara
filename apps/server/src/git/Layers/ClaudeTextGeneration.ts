@@ -31,6 +31,7 @@ import {
   sanitizeThreadRecap,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+import { buildClaudeProcessEnv } from "../../provider/claudeEnvironment.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
 
@@ -83,12 +84,7 @@ function resolveClaudeEnvironment(input: {
   >[0]["providerOptions"];
 }): NodeJS.ProcessEnv {
   const claudeOptions = input.providerOptions?.claudeAgent;
-  const homePath = claudeOptions?.homePath?.trim();
-  return {
-    ...process.env,
-    ...(claudeOptions?.environment ?? {}),
-    ...(homePath ? { HOME: homePath } : {}),
-  };
+  return buildClaudeProcessEnv(claudeOptions?.homePath, claudeOptions?.environment);
 }
 
 function resolveClaudeEffort(

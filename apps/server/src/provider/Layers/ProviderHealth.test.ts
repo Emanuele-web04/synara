@@ -111,6 +111,26 @@ function assertProviderInstanceEnv(
   assert.strictEqual(env?.[key], expected);
 }
 
+function withProcessPlatform<T, E, R>(
+  platform: NodeJS.Platform,
+  effect: Effect.Effect<T, E, R>,
+): Effect.Effect<T, E, R> {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: platform });
+      return descriptor;
+    }),
+    () => effect,
+    (descriptor) =>
+      Effect.sync(() => {
+        if (descriptor) {
+          Object.defineProperty(process, "platform", descriptor);
+        }
+      }),
+  );
+}
+
 const allProvidersDisabledSettings = {
   providers: {
     codex: { enabled: false },
@@ -1123,20 +1143,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("passes configured instance HOME and environment to Claude probes", () =>
-      Effect.gen(function* () {
-        const status = yield* makeCheckClaudeProviderStatus(
-          undefined,
-          "/custom/bin/claude",
-          "/tmp/claude-work-home",
-          { SYNARA_TEST_INSTANCE: "claude-work" },
-        );
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
+    it.effect("passes configured Windows profile HOME and environment to Claude probes", () =>
+      withProcessPlatform(
+        "win32",
+        Effect.gen(function* () {
+          const status = yield* makeCheckClaudeProviderStatus(
+            undefined,
+            "/custom/bin/claude",
+            "C:\\Users\\work\\.claude-work",
+            { SYNARA_TEST_INSTANCE: "claude-work" },
+          );
+          assert.strictEqual(status.status, "ready");
+        }),
+      ).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "/custom/bin/claude");
-            assert.strictEqual(env?.HOME, "/tmp/claude-work-home");
+            assert.strictEqual(env?.HOME, "C:\\Users\\work\\.claude-work");
+            assert.strictEqual(env?.USERPROFILE, "C:\\Users\\work\\.claude-work");
+            assert.strictEqual(env?.APPDATA, "C:\\Users\\work\\.claude-work\\AppData\\Roaming");
+            assert.strictEqual(env?.LOCALAPPDATA, "C:\\Users\\work\\.claude-work\\AppData\\Local");
+            assert.strictEqual(env?.HOMEDRIVE, "C:");
+            assert.strictEqual(env?.HOMEPATH, "\\Users\\work\\.claude-work");
             assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "claude-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
