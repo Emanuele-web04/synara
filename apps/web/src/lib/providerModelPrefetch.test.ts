@@ -5,7 +5,7 @@
 // Layer: Web lib tests
 
 import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
-import type { ProviderKind, ServerProviderStatus } from "@synara/contracts";
+import type { ProviderInstanceId, ProviderKind, ServerProviderStatus } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -17,7 +17,33 @@ import {
   resolveNewThreadModelPrefetchCwd,
   type ProviderModelPrefetchSettings,
 } from "./providerModelPrefetch";
-import { providerDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+import { providerDiscoveryQueryKeys as rawProviderDiscoveryQueryKeys } from "./providerDiscoveryReactQuery";
+
+const providerDiscoveryQueryKeys = {
+  ...rawProviderDiscoveryQueryKeys,
+  models: (
+    provider: ProviderKind,
+    binaryPath: string | null,
+    apiEndpoint: string | null,
+    agentDir: string | null,
+    cwd: string | null,
+    homePath: string | null = null,
+    shadowHomePath: string | null = null,
+    accountId: string | null = null,
+    instanceId: ProviderInstanceId = provider,
+  ) =>
+    rawProviderDiscoveryQueryKeys.models(
+      provider,
+      binaryPath,
+      apiEndpoint,
+      agentDir,
+      cwd,
+      homePath,
+      shadowHomePath,
+      accountId,
+      instanceId,
+    ),
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -47,6 +73,8 @@ function makeSettings(
 function makeStatus(provider: ProviderKind, available: boolean): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     available,
     status: available ? "ready" : "error",
     authStatus: "authenticated",
@@ -191,7 +219,54 @@ describe("providerModelsPrefetchQueryOptions", () => {
     // OMP's catalog is global, so cwd is forced to null — the prefetch must land on the
     // same cwd-agnostic key the composer reads and the startup warmer (ProviderModelDiscoveryWarmer) writes.
     expect(ompOptions.queryKey).toEqual(
-      providerDiscoveryQueryKeys.models("omp", "/bin/omp", null, "/tmp/omp-agent", null),
+      providerDiscoveryQueryKeys.models(
+        "omp",
+        "/bin/omp",
+        null,
+        "/tmp/omp-agent",
+        null,
+        null,
+        null,
+        null,
+        "omp",
+      ),
+    );
+  });
+
+  it("uses the selected instance identity and config without inheriting default-driver paths", () => {
+    const settings = makeSettings({
+      cursorBinaryPath: "/bin/default-cursor",
+      cursorApiEndpoint: "https://default.example",
+      providerInstances: {
+        cursor_work: {
+          driver: "cursor",
+          displayName: "Cursor Work",
+          config: {
+            binaryPath: "/bin/work-cursor",
+            apiEndpoint: "https://work.example",
+          },
+        },
+      },
+    });
+
+    expect(
+      providerModelsPrefetchQueryOptions({
+        provider: "cursor",
+        instanceId: "cursor_work",
+        settings,
+      }).queryKey,
+    ).toEqual(
+      providerDiscoveryQueryKeys.models(
+        "cursor",
+        "/bin/work-cursor",
+        "https://work.example",
+        null,
+        null,
+        null,
+        null,
+        null,
+        "cursor_work",
+      ),
     );
   });
 });

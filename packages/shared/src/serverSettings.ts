@@ -8,7 +8,7 @@ import {
   type ServerSettingsPatch,
 } from "@synara/contracts";
 import { deepMerge, type DeepPartial } from "./Struct";
-import { deriveProviderInstances } from "./providerInstances";
+import { defaultInstanceIdForProvider, deriveProviderInstances } from "./providerInstances";
 
 function defaultModelForProvider(provider: ProviderKind): string | undefined {
   // OMP resolves its model through role config, so a provider switch keeps the
@@ -42,9 +42,8 @@ export function applyServerSettingsPatch(
 
   const patchedInstanceId =
     selectionPatch.instanceId ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
-      ? selectionPatch.provider
+    (selectionPatch.provider
+      ? defaultInstanceIdForProvider(selectionPatch.provider)
       : current.textGenerationModelSelection.instanceId);
   const patchedInstance =
     patchedInstanceId !== undefined

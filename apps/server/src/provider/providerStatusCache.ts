@@ -6,7 +6,11 @@
  *
  * @module providerStatusCache
  */
-import { ServerProviderStatus, type ProviderInstanceId } from "@synara/contracts";
+import {
+  ServerProviderStatus,
+  defaultInstanceIdForDriver,
+  type ProviderInstanceId,
+} from "@synara/contracts";
 import { Cause, Effect, FileSystem, Schema } from "effect";
 import { writeFileStringAtomically } from "../atomicWrite";
 
@@ -28,7 +32,7 @@ const decodeProviderStatusCache = Schema.decodeUnknownEffect(
 );
 
 const providerOrderRank = (provider: ServerProviderStatus["provider"]): number => {
-  const rank = PROVIDER_STATUS_CACHE_IDS.indexOf(provider);
+  const rank = (PROVIDER_STATUS_CACHE_IDS as readonly string[]).indexOf(provider);
   return rank === -1 ? Number.MAX_SAFE_INTEGER : rank;
 };
 
@@ -42,6 +46,14 @@ export const orderProviderStatuses = (
     }
     return (left.instanceId ?? left.provider).localeCompare(right.instanceId ?? right.provider);
   });
+
+function normalizeProviderStatusIdentity(status: ServerProviderStatus): ServerProviderStatus {
+  return {
+    ...status,
+    instanceId: status.instanceId ?? defaultInstanceIdForDriver(status.provider),
+    driver: status.driver ?? status.provider,
+  };
+}
 
 export function resolveProviderStatusCachePath(input: {
   readonly stateDir: string;
@@ -83,21 +95,28 @@ export const readProviderStatusCache = (
         onSuccess: Effect.succeed,
       }),
     );
-    if (!status || !expected) {
-      return status;
+    if (!status) {
+      return undefined;
+    }
+    const normalizedStatus = normalizeProviderStatusIdentity(status);
+    if (!expected) {
+      return normalizedStatus;
     }
 
     const expectedInstanceId = expected.instanceId ?? expected.provider;
-    const actualInstanceId = status.instanceId ?? status.provider;
-    if (status.provider === expected.provider && actualInstanceId === expectedInstanceId) {
-      return status;
+    const actualInstanceId = normalizedStatus.instanceId;
+    if (
+      normalizedStatus.provider === expected.provider &&
+      actualInstanceId === expectedInstanceId
+    ) {
+      return normalizedStatus;
     }
 
     yield* Effect.logWarning("provider status cache identity mismatch, ignoring", {
       path: filePath,
       expectedProvider: expected.provider,
       expectedInstanceId,
-      actualProvider: status.provider,
+      actualProvider: normalizedStatus.provider,
       actualInstanceId,
     });
     return undefined;

@@ -5,7 +5,7 @@
 
 import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   filterPromptProviderMentionReferences,
@@ -16,7 +16,11 @@ import {
 import { effectiveComposerAttachmentCount } from "~/lib/composerSend";
 import { useComposerImageIntake } from "~/hooks/useComposerImageIntake";
 import { newThreadId } from "~/lib/utils";
-import { resolveSelectableProviderInstanceId, type AppSettings } from "../../appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  type AppSettings,
+} from "../../appSettings";
 import {
   type ComposerImageAttachment,
   providerInstanceModelSelectionKey,
@@ -61,14 +65,25 @@ export function useKanbanTaskScratchDraft(input: {
   const stickyModelSelectionByProvider = useComposerDraftStore(
     (state) => state.stickyModelSelectionByProvider,
   );
+  const activeProviderInstanceId = scratchDraft.activeProvider ?? stickyActiveProvider;
+  const providerInstances = useMemo(
+    () => getProviderInstanceOptions(input.settings),
+    [input.settings],
+  );
   const selectedProvider: ProviderKind =
-    scratchDraft.activeProvider ?? stickyActiveProvider ?? input.defaultProvider;
+    (activeProviderInstanceId
+      ? (scratchDraft.modelSelectionByProvider[activeProviderInstanceId]?.provider ??
+        stickyModelSelectionByProvider[activeProviderInstanceId]?.provider ??
+        providerInstances.find((instance) => instance.instanceId === activeProviderInstanceId)
+          ?.provider)
+      : null) ?? input.defaultProvider;
   const selectedProviderInstanceId: ProviderInstanceId = resolveSelectableProviderInstanceId(
     input.settings,
     selectedProvider,
-    Object.values(scratchDraft.modelSelectionByProvider).find(
-      (selection) => selection?.provider === selectedProvider,
-    )?.instanceId ??
+    activeProviderInstanceId ??
+      Object.values(scratchDraft.modelSelectionByProvider).find(
+        (selection) => selection?.provider === selectedProvider,
+      )?.instanceId ??
       Object.values(stickyModelSelectionByProvider).find(
         (selection) => selection?.provider === selectedProvider,
       )?.instanceId,

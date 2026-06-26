@@ -7,6 +7,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
+  type ProviderInstanceId,
   type ProviderKind,
   type ServerProviderStatus,
   type ServerSettings,
@@ -34,6 +35,7 @@ import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState
 
 import {
   getCodexAccountOptions,
+  mergeProviderInstanceConfigPatch,
   normalizeCodexAccounts,
   type AppSettings,
   type AppSettingsBinding,
@@ -52,7 +54,7 @@ import {
 } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import { ensureNativeApi } from "~/nativeApi";
-import { sameProviderOrder } from "~/providerOrdering";
+import { isProviderKind, sameProviderOrder } from "~/providerOrdering";
 import {
   getVisibleProviderUpdateStatuses,
   isProviderLatestVersionKnowable,
@@ -62,6 +64,7 @@ import {
   shouldShowProviderUpdateStatus,
   withProviderUpdateTimeout,
 } from "~/providerUpdates";
+import { providerStatusInstanceKey } from "~/lib/providerAvailability";
 import { SETTINGS_TARGETS } from "~/settingsNavigation";
 import {
   SETTINGS_INSET_LIST_CLASS_NAME,
@@ -667,11 +670,17 @@ function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined
   return state.output?.trim() || state.message || "The provider update did not complete.";
 }
 
+function providerStatusDisplayName(status: ServerProviderStatus): string {
+  if (status.displayName?.trim()) return status.displayName;
+  const driver = status.driver ?? status.provider;
+  return isProviderKind(driver) ? PROVIDER_DISPLAY_NAMES[driver] : driver;
+}
+
 function ProviderUpdateAction(props: {
   providerStatus: ServerProviderStatus;
   active: boolean;
   disabled: boolean;
-  onUpdate: (provider: ProviderKind) => void;
+  onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
 }) {
   const advisory = props.providerStatus.versionAdvisory;
   return (
@@ -683,7 +692,9 @@ function ProviderUpdateAction(props: {
       title={advisory?.updateCommand ? `Run ${advisory.updateCommand}` : undefined}
       onClick={(event: MouseEvent<HTMLButtonElement>) => {
         event.stopPropagation();
-        props.onUpdate(props.providerStatus.provider);
+        const driver = props.providerStatus.driver ?? props.providerStatus.provider;
+        if (!isProviderKind(driver)) return;
+        props.onUpdate(driver, providerStatusInstanceKey(props.providerStatus));
       }}
     >
       {props.active ? (
@@ -975,10 +986,6 @@ function ProviderInstancesControl(props: {
   ) => {
     const existing = props.settings.providerInstances[instanceId];
     if (!existing) return;
-    const existingConfig =
-      existing.config && typeof existing.config === "object" && !Array.isArray(existing.config)
-        ? (existing.config as Record<string, unknown>)
-        : {};
     const { displayName: _existingDisplayName, ...existingWithoutDisplayName } = existing;
     const displayName = patch.displayName?.trim();
     updateInstances({
@@ -993,7 +1000,9 @@ function ProviderInstancesControl(props: {
             : {}
           : {}),
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
-        ...(patch.config ? { config: { ...existingConfig, ...patch.config } } : {}),
+        ...(patch.config
+          ? { config: mergeProviderInstanceConfigPatch(existing.config, patch.config) }
+          : {}),
       },
     });
   };
@@ -1124,9 +1133,9 @@ function ProviderToolRow(props: {
     "providers" | "providerInstances" | "enableProviderUpdateChecks"
   > | null;
   providerStatus: ServerProviderStatus | undefined;
-  updatingProviders: ReadonlySet<ProviderKind>;
+  updatingProviders: ReadonlySet<ProviderInstanceId>;
   onOpenChange: (open: boolean) => void;
-  onUpdate: (provider: ProviderKind) => void;
+  onUpdate: (provider: ProviderKind, instanceId?: ProviderInstanceId) => void;
   updateSettings: (patch: Partial<AppSettings>) => void;
 }) {
   const title = PROVIDER_DISPLAY_NAMES[props.config.provider];
@@ -1153,7 +1162,11 @@ function ProviderToolRow(props: {
     : null;
   const updateActive = Boolean(
     (props.providerStatus && isProviderUpdateActive(props.providerStatus)) ||
-    props.updatingProviders.has(props.config.provider),
+    props.updatingProviders.has(
+      props.providerStatus
+        ? providerStatusInstanceKey(props.providerStatus)
+        : props.config.provider,
+    ),
   );
   const showUpdateButton = props.providerStatus
     ? shouldPromptProviderUpdate(props.providerStatus) &&
@@ -1289,7 +1302,7 @@ export function ProvidersSettingsPanel({
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
     () => createProviderInstallDisclosureState(settings),
   );
-  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderKind>>(
+  const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderInstanceId>>(
     () => new Set(),
   );
   const providerEnablementMutationInFlightRef = useRef(false);
@@ -1321,7 +1334,15 @@ export function ProvidersSettingsPanel({
   );
   const isProviderOrderDirty = !sameProviderOrder(settings.providerOrder, defaults.providerOrder);
   const providerStatusByProvider = useMemo(
-    () => new Map(localProviderStatuses.map((status) => [status.provider, status])),
+    () =>
+      new Map<ProviderKind, ServerProviderStatus>(
+        localProviderStatuses.flatMap((status) => {
+          const driver = status.driver ?? status.provider;
+          return isProviderKind(driver) && providerStatusInstanceKey(status) === driver
+            ? [[driver, status] as const]
+            : [];
+        }),
+      ),
     [localProviderStatuses],
   );
   const availableProviderCount = orderedProviderVisibilityOptions.filter(
@@ -1391,21 +1412,29 @@ export function ProvidersSettingsPanel({
   );
 
   const runProviderUpdate = useCallback(
-    async (provider: ProviderKind) => {
-      if (updatingProviders.has(provider)) return;
-      setUpdatingProviders((current) => new Set(current).add(provider));
+    async (provider: ProviderKind, instanceId?: ProviderInstanceId) => {
+      const targetId = instanceId ?? provider;
+      if (updatingProviders.has(targetId)) return;
+      setUpdatingProviders((current) => new Set(current).add(targetId));
       await withProviderUpdateTimeout({
         provider,
-        request: ensureNativeApi().server.updateProvider({ provider }),
+        request: ensureNativeApi().server.updateProvider({
+          provider,
+          ...(instanceId ? { instanceId } : {}),
+        }),
       })
         .then((result) => {
-          const refreshedProvider = result.providers.find((status) => status.provider === provider);
+          const refreshedProvider = result.providers.find(
+            (status) =>
+              (status.driver ?? status.provider) === provider &&
+              providerStatusInstanceKey(status) === targetId,
+          );
           const failureMessage = providerUpdateFailureMessage(refreshedProvider);
           if (failureMessage) {
             const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
             toastManager.add({
               type: "error",
-              title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+              title: `Could not update ${refreshedProvider ? providerStatusDisplayName(refreshedProvider) : PROVIDER_DISPLAY_NAMES[provider]}`,
               description: manualCommand
                 ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
                 : failureMessage,
@@ -1415,7 +1444,7 @@ export function ProvidersSettingsPanel({
           }
           toastManager.add({
             type: "success",
-            title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
+            title: `${refreshedProvider ? providerStatusDisplayName(refreshedProvider) : PROVIDER_DISPLAY_NAMES[provider]} update finished`,
             description: "New sessions will use the refreshed provider.",
           });
         })
@@ -1432,7 +1461,7 @@ export function ProvidersSettingsPanel({
             .catch(() => undefined);
           setUpdatingProviders((current) => {
             const next = new Set(current);
-            next.delete(provider);
+            next.delete(targetId);
             return next;
           });
         });
@@ -1669,14 +1698,15 @@ export function ProvidersSettingsPanel({
                 )}
               >
                 {outdatedProviderStatuses.map((providerStatus) => {
+                  const instanceId = providerStatusInstanceKey(providerStatus);
                   const updateActive =
                     isProviderUpdateActive(providerStatus) ||
-                    updatingProviders.has(providerStatus.provider);
+                    updatingProviders.has(instanceId);
                   const updateLabel = providerUpdateStatusLabel(providerStatus);
                   return (
                     <SettingsListRow
-                      key={providerStatus.provider}
-                      title={PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
+                      key={instanceId}
+                      title={providerStatusDisplayName(providerStatus)}
                       description={updateLabel || undefined}
                       actions={
                         providerStatus.versionAdvisory?.canUpdate ? (

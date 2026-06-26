@@ -6,7 +6,9 @@
 
 import type {
   AssistantDeliveryMode,
+  ModelSelection,
   ProjectId,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   ThreadEnvironmentMode,
@@ -14,6 +16,7 @@ import type {
 } from "@synara/contracts";
 import { buildPromptThreadTitleFallback } from "@synara/shared/chatThreads";
 import { isPendingThreadWorktree } from "@synara/shared/threadEnvironment";
+import type { ProviderInstanceOption } from "../appSettings";
 import {
   buildKanbanComposerDraftSnapshot,
   resolveKanbanDraftOpenThreadReason,
@@ -63,11 +66,57 @@ export type KanbanDraftDispatchResult =
   | { kind: "unavailable" }
   | { kind: "error"; message: string };
 
+type KanbanDispatchProviderInstance = Pick<ProviderInstanceOption, "instanceId" | "provider">;
+
+export interface KanbanDraftDispatchTarget {
+  readonly modelSelection: ModelSelection;
+  readonly provider: ProviderKind;
+  readonly instanceId: ProviderInstanceId;
+}
+
+function resolveProviderForInstanceId(
+  providerInstances: ReadonlyArray<KanbanDispatchProviderInstance> | undefined,
+  instanceId: ProviderInstanceId,
+): ProviderKind | null {
+  return (
+    providerInstances?.find((instance) => instance.instanceId === instanceId)?.provider ?? null
+  );
+}
+
+export function resolveKanbanDraftDispatchTarget(input: {
+  threadId: ThreadId;
+  projectId: ProjectId;
+  thread: SidebarThreadSummary | null;
+  defaultProvider: ProviderKind;
+  providerInstances?: ReadonlyArray<KanbanDispatchProviderInstance> | undefined;
+}): KanbanDraftDispatchTarget {
+  const composerStore = useComposerDraftStore.getState();
+  const draftComposerState = composerStore.draftsByThreadId[input.threadId] ?? null;
+  const project =
+    useStore.getState().projects.find((candidate) => candidate.id === input.projectId) ?? null;
+  const resolveConfiguredProvider = (instanceId: ProviderInstanceId) =>
+    draftComposerState?.modelSelectionByProvider[instanceId]?.provider ??
+    resolveProviderForInstanceId(input.providerInstances, instanceId);
+  const modelSelection = resolvePreferredComposerModelSelection({
+    draft: draftComposerState,
+    threadModelSelection: input.thread?.modelSelection ?? null,
+    projectModelSelection: project?.defaultModelSelection ?? null,
+    defaultProvider: input.defaultProvider,
+    resolveProviderForInstanceId: resolveConfiguredProvider,
+  });
+  return {
+    modelSelection,
+    provider: modelSelection.provider,
+    instanceId: modelSelection.instanceId ?? modelSelection.provider,
+  };
+}
+
 export async function dispatchKanbanDraftCard(input: {
   card: KanbanCard;
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
+  providerInstances?: ReadonlyArray<KanbanDispatchProviderInstance> | undefined;
 }): Promise<KanbanDraftDispatchResult> {
   const { card } = input;
   if (resolveDraftDropAction(card) !== "dispatch") {
@@ -83,6 +132,7 @@ export async function dispatchKanbanDraftCard(input: {
     defaultProvider: input.defaultProvider,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
+    providerInstances: input.providerInstances,
   });
 }
 
@@ -94,6 +144,7 @@ interface KanbanDraftDispatchInput {
   defaultProvider: ProviderKind;
   assistantDeliveryMode: AssistantDeliveryMode;
   providerOptions?: ProviderStartOptions | undefined;
+  providerInstances?: ReadonlyArray<KanbanDispatchProviderInstance> | undefined;
 }
 
 // Racing callers (a re-drop before the board re-derives, drag + send-now) must
@@ -143,14 +194,16 @@ async function dispatchKanbanDraftThreadOnce(
   }
 
   const appState = useStore.getState();
-  const project = appState.projects.find((candidate) => candidate.id === projectId) ?? null;
   const existingThread = thread ? getThreadFromState(appState, threadId) : null;
-  const modelSelection = resolvePreferredComposerModelSelection({
-    draft: draftComposerState,
-    threadModelSelection: thread?.modelSelection ?? null,
-    projectModelSelection: project?.defaultModelSelection ?? null,
+  const dispatchTarget = resolveKanbanDraftDispatchTarget({
+    threadId,
+    projectId,
+    thread,
     defaultProvider: input.defaultProvider,
+    providerInstances: input.providerInstances,
   });
+  const modelSelection = dispatchTarget.modelSelection;
+  const project = appState.projects.find((candidate) => candidate.id === projectId) ?? null;
   const draftThread = composerStore.getDraftThread(threadId);
   // Worktree creation is owned by the full chat composer path. Kanban stays a
   // control surface and opens chat when a draft still needs that preflight.
@@ -245,6 +298,7 @@ async function dispatchKanbanDraftThreadOnce(
     projectId,
     title: thread?.title ?? fallbackTitle,
     provider: modelSelection.provider,
+    providerInstanceId: modelSelection.instanceId ?? modelSelection.provider,
     baselineTurnId: thread?.latestTurn?.turnId ?? null,
     droppedAtMs,
   });
@@ -262,6 +316,8 @@ async function dispatchKanbanDraftThreadOnce(
         options: undefined,
         projectDefaultModelSelection: project?.defaultModelSelection ?? null,
         projectId,
+        resolveProviderForInstanceId: (instanceId) =>
+          resolveProviderForInstanceId(input.providerInstances, instanceId),
       });
       const promotion = await promoteThreadCreate(
         {

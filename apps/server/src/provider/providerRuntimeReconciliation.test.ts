@@ -81,6 +81,7 @@ function binding(
   return {
     threadId: THREAD_ID,
     provider,
+    providerInstanceId: provider,
     status: activeTurnId === null ? "stopped" : "running",
     lastSeenAt: "2026-07-23T20:00:00.000Z",
     runtimePayload: { activeTurnId },

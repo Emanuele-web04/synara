@@ -856,6 +856,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+export function mergeProviderInstanceConfigPatch(
+  existingConfig: unknown,
+  patchConfig: Record<string, unknown>,
+): Record<string, unknown> {
+  const merged = {
+    ...(isRecord(existingConfig) ? existingConfig : {}),
+    ...patchConfig,
+  };
+  for (const key of Object.keys(patchConfig)) {
+    delete merged[`${key}Redacted`];
+  }
+  return merged;
+}
+
 export function getProviderInstanceOptions(
   settings: Pick<
     AppSettings,
@@ -1606,21 +1620,40 @@ export function patchCustomModels(
 }
 
 export function patchCustomModelsForProviderInstance(
-  settings: Pick<AppSettings, "providerInstances">,
+  settings: Pick<AppSettings, "providerInstances"> &
+    Partial<
+      Pick<AppSettings, "codexAccounts" | "codexHomePath">
+    >,
   instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
   models: string[],
 ): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
   const existing = settings.providerInstances[instance.instanceId];
+  const codexAccount =
+    instance.provider === "codex" && !instance.isDefault
+      ? (settings.codexAccounts ?? []).find(
+          (account) => providerInstanceIdForCodexAccount(account.id) === instance.instanceId,
+        )
+      : undefined;
 
   return {
     providerInstances: {
       ...settings.providerInstances,
       [instance.instanceId]: {
-        ...(existing ?? { driver: instance.provider, enabled: true }),
-        config: {
-          ...(isRecord(existing?.config) ? existing.config : {}),
+        ...(existing ?? {
+          driver: instance.provider,
+          enabled: true,
+          ...(codexAccount?.label.trim() ? { displayName: codexAccount.label.trim() } : {}),
+        }),
+        config: mergeProviderInstanceConfigPatch(existing?.config, {
+          ...(codexAccount
+            ? {
+                homePath: codexAccount.homePath.trim() || settings.codexHomePath || "",
+                shadowHomePath: codexAccount.shadowHomePath.trim(),
+                accountId: codexAccount.id,
+              }
+            : {}),
           customModels: models,
-        },
+        }),
       },
     },
   };
@@ -2190,6 +2223,18 @@ export function getCustomBinaryPathForProvider(
     case "omp":
       return normalizeProviderBinaryPathOverride(provider, settings.ompBinaryPath);
   }
+}
+
+export function getCustomBinaryPathForProviderInstance(
+  settings: Parameters<typeof getProviderStartOptions>[0],
+  provider: ProviderKind,
+  instanceId: ProviderInstanceId,
+): string {
+  const providerOptions = getProviderStartOptions(settings, instanceId)?.[provider];
+  const binaryPath = isRecord(providerOptions) ? providerOptions.binaryPath : undefined;
+  return typeof binaryPath === "string"
+    ? normalizeProviderBinaryPathOverride(provider, binaryPath)
+    : "";
 }
 
 export function useAppSettings() {

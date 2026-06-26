@@ -13,6 +13,7 @@ import {
 import { CircleAlertIcon, TriangleAlertIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { ChatColumnBannerFrame } from "./ChatColumnBannerFrame";
+import { isProviderKind } from "../../providerOrdering";
 
 export const ProviderHealthBanner = function ProviderHealthBanner({
   onDismiss,
@@ -25,8 +26,10 @@ export const ProviderHealthBanner = function ProviderHealthBanner({
     return null;
   }
 
-  const providerLabel =
-    status.displayName?.trim() || PROVIDER_DISPLAY_NAMES[status.provider] || status.provider;
+  const providerLabelFallback = isProviderKind(status.provider)
+    ? PROVIDER_DISPLAY_NAMES[status.provider]
+    : status.provider;
+  const providerLabel = status.displayName?.trim() || providerLabelFallback || status.provider;
   const defaultMessage =
     status.status === "error"
       ? `${providerLabel} provider is unavailable.`

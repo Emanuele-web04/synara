@@ -82,7 +82,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           provider_name AS "providerName",
-          COALESCE(provider_instance_id, provider_name) AS "providerInstanceId",
+          provider_instance_id AS "providerInstanceId",
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,
@@ -103,7 +103,7 @@ const makeProviderSessionRuntimeRepository = Effect.gen(function* () {
         SELECT
           thread_id AS "threadId",
           provider_name AS "providerName",
-          COALESCE(provider_instance_id, provider_name) AS "providerInstanceId",
+          provider_instance_id AS "providerInstanceId",
           adapter_key AS "adapterKey",
           runtime_mode AS "runtimeMode",
           status,

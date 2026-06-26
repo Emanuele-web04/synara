@@ -64,6 +64,17 @@ export interface ProviderModelCatalog {
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
 
+// OMP's catalog is global, but its `modelRoles` merge a project layer, so the
+// composer keeps cwd in the key for roles to reflect the active project.
+const CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS: ReadonlySet<ProviderKind> = new Set([
+  "antigravity",
+  "droid",
+  "opencode",
+  "pi",
+  "devin",
+  "omp",
+]);
+
 function readProviderOptionString(options: unknown, key: string): string | null {
   if (!options || typeof options !== "object" || Array.isArray(options)) {
     return null;
@@ -168,10 +179,10 @@ export function useProviderModelCatalog(input: {
   );
   const selectedInstanceQueryOption = (
     provider: ProviderKind,
-  ): { readonly instanceId?: ProviderInstanceId } => {
+  ): { readonly instanceId: ProviderInstanceId } => {
     const instanceId =
       selectedProvider === provider ? selectedProviderInstanceId?.trim() : undefined;
-    return instanceId ? { instanceId } : {};
+    return { instanceId: instanceId || provider };
   };
   const prefetchProviderSet = useMemo(
     () =>
@@ -229,7 +240,9 @@ export function useProviderModelCatalog(input: {
       settings,
       provider,
       instanceId: instance?.instanceId ?? provider,
-      cwd: discoveryCwd,
+      // Only project-scoped catalogs key on cwd, matching the new-thread
+      // prefetch so a warmed catalog serves the composer's first read.
+      cwd: CWD_SCOPED_MODEL_DISCOVERY_PROVIDERS.has(provider) ? discoveryCwd : null,
       enabled,
     });
   };
@@ -325,7 +338,13 @@ export function useProviderModelCatalog(input: {
     providerAgentsQueryOptions({
       provider: "opencode",
       ...selectedInstanceQueryOption("opencode"),
-      binaryPath: settings.openCodeBinaryPath || null,
+      binaryPath: readProviderOptionString(
+        getProviderStartOptions(
+          settings,
+          selectedInstanceQueryOption("opencode").instanceId,
+        )?.opencode,
+        "binaryPath",
+      ),
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),

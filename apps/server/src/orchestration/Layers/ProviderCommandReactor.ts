@@ -143,6 +143,7 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   mergeProviderStartOptions,
   providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
   resolveProviderInstance,
 } from "@synara/shared/providerInstances";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
@@ -1374,8 +1375,13 @@ const make = Effect.gen(function* () {
     // Skip the configured fallback when its provider is currently unavailable.
     const settings = yield* serverSettings.getSettings;
     const statuses = yield* providerHealth.getStatuses;
+    const selectedProviderInstanceId = resolveModelSelectionInstanceId(
+      settings.textGenerationModelSelection,
+    );
     const fallbackStatus = statuses.find(
-      (status) => status.provider === settings.textGenerationModelSelection.provider,
+      (status) =>
+        (status.driver ?? status.provider) === settings.textGenerationModelSelection.provider &&
+        (status.instanceId ?? status.provider) === selectedProviderInstanceId,
     );
     if (fallbackStatus && !fallbackStatus.available) {
       return null;
@@ -1444,9 +1450,24 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  const resolveKnownProviderForModelSelection = Effect.fnUntraced(function* (
+    modelSelection: ModelSelection,
+  ): Effect.fn.Return<ProviderKind | undefined> {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (settings === null) return undefined;
+    return (
+      resolveProviderInstance(settings, {
+        instanceId: resolveModelSelectionInstanceId(modelSelection),
+      })?.driver ?? undefined
+    );
+  });
+
   const setThreadSessionError = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly runtimeMode?: RuntimeMode;
+    readonly modelSelection?: ModelSelection;
     readonly detail: string;
     readonly expectedSession?: Pick<OrchestrationSession, "status" | "updatedAt">;
     readonly createdAt: string;
@@ -1455,16 +1476,20 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const errorModelSelection = input.modelSelection ?? thread.modelSelection;
+    const requestedProviderInstanceId = resolveModelSelectionInstanceId(errorModelSelection);
+    const resolvedProviderName = yield* resolveKnownProviderForModelSelection(errorModelSelection);
+    const existingBoundProviderName =
+      thread.session?.providerInstanceId !== requestedProviderInstanceId
+        ? thread.session?.providerName
+        : null;
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
         threadId: input.threadId,
         status: "error",
-        providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-        providerInstanceId:
-          thread.session?.providerInstanceId ??
-          thread.modelSelection.instanceId ??
-          thread.modelSelection.provider,
+        providerName: existingBoundProviderName ?? resolvedProviderName ?? errorModelSelection.provider,
+        providerInstanceId: thread.session?.providerInstanceId ?? requestedProviderInstanceId,
         runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: input.detail,
@@ -1473,6 +1498,47 @@ const make = Effect.gen(function* () {
       ...(input.expectedSession !== undefined ? { expectedSession: input.expectedSession } : {}),
       createdAt: input.createdAt,
     });
+  });
+
+  const projectThreadStartingIfIdle = Effect.fnUntraced(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly threadId: ThreadId;
+    readonly modelSelection?: ModelSelection;
+    readonly runtimeMode?: RuntimeMode;
+    readonly createdAt: string;
+    readonly force?: boolean;
+  }) {
+    const projectedModelSelection = input.modelSelection ?? input.thread.modelSelection;
+    const activeRuntimeSession =
+      input.force === true
+        ? undefined
+        : yield* providerService.listSessions().pipe(
+            Effect.map((sessions) =>
+              sessions.find((session) => session.threadId === input.threadId),
+            ),
+          );
+    const sessionProviderEstablished =
+      input.force !== true &&
+      (input.thread.latestTurn !== null || activeRuntimeSession !== undefined);
+    const projectedSession = deriveTurnStartSession({
+      threadId: input.threadId,
+      currentSession: input.force === true ? null : input.thread.session,
+      providerName:
+        (yield* resolveKnownProviderForModelSelection(projectedModelSelection)) ??
+        projectedModelSelection.provider,
+      providerInstanceId: resolveModelSelectionInstanceId(projectedModelSelection),
+      requestedRuntimeMode:
+        input.thread.session?.runtimeMode ?? input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+      requestedAt: input.createdAt,
+      sessionProviderEstablished,
+    });
+    if (projectedSession !== null) {
+      yield* setThreadSession({
+        threadId: input.threadId,
+        session: projectedSession,
+        createdAt: input.createdAt,
+      });
+    }
   });
 
   /**
@@ -1814,6 +1880,13 @@ const make = Effect.gen(function* () {
       instanceId: desiredProviderInstanceId,
     });
     const desiredProvider = desiredProviderInstance?.driver ?? desiredModelSelection.provider;
+    const currentProviderInstanceId =
+      thread.session?.providerInstanceId ??
+      thread.modelSelection.instanceId ??
+      thread.modelSelection.provider;
+    const requestedProviderInstanceChanged =
+      requestedModelSelection !== undefined &&
+      desiredProviderInstanceId !== currentProviderInstanceId;
     const desiredRoutedModelSelection =
       desiredProviderInstance && desiredProvider !== desiredModelSelection.provider
         ? ({
@@ -1843,7 +1916,7 @@ const make = Effect.gen(function* () {
       currentProvider !== undefined &&
       ((thread.latestTurn === null &&
         requestedModelSelection !== undefined &&
-        desiredProvider !== currentProvider) ||
+        (desiredProvider !== currentProvider || requestedProviderInstanceChanged)) ||
         thread.modelSelection.provider !== currentProvider)
         ? yield* resolveActiveSession(threadId)
         : undefined;
@@ -1899,14 +1972,11 @@ const make = Effect.gen(function* () {
     const preferredProvider: ProviderKind = providerRebindRequested
       ? thread.modelSelection.provider
       : (boundProvider ?? desiredProvider);
-    const currentProviderInstanceId =
-      thread.session?.providerInstanceId ??
-      thread.modelSelection.instanceId ??
-      thread.modelSelection.provider;
-    const requestedProviderInstanceChanged =
-      requestedModelSelection !== undefined &&
-      desiredProviderInstanceId !== currentProviderInstanceId;
-    if (thread.session !== null && requestedProviderInstanceChanged && !providerRebindRequested) {
+    if (
+      establishedProvider !== undefined &&
+      requestedProviderInstanceChanged &&
+      !providerRebindRequested
+    ) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
@@ -4251,6 +4321,9 @@ const make = Effect.gen(function* () {
                 yield* setThreadSessionError({
                   threadId: event.payload.threadId,
                   runtimeMode: event.payload.runtimeMode,
+                  ...(event.payload.modelSelection !== undefined
+                    ? { modelSelection: event.payload.modelSelection }
+                    : {}),
                   detail,
                   createdAt: event.payload.createdAt,
                 });
@@ -5818,6 +5891,7 @@ const make = Effect.gen(function* () {
       readonly preserveQueuedTurns?: boolean;
       readonly preserveThreadSession?: boolean;
       readonly activeTurnId?: TurnId | null;
+      readonly forceStartingProjection?: boolean;
     },
   ) {
     if (options?.preserveQueuedTurns !== true) {
@@ -5897,23 +5971,13 @@ const make = Effect.gen(function* () {
 
     const thread = yield* resolveThread(payload.threadId);
     if (thread && options?.preserveThreadSession !== true) {
-      yield* setThreadSession({
+      yield* projectThreadStartingIfIdle({
+        thread,
         threadId: payload.threadId,
-        session: {
-          threadId: payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          providerInstanceId:
-            thread.session?.providerInstanceId ??
-            payload.modelSelection?.instanceId ??
-            thread.modelSelection.instanceId ??
-            thread.modelSelection.provider,
-          runtimeMode: payload.runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: payload.createdAt,
-        },
+        ...(payload.modelSelection !== undefined ? { modelSelection: payload.modelSelection } : {}),
+        runtimeMode: payload.runtimeMode,
         createdAt: payload.createdAt,
+        force: options?.forceStartingProjection === true,
       });
     }
 
@@ -5983,22 +6047,13 @@ const make = Effect.gen(function* () {
       messageId: event.payload.messageId,
     });
     if (thread && !isQueuedMessageEdit) {
-      yield* setThreadSession({
+      yield* projectThreadStartingIfIdle({
+        thread,
         threadId: event.payload.threadId,
-        session: {
-          threadId: event.payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          providerInstanceId:
-            thread.session?.providerInstanceId ??
-            event.payload.modelSelection?.instanceId ??
-            thread.modelSelection.instanceId ??
-            thread.modelSelection.provider,
-          runtimeMode: event.payload.runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: event.payload.createdAt,
-        },
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        runtimeMode: event.payload.runtimeMode,
         createdAt: event.payload.createdAt,
       });
     }
@@ -6014,6 +6069,7 @@ const make = Effect.gen(function* () {
       yield* processMessageEditResendPayload(event.payload, {
         skipProviderRollback: true,
         activeTurnId,
+        forceStartingProjection: true,
       });
       return;
     }
@@ -6498,6 +6554,9 @@ const make = Effect.gen(function* () {
               setThreadSessionError({
                 threadId: event.payload.threadId,
                 runtimeMode: event.payload.runtimeMode,
+                ...(event.payload.modelSelection !== undefined
+                  ? { modelSelection: event.payload.modelSelection }
+                  : {}),
                 detail: Cause.pretty(cause),
                 createdAt: event.payload.createdAt,
               }).pipe(Effect.andThen(Effect.failCause(cause))),

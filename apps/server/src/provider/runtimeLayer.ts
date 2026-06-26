@@ -103,6 +103,7 @@ export function makeServerProviderLayer(
       Layer.provide(piAdapterLayer),
       Layer.provide(ompAdapterLayer),
       Layer.provideMerge(providerSessionDirectoryLayer),
+      Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
     );
     const providerServiceLayer = makeDurableProviderServiceLive({
       ...(canonicalEventLogger ? { canonicalEventLogger } : {}),

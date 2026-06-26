@@ -202,7 +202,7 @@ export interface ComposerThreadDraftState {
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
   modelSelectionByProvider: ModelSelectionByProviderInstance;
-  activeProvider: ProviderKind | null;
+  activeProvider: ProviderInstanceId | null;
   // Per-thread provider start options staged for dispatch (e.g. a group's worker
   // routing defaults). Unset means the global settings-derived options apply.
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
@@ -264,7 +264,7 @@ export interface ComposerDraftStoreState {
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
   stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
-  stickyActiveProvider: ProviderKind | null;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,

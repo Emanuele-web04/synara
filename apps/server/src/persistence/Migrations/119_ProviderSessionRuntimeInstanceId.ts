@@ -4,19 +4,27 @@ import * as Effect from "effect/Effect";
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  yield* sql`
-    ALTER TABLE provider_session_runtime
-    ADD COLUMN provider_instance_id TEXT
+  const columns = yield* sql<{ readonly name: string }>`
+    PRAGMA table_info(provider_session_runtime)
   `;
+  if (!columns.some((column) => column.name === "provider_instance_id")) {
+    yield* sql`
+      ALTER TABLE provider_session_runtime
+      ADD COLUMN provider_instance_id TEXT
+    `;
+  }
 
   yield* sql`
     UPDATE provider_session_runtime
     SET provider_instance_id = COALESCE(
       json_extract(runtime_payload_json, '$.providerInstanceId'),
-      json_extract(runtime_payload_json, '$.modelSelection.instanceId'),
-      provider_name
+      json_extract(runtime_payload_json, '$.modelSelection.instanceId')
     )
     WHERE provider_instance_id IS NULL
+      AND COALESCE(
+        json_extract(runtime_payload_json, '$.providerInstanceId'),
+        json_extract(runtime_payload_json, '$.modelSelection.instanceId')
+      ) IS NOT NULL
   `;
 
   yield* sql`

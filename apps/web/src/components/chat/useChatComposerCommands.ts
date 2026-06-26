@@ -1,6 +1,7 @@
 import {
   ThreadId,
   type ModelSlug,
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderSkillReference,
 } from "@synara/contracts";
@@ -62,7 +63,11 @@ interface ChatComposerCommandsInput {
   updateSelectedComposerMentions: ReturnType<
     typeof useComposerReferences
   >["updateSelectedComposerMentions"];
-  onProviderModelSelect: (provider: ProviderKind, model: ModelSlug) => Promise<void>;
+  onProviderModelSelect: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => Promise<void>;
   composerMenuItems: ComposerCommandItem[];
   composerHighlightedItemId: string | null;
   activePendingQuestion: ReturnType<typeof useChatPendingInteractions>["activePendingQuestion"];
@@ -265,7 +270,7 @@ export function useChatComposerCommands({
         return;
       }
       if (item.type === "model") {
-        onProviderModelSelect(item.provider, item.model);
+        onProviderModelSelect(item.provider, item.model, item.instanceId);
         applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
         return;
       }

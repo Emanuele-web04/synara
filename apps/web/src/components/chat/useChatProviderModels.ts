@@ -36,7 +36,6 @@ import {
   shouldShowComposerModelBootstrapSkeleton,
   threadHasProviderLockingActivity,
 } from "../ChatView.logic";
-import { AVAILABLE_PROVIDER_OPTIONS } from "./ProviderModelPicker";
 import { getComposerProviderState } from "./composerProviderRegistry";
 import { resolveRuntimeModelDescriptor } from "./runtimeModelCapabilities";
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
@@ -62,7 +61,15 @@ export function useChatProviderModels({
   const queryClient = useQueryClient();
   const prompt = composerDraft.prompt;
   const sessionProvider = activeThread?.session?.provider ?? null;
-  const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProviderInstanceIdByThreadId = composerDraft.activeProvider ?? null;
+  const selectedProviderByThreadId = selectedProviderInstanceIdByThreadId
+    ? (composerDraft.modelSelectionByProvider[selectedProviderInstanceIdByThreadId]?.provider ??
+      providerInstances.find(
+        (instance) => instance.instanceId === selectedProviderInstanceIdByThreadId,
+      )?.provider ??
+      null)
+    : null;
   const threadProvider =
     activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
   const hasThreadStarted = Boolean(
@@ -105,7 +112,6 @@ export function useChatProviderModels({
       settings.providerOrder,
     ],
   );
-  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const selectedProviderInstanceId = useMemo<ProviderInstanceId>(() => {
     const sessionInstanceId =
       activeThread?.session?.provider === selectedProvider
@@ -113,10 +119,15 @@ export function useChatProviderModels({
         : undefined;
     if (sessionInstanceId) return sessionInstanceId;
 
-    let candidateInstanceId: ProviderInstanceId | undefined;
-    const draftSelection = Object.values(composerDraft.modelSelectionByProvider).find(
-      (selection) => selection?.provider === selectedProvider,
-    );
+    let candidateInstanceId: ProviderInstanceId | undefined =
+      selectedProviderByThreadId === selectedProvider
+        ? (selectedProviderInstanceIdByThreadId ?? undefined)
+        : undefined;
+    const draftSelection = candidateInstanceId
+      ? composerDraft.modelSelectionByProvider[candidateInstanceId]
+      : Object.values(composerDraft.modelSelectionByProvider).find(
+          (selection) => selection?.provider === selectedProvider,
+        );
     if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
       candidateInstanceId = draftSelection.instanceId;
     }
@@ -142,6 +153,8 @@ export function useChatProviderModels({
     activeThread?.session?.providerInstanceId,
     composerDraft.modelSelectionByProvider,
     selectedProvider,
+    selectedProviderByThreadId,
+    selectedProviderInstanceIdByThreadId,
     settings,
   ]);
 
@@ -364,8 +377,13 @@ export function useChatProviderModels({
   const searchableModelOptions = useMemo(
     () =>
       buildSearchableModelOptions({
-        providerOptions: AVAILABLE_PROVIDER_OPTIONS,
+        providerOptions: providerInstances.map((instance) => ({
+          value: instance.provider,
+          label: instance.label,
+          instanceId: instance.instanceId,
+        })),
         modelOptionsByProvider,
+        modelOptionsByProviderInstance,
         providerOrder: settings.providerOrder,
         hiddenProviders: settings.hiddenProviders,
         protectedProviders: [selectedProvider],
@@ -374,6 +392,8 @@ export function useChatProviderModels({
     [
       lockedProvider,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
+      providerInstances,
       selectedProvider,
       settings.hiddenProviders,
       settings.providerOrder,
