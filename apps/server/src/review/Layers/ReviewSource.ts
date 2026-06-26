@@ -72,6 +72,8 @@ interface ReviewCacheIdentity {
   readonly tokenIdentity: string;
 }
 
+type ReviewPatchSource = NonNullable<ReviewWalkthrough["patchSource"]>;
+
 interface ReviewPreflightCacheEntry<T> {
   readonly value: T;
   readonly expiresAt: number;
@@ -1935,7 +1937,7 @@ const makeReviewSource = Effect.gen(function* () {
               data: walkthrough,
               fetchedAt,
             })
-            .pipe(Effect.catchAll(() => Effect.void));
+            .pipe(Effect.catch(() => Effect.void));
           yield* reviewUpdateBus.publish({
             _tag: "pullRequestWalkthrough",
             cwd: input.cwd,
