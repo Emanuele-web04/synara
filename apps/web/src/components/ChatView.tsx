@@ -2313,8 +2313,13 @@ export default function ChatView({
       ? null
       : activeProviderStatus;
   const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+    () =>
+      findProviderStatus(
+        providerStatuses,
+        "codex",
+        selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
+      ),
+    [providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeProjectCwd = activeProject?.cwd ?? null;
@@ -2692,6 +2697,7 @@ export default function ChatView({
     activeThreadId: activeThread?.id ?? null,
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     activeProviderStatus: voiceProviderStatus,
     pendingUserInputCount: pendingUserInputs.length,
     onTranscriptReady: appendVoiceTranscriptToComposer,

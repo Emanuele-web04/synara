@@ -8,16 +8,17 @@
 
 import nodePath from "node:path";
 
-import type {
-  ProfileQuota,
-  ProfileStats,
-  ProfileTokenStats,
-  ProviderKind,
-  StatsGetProfileStatsInput,
-  StatsGetProfileTokenStatsInput,
+import {
+  ProviderInstanceId,
+  type ProfileQuota,
+  type ProfileStats,
+  type ProfileTokenStats,
+  type ProviderKind,
+  type StatsGetProfileStatsInput,
+  type StatsGetProfileTokenStatsInput,
 } from "@synara/contracts";
 import { isBuiltInComposerSlashCommandName } from "@synara/shared/composerSlashCommands";
-import { Effect, Layer, ServiceMap } from "effect";
+import { Effect, Layer, Schema, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "./config";
@@ -54,6 +55,7 @@ interface PromptActivityRow extends CountRow {
 
 interface TurnInsightRow extends CountRow {
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly reasoning: string | null;
 }
@@ -441,6 +443,11 @@ function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
   return provider && PROVIDER_KINDS.has(provider as ProviderKind)
     ? (provider as ProviderKind)
     : "unknown";
+}
+
+function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | "unknown" {
+  const instanceId = nonEmptyString(value);
+  return instanceId && Schema.is(ProviderInstanceId)(instanceId) ? instanceId : "unknown";
 }
 
 interface TokenModelUsageCount {
@@ -940,6 +947,20 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             END AS provider,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.instanceId'),
+                json_extract(e.payload_json, '$.modelSelection.provider')
+              )
+              ELSE CASE
+                WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.instanceId'),
+                  json_extract(t.model_selection_json, '$.provider')
+                )
+              END
+            END AS instanceId,
+            CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
               THEN json_extract(e.payload_json, '$.modelSelection.model')
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
@@ -970,17 +991,17 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             AND (um.dispatch_origin IS NULL OR um.dispatch_origin = 'user')
         ),
         turn_counts AS (
-          SELECT provider, model, reasoning, COUNT(*) AS count
+          SELECT provider, instanceId, model, reasoning, COUNT(*) AS count
           FROM per_turn
-          GROUP BY provider, model, reasoning
+          GROUP BY provider, instanceId, model, reasoning
           UNION ALL
-          SELECT provider, model, reasoning, turn_count AS count
+          SELECT provider, provider AS instanceId, model, reasoning, turn_count AS count
           FROM profile_stats_deleted_turns
         )
-        SELECT provider, model, reasoning, SUM(count) AS count
+        SELECT provider, instanceId, model, reasoning, SUM(count) AS count
         FROM turn_counts
-        GROUP BY provider, model, reasoning
-        ORDER BY count DESC, provider ASC, model ASC, reasoning ASC
+        GROUP BY provider, instanceId, model, reasoning
+        ORDER BY count DESC, provider ASC, instanceId ASC, model ASC, reasoning ASC
       `,
     );
 
@@ -1151,20 +1172,26 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // ── Provider / model mix ──
       const providerModelCounts = new Map<
         string,
-        { readonly provider: string | null; readonly model: string | null; count: number }
+        {
+          readonly provider: string | null;
+          readonly instanceId: string | null;
+          readonly model: string | null;
+          count: number;
+        }
       >();
       const reasoningCounts = new Map<string, { readonly reasoning: string; count: number }>();
 
       for (const row of turnInsightRows) {
         const count = num(row.count);
         const provider = nonEmptyString(row.provider);
+        const instanceId = nonEmptyString(row.instanceId);
         const model = nonEmptyString(row.model);
-        const providerModelKey = `${provider ?? ""}\u0000${model ?? ""}`;
+        const providerModelKey = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
         const existingProviderModel = providerModelCounts.get(providerModelKey);
         if (existingProviderModel) {
           existingProviderModel.count += count;
         } else {
-          providerModelCounts.set(providerModelKey, { provider, model, count });
+          providerModelCounts.set(providerModelKey, { provider, instanceId, model, count });
         }
 
         const reasoning = nonEmptyString(row.reasoning);
@@ -1182,6 +1209,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         (left, right) =>
           right.count - left.count ||
           compareNullableText(left.provider, right.provider) ||
+          compareNullableText(left.instanceId, right.instanceId) ||
           compareNullableText(left.model, right.model),
       );
       const totalModelTurns = providerModelRows.reduce((sum, row) => sum + num(row.count), 0);
@@ -1189,6 +1217,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         const count = num(row.count);
         return {
           provider: normalizeProviderKind(row.provider),
+          instanceId: normalizeProviderInstanceId(row.instanceId),
           model: nonEmptyString(row.model) ?? "unknown",
           turnCount: count,
           percent: percent1(count, totalModelTurns),

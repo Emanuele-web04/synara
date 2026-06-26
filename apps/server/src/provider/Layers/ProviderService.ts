@@ -47,6 +47,7 @@ import {
   unsupportedAutoRuntimeModeMessage,
 } from "@synara/shared/runtimeMode";
 import { createHash, randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import {
   Cause,
   Deferred,
@@ -380,6 +381,20 @@ function readPersistedAutoApproveSynaraTools(
   return runtimePayloadRecord(runtimePayload).autoApproveSynaraTools === true;
 }
 
+function providerStartOptionsEqualForProvider(
+  provider: ProviderKind,
+  left: ProviderStartOptions | undefined,
+  right: ProviderStartOptions | undefined,
+): boolean {
+  const persistedLeft = redactProviderOptionsForPersistence(left) as
+    | ProviderStartOptions
+    | undefined;
+  const persistedRight = redactProviderOptionsForPersistence(right) as
+    | ProviderStartOptions
+    | undefined;
+  return isDeepStrictEqual(persistedLeft?.[provider], persistedRight?.[provider]);
+}
+
 function readPersistedProviderInstanceId(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): string | undefined {
@@ -422,6 +437,16 @@ function modelSelectionForRoute(
     provider,
     instanceId: providerInstanceId,
   } as ModelSelection;
+}
+
+function sessionMatchesProviderInstance(
+  session: ProviderSession,
+  providerInstanceId: string,
+): boolean {
+  return (
+    session.providerInstanceId === providerInstanceId ||
+    (session.providerInstanceId === undefined && providerInstanceId === session.provider)
+  );
 }
 
 function validateModelSelectionMatchesRoute(input: {
@@ -1152,7 +1177,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       return Effect.gen(function* () {
         const adapter = yield* registry.getByProvider(event.provider);
         const sessions = yield* adapter.listSessions();
-        const activeSession = sessions.find((session) => session.threadId === event.threadId);
+        const activeSession = sessions.find(
+          (session) =>
+            session.threadId === event.threadId &&
+            (event.providerInstanceId === undefined ||
+              sessionMatchesProviderInstance(session, event.providerInstanceId)),
+        );
         return activeSession?.resumeCursor;
       }).pipe(
         Effect.catchCause((cause) =>
@@ -1852,21 +1882,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               runtimePayloadRecord(binding.runtimePayload)[
                 AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
               ] === true;
-            const hasActiveSession = yield* adapter.hasSession(threadId);
+            const activeSession = (yield* adapter.listSessions()).find(
+              (session) => session.threadId === threadId,
+            );
 
             // A concurrent recovery may have won between the drain and restart
             // phases. Adopt its fresh runtime instead of replacing it again.
-            if (hasActiveSession && !requiresCredentialRotation) {
-              const existing = (yield* adapter.listSessions()).find(
-                (session) => session.threadId === threadId,
-              );
-              if (existing) {
-                lease.adopt(binding.lifecycleGeneration ?? "legacy");
-                return adapter;
-              }
+            if (
+              activeSession &&
+              !requiresCredentialRotation &&
+              sessionMatchesProviderInstance(activeSession, resolved.instance.instanceId)
+            ) {
+              lease.adopt(binding.lifecycleGeneration ?? "legacy");
+              return adapter;
             }
 
-            if (hasActiveSession && requiresCredentialRotation) {
+            if (activeSession) {
+              yield* adapter.stopSession(threadId).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.logWarning("provider.session.stop-stale-failed", {
+                    threadId,
+                    provider: adapter.provider,
+                    providerInstanceId: activeSession.providerInstanceId,
+                    cause: Cause.pretty(cause),
+                  }),
+                ),
+              );
+            }
+
+            if (
+              activeSession &&
+              requiresCredentialRotation &&
+              (yield* adapter.hasSession(threadId))
+            ) {
               return yield* toValidationError(
                 input.operation,
                 `Cannot recover thread '${threadId}' because its retired provider runtime is still active.`,
@@ -2135,7 +2183,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const routedProviderInstanceId =
           resolved?.instance.instanceId ?? persistedProviderInstanceId;
 
-        const hasActiveSession = yield* adapter.hasSession(input.threadId);
+        const activeSession = (yield* adapter.listSessions()).find(
+          (session) => session.threadId === input.threadId,
+        );
         const requiresCredentialRotation =
           runtimePayloadRecord(binding.runtimePayload)[
             AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED
@@ -2152,7 +2202,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           binding.lifecycleGeneration === undefined ||
           binding.lifecycleGeneration === lifecycle.currentGeneration(input.threadId);
         if (
-          hasActiveSession &&
+          activeSession !== undefined &&
+          sessionMatchesProviderInstance(activeSession, routedProviderInstanceId) &&
           (!input.allowRecovery || (bindingMatchesCurrentGeneration && !requiresCredentialRotation))
         ) {
           return {
@@ -2161,6 +2212,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             isActive: true,
             lifecycleGeneration: binding.lifecycleGeneration,
           } as const;
+        }
+
+        if (activeSession) {
+          yield* stopStaleSessionsForThread({
+            threadId: input.threadId,
+            provider: adapter.provider,
+            providerInstanceId: routedProviderInstanceId,
+          });
         }
 
         if (!input.allowRecovery) {
@@ -2237,7 +2296,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? { providerOptions: input.providerOptions ?? persistedProviderOptions }
                 : {}),
             });
-            return { resolved, persistedProviderInstanceId } as const;
+            return { resolved, persistedProviderInstanceId, persistedProviderOptions } as const;
           });
         // Resolve the instance up front so the driver's adapter can prepare a
         // session replacement before the lifecycle lock is taken. The lifecycle
@@ -2274,7 +2333,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           (lease) =>
             Effect.gen(function* () {
               const persistedBinding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-              const { resolved, persistedProviderInstanceId } =
+              const { resolved, persistedProviderInstanceId, persistedProviderOptions } =
                 yield* resolveStartInstance(persistedBinding);
               if (resolved.instance.driver !== adapter.provider) {
                 return yield* toValidationError(
@@ -2285,12 +2344,21 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               const bindingMatchesResolvedInstance =
                 persistedBinding?.provider === resolved.instance.driver &&
                 persistedProviderInstanceId === resolved.instance.instanceId;
+              const canReusePersistedResumeCursor =
+                bindingMatchesResolvedInstance &&
+                providerStartOptionsEqualForProvider(
+                  resolved.instance.driver,
+                  persistedProviderOptions,
+                  resolved.providerOptions,
+                );
               const effectiveResumeCursor =
                 input.forkSourceResumeCursor !== undefined
                   ? undefined
                   : (input.resumeCursor ??
-                    retiredSession?.resumeCursor ??
-                    (persistedBinding && bindingMatchesResolvedInstance
+                    // A replacement retired for another account or endpoint must
+                    // not hand its native cursor to the new runtime.
+                    (canReusePersistedResumeCursor ? retiredSession?.resumeCursor : undefined) ??
+                    (persistedBinding && canReusePersistedResumeCursor
                       ? persistedBinding.resumeCursor
                       : undefined));
               const persistedPriorTranscriptBootstrapPending =

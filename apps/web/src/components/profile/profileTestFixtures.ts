@@ -38,8 +38,14 @@ export const baseStats = {
     totalSkillsUsed: 0,
   },
   providerModels: [
-    { provider: "codex", model: "gpt-5-codex", turnCount: 2, percent: 66.7 },
-    { provider: "claudeAgent", model: "claude-sonnet-4-6", turnCount: 1, percent: 33.3 },
+    { provider: "codex", instanceId: "codex", model: "gpt-5-codex", turnCount: 2, percent: 66.7 },
+    {
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      turnCount: 1,
+      percent: 33.3,
+    },
   ],
   skills: [],
   mostUsedSkill: null,

@@ -199,6 +199,7 @@ describe("useComposerVoiceController", () => {
       activeThreadId: THREAD_A,
       threadId: THREAD_A,
       selectedProvider: "codex",
+      selectedProviderInstanceId: "codex",
       activeProviderStatus: null,
       pendingUserInputCount: 0,
       onTranscriptReady: vi.fn(),
@@ -226,12 +227,13 @@ describe("useComposerVoiceController", () => {
 
     expect(nativeApi.prewarmVoice).toHaveBeenCalledWith({
       provider: "codex",
+      providerInstanceId: "codex",
       cwd: PROJECT.cwd,
       threadId: THREAD_A,
     });
   });
 
-  it.each(["thread", "provider", "cancel"] as const)(
+  it.each(["thread", "provider", "instance", "cancel"] as const)(
     "ignores a stale transcription after %s changes",
     async (staleCause) => {
       const transcription = deferred<{ text: string }>();
@@ -243,7 +245,12 @@ describe("useComposerVoiceController", () => {
       if (staleCause === "thread") {
         render({ activeThreadId: THREAD_B, threadId: THREAD_B });
       } else if (staleCause === "provider") {
-        render({ selectedProvider: "claudeAgent" as ProviderKind });
+        render({
+          selectedProvider: "claudeAgent" as ProviderKind,
+          selectedProviderInstanceId: "claudeAgent",
+        });
+      } else if (staleCause === "instance") {
+        render({ selectedProviderInstanceId: "codex_work" });
       } else {
         result.cancelComposerVoiceRecording();
       }

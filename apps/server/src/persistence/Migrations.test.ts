@@ -275,6 +275,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
         [115, "ProjectAgentManagedWorkers"],
         [116, "ProjectAgentWorkerRecovery"],
         [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -344,6 +346,8 @@ managedAttachmentsLegacyLayer("managed attachment migration after private migrat
           { migration_id: 115, name: "ProjectAgentManagedWorkers" },
           { migration_id: 116, name: "ProjectAgentWorkerRecovery" },
           { migration_id: 117, name: "WorkerMonitoringLiveness" },
+          { migration_id: 118, name: "ProjectionThreadSessionProviderInstance" },
+          { migration_id: 119, name: "ProviderSessionRuntimeInstanceId" },
         ],
       );
       const groupConfigColumns = yield* sql<{ readonly name: string }>`
@@ -493,6 +497,8 @@ agentGatewayRetentionLegacyLayer(
           [115, "ProjectAgentManagedWorkers"],
           [116, "ProjectAgentWorkerRecovery"],
           [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
         ]);
 
         const columns = yield* sql<{ readonly name: string }>`
@@ -605,6 +611,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [115, "ProjectAgentManagedWorkers"],
         [116, "ProjectAgentWorkerRecovery"],
         [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -658,6 +666,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [115, "ProjectAgentManagedWorkers"],
           [116, "ProjectAgentWorkerRecovery"],
           [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
         ],
       );
 
@@ -765,6 +775,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
         [115, "ProjectAgentManagedWorkers"],
         [116, "ProjectAgentWorkerRecovery"],
         [117, "WorkerMonitoringLiveness"],
+        [118, "ProjectionThreadSessionProviderInstance"],
+        [119, "ProviderSessionRuntimeInstanceId"],
       ]);
 
       const tracker = yield* trackerRows(sql);
@@ -814,6 +826,8 @@ spacesMigrationCollisionLayer("Spaces migration after the private migration 70 c
           [115, "ProjectAgentManagedWorkers"],
           [116, "ProjectAgentWorkerRecovery"],
           [117, "WorkerMonitoringLiveness"],
+          [118, "ProjectionThreadSessionProviderInstance"],
+          [119, "ProviderSessionRuntimeInstanceId"],
         ],
       );
       const preservedSpaces = yield* sql<{ readonly spaceId: string }>`
