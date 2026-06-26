@@ -138,6 +138,8 @@ describe("threadHandoff", () => {
       overrides: Partial<ServerProviderStatus> = {},
     ): ServerProviderStatus => ({
       provider,
+      instanceId: provider,
+      driver: provider,
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -175,6 +177,8 @@ describe("threadHandoff", () => {
         providerStatuses: [
           {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "ready",
             available: true,
             authStatus: "authenticated",

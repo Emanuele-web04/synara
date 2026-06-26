@@ -129,6 +129,22 @@ const PI_BRANDED_MODELS = mergeDynamicModelOptions({
   ],
 }) satisfies ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>;
 
+function providerStatus(
+  provider: ProviderKind,
+  overrides: Partial<ServerProviderStatus> = {},
+): ServerProviderStatus {
+  return {
+    provider,
+    instanceId: provider,
+    driver: provider,
+    status: "ready",
+    available: true,
+    authStatus: "authenticated",
+    checkedAt: "2026-04-10T10:00:00.000Z",
+    ...overrides,
+  };
+}
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -185,20 +201,8 @@ describe("ProviderModelPicker", () => {
       model: "claude-opus-4-6",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
+        providerStatus("codex"),
+        providerStatus("claudeAgent"),
       ],
     });
 
@@ -573,20 +577,12 @@ describe("ProviderModelPicker", () => {
       model: "gpt-5-codex",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
+        providerStatus("codex"),
+        providerStatus("claudeAgent", {
           status: "error",
           available: false,
           authStatus: "unauthenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
+        }),
       ],
     });
 
@@ -610,15 +606,7 @@ describe("ProviderModelPicker", () => {
       provider: "codex",
       model: "gpt-5-codex",
       lockedProvider: null,
-      providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-      ],
+      providers: [providerStatus("codex")],
     });
 
     try {
@@ -641,21 +629,13 @@ describe("ProviderModelPicker", () => {
       model: "gpt-5-codex",
       lockedProvider: null,
       providers: [
-        {
-          provider: "codex",
-          status: "ready",
-          available: true,
-          authStatus: "authenticated",
-          checkedAt: "2026-04-10T10:00:00.000Z",
-        },
-        {
-          provider: "claudeAgent",
+        providerStatus("codex"),
+        providerStatus("claudeAgent", {
           status: "warning",
           available: true,
           authStatus: "unknown",
-          checkedAt: "2026-04-10T10:00:00.000Z",
           message: "Could not verify auth status.",
-        },
+        }),
       ],
     });
 

@@ -1,4 +1,4 @@
-import { ThreadId, type ModelSelection } from "@synara/contracts";
+import { ProviderInstanceId, ThreadId, type ModelSelection } from "@synara/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   deriveEffectiveComposerModelState,
@@ -64,6 +64,42 @@ describe("resolvePreferredComposerModelSelection", () => {
         projectModelSelection: null,
       }),
     ).toEqual(cursorSelection);
+  });
+
+  it("does not infer an active instance from arbitrary same-provider draft selections", () => {
+    const resolved = resolvePreferredComposerModelSelection({
+      draft: {
+        modelSelectionByProvider: {
+          claude_work: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-work",
+            undefined,
+            "claude_work",
+          ),
+          claude_personal: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-personal",
+            undefined,
+            "claude_personal",
+          ),
+        },
+        activeProvider: null,
+      },
+      threadModelSelection: null,
+      projectModelSelection: null,
+      defaultProvider: "claudeAgent",
+      resolveProviderForInstanceId: (instanceId) =>
+        instanceId === ProviderInstanceId.makeUnsafe("claude_work") ||
+        instanceId === ProviderInstanceId.makeUnsafe("claude_personal")
+          ? "claudeAgent"
+          : null,
+    });
+
+    expect(resolved).toEqual({
+      provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-5",
+    });
   });
 });
 

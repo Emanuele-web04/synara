@@ -8251,6 +8251,15 @@ describe("ChatView transcript geometry (full app)", () => {
       await expect.element(newWorktreeOption).toBeInTheDocument();
       await newWorktreeOption.click();
 
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
+            "worktree",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
       await vi.waitFor(
         () => {
@@ -8615,6 +8624,8 @@ describe("ChatView transcript geometry (full app)", () => {
           ...nextFixture.serverConfig.providers,
           {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -8691,6 +8702,8 @@ describe("ChatView transcript geometry (full app)", () => {
           ...nextFixture.serverConfig.providers,
           {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "warning",
             available: true,
             authStatus: "unauthenticated",

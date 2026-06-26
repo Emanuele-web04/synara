@@ -125,9 +125,7 @@ export function useChatProviderModels({
         : undefined;
     const draftSelection = candidateInstanceId
       ? composerDraft.modelSelectionByProvider[candidateInstanceId]
-      : Object.values(composerDraft.modelSelectionByProvider).find(
-          (selection) => selection?.provider === selectedProvider,
-        );
+      : undefined;
     if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
       candidateInstanceId = draftSelection.instanceId;
     }

@@ -19,6 +19,8 @@ import {
 
 const READY_CODEX_STATUS = {
   provider: "codex",
+  instanceId: "codex",
+  driver: "codex",
   status: "ready",
   available: true,
   authStatus: "authenticated",

@@ -940,7 +940,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
         const instance = resolveProviderInstance(settings, {
           instanceId: requestedInstanceId,
-          ...(explicitProvider ? { provider } : {}),
+          ...providerKindConstraint(explicitProvider ? provider : ""),
         });
         if (!instance) {
           return yield* toValidationError(

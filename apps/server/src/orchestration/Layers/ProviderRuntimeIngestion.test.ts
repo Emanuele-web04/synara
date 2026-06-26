@@ -8,6 +8,7 @@ import type {
   OrchestrationEvent,
   OrchestrationReadModel,
   OrchestrationThread,
+  ProviderDriverKind,
   ProviderKind,
   ProviderRuntimeEvent,
   ProviderSession,
@@ -72,7 +73,7 @@ const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
   readonly eventId: EventId;
-  readonly provider: ProviderKind;
+  readonly provider: ProviderDriverKind;
   readonly createdAt: string;
   readonly threadId: ThreadId;
   readonly turnId?: string | undefined;
