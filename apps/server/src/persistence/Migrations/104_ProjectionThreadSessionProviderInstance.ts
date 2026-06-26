@@ -16,18 +16,25 @@ export default Effect.gen(function* () {
 
   yield* sql`
     UPDATE projection_thread_sessions
-    SET provider_instance_id = (
-      SELECT json_extract(projection_threads.model_selection_json, '$.instanceId')
-      FROM projection_threads
-      WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
-    )
-    WHERE provider_instance_id IS NULL
-      AND EXISTS (
-        SELECT 1
+    SET provider_instance_id = COALESCE(
+      (
+        SELECT json_extract(provider_session_runtime.runtime_payload_json, '$.providerInstanceId')
+        FROM provider_session_runtime
+        WHERE provider_session_runtime.thread_id = projection_thread_sessions.thread_id
+      ),
+      (
+        SELECT json_extract(provider_session_runtime.runtime_payload_json, '$.modelSelection.instanceId')
+        FROM provider_session_runtime
+        WHERE provider_session_runtime.thread_id = projection_thread_sessions.thread_id
+      ),
+      (
+        SELECT json_extract(projection_threads.model_selection_json, '$.instanceId')
         FROM projection_threads
         WHERE projection_threads.thread_id = projection_thread_sessions.thread_id
-          AND json_extract(projection_threads.model_selection_json, '$.instanceId') IS NOT NULL
-      )
+      ),
+      provider_name
+    )
+    WHERE provider_instance_id IS NULL
   `;
 
   yield* sql`

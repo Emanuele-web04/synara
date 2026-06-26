@@ -56,6 +56,8 @@ const GPT_5_4 = "gpt-5.4" as ModelSlug;
 
 const CODEX_PROVIDER_STATUS: ServerProviderStatus = {
   provider: "codex",
+  instanceId: "codex",
+  driver: "codex",
   status: "ready",
   available: true,
   authStatus: "authenticated",

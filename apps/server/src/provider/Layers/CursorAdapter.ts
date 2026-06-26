@@ -463,13 +463,22 @@ export function makeCursorAdapter(
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
+    const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
+      const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
+      return providerInstanceId && event.providerInstanceId !== providerInstanceId
+        ? { ...event, providerInstanceId }
+        : event;
+    };
+
     const offerRuntimeEvent = (
       lifecycleGeneration: string | undefined,
       event: ProviderRuntimeEvent,
     ) =>
       PubSub.publish(
         runtimeEventPubSub,
-        stampAcpRuntimeEventLifecycleGeneration(event, lifecycleGeneration),
+        stampRuntimeEventForInstance(
+          stampAcpRuntimeEventLifecycleGeneration(event, lifecycleGeneration),
+        ),
       ).pipe(Effect.asVoid);
 
     const logNative = (

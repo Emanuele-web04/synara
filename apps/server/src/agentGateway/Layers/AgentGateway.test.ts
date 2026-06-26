@@ -3310,6 +3310,8 @@ describe("AgentGateway", () => {
       harness.setProviderStatuses([
         {
           provider: "codex",
+          instanceId: "codex",
+          driver: "codex",
           status: "error",
           available: false,
           authStatus: "unauthenticated",
@@ -3318,6 +3320,8 @@ describe("AgentGateway", () => {
         },
         {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           status: "error",
           available: false,
           authStatus: "unauthenticated",
@@ -3514,6 +3518,8 @@ describe("AgentGateway", () => {
       providerStatuses: [
         {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           status: "error",
           available: false,
           authStatus: "unauthenticated",

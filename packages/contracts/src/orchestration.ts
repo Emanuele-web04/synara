@@ -304,6 +304,8 @@ const ModelSelectionByProvider = Schema.Union([
   PiModelSelection,
 ]);
 
+// Keep persisted inputs loose so malformed or mixed legacy drafts reach the
+// transform; the discriminated target union remains the canonical contract.
 const ModelSelectionSource = Schema.Struct({
   provider: Schema.optional(Schema.Unknown),
   instanceId: Schema.optional(Schema.Unknown),
@@ -322,11 +324,15 @@ export const ModelSelection = ModelSelectionSource.pipe(
           typeof raw.model === "string" && raw.model.trim().length > 0
             ? raw.model
             : defaultModelForProvider(provider);
+        const instanceId =
+          typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+            ? raw.instanceId.trim()
+            : provider;
         const base: Record<string, unknown> = {
           provider,
+          instanceId,
           model,
         };
-        base.instanceId = raw.instanceId ?? provider;
         if (raw.options !== undefined) {
           base.options = raw.options;
         }

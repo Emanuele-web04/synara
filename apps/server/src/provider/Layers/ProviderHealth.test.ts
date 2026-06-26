@@ -356,6 +356,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
           provider: {
             provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -424,6 +426,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
           provider: {
             provider: "codex",
+            instanceId: "codex",
+            driver: "codex",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -488,6 +492,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it("builds an inert status for disabled providers", () => {
       assert.deepStrictEqual(makeDisabledProviderStatus("opencode", "2026-06-16T12:00:00.000Z"), {
         provider: "opencode",
+        instanceId: "opencode",
+        driver: "opencode",
         status: "warning",
         available: false,
         authStatus: "unknown",
@@ -888,6 +894,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("stabilizeProviderStatusesAgainstTransientTimeouts", () => {
     const previousReadyOpenCode = {
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       status: "ready",
       available: true,
       authStatus: "unknown",
@@ -903,6 +911,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         [
           {
             provider: "opencode",
+            instanceId: "opencode",
+            driver: "opencode",
             status: "error",
             available: false,
             authStatus: "unknown",
@@ -940,6 +950,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         [
           {
             provider: "opencode",
+            instanceId: "opencode",
+            driver: "opencode",
             status: "error",
             available: false,
             authStatus: "unknown",
@@ -966,6 +978,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it("does not hide non-timeout provider failures", () => {
       const unavailableStatus = {
         provider: "opencode",
+        instanceId: "opencode",
+        driver: "opencode",
         status: "error",
         available: false,
         authStatus: "unknown",
@@ -985,6 +999,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it("keeps an already usable provider ready after a transient auth timeout warning", () => {
       const previousReadyClaude = {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -997,6 +1013,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         [
           {
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "warning",
             available: true,
             authStatus: "unknown",
@@ -1019,6 +1037,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it("does not keep a stale Claude auth error after a transient auth timeout", () => {
       const previousUnauthenticatedClaude = {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
         status: "error",
         available: true,
         authStatus: "unauthenticated",
@@ -1028,6 +1048,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       } satisfies ServerProviderStatus;
       const authTimeoutWarning = {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
         status: "warning",
         available: true,
         authStatus: "unknown",
@@ -1049,6 +1071,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   describe("providerStatusesEqual", () => {
     const readyCursor = {
       provider: "cursor",
+      instanceId: "cursor",
+      driver: "cursor",
       status: "ready",
       available: true,
       authStatus: "unknown",

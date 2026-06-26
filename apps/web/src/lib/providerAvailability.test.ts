@@ -13,6 +13,8 @@ import {
 
 const BASE_STATUS: ServerProviderStatus = {
   provider: "antigravity",
+  instanceId: "antigravity",
+  driver: "antigravity",
   status: "error",
   available: false,
   authStatus: "unknown",
@@ -51,6 +53,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
         },
         customBinaryPath: "/opt/homebrew/bin/claude",
@@ -58,6 +62,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       available: true,
       status: "warning",
       message:
@@ -72,6 +78,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...READY_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode is ready.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -79,6 +87,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       status: "warning",
       available: false,
       authStatus: "unknown",
@@ -94,6 +104,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -101,6 +113,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       authStatus: "unknown",
       available: true,
       checkedAt: BASE_STATUS.checkedAt,
@@ -142,6 +156,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode-next",
@@ -150,6 +166,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       available: true,
       status: "warning",
       message:
@@ -178,6 +196,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
   it("does not reuse Auto capability from a different Claude binary", () => {
     const status: ServerProviderStatus = {
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -194,6 +214,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -204,6 +226,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
   it("preserves Auto capability probed from the selected Codex binary", () => {
     const status: ServerProviderStatus = {
       provider: "codex",
+      instanceId: "codex",
+      driver: "codex",
       status: "ready",
       available: true,
       authStatus: "authenticated",
@@ -391,6 +415,7 @@ describe("providerUnavailableReason", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude_work",
+        driver: "claudeAgent",
         displayName: "Claude Work",
         authStatus: "unauthenticated",
       }),
@@ -405,6 +430,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude",
+        driver: "claudeAgent",
         displayName: "Claude",
         status: "ready",
         available: true,
@@ -414,6 +440,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude_work",
+        driver: "claudeAgent",
         displayName: "Work",
         message: "Work account is disabled.",
       },
@@ -438,6 +465,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claudeAgent",
+        driver: "claudeAgent",
         displayName: "Claude",
         status: "ready",
         available: true,

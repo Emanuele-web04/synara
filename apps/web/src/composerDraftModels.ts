@@ -867,9 +867,7 @@ export function resolvePreferredComposerModelSelection(input: {
   const activeDraftSelection = activeInstanceId
     ? input.draft?.modelSelectionByProvider[activeInstanceId]
     : undefined;
-  const firstDraftSelection =
-    activeDraftSelection ?? Object.values(input.draft?.modelSelectionByProvider ?? {})[0] ?? null;
-  const draftProviderWithSelection = firstDraftSelection?.provider ?? null;
+  const draftProviderWithSelection = activeDraftSelection?.provider ?? null;
   const activeInstanceProvider = activeInstanceId
     ? (activeDraftSelection?.provider ??
       input.resolveProviderForInstanceId?.(activeInstanceId) ??
@@ -893,7 +891,7 @@ export function resolvePreferredComposerModelSelection(input: {
     preferredProvider,
     activeInstanceProvider === preferredProvider
       ? activeInstanceId
-      : (firstDraftSelection?.instanceId ?? preferredPersistedSelection?.instanceId),
+      : preferredPersistedSelection?.instanceId,
   );
   const persistedSelection =
     (modelSelectionMatchesProviderInstance(
