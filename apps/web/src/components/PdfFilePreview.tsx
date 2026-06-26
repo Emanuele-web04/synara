@@ -31,13 +31,19 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
    */
   filePath: string;
   cwd: string | null | undefined;
+  previewGrant?: string | null | undefined;
   /** Pre-resolved target for the "Open in editor" control in the toolbar. */
   openInTarget: string | null;
   className?: string;
 }) {
   const previewUrl = useMemo(
-    () => buildLocalImageUrl({ src: props.filePath, cwd: props.cwd ?? undefined }),
-    [props.cwd, props.filePath],
+    () =>
+      buildLocalImageUrl({
+        src: props.filePath,
+        cwd: props.cwd ?? undefined,
+        grant: props.previewGrant,
+      }),
+    [props.cwd, props.filePath, props.previewGrant],
   );
   const fileName = useMemo(() => basenameOfPath(props.filePath), [props.filePath]);
   const doc = usePdfDocument(previewUrl);

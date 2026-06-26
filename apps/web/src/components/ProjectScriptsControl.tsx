@@ -11,8 +11,8 @@ import {
   ListChecksIcon,
   PlayIcon,
   PlusIcon,
+  SearchIcon,
   SettingsIcon,
-  WrenchIcon,
 } from "~/lib/icons";
 import React, {
   type FormEvent,
@@ -85,7 +85,7 @@ function ScriptIcon({
 }) {
   if (icon === "test") return <FlaskConicalIcon className={className} />;
   if (icon === "lint") return <ListChecksIcon className={className} />;
-  if (icon === "configure") return <WrenchIcon className={className} />;
+  if (icon === "configure") return <SearchIcon className={className} />;
   if (icon === "build") return <HammerIcon className={className} />;
   if (icon === "debug") return <BugIcon className={className} />;
   return <PlayIcon className={className} />;

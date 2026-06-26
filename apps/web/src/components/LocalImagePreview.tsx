@@ -43,12 +43,16 @@ export interface LocalImagePreviewState {
 export function useLocalImagePreview(input: {
   src: string;
   cwd: string | null | undefined;
+  previewGrant?: string | null | undefined;
 }): LocalImagePreviewState {
-  const { src, cwd } = input;
-  const previewUrl = useMemo(() => buildLocalImageUrl({ src, cwd: cwd ?? undefined }), [cwd, src]);
+  const { src, cwd, previewGrant } = input;
+  const previewUrl = useMemo(
+    () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, grant: previewGrant }),
+    [cwd, previewGrant, src],
+  );
   const downloadUrl = useMemo(
-    () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, download: true }),
-    [cwd, src],
+    () => buildLocalImageUrl({ src, cwd: cwd ?? undefined, download: true, grant: previewGrant }),
+    [cwd, previewGrant, src],
   );
   const fileName = useMemo(() => localImageFileName(src), [src]);
   const [status, setStatus] = useState<LocalImagePreviewStatus>("loading");
@@ -136,6 +140,7 @@ export function LocalImageErrorCard(props: {
 export function LocalImagePreview(props: {
   src: string;
   cwd: string | null | undefined;
+  previewGrant?: string | null | undefined;
   alt: string;
   className?: string;
   imageClassName?: string;
@@ -143,6 +148,7 @@ export function LocalImagePreview(props: {
   const { downloadUrl, downloadName, status, imgProps } = useLocalImagePreview({
     src: props.src,
     cwd: props.cwd,
+    previewGrant: props.previewGrant,
   });
   const handleDownloadClick = useLocalImageDownloadClick({ downloadUrl, downloadName });
 

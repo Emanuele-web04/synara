@@ -1,7 +1,7 @@
 // FILE: WorkspaceFilePreview.tsx
 // Purpose: Shared single-file preview (code with syntax highlighting, parsed
-//          markdown, images, PDFs) for workspace files and allowlisted scratch
-//          binary previews reused by editor and right-dock panes.
+//          markdown, images, PDFs) for workspace files plus absolute local
+//          file references reused by editor and right-dock panes.
 // Layer: Web chat presentation component
 // Exports: WorkspaceFilePreview, isMarkdownPreviewablePath
 
@@ -10,7 +10,11 @@ import {
   isSupportedLocalPdfPath,
   lowerCaseExtensionOf,
 } from "@t3tools/shared/localPreviewFiles";
-import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@t3tools/shared/path";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  joinWorkspaceRelativePath,
+} from "@t3tools/shared/path";
 import { isScratchWorkspacePath } from "@t3tools/shared/threadWorkspace";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -35,7 +39,11 @@ import { formatFileCommentRange, type FileCommentSelection } from "~/lib/fileCom
 import { showFileReferenceContextMenu } from "~/lib/fileReferenceContextMenu";
 import { PlusIcon } from "~/lib/icons";
 import { toggleMarkdownTaskMarker } from "~/lib/markdownTaskList";
-import { projectReadFileQueryOptions } from "~/lib/projectReactQuery";
+import {
+  isLocalPreviewGrantUsable,
+  projectLocalPreviewGrantQueryOptions,
+  projectReadFileQueryOptions,
+} from "~/lib/projectReactQuery";
 import {
   MAX_SYNTAX_HIGHLIGHT_INPUT_CHARS,
   cacheSyntaxHighlightedHtml,
@@ -75,10 +83,13 @@ function parentDirectoryFromPath(path: string): string | null {
 }
 
 function markdownPreviewCwd(workspaceRoot: string | null, filePath: string): string | undefined {
+  const parentDirectory = parentDirectoryFromPath(filePath);
+  if (isLocalAbsolutePath(filePath)) {
+    return parentDirectory ?? undefined;
+  }
   if (!workspaceRoot) {
     return undefined;
   }
-  const parentDirectory = parentDirectoryFromPath(filePath);
   if (!parentDirectory) {
     return workspaceRoot;
   }
@@ -319,17 +330,36 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   const markdownPreviewDefault = props.markdownPreviewDefault ?? false;
   const fileIsImage = filePath !== null && isSupportedLocalImagePath(filePath);
   const fileIsPdf = filePath !== null && isSupportedLocalPdfPath(filePath);
+  const fileIsLocalAbsolute = filePath !== null && isLocalAbsolutePath(filePath);
+  const fileIsWorkspaceRelative = filePath !== null && isWorkspaceRelativePathSafe(filePath);
   const fileIsScratchBinaryPreview =
     filePath !== null && (fileIsImage || fileIsPdf) && isScratchWorkspacePath(filePath);
+  const fileNeedsLocalPreviewGrant =
+    filePath !== null && fileIsLocalAbsolute && !fileIsScratchBinaryPreview;
   const fileIsMarkdown = filePath !== null && isMarkdownPreviewablePath(filePath);
   const [markdownPreviewEnabled, setMarkdownPreviewEnabled] = useState(markdownPreviewDefault);
+  const localPreviewGrantQuery = useQuery(
+    projectLocalPreviewGrantQueryOptions({
+      path: filePath,
+      enabled: fileNeedsLocalPreviewGrant,
+    }),
+  );
+  const localPreviewGrant =
+    fileNeedsLocalPreviewGrant && isLocalPreviewGrantUsable(localPreviewGrantQuery.data)
+      ? (localPreviewGrantQuery.data?.grant ?? null)
+      : null;
   const fileQuery = useQuery(
     projectReadFileQueryOptions({
       cwd: props.workspaceRoot,
       relativePath: filePath,
+      previewGrant: localPreviewGrant,
       // Images and PDFs are binary: they stream through the local-image HTTP
       // route instead of the text file-read RPC.
-      enabled: props.workspaceRoot !== null && filePath !== null && !fileIsImage && !fileIsPdf,
+      enabled:
+        filePath !== null &&
+        !fileIsImage &&
+        !fileIsPdf &&
+        (props.workspaceRoot !== null || localPreviewGrant !== null),
     }),
   );
   useEffect(() => {
@@ -468,9 +498,13 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
   }, []);
   // Toggling a task rewrites the file, so only enable it when the preview
   // holds the complete contents (writing a truncated read would corrupt it).
-  const canToggleTasks = fileQuery.data !== undefined && !fileQuery.data.truncated;
+  const canToggleTasks =
+    props.workspaceRoot !== null &&
+    fileIsWorkspaceRelative &&
+    fileQuery.data !== undefined &&
+    !fileQuery.data.truncated;
 
-  if (!props.workspaceRoot && !fileIsScratchBinaryPreview) {
+  if (!props.workspaceRoot && !fileIsLocalAbsolute && !fileIsScratchBinaryPreview) {
     return (
       <PanelStateMessage density="compact" fill="flex">
         <p>No workspace is attached to this chat.</p>
@@ -487,6 +521,20 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
       )
     );
   }
+  if (fileNeedsLocalPreviewGrant && !localPreviewGrant) {
+    if (localPreviewGrantQuery.error) {
+      return (
+        <PanelStateMessage density="compact" fill="flex" className="items-start justify-start p-3">
+          <p className="text-left text-[11px] text-destructive/85">
+            {localPreviewGrantQuery.error instanceof Error
+              ? localPreviewGrantQuery.error.message
+              : "Could not create local file preview grant."}
+          </p>
+        </PanelStateMessage>
+      );
+    }
+    return <FilePreviewLoadingState />;
+  }
 
   // PDFs own their full surface — toolbar (file name, page nav, zoom, Open) plus
   // the rendered page stack — so they skip the shared breadcrumb header here.
@@ -496,7 +544,12 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
         ? joinWorkspaceRelativePath(props.workspaceRoot, filePath)
         : filePath;
     return (
-      <PdfFilePreview filePath={filePath} cwd={props.workspaceRoot} openInTarget={openInTarget} />
+      <PdfFilePreview
+        filePath={filePath}
+        cwd={props.workspaceRoot}
+        previewGrant={localPreviewGrant}
+        openInTarget={openInTarget}
+      />
     );
   }
 
@@ -523,6 +576,7 @@ export function WorkspaceFilePreview(props: WorkspaceFilePreviewProps) {
           <LocalImagePreview
             src={filePath}
             cwd={props.workspaceRoot}
+            previewGrant={localPreviewGrant}
             alt={basenameOfPath(filePath)}
             className="min-h-full"
             imageClassName="max-h-[calc(100vh-13rem)]"

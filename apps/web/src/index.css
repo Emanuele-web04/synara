@@ -550,7 +550,10 @@
 
 body {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.015em;
+  /* Neutral tracking: let the system UI font (SF Pro on macOS via the
+     -apple-system fallback) use its own optical metrics instead of a squeezed
+     web-style negative tracking, so text reads native rather than "designed". */
+  letter-spacing: normal;
   margin: 0;
   padding: 0;
   min-height: 100vh;
@@ -559,7 +562,7 @@ body {
 /* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
 .font-system-ui {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.015em;
+  letter-spacing: normal;
 }
 
 /* Keep transcript-only code surfaces on the chat-specific coding font stack. */
@@ -1640,6 +1643,53 @@ label:has(> select#reasoning-effort) select {
   }
   100% {
     background-position: -100% 0;
+  }
+}
+
+/* Lightweight text shimmer for the "Working for …" status line.
+   CSS-only: clips an animated gradient to the glyphs so there is no JS timer
+   or React re-render driving the effect. Edges use currentColor (the muted
+   text color set via Tailwind) so non-highlighted text matches the original
+   exactly, and a brighter band sweeps across once per cycle. */
+.working-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0%,
+    currentColor 46%,
+    color-mix(in srgb, currentColor, white 62%) 50%,
+    currentColor 54%,
+    currentColor 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: working-shimmer 3.3s linear infinite;
+}
+
+/* Slow, delicate sweep across the whole word over the first ~85% of the cycle
+   (~2.8s), then a short ~0.5s pause before it repeats. The start/end positions
+   (108% / -8%) park the band exactly at the word's left/right edges, so the
+   visible sweep spans every glyph with no off-screen dead time and the loop
+   restart is invisible. Two segments keep the sweep speed and the pause
+   independently tunable. */
+@keyframes working-shimmer {
+  0% {
+    background-position: 108% 0;
+  }
+  85% {
+    background-position: -8% 0;
+  }
+  100% {
+    background-position: -8% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
   }
 }
 
