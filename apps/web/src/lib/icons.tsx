@@ -5,7 +5,7 @@ import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
 import { LuMessageSquareDashed } from "react-icons/lu";
 import { cn } from "./utils";
-import { CentralIcon } from "./central-icons";
+import { CentralIcon, type CentralIconVariant } from "./central-icons";
 import {
   IconAdjustments,
   IconAlertCircle,
@@ -26,7 +26,6 @@ import {
   IconChartBar,
   IconCheck,
   IconChevronDown,
-  IconClock,
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
@@ -96,13 +95,14 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
 // Wraps a Central icon asset behind the LucideIcon API. Rendering via CSS mask
 // avoids stroke-on-stroke alpha summation that gave hand-drawn SVGs a
 // "stamped twice" look on shared vertices (the previous PinIcon bug).
-function centralIconWrapper(name: string): LucideIcon {
+function centralIconWrapper(name: string, variant?: CentralIconVariant): LucideIcon {
   return function CentralIconWrapper({ className, style, ...rest }) {
     const ariaLabelRaw = (rest as { ["aria-label"]?: unknown })["aria-label"];
     const label = typeof ariaLabelRaw === "string" ? ariaLabelRaw : undefined;
     return (
       <CentralIcon
         name={name}
+        variant={variant}
         className={typeof className === "string" ? className : undefined}
         style={style as CSSProperties | undefined}
         label={label}
@@ -149,7 +149,10 @@ export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
 export const FlameIcon = adaptIcon(IconFlame);
 export const TrophyIcon = adaptIcon(IconTrophy);
-export const ClockIcon = adaptIcon(IconClock);
+// The clock doubles as the automation glyph everywhere it appears (meta chip,
+// Automations nav, slash command, created card, environment section), so it is
+// sourced from the Central icon set rather than the Tabler stroke icon.
+export const ClockIcon = centralIconWrapper("clock");
 export const ChartBarIcon = adaptIcon(IconChartBar);
 export const ShareIcon = adaptIcon(IconShare3);
 export const SparklesIcon = adaptIcon(IconSparkles);
@@ -179,6 +182,7 @@ export const GitHubIcon: LucideIcon = (props) => (
 );
 export const GitPullRequestIcon = centralIconWrapper("pull-request");
 export const GlobeIcon = adaptIcon(IconWorld);
+export const WebSearchIcon: LucideIcon = centralIconWrapper("globe");
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
@@ -209,6 +213,9 @@ export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
+// Solid pin from the fill set — used wherever a pin reflects "pinned" status
+// (project + thread rows and their hover cards) rather than a neutral action.
+export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);

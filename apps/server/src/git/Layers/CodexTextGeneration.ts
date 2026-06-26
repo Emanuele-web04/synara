@@ -323,18 +323,14 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           "-",
         ];
         const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
-        const command = ChildProcess.make(
-          prepared.command,
-          prepared.args,
-          {
-            cwd,
-            env,
-            shell: prepared.shell,
-            stdin: {
-              stream: Stream.make(new TextEncoder().encode(prompt)),
-            },
+        const command = ChildProcess.make(prepared.command, prepared.args, {
+          cwd,
+          env,
+          shell: prepared.shell,
+          stdin: {
+            stream: Stream.make(new TextEncoder().encode(prompt)),
           },
-        );
+        });
 
         const child = yield* commandSpawner
           .spawn(command)

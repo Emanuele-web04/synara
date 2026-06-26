@@ -38,10 +38,10 @@ import {
   BotIcon,
   CheckIcon,
   ChangesIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
   GitHubIcon,
-  GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
@@ -52,13 +52,15 @@ import {
   SteerIcon,
   TerminalIcon,
   Undo2Icon,
+  WebSearchIcon,
   ZapIcon,
 } from "~/lib/icons";
+import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
 import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
-import { ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
+import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -80,7 +82,7 @@ import {
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -1277,7 +1279,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     // unpinned message only reveals it on hover, like the other footer actions.
                     // Same Central pin glyph in both states — persistence signals the pinned state.
                     <MessageActionButton
-                      label={messagePinned ? "Unpin message" : "Pin message"}
+                      label={pinActionLabel("message", messagePinned)}
                       tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
                       aria-pressed={messagePinned}
                       className={
@@ -2081,7 +2083,7 @@ function workEntryPreview(
 
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
     const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveInlineCommandCall(command);
+    if (command) return deriveReadableCommandDisplay(command).target;
   }
 
   if (workEntry.preview) return workEntry.preview;
@@ -2149,7 +2151,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "file_change") {
     return SquarePenIcon;
   }
-  if (workEntry.itemType === "web_search") return GlobeIcon;
+  if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
@@ -2364,7 +2366,6 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
   const canOpenToolDetails = Boolean(onOpenToolDetails) && Boolean(workEntry.toolDetails);
-  const openToolDetails = canOpenToolDetails ? () => onOpenToolDetails?.(workEntry) : undefined;
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
@@ -2411,32 +2412,15 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
             const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
             const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
-            return (
-              <button
-                key={`${workEntry.id}:${changedFilePath}`}
-                type="button"
-                data-file-change-row="true"
-                data-tool-detail-trigger={canOpenToolDetails ? "true" : undefined}
-                className={cn(
-                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
-                  compact
-                    ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
-                  canOpenEditedRow ? "cursor-pointer" : "cursor-default",
-                )}
-                title={canOpenToolDetails ? "View tool details" : changedFilePath}
-                disabled={!canOpenEditedRow}
-                onClick={() => {
-                  if (openToolDetails) {
-                    openToolDetails();
-                    return;
-                  }
-                  if (!turnId || !onOpenTurnDiff) {
-                    return;
-                  }
-                  onOpenTurnDiff(turnId, changedFilePath);
-                }}
-              >
+            const editedRowClassName = cn(
+              "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
+              compact
+                ? "px-0 py-[1px] hover:opacity-95"
+                : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
+              canOpenEditedRow ? "cursor-pointer" : "cursor-default",
+            );
+            const editedRowChildren = (
+              <>
                 <span
                   className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
                   style={{ fontSize: `${rowFontSizePx}px` }}
@@ -2462,14 +2446,38 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     />
                   </span>
                 ) : null}
-                {canOpenToolDetails ? (
-                  <span
-                    className="font-system-ui ml-auto shrink-0 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/45"
-                    style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
-                  >
-                    Details
-                  </span>
-                ) : null}
+              </>
+            );
+            if (canOpenToolDetails && workEntry.toolDetails) {
+              return (
+                <ToolDetailsDisclosure
+                  key={`${workEntry.id}:${changedFilePath}`}
+                  details={workEntry.toolDetails}
+                  compact={compact}
+                  title="View tool details"
+                  summaryClassName={editedRowClassName}
+                  dataFileChangeRow
+                >
+                  {editedRowChildren}
+                </ToolDetailsDisclosure>
+              );
+            }
+            return (
+              <button
+                key={`${workEntry.id}:${changedFilePath}`}
+                type="button"
+                data-file-change-row="true"
+                className={editedRowClassName}
+                title={changedFilePath}
+                disabled={!canOpenEditedRow}
+                onClick={() => {
+                  if (!turnId || !onOpenTurnDiff) {
+                    return;
+                  }
+                  onOpenTurnDiff(turnId, changedFilePath);
+                }}
+              >
+                {editedRowChildren}
               </button>
             );
           })}
@@ -2669,20 +2677,25 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </div>
             </>
           );
+          if (canOpenToolDetails && workEntry.toolDetails) {
+            return (
+              <ToolDetailsDisclosure
+                details={workEntry.toolDetails}
+                compact={compact}
+                title={rawCommand ?? displayText}
+              >
+                {rowContentChildren}
+              </ToolDetailsDisclosure>
+            );
+          }
+
           const rowContent = (
             <AgentActivityOpenSurface
-              canOpen={canOpenAgentActivity || canOpenReadFile || canOpenToolDetails}
+              canOpen={canOpenAgentActivity || canOpenReadFile}
               compact={compact}
-              title={
-                canOpenToolDetails
-                  ? "View tool details"
-                  : canOpenReadFile
-                    ? (readFilePath ?? hoverText)
-                    : hoverText
-              }
-              onOpen={openAgentActivity ?? openReadFile ?? openToolDetails}
+              title={canOpenReadFile ? (readFilePath ?? hoverText) : hoverText}
+              onOpen={openAgentActivity ?? openReadFile}
               onHover={prefetchReadFile}
-              dataToolDetailTrigger={canOpenToolDetails}
             >
               {rowContentChildren}
             </AgentActivityOpenSurface>
@@ -2743,5 +2756,55 @@ function AgentActivityOpenSurface(props: {
     <div className={className} title={props.title}>
       {props.children}
     </div>
+  );
+}
+
+function ToolDetailsDisclosure(props: {
+  children: ReactNode;
+  compact: boolean;
+  dataFileChangeRow?: boolean | undefined;
+  details: NonNullable<TimelineWorkEntry["toolDetails"]>;
+  summaryClassName?: string | undefined;
+  title?: string | undefined;
+}) {
+  const summaryClassName =
+    props.summaryClassName ??
+    cn(
+      "flex w-full items-center text-left transition-[opacity,translate] duration-200",
+      props.compact ? "gap-1.5" : "gap-2",
+      "cursor-pointer rounded-md hover:bg-[var(--color-background-button-secondary-hover)]",
+    );
+  const [hasOpened, setHasOpened] = useState(false);
+
+  return (
+    <details
+      className="group/tool-details min-w-0"
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          setHasOpened(true);
+        }
+      }}
+    >
+      <summary
+        className={cn("list-none [&::-webkit-details-marker]:hidden", summaryClassName)}
+        title={props.title ?? "View tool details"}
+        data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
+        data-tool-detail-trigger="true"
+      >
+        {props.children}
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="ml-auto size-3.5 shrink-0 text-muted-foreground/38 transition-transform duration-200 group-open/tool-details:rotate-90"
+        />
+      </summary>
+      {hasOpened ? (
+        <div
+          className={cn("mt-2 min-w-0", props.compact ? "ml-5" : "ml-7")}
+          data-tool-details-inline="true"
+        >
+          <ToolCallDetailsContent details={props.details} />
+        </div>
+      ) : null}
+    </details>
   );
 }

@@ -65,9 +65,7 @@ type LegacyProviderRuntimeEvent = {
 type ReleaseListSessions = (sessions: ReadonlyArray<ProviderSession>) => void;
 
 // Converts deferred listSessions callbacks into typed release handles for race tests.
-function requireReleaseListSessions(
-  release: ReleaseListSessions | undefined,
-): ReleaseListSessions {
+function requireReleaseListSessions(release: ReleaseListSessions | undefined): ReleaseListSessions {
   if (typeof release !== "function") {
     assert.fail("Expected listSessions release callback");
   }

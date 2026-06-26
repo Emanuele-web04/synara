@@ -150,6 +150,17 @@ export const APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME =
 /** Default floating popup shell (dropdown menus, selects, popovers). */
 export const APP_TRANSLUCENT_POPUP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-2xl shadow-xl`;
 
+/**
+ * Frosted surface chrome shared by every plain tooltip (default TooltipPopup) and
+ * the sidebar hover cards: the translucent shell at the tooltip's tighter
+ * `rounded-lg` radius with a lifted shadow. The sidebar hover cards extend this
+ * with their fixed width, so a plain tooltip, the thread card, and the project
+ * card all read as one surface and can never drift apart. Composer-attached
+ * picker tooltips deliberately stay on the picker chrome instead (see
+ * COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME) so they match the menus they open.
+ */
+export const APP_TOOLTIP_SURFACE_CLASS_NAME = `${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME} rounded-lg shadow-xl`;
+
 /** Frosted backdrop layer inside composer picker dropdown panels. @deprecated Use APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME instead. */
 export const COMPOSER_PICKER_MENU_BACKDROP_CLASS_NAME = "composer-picker-menu-surface";
 

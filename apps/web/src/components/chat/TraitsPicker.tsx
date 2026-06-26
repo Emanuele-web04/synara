@@ -31,9 +31,9 @@ import {
   type ProviderOptions,
 } from "../../providerModelOptions";
 import { COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME } from "./composerPickerStyles";
-import { ComposerPickerMenuPopup, ComposerPickerTooltipPopup } from "./ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
-import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
@@ -199,12 +199,13 @@ function TraitRadioSection({
           return option.description ? (
             <Tooltip key={option.value}>
               <TooltipTrigger render={item} />
-              <ComposerPickerTooltipPopup
+              <TooltipPopup
                 side="right"
+                variant="picker"
                 className="max-w-80 whitespace-normal leading-tight"
               >
                 {option.description}
-              </ComposerPickerTooltipPopup>
+              </TooltipPopup>
             </Tooltip>
           ) : (
             item
@@ -597,7 +598,7 @@ export const TraitsPicker = memo(function TraitsPicker({
             {triggerContent}
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
+            <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change effort, context, and speed</span>
                 <ShortcutKbd
@@ -605,7 +606,7 @@ export const TraitsPicker = memo(function TraitsPicker({
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </ComposerPickerTooltipPopup>
+            </TooltipPopup>
           ) : null}
         </Tooltip>
       ) : (

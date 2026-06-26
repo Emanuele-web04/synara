@@ -32,6 +32,15 @@ function humanizeMcpToolIdentifier(value: string): string | null {
   return `${normalizedServer}: ${normalizedTool}`;
 }
 
+function humanizeMcpServerTool(server: string, tool: string): string | null {
+  const normalizedServer = humanizeMcpToken(server);
+  const normalizedTool = humanizeMcpToken(tool);
+  if (!normalizedServer || !normalizedTool) {
+    return null;
+  }
+  return `${normalizedServer}: ${normalizedTool}`;
+}
+
 export interface ReadableToolTitleInput {
   readonly title?: string | null;
   readonly fallbackLabel: string;
@@ -190,6 +199,10 @@ function extractToolDescriptorFromPayload(
   if (!payload) {
     return null;
   }
+  const mcpServerTool = extractMcpServerToolDescriptor(payload, 0);
+  if (mcpServerTool) {
+    return mcpServerTool;
+  }
   const descriptorKeys = ["kind", "name", "tool", "tool_name", "toolName", "title"];
   const candidates: string[] = [];
   collectDescriptorCandidates(payload, descriptorKeys, candidates, 0);
@@ -202,6 +215,33 @@ function extractToolDescriptorFromPayload(
       continue;
     }
     return normalized;
+  }
+  return null;
+}
+
+function extractMcpServerToolDescriptor(value: unknown, depth: number): string | null {
+  if (depth > 4 || !value || typeof value !== "object") {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractMcpServerToolDescriptor(entry, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.server === "string" && typeof record.tool === "string") {
+    return humanizeMcpServerTool(record.server, record.tool);
+  }
+  for (const nestedKey of ["item", "data", "event", "payload", "result", "input", "call"]) {
+    const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
+    if (nested) {
+      return nested;
+    }
   }
   return null;
 }
@@ -259,8 +299,9 @@ export function deriveReadableCommandDisplay(
   rawCommand: string,
   isRunning = false,
 ): ReadableCommandDisplay {
-  const command = unwrapShellCommandIfPresent(rawCommand);
-  const [tool, args] = splitToolAndArgs(command);
+  const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+  const primaryCommand = firstShellCommandSegment(command);
+  const [tool, args] = splitToolAndArgs(primaryCommand);
 
   switch (tool) {
     case "cat":
@@ -294,7 +335,7 @@ export function deriveReadableCommandDisplay(
     case "fd":
       return {
         verb: isRunning ? "Finding" : "Found",
-        target: lastPathComponents(args, "files"),
+        target: findTarget(args, "files"),
         fullCommand: rawCommand,
       };
     case "mkdir":
@@ -324,17 +365,35 @@ export function deriveReadableCommandDisplay(
       };
     case "git":
       return humanizeGitCommand(args, rawCommand, isRunning);
+    case "node":
+    case "bun":
+    case "deno":
+    case "python":
+    case "python3":
+    case "ruby":
+    case "perl":
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: inlineScriptTarget(tool, command, args) ?? compactInlineCommand(command),
+        fullCommand: rawCommand,
+      };
+    case "osascript":
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: "AppleScript",
+        fullCommand: rawCommand,
+      };
     default:
       return {
         verb: isRunning ? "Running" : "Ran",
-        target: command,
+        target: compactInlineCommand(command),
         fullCommand: rawCommand,
       };
   }
 }
 
 export function deriveInlineCommandCall(rawCommand: string): string {
-  return unwrapShellCommandIfPresent(rawCommand);
+  return stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
 }
 
 function humanizeGitCommand(
@@ -342,7 +401,8 @@ function humanizeGitCommand(
   rawCommand: string,
   isRunning: boolean,
 ): ReadableCommandDisplay {
-  const subcommand = args.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  const normalizedArgs = stripGitGlobalOptions(args);
+  const subcommand = normalizedArgs.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   switch (subcommand) {
     case "status":
       return {
@@ -402,10 +462,37 @@ function humanizeGitCommand(
     default:
       return {
         verb: isRunning ? "Running" : "Ran",
-        target: `git ${args}`.trim(),
+        target: compactInlineCommand(`git ${normalizedArgs}`.trim()),
         fullCommand: rawCommand,
       };
   }
+}
+
+function stripGitGlobalOptions(args: string): string {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (token === "-C" || token === "-c" || token === "--git-dir" || token === "--work-tree") {
+      index += 2;
+      continue;
+    }
+    if (
+      token.startsWith("-C") ||
+      token.startsWith("-c") ||
+      token.startsWith("--git-dir=") ||
+      token.startsWith("--work-tree=")
+    ) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--")) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return tokens.slice(index).join(" ");
 }
 
 function checkoutTarget(args: string): string {
@@ -425,6 +512,31 @@ function lastPathComponents(args: string, fallback: string): string {
   return fallback;
 }
 
+function findTarget(args: string, fallback: string): string {
+  const tokens = tokenizeCommandArgs(args);
+  let skipNext = false;
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      if (
+        token === "-maxdepth" ||
+        token === "-mindepth" ||
+        token === "-name" ||
+        token === "-type" ||
+        token === "-path"
+      ) {
+        skipNext = true;
+      }
+      continue;
+    }
+    return compactPath(token);
+  }
+  return fallback;
+}
+
 function compactPath(path: string): string {
   if (path === ".") {
     return "current directory";
@@ -437,6 +549,36 @@ function compactPath(path: string): string {
     return path;
   }
   return parts.slice(-2).join("/");
+}
+
+function compactInlineCommand(command: string): string {
+  const normalized = command.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 140) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 137).trimEnd()}...`;
+}
+
+function firstShellCommandSegment(command: string): string {
+  const chain = findShellChain(command);
+  return chain ? command.slice(0, chain.operatorStart).trim() : command;
+}
+
+function inlineScriptTarget(tool: string, command: string, args: string): string | null {
+  const normalizedTool = tool === "python3" ? "python" : tool;
+  if (containsHeredoc(command) || hasInlineScriptFlag(args)) {
+    return `${normalizedTool} script`;
+  }
+  return null;
+}
+
+function containsHeredoc(command: string): boolean {
+  return /(^|\s)<<-?\s*['"]?[A-Za-z0-9_]+/.test(command);
+}
+
+function hasInlineScriptFlag(args: string): boolean {
+  const tokens = tokenizeCommandArgs(args);
+  return tokens.some((token) => token === "-e" || token === "-c" || token.startsWith("-e="));
 }
 
 function searchSummary(args: string): string {
@@ -630,10 +772,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     ) {
       value = value.slice(1, -1).trim();
     }
-    const chainedCommandIndex = findShellChainIndex(value);
-    if (chainedCommandIndex >= 0) {
-      value = value.slice(chainedCommandIndex).trim();
-    }
+    value = stripLeadingShellPreambles(value);
     break;
   }
 
@@ -645,7 +784,47 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
   return value;
 }
 
-function findShellChainIndex(value: string): number {
+function stripLeadingShellPreambles(value: string): string {
+  let current = value.trim();
+  for (let attempts = 0; attempts < 4; attempts += 1) {
+    const chain = findShellChain(current);
+    if (!chain) {
+      return current;
+    }
+    const head = current.slice(0, chain.operatorStart).trim();
+    if (!isShellSetupPreamble(head)) {
+      return current;
+    }
+    current = current.slice(chain.commandStart).trim();
+  }
+  return current;
+}
+
+function isShellSetupPreamble(value: string): boolean {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/^(?:builtin\s+)?cd\s+/.test(normalized)) {
+    return true;
+  }
+  if (/^(?:source|\.)\s+/.test(normalized)) {
+    return true;
+  }
+  if (/^set\s+[-+][A-Za-z]/.test(normalized)) {
+    return true;
+  }
+  if (
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=[^\s]+(?:\s+[A-Za-z_][A-Za-z0-9_]*=[^\s]+)*$/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function findShellChain(value: string): { operatorStart: number; commandStart: number } | null {
   let quote: '"' | "'" | null = null;
 
   for (let index = 0; index < value.length - 1; index += 1) {
@@ -666,12 +845,100 @@ function findShellChainIndex(value: string): number {
     }
     const next = value[index + 1];
     if (char === "&" && next === "&") {
-      return index + 2;
+      return { operatorStart: index, commandStart: index + 2 };
     }
     if (char === ";") {
-      return index + 1;
+      return { operatorStart: index, commandStart: index + 1 };
     }
   }
 
-  return -1;
+  return null;
+}
+
+function stripCommandDisplayWrappers(command: string): string {
+  let current = command.replace(/\s+/g, " ").trim();
+  for (let attempts = 0; attempts < 4; attempts += 1) {
+    const [tool, args] = splitToolAndArgs(current);
+    const next =
+      tool === "env"
+        ? stripEnvCommand(args)
+        : tool === "timeout" || tool === "gtimeout"
+          ? stripTimeoutCommand(args)
+          : tool === "nice"
+            ? stripNiceCommand(args)
+            : tool === "arch"
+              ? stripArchCommand(args)
+              : tool === "command"
+                ? args
+                : null;
+    if (!next || next === current) {
+      return current;
+    }
+    current = next.trim();
+  }
+  return current;
+}
+
+function stripEnvCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (token === "--") {
+      index += 1;
+      break;
+    }
+    if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir") {
+      index += 2;
+      continue;
+    }
+    if (token.startsWith("--unset=") || token.startsWith("--chdir=")) {
+      index += 1;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripTimeoutCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length && tokens[index]?.startsWith("-")) {
+    index += tokens[index] === "-s" || tokens[index] === "-k" ? 2 : 1;
+  }
+  if (index < tokens.length && /^\d+(?:\.\d+)?[smhd]?$/.test(tokens[index]!)) {
+    index += 1;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripNiceCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  if (tokens[index] === "-n") {
+    index += 2;
+  } else {
+    while (tokens[index]?.startsWith("-")) {
+      index += 1;
+    }
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripArchCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (tokens[index]?.startsWith("-")) {
+    index += 1;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
 }

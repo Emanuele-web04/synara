@@ -3004,9 +3004,7 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(harness.engine, (entry) =>
       entry.activities.some((activity) => activity.id === "evt-empty-stream-completed"),
     );
-    const activity = thread.activities.find(
-      (entry) => entry.id === "evt-empty-stream-completed",
-    );
+    const activity = thread.activities.find((entry) => entry.id === "evt-empty-stream-completed");
     const payload =
       activity?.payload && typeof activity.payload === "object"
         ? (activity.payload as Record<string, unknown>)

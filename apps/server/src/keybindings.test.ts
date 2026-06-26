@@ -316,6 +316,94 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("preserves new-chat Cmd/Option/N while relaxing its terminal guard", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      // Existing configs already persisted the old shipped keys. Startup should only
+      // relax the creation guard; it must not move new-chat away from Cmd/Option/N.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
+        { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+shift+o" &&
+            entry.command === "sidebar.addProject" &&
+            entry.when === "!terminalFocus",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+alt+n" &&
+            entry.command === "chat.newChat" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+o" && entry.command === "chat.newChat",
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+p" && entry.command === "sidebar.addProject",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("relaxes creation-command terminal guards so macOS can create from the terminal", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      // A config still carrying the old bare `!terminalFocus` guard on creation commands,
+      // including one the user rebound to a custom key, plus a non-creation command.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
+        { key: "mod+shift+k", command: "chat.newTerminal", when: "!terminalFocus" },
+        { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      // Creation commands gain the `|| isMac` escape hatch, even on a rebound key.
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+n" &&
+            entry.command === "chat.new" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+shift+k" &&
+            entry.command === "chat.newTerminal" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      // Non-creation commands keep their original guard untouched.
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.command === "settings.usage" && entry.when === "!terminalFocus",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect("accepts synced composer picker keybindings without startup issues", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
