@@ -90,6 +90,7 @@ import {
 } from "../components/settings/SettingsPanelPrimitives";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { SandboxesSettings } from "../components/settings/SandboxesSettings";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
@@ -163,6 +164,7 @@ import {
   getVisibleProviderUpdateStatuses,
   shouldShowProviderUpdateStatus,
 } from "../providerUpdates";
+import { SANDBOX_APP_SETTINGS_KEYS } from "../sandboxSettings";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
 
@@ -987,6 +989,9 @@ function SettingsRouteView() {
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
     ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
     ...(isProviderOrderDirty ? ["Provider order"] : []),
+    ...(SANDBOX_APP_SETTINGS_KEYS.some((key) => settings[key] !== defaults[key])
+      ? ["Sandboxes"]
+      : []),
   ];
 
   const openKeybindingsFile = useCallback(() => {
@@ -3263,6 +3268,14 @@ function SettingsRouteView() {
         return <SkillsSettingsPanel />;
       case "usage":
         return <ProviderUsageSettingsPanel />;
+      case "sandboxes":
+        return (
+          <SandboxesSettings
+            settings={settings}
+            defaults={defaults}
+            updateSettings={updateSettings}
+          />
+        );
       case "advanced":
         return renderAdvancedPanel();
       default:
