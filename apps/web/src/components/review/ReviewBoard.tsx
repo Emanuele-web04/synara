@@ -154,8 +154,13 @@ export function ReviewBoard(props: { cwd: string | null }) {
     serverSearch.trim().length === 0 &&
     activeFilters.length === 0 &&
     resultLimitState === null;
+  const canUseBoardLaneFallback =
+    cwd !== null &&
+    view === "all" &&
+    serverSearch.trim().length === 0 &&
+    activeFilters.length === 0;
   const boardLanesQuery = useQuery({
-    ...reviewLoadBoardLanesQueryOptions({ cwd }),
+    ...reviewLoadBoardLanesQueryOptions({ cwd, limit: REVIEW_LIST_PAGE_SIZE }),
     enabled: canUseBoardLaneHydrate,
   });
   const columnQueryInputs = useMemo(
@@ -212,11 +217,6 @@ export function ReviewBoard(props: { cwd: string | null }) {
   });
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
   const facetBasePullRequests = useMemo(() => {
-    const cachedPullRequests = queryClient
-      .getQueriesData<ReviewListPullRequestsResult>({
-        queryKey: reviewQueryKeys.pullRequestLists(cwd),
-      })
-      .flatMap(([, data]) => data?.pullRequests ?? []);
     const columnPullRequests = columnQueries.flatMap((query) => query.data?.pullRequests ?? []);
     // Lane-hydrated views disable the per-column queries, so their pull requests
     // only live in boardLanesQuery; include them or the facet menu has no options.
@@ -224,11 +224,10 @@ export function ReviewBoard(props: { cwd: string | null }) {
       (column) => boardLaneResultForColumn(boardLanesQuery.data, column.id)?.pullRequests ?? [],
     );
     return uniqueReviewPullRequests([
-      ...cachedPullRequests,
       ...columnPullRequests,
       ...lanePullRequests,
     ]);
-  }, [columnQueries, queryClient, cwd, boardLanesQuery.data]);
+  }, [columnQueries, boardLanesQuery.data]);
 
   const facetItems = useMemo(
     () => filterByView(facetBasePullRequests, view, viewerLogin),
@@ -243,17 +242,21 @@ export function ReviewBoard(props: { cwd: string | null }) {
       REVIEW_BOARD_COLUMNS.map((column, index) => {
         const columnInput = columnQueryInputs[index]!;
         const query = columnQueries[index]!;
-        const laneData = boardLaneResultForColumn(boardLanesQuery.data, column.id);
+        const laneData = canUseBoardLaneFallback
+          ? boardLaneResultForColumn(boardLanesQuery.data, column.id)
+          : undefined;
+        const queryData = query.data;
+        const sourceData = queryData ?? laneData;
         const pullRequests = filterReviewPullRequests(
           filterByView(
-            laneData?.pullRequests ?? query.data?.pullRequests ?? [],
+            sourceData?.pullRequests ?? [],
             view,
             viewerLogin,
           ).filter((summary) => deriveReviewColumn(summary) === column.id),
           clientSearch,
           activeFilters,
         );
-        const meta = laneData?.meta ?? query.data?.meta;
+        const meta = sourceData?.meta;
         const resultLimitForColumn =
           resultLimitState?.scopeKey === columnInput.scopeKey ? resultLimitState.limit : null;
         const canLoadMore =
@@ -269,6 +272,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
           query,
           meta,
           canLoadMore,
+          hasData: sourceData !== undefined,
         };
       }),
     [
@@ -277,6 +281,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
       columnQueries,
       columnQueryInputs,
       boardLanesQuery.data,
+      canUseBoardLaneFallback,
       resultLimitState,
       view,
       viewerLogin,
@@ -296,7 +301,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
   const hasPullRequestListData =
     canUseBoardLaneHydrate && boardLanesQuery.data
       ? true
-      : enabledColumnStates.length > 0 && enabledColumnStates.every((column) => column.query.data);
+      : enabledColumnStates.length > 0 && enabledColumnStates.every((column) => column.hasData);
   const isColdSyncing =
     !hasPullRequestListData &&
     (enabledColumnStates.some((column) => column.query.isFetching) ||

@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  buildDiffPanelUnsafeCSS,
   buildFileDiffRenderKey,
   buildPatchCacheKey,
   getRenderablePatch,
@@ -14,6 +15,19 @@ import {
   splitRepoRelativePath,
   summarizePatchTotals,
 } from "./diffRendering";
+
+describe("buildDiffPanelUnsafeCSS", () => {
+  it("keeps sticky file headers by default", () => {
+    expect(buildDiffPanelUnsafeCSS("light")).toContain("position: sticky !important");
+  });
+
+  it("can disable sticky file headers for outer-virtualized surfaces", () => {
+    const css = buildDiffPanelUnsafeCSS("light", { stickyHeaders: false });
+
+    expect(css).toContain("position: relative !important");
+    expect(css).not.toContain("position: sticky !important");
+  });
+});
 
 describe("buildPatchCacheKey", () => {
   it("returns a stable cache key for identical content", () => {

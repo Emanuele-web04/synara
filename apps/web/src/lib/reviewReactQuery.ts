@@ -12,6 +12,7 @@ import type {
   ReviewPullRequestOverview,
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
+  ReviewGenerateWalkthroughInput,
   ReviewRunAgentInput,
   ReviewSourceRef,
   ReviewSubmitInput,
@@ -36,7 +37,7 @@ const REVIEW_REMOTE_THREADS_STALE_TIME_MS = 30_000;
 const REVIEW_PROJECT_ACCESS_STALE_TIME_MS = 300_000;
 const REVIEW_PROJECTS_STALE_TIME_MS = 60_000;
 const REVIEW_PROJECT_BOARD_STALE_TIME_MS = 30_000;
-const REVIEW_WALKTHROUGH_GC_TIME_MS = 5 * 60_000;
+const REVIEW_WALKTHROUGH_GC_TIME_MS = 60 * 60_000;
 
 type ReviewListState = NonNullable<ReviewListPullRequestsInput["state"]>;
 type ReviewListColumn = NonNullable<ReviewListPullRequestsInput["columns"]>[number];
@@ -142,14 +143,41 @@ export function applyReviewUpdatedPayload(
   if (payload._tag === "pullRequestWalkthrough") {
     const patchSignature = payload.data.patchSignature;
     if (patchSignature !== undefined) {
+      const expectedHeadSha = payload.data.reviewedHeadSha ?? null;
+      const walkthroughResult = {
+        walkthrough: payload.data,
+        ...(payload.data.reviewedHeadSha !== undefined
+          ? { reviewedHeadSha: payload.data.reviewedHeadSha }
+          : {}),
+        patchSignature,
+        ...(payload.data.patchSource !== undefined
+          ? { patchSource: payload.data.patchSource }
+          : {}),
+        headMoved: false,
+        patchChanged: false,
+      } satisfies ReviewWalkthroughResult;
       queryClient.setQueryData(
         reviewQueryKeys.walkthrough(
           payload.cwd,
           payload.reference,
           patchSignature,
-          payload.data.reviewedHeadSha ?? null,
+          expectedHeadSha,
         ),
-        payload.data,
+        walkthroughResult,
+      );
+      queryClient.setQueriesData<ReviewWalkthroughResult>(
+        {
+          queryKey: [
+            "review",
+            "walkthrough",
+            payload.cwd,
+            payload.reference,
+            patchSignature,
+            expectedHeadSha,
+          ],
+          exact: false,
+        },
+        walkthroughResult,
       );
     }
     return;
@@ -275,7 +303,17 @@ export const reviewQueryKeys = {
     reference: string | null,
     patchSignature: string | null,
     expectedHeadSha: string | null,
-  ) => ["review", "walkthrough", cwd, reference, patchSignature, expectedHeadSha] as const,
+    generationSettings: unknown = null,
+  ) =>
+    [
+      "review",
+      "walkthrough",
+      cwd,
+      reference,
+      patchSignature,
+      expectedHeadSha,
+      generationSettings,
+    ] as const,
   conversation: (cwd: string | null, reference: string | null) =>
     ["review", "conversation", cwd, reference] as const,
   comments: (targetKey: string) => ["review", "comments", targetKey] as const,
@@ -445,6 +483,10 @@ export function reviewGenerateWalkthroughQueryOptions(input: {
   source: ReviewSourceRef | null;
   patchSignature: string | null;
   expectedHeadSha?: string;
+  codexHomePath?: ReviewGenerateWalkthroughInput["codexHomePath"];
+  providerOptions?: ReviewGenerateWalkthroughInput["providerOptions"];
+  modelSelection?: ReviewGenerateWalkthroughInput["modelSelection"];
+  textGenerationModel?: ReviewGenerateWalkthroughInput["textGenerationModel"];
 }) {
   return queryOptions({
     queryKey: reviewQueryKeys.walkthrough(
@@ -452,6 +494,12 @@ export function reviewGenerateWalkthroughQueryOptions(input: {
       input.reference,
       input.patchSignature,
       input.expectedHeadSha ?? null,
+      {
+        codexHomePath: input.codexHomePath ?? null,
+        providerOptions: input.providerOptions ?? null,
+        modelSelection: input.modelSelection ?? null,
+        textGenerationModel: input.textGenerationModel ?? null,
+      },
     ),
     queryFn: async (): Promise<ReviewWalkthroughResult> => {
       const api = ensureNativeApi();
@@ -463,6 +511,12 @@ export function reviewGenerateWalkthroughQueryOptions(input: {
         source: input.source,
         expectedPatchSignature: input.patchSignature,
         ...(input.expectedHeadSha !== undefined ? { expectedHeadSha: input.expectedHeadSha } : {}),
+        ...(input.codexHomePath !== undefined ? { codexHomePath: input.codexHomePath } : {}),
+        ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+        ...(input.textGenerationModel !== undefined
+          ? { textGenerationModel: input.textGenerationModel }
+          : {}),
       });
     },
     enabled:
