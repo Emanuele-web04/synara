@@ -6,10 +6,7 @@
 
 import type { ReactNode } from "react";
 import { ChangesIcon, TerminalIcon } from "~/lib/icons";
-import {
-  createMarkdownCodeFence,
-  formatShellTranscript,
-} from "~/lib/toolCallDetailsFormatting";
+import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
 import type { WorkLogEntry } from "../../session-logic";

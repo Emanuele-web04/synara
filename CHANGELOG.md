@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.3.1 - 2026-06-26
+
+### Added
+
+- Added transcript tool-call detail dialogs and formatting helpers for command output, patches, file changes, and tool output so command-heavy turns are easier to inspect.
+- Added regression coverage for tool-call labels, tool-call detail formatting, message timeline grouping, sidebar hover-card anchoring, keybindings, Gemini ACP probing, provider runtime ingestion, ProviderService behavior, electron-updater security, and Windows process handling.
+- Added a curated central icon asset set and provider/UI icon plumbing used by newer picker, header, sidebar, and preview surfaces.
+- Added more explicit project and thread hover-card content, thread pin toggle behavior, recent view switching, and project shortcut targeting.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.1` across the server, desktop, web, and contracts packages.
+- Refined session orchestration and transcript handling so assistant messages, tool/work rows, collapsed turns, runtime activity, and sidechat state stay separated more predictably.
+- Improved chat header, recent-view, sidebar, split-chat, and hover-card navigation for multi-pane workflows.
+- Tightened keyboard shortcut defaults and persisted keybinding migrations for chat creation, terminal creation, navigation, and duplicate/stale binding rows.
+- Expanded provider runtime ingestion for canonical Codex event shapes, generated-image markdown, MCP tool progress, reasoning deltas, proposed-plan events, and synthetic placeholder thread ids.
+- Hardened provider management around idle runtime retention, provider health refresh, process cleanup, Cursor/Gemini/Grok adapter paths, OpenCode runtime handling, and Gemini ACP probe parsing.
+- Made automation setup/update flows stricter by separating conversational setup prompts, update-only approval paths, approval fallback behavior, prompt filler removal, and risk acknowledgement gating.
+- Improved desktop startup/update handling by reducing noisy Node deprecation warnings and tightening electron-updater Windows command construction.
+- Refined composer, automation banners, provider/model pickers, Kanban cards, preview cards, tooltip primitives, and project/sidebar icons with smaller consistency fixes.
+- Welcomed focused external contributions in the project docs and README while keeping the early-WIP guidance explicit.
+
+### Fixed
+
+- Fixed transcript tool-call inspection gaps where shell command output, patch details, and normalized tool output were hard to review from the UI.
+- Fixed session orchestration edge cases around review interrupt retry, compaction progress, runtime event replay, generated image completion replay, and provider-thread placeholder matching.
+- Fixed provider runtime warning and ingestion paths that could mishandle missing usage details, auxiliary turn completions, or non-active turn completions in synthetic/runtime tests.
+- Fixed automation approval regressions around update-only flows, fallback prompts, conversational setup follow-up text, and dispatch-time risk acknowledgement.
+- Fixed desktop updater command-hardening coverage and reduced startup warning noise from desktop Node behavior.
+- Fixed formatting drift caught by the release gate in `apps/server/src/keybindings.test.ts` and `apps/web/src/components/chat/ToolCallDetailsDialog.tsx`.
+
+### Verification
+
+- Initial `bun run fmt:check` failed on `apps/server/src/keybindings.test.ts` and `apps/web/src/components/chat/ToolCallDetailsDialog.tsx`; after targeted `bunx oxfmt` on those two files, `bun run fmt:check` passed.
+- `bun run lint` passed with 156 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and left `bun.lock` unchanged.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m6s. `@t3tools/web` passed 182 files / 2164 tests. `t3` passed 135 files with 1 skipped file, 1456 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.1`, and `npm run lint` passed.
+
 ## 0.3.0 - 2026-06-24
 
 ### Added

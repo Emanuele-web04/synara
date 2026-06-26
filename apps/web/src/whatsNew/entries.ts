@@ -22,6 +22,76 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.1",
+    date: "Jun 26",
+    features: [
+      {
+        id: "tool-call-details",
+        title: "Tool calls are easier to inspect",
+        description:
+          "Transcript tool calls now expose clearer detail dialogs for shell commands, patches, file changes, and tool output, so review-heavy chats are easier to audit.",
+        details:
+          "Synara now formats tool command transcripts, normalizes patch/change output, labels more tool kinds consistently, preserves structured work metadata through the timeline, and adds focused coverage for tool-call labels and formatting.",
+      },
+      {
+        id: "transcript-flow",
+        title: "Long chats stay calmer while work is running",
+        description:
+          "Transcript grouping and scroll behavior were refined so live assistant text, collapsed work rows, sidechat panes, and tool-only activity behave more predictably.",
+        details:
+          "This release tightens message timeline derivation, keeps real assistant text separate from tool/work rows, improves collapsed-turn signatures, preserves assistant selection actions, and adds focused tests for timeline rows and ChatView state.",
+      },
+      {
+        id: "multi-pane-navigation",
+        title: "Multi-pane work is quicker to navigate",
+        description:
+          "Recent views, split chats, pinned threads, hover cards, and project sidebar actions received a round of smaller navigation polish.",
+        details:
+          "Recent view switching, sidebar hover-card anchors, thread/project hover content, pin toggles, chat header actions, project shortcut targets, and split/sidechat affordances now share more predictable state and keyboard routing.",
+      },
+      {
+        id: "keybindings",
+        title: "Keyboard shortcuts got stricter",
+        description:
+          "Shortcut defaults and migrations are now safer, with better handling for chat creation, terminal actions, navigation, and stale keybinding rows.",
+        details:
+          "Server and web keybinding logic now validates persisted bindings more carefully, avoids carrying conflicting defaults forward, improves new-chat/new-terminal command resolution, and has expanded regression coverage.",
+      },
+      {
+        id: "provider-runtime-reliability",
+        title: "Providers recover from more edge cases",
+        description:
+          "Codex, Gemini, Grok, Cursor, OpenCode, and provider health paths are sturdier around runtime events, discovery, process cleanup, and idle sessions.",
+        details:
+          "Provider runtime ingestion now handles more canonical event shapes, Gemini ACP probing is more defensive, provider service behavior has broader coverage, idle runtime cleanup was tightened, process runner handling is safer, and Codex review/compaction progress is easier to reconcile.",
+      },
+      {
+        id: "automation-approval-safety",
+        title: "Automation setup asks for the right approval",
+        description:
+          "Automation creation and updates now separate setup prompts, update-only flows, approval fallbacks, and risk acknowledgement more carefully.",
+        details:
+          "This release hardens conversational automation setup, preserves update-only approval paths, restores the approval fallback, strips carried setup filler from prompts, and keeps the risk acknowledgement gate attached to dispatch.",
+      },
+      {
+        id: "desktop-update-hardening",
+        title: "Desktop updates and startup are quieter",
+        description:
+          "The desktop shell now suppresses noisy Node warnings in more places and hardens electron-updater command handling on Windows.",
+        details:
+          "Desktop startup applies safer warning handling, voice transcription edge cases were tightened, and electron updater command construction now has dedicated security coverage around Windows process spawning.",
+      },
+      {
+        id: "icons-and-ui-polish",
+        title: "The interface has more useful visual signals",
+        description:
+          "Provider icons, central icon assets, model pickers, composer controls, automation banners, Kanban cards, preview cards, and tooltips were cleaned up in small but visible ways.",
+        details:
+          "Synara now ships a curated central-icons set, improves provider/model picker presentation, refines composer picker and automation banners, adds better project/thread hover details, and keeps repeated UI surfaces closer to the same visual language.",
+      },
+    ],
+  },
+  {
     version: "0.3.0",
     date: "Jun 24",
     features: [

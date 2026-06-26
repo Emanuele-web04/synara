@@ -349,9 +349,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         ),
       );
       assert.isFalse(
-        persisted.some(
-          (entry) => entry.key === "mod+shift+o" && entry.command === "chat.newChat",
-        ),
+        persisted.some((entry) => entry.key === "mod+shift+o" && entry.command === "chat.newChat"),
       );
       assert.isFalse(
         persisted.some(
