@@ -6,6 +6,8 @@
  *
  * @module ClaudeAdapterLive
  */
+import * as NodePath from "node:path";
+
 import {
   type AgentInfo,
   type CanUseTool,
@@ -306,6 +308,31 @@ function hashCacheComponent(value: string): string {
   return (hash >>> 0).toString(36);
 }
 
+export function claudeHomeEnvironment(
+  homePath: string,
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const homeEnvironment: NodeJS.ProcessEnv = { HOME: homePath };
+  if (platform !== "win32") {
+    return homeEnvironment;
+  }
+
+  const appDataRoot = NodePath.win32.join(homePath, "AppData");
+  const parsed = NodePath.win32.parse(homePath);
+  return {
+    ...homeEnvironment,
+    USERPROFILE: homePath,
+    APPDATA: NodePath.win32.join(appDataRoot, "Roaming"),
+    LOCALAPPDATA: NodePath.win32.join(appDataRoot, "Local"),
+    ...(parsed.root.match(/^[A-Za-z]:\\$/)
+      ? {
+          HOMEDRIVE: parsed.root.slice(0, 2),
+          HOMEPATH: homePath.slice(2) || "\\",
+        }
+      : {}),
+  };
+}
+
 function claudeEnvironment(
   homePath: string | null | undefined,
   environment?: Readonly<Record<string, string>> | undefined,
@@ -314,7 +341,7 @@ function claudeEnvironment(
   return {
     ...process.env,
     ...(environment ?? {}),
-    ...(trimmedHomePath ? { HOME: trimmedHomePath } : {}),
+    ...(trimmedHomePath ? claudeHomeEnvironment(trimmedHomePath) : {}),
   };
 }
 

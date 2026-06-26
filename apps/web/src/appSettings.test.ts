@@ -1172,6 +1172,8 @@ describe("provider-indexed custom model settings", () => {
       patchCustomModelsForProviderInstance(
         {
           codexAccounts: [],
+          claudeBinaryPath: "/opt/bin/claude",
+          claudeHomePath: "/tmp/claude-default",
           codexHomePath: "",
           providerInstances: {},
           selectedCodexAccountId: "default",
@@ -1188,7 +1190,48 @@ describe("provider-indexed custom model settings", () => {
         claudeAgent: {
           driver: "claudeAgent",
           enabled: true,
-          config: { customModels: ["claude/default-instance"] },
+          config: {
+            binaryPath: "/opt/bin/claude",
+            homePath: "/tmp/claude-default",
+            customModels: ["claude/default-instance"],
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves server settings when saving custom models for default provider instances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          openCodeBinaryPath: "/opt/bin/opencode",
+          openCodeExperimentalWebSockets: true,
+          openCodeServerPassword: "server-secret",
+          openCodeServerUrl: "http://127.0.0.1:4096",
+          providerInstances: {},
+          selectedCodexAccountId: "default",
+        },
+        {
+          instanceId: "opencode",
+          provider: "opencode",
+          isDefault: true,
+        },
+        ["openrouter/custom-opencode"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        opencode: {
+          driver: "opencode",
+          enabled: true,
+          config: {
+            binaryPath: "/opt/bin/opencode",
+            experimentalWebSockets: true,
+            serverPassword: "server-secret",
+            serverUrl: "http://127.0.0.1:4096",
+            customModels: ["openrouter/custom-opencode"],
+          },
         },
       },
     });
@@ -1206,6 +1249,7 @@ describe("provider-indexed custom model settings", () => {
               shadowHomePath: "/tmp/codex-shadow",
             },
           ],
+          codexBinaryPath: "/opt/bin/codex",
           codexHomePath: "/tmp/codex-default",
           providerInstances: {},
           selectedCodexAccountId: "work",
@@ -1224,6 +1268,7 @@ describe("provider-indexed custom model settings", () => {
           enabled: true,
           displayName: "Work",
           config: {
+            binaryPath: "/opt/bin/codex",
             homePath: "/tmp/codex-work",
             shadowHomePath: "/tmp/codex-shadow",
             accountId: "work",
