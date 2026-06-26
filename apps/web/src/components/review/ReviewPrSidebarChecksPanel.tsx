@@ -183,41 +183,71 @@ export function CheckRow(props: {
   variant: "card" | "inspector";
 }): ReactElement {
   const subtitle = props.check.description ?? props.check.workflow ?? null;
+  const isInspector = props.variant === "inspector";
   const content = (
     <>
-      <CheckStateIcon state={props.check.state} className="size-4" />
-      <div className="min-w-0 flex-1">
-        <div className="flex min-w-0 items-baseline gap-1.5">
+      <span className="inline-flex w-5 shrink-0 items-center justify-center self-stretch">
+        <CheckStateIcon
+          state={props.check.state}
+          className={isInspector ? "size-3.5" : "size-4"}
+        />
+      </span>
+      <div className="min-w-0 self-center">
+        <div
+          className={cn(
+            "grid min-w-0 items-baseline gap-2",
+            isInspector
+              ? "grid-cols-[minmax(0,1fr)_5.75rem]"
+              : "grid-cols-[minmax(0,1fr)_5.5rem]",
+          )}
+        >
           <p
-            className="min-w-0 flex-1 truncate font-medium text-[12px] text-foreground"
+            className={cn(
+              "min-w-0 truncate font-medium text-foreground",
+              isInspector ? "text-[12px]" : "text-[12.5px]",
+            )}
             title={props.check.name}
           >
             {props.check.name}
           </p>
-          <p className="shrink-0 text-[10px] text-muted-foreground/75">
+          <p
+            className={cn(
+              "justify-self-end whitespace-nowrap text-right text-muted-foreground/75",
+              isInspector ? "text-[10.5px]" : "text-[10px]",
+            )}
+          >
             {checkStateLabel(props.check.state)}
           </p>
         </div>
         {subtitle ? (
-          <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground/75" title={subtitle}>
+          <p
+            className={cn(
+              "truncate text-muted-foreground/75",
+              isInspector ? "mt-1 text-[10.5px]" : "mt-0.5 text-[10.5px]",
+            )}
+            title={subtitle}
+          >
             {subtitle}
           </p>
         ) : null}
       </div>
       {props.check.url ? (
         <ArrowUpRightIcon
-          className="size-3.5 shrink-0 text-muted-foreground/70"
+          className="size-3.5 shrink-0 self-center text-muted-foreground/70"
           aria-hidden="true"
         />
       ) : null}
     </>
   );
   const className = cn(
-    "flex min-h-9 min-w-0 items-start gap-2 outline-none",
+    "grid min-w-0 outline-none transition-colors",
     props.variant === "card"
-      ? cn("rounded-lg border px-2 py-1.5", ROW_TONE_CLASS[props.check.state])
+      ? cn(
+          "min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_0.875rem] gap-2 rounded-lg border px-2.5 py-2",
+          ROW_TONE_CLASS[props.check.state],
+        )
       : cn(
-          "rounded-md px-1 py-2",
+          "min-h-12 grid-cols-[1.25rem_minmax(0,1fr)_0.875rem] gap-2 rounded-md px-2 py-2.5",
           props.check.state === "failure" && "bg-destructive/10",
           props.check.state === "pending" && "bg-warning/10",
         ),
@@ -275,7 +305,7 @@ export function ReviewPrSidebarChecksPanel(props: {
         {orderedChecks.length > 0 ? (
           <ul
             className={cn(
-              "mt-3 flex min-h-0 flex-col overflow-y-auto pe-1",
+              "mt-3 flex min-h-0 scroll-pb-2 flex-col overflow-y-auto pb-1 pr-2 [scrollbar-gutter:stable]",
               props.maxRowsClassName ?? "max-h-56",
             )}
             role="list"
@@ -330,7 +360,7 @@ export function ReviewPrSidebarChecksPanel(props: {
       {orderedChecks.length > 0 ? (
         <ul
           className={cn(
-            "flex min-h-0 flex-col gap-1 overflow-y-auto pe-1",
+            "flex min-h-0 scroll-pb-2 flex-col gap-1 overflow-y-auto pb-1 pr-2 [scrollbar-gutter:stable]",
             props.maxRowsClassName ?? "max-h-56",
           )}
           role="list"
