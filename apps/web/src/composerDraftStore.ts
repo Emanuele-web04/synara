@@ -1583,9 +1583,7 @@ export function resolvePreferredComposerModelSelection(input: {
     : undefined;
   const draftProviderWithSelection = activeDraftSelection
     ? resolveSelectionProvider(activeDraftSelection)
-    : Object.values(input.draft?.modelSelectionByProvider ?? {})[0]
-      ? resolveSelectionProvider(Object.values(input.draft?.modelSelectionByProvider ?? {})[0]!)
-      : null;
+    : null;
   const preferredProvider =
     draftProviderWithSelection ??
     activeInstanceProvider ??

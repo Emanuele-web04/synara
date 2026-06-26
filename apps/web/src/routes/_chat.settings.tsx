@@ -920,11 +920,8 @@ function SettingsRouteView() {
     return groups;
   }, [managedWorktrees, threadShells]);
 
-  // Builds provider model-option arrays; only the Models panel reads it. Memoize on the
-  // narrow inputs the helper actually uses (destructured so exhaustive-deps stays exact) so
-  // typing in any other settings field — every keystroke re-renders this monolithic route —
-  // doesn't rebuild these lists.
-  const { textGenerationModel, textGenerationProvider } = settings;
+  // Builds provider model-option arrays; only the Models panel reads it, so keep the
+  // derived target list tied to the already-memoized provider instance options.
   const providerInstanceOptions = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const unsupportedProviderInstanceOptions = useMemo(
     () => getUnsupportedProviderInstanceOptions(settings),
@@ -992,7 +989,7 @@ function SettingsRouteView() {
         isDefault: false,
       }));
     return [...defaultTargets, ...explicitTargets];
-  }, [providerInstanceOptions, settings.providerInstances]);
+  }, [providerInstanceOptions]);
   const selectedCustomModelTarget =
     customModelTargetOptions.find((target) => target.instanceId === selectedCustomModelTargetId) ??
     customModelTargetOptions[0]!;

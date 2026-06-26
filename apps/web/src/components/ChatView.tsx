@@ -1900,11 +1900,7 @@ export default function ChatView({
 
     const draftSelection =
       candidateInstanceId === undefined
-        ? Object.values(composerDraft.modelSelectionByProvider).find(
-            (selection) =>
-              selection !== undefined &&
-              resolveProviderForModelSelection(selection) === selectedProvider,
-          )
+        ? undefined
         : composerDraft.modelSelectionByProvider[
             providerInstanceModelSelectionKey(selectedProvider, candidateInstanceId)
           ];

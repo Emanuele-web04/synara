@@ -11,6 +11,8 @@ import {
 
 const BASE_STATUS: ServerProviderStatus = {
   provider: "gemini",
+  instanceId: "gemini",
+  driver: "gemini",
   status: "error",
   available: false,
   authStatus: "unknown",
@@ -42,6 +44,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
         },
         customBinaryPath: "/opt/homebrew/bin/claude",
@@ -49,6 +53,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       available: true,
       status: "warning",
       message:
@@ -63,6 +69,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -70,6 +78,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       authStatus: "unknown",
       available: true,
       checkedAt: BASE_STATUS.checkedAt,
@@ -111,6 +121,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode-next",
@@ -119,6 +131,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       available: true,
       status: "warning",
       message:
@@ -202,6 +216,7 @@ describe("providerUnavailableReason", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude_work",
+        driver: "claudeAgent",
         displayName: "Claude Work",
         authStatus: "unauthenticated",
       }),
@@ -216,6 +231,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude",
+        driver: "claudeAgent",
         displayName: "Claude",
         status: "ready",
         available: true,
@@ -225,6 +241,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claude_work",
+        driver: "claudeAgent",
         displayName: "Work",
         message: "Work account is disabled.",
       },
@@ -249,6 +266,7 @@ describe("findProviderStatus", () => {
         ...BASE_STATUS,
         provider: "claudeAgent",
         instanceId: "claudeAgent",
+        driver: "claudeAgent",
         displayName: "Claude",
         status: "ready",
         available: true,

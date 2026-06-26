@@ -158,6 +158,32 @@ it.effect("preserves provider instance ids when decoding model selections", () =
   }),
 );
 
+it.effect("normalizes mixed legacy option payloads when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      options: {
+        effort: "max",
+        fastMode: true,
+        budget: 12,
+        nullish: null,
+        nested: { foo: 1 },
+      },
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      options: [
+        { id: "effort", value: "max" },
+        { id: "fastMode", value: true },
+        { id: "budget", value: "12" },
+      ],
+    });
+  }),
+);
+
 it.effect("decodes providerless instance-id model selections from newer T3 payloads", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeModelSelection({

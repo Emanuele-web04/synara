@@ -183,6 +183,14 @@ const layer = it.layer(
                 homePath: "/tmp/codex-work",
               },
             },
+            cursor_work: {
+              driver: "cursor",
+              displayName: "Cursor Work",
+            },
+            opencode_work: {
+              driver: "opencode",
+              displayName: "OpenCode Work",
+            },
           },
         }),
       ),
@@ -286,6 +294,97 @@ layer("ProviderAdapterRegistryLive", (it) => {
         [workThreadId],
       );
       assert.equal(instanceSessions[0]?.providerInstanceId, workInstanceId);
+    }),
+  );
+
+  it.effect("routes custom Cursor and OpenCode instance sessions through exact facades", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      const cursorThreadId = ThreadId.makeUnsafe("thread-cursor-work");
+      const openCodeThreadId = ThreadId.makeUnsafe("thread-opencode-work");
+      const cursorSessions = new Map<ThreadId, ProviderSession>();
+      const openCodeSessions = new Map<ThreadId, ProviderSession>();
+
+      vi.mocked(fakeCursorAdapter.startSession).mockImplementation((input) =>
+        Effect.sync(() => {
+          const session: ProviderSession = {
+            provider: "cursor",
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            threadId: input.threadId,
+            createdAt: now,
+            updatedAt: now,
+          };
+          cursorSessions.set(input.threadId, session);
+          return session;
+        }),
+      );
+      vi.mocked(fakeCursorAdapter.listSessions).mockImplementation(() =>
+        Effect.succeed([...cursorSessions.values()]),
+      );
+      vi.mocked(fakeCursorAdapter.hasSession).mockImplementation((threadId) =>
+        Effect.succeed(cursorSessions.has(threadId)),
+      );
+      vi.mocked(fakeCursorAdapter.stopSession).mockImplementation((threadId) =>
+        Effect.sync(() => {
+          cursorSessions.delete(threadId);
+        }),
+      );
+
+      vi.mocked(fakeOpenCodeAdapter.startSession).mockImplementation((input) =>
+        Effect.sync(() => {
+          const session: ProviderSession = {
+            provider: "opencode",
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            threadId: input.threadId,
+            createdAt: now,
+            updatedAt: now,
+          };
+          openCodeSessions.set(input.threadId, session);
+          return session;
+        }),
+      );
+      vi.mocked(fakeOpenCodeAdapter.listSessions).mockImplementation(() =>
+        Effect.succeed([...openCodeSessions.values()]),
+      );
+      vi.mocked(fakeOpenCodeAdapter.hasSession).mockImplementation((threadId) =>
+        Effect.succeed(openCodeSessions.has(threadId)),
+      );
+      vi.mocked(fakeOpenCodeAdapter.stopSession).mockImplementation((threadId) =>
+        Effect.sync(() => {
+          openCodeSessions.delete(threadId);
+        }),
+      );
+
+      const registry = yield* ProviderAdapterRegistry;
+      assert.ok(registry.getByInstance);
+      const cursor = yield* registry.getByInstance(asProviderInstanceId("cursor_work"));
+      const openCode = yield* registry.getByInstance(asProviderInstanceId("opencode_work"));
+
+      yield* cursor.startSession({
+        threadId: cursorThreadId,
+        provider: "cursor",
+        runtimeMode: "full-access",
+      });
+      yield* openCode.startSession({
+        threadId: openCodeThreadId,
+        provider: "opencode",
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(yield* cursor.hasSession(cursorThreadId), true);
+      assert.equal(yield* openCode.hasSession(openCodeThreadId), true);
+      assert.equal((yield* cursor.listSessions())[0]?.providerInstanceId, "cursor_work");
+      assert.equal((yield* openCode.listSessions())[0]?.providerInstanceId, "opencode_work");
+
+      yield* cursor.stopSession(cursorThreadId);
+      yield* openCode.stopSession(openCodeThreadId);
+
+      assert.equal(yield* cursor.hasSession(cursorThreadId), false);
+      assert.equal(yield* openCode.hasSession(openCodeThreadId), false);
     }),
   );
 });

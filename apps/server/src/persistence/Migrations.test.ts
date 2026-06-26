@@ -220,6 +220,17 @@ layer("reconcileMigrationLineage", (it) => {
         )
         VALUES
           (
+            'thread-codex-work',
+            'codex',
+            NULL,
+            'codex',
+            'full-access',
+            'running',
+            ${now},
+            NULL,
+            ${JSON.stringify({ modelSelection: { instanceId: "codex_bound", model: "gpt-5.4" } })}
+          ),
+          (
             'runtime-codex-work',
             'codex',
             NULL,
@@ -271,8 +282,8 @@ layer("reconcileMigrationLineage", (it) => {
         ORDER BY thread_id ASC
       `;
       assert.deepStrictEqual(projectionRows, [
-        { threadId: "thread-codex-work", providerInstanceId: "codex_work" },
-        { threadId: "thread-no-model-selection", providerInstanceId: null },
+        { threadId: "thread-codex-work", providerInstanceId: "codex_bound" },
+        { threadId: "thread-no-model-selection", providerInstanceId: "codex" },
       ]);
 
       const runtimeRows = yield* sql<{
@@ -283,12 +294,13 @@ layer("reconcileMigrationLineage", (it) => {
           thread_id AS "threadId",
           provider_instance_id AS "providerInstanceId"
         FROM provider_session_runtime
-        WHERE thread_id IN ('runtime-codex-work', 'runtime-no-instance')
+        WHERE thread_id IN ('runtime-codex-work', 'runtime-no-instance', 'thread-codex-work')
         ORDER BY thread_id ASC
       `;
       assert.deepStrictEqual(runtimeRows, [
         { threadId: "runtime-codex-work", providerInstanceId: "codex_work" },
-        { threadId: "runtime-no-instance", providerInstanceId: null },
+        { threadId: "runtime-no-instance", providerInstanceId: "codex" },
+        { threadId: "thread-codex-work", providerInstanceId: "codex_bound" },
       ]);
     }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );

@@ -106,6 +106,8 @@ function getWindowForTest(): Window & typeof globalThis & { desktopBridge?: unkn
 const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
   {
     provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
     status: "ready",
     available: true,
     authStatus: "authenticated",

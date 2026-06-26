@@ -74,20 +74,13 @@ const ModelSelectionWire = Schema.Struct({
   options: Schema.optional(ProviderOptionSelections),
 });
 
-const LegacyProviderOptionSelectionRecord = Schema.Record(
-  Schema.String,
-  Schema.Union([TrimmedNonEmptyString, Schema.Boolean, Schema.Number]),
-);
-const ModelSelectionOptionsSource = Schema.Union([
-  ProviderOptionSelections,
-  LegacyProviderOptionSelectionRecord,
-]);
-
+// Keep the persisted source shape loose so legacy drafts can reach the transform;
+// the target schema still enforces the canonical provider-instance selection.
 const ModelSelectionSource = Schema.Struct({
-  provider: Schema.optional(Schema.String),
-  instanceId: Schema.optional(Schema.String),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(ModelSelectionOptionsSource),
+  provider: Schema.optionalKey(Schema.Json),
+  instanceId: Schema.optionalKey(Schema.Json),
+  model: Schema.Json,
+  options: Schema.optionalKey(Schema.Json),
 });
 
 function normalizeModelSelectionOptions(input: unknown): unknown {
@@ -118,11 +111,14 @@ export const ModelSelection = ModelSelectionSource.pipe(
     ModelSelectionWire,
     SchemaTransformation.transformOrFail({
       decode: (raw) => {
+        const instanceIdSource =
+          typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+            ? raw.instanceId.trim()
+            : typeof raw.provider === "string"
+              ? raw.provider
+              : undefined;
         const base: Record<string, unknown> = {
-          instanceId:
-            typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
-              ? raw.instanceId.trim()
-              : raw.provider,
+          instanceId: instanceIdSource,
           model: raw.model,
         };
         if (raw.options !== undefined) {

@@ -9,6 +9,8 @@ import { providerModelDiscoveryInvalidationFingerprint } from "./providerDiscove
 
 const BASE_PROVIDER_STATUS = {
   provider: "cursor",
+  instanceId: "cursor",
+  driver: "cursor",
   status: "ready",
   available: true,
   authStatus: "unknown",
@@ -92,6 +94,8 @@ describe("providerModelDiscoveryInvalidationFingerprint", () => {
     const codexStatus = {
       ...BASE_PROVIDER_STATUS,
       provider: "codex",
+      instanceId: "codex",
+      driver: "codex",
       version: "1.2.3",
     } satisfies ServerProviderStatus;
 

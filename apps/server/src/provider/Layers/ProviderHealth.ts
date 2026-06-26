@@ -972,6 +972,8 @@ export const makeCheckCodexProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -985,6 +987,8 @@ export const makeCheckCodexProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -998,6 +1002,8 @@ export const makeCheckCodexProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1012,6 +1018,8 @@ export const makeCheckCodexProviderStatus = (
     if (parsedVersion && !isCodexCliVersionSupported(parsedVersion)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1029,6 +1037,8 @@ export const makeCheckCodexProviderStatus = (
     if (yield* hasCustomModelProviderForEnv(probeEnv)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "ready" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1047,6 +1057,8 @@ export const makeCheckCodexProviderStatus = (
       const error = authProbe.failure;
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1062,6 +1074,8 @@ export const makeCheckCodexProviderStatus = (
     if (Option.isNone(authProbe.success)) {
       return {
         provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1088,6 +1102,8 @@ export const makeCheckCodexProviderStatus = (
 
     return {
       provider: CODEX_PROVIDER,
+      instanceId: CODEX_PROVIDER,
+      driver: CODEX_PROVIDER,
       status: parsed.status,
       available: true,
       authStatus: parsed.authStatus,
@@ -1209,6 +1225,8 @@ export const makeCheckClaudeProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1222,6 +1240,8 @@ export const makeCheckClaudeProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1236,6 +1256,8 @@ export const makeCheckClaudeProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1257,6 +1279,8 @@ export const makeCheckClaudeProviderStatus = (
       const error = authProbe.failure;
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1272,6 +1296,8 @@ export const makeCheckClaudeProviderStatus = (
     if (Option.isNone(authProbe.success)) {
       return {
         provider: CLAUDE_AGENT_PROVIDER,
+        instanceId: CLAUDE_AGENT_PROVIDER,
+        driver: CLAUDE_AGENT_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1298,6 +1324,8 @@ export const makeCheckClaudeProviderStatus = (
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
+      instanceId: CLAUDE_AGENT_PROVIDER,
+      driver: CLAUDE_AGENT_PROVIDER,
       status: parsed.status,
       available: true,
       authStatus: parsed.authStatus,
@@ -1328,6 +1356,8 @@ export const makeCheckGeminiProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: GEMINI_PROVIDER,
+        instanceId: GEMINI_PROVIDER,
+        driver: GEMINI_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1341,6 +1371,8 @@ export const makeCheckGeminiProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: GEMINI_PROVIDER,
+        instanceId: GEMINI_PROVIDER,
+        driver: GEMINI_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1354,6 +1386,8 @@ export const makeCheckGeminiProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: GEMINI_PROVIDER,
+        instanceId: GEMINI_PROVIDER,
+        driver: GEMINI_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1375,6 +1409,8 @@ export const makeCheckGeminiProviderStatus = (
       const error = capabilityProbe.failure;
       return {
         provider: GEMINI_PROVIDER,
+        instanceId: GEMINI_PROVIDER,
+        driver: GEMINI_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1390,6 +1426,8 @@ export const makeCheckGeminiProviderStatus = (
     const parsed = normalizeGeminiCapabilityProbeResult(capabilityProbe.success);
     return {
       provider: GEMINI_PROVIDER,
+      instanceId: GEMINI_PROVIDER,
+      driver: GEMINI_PROVIDER,
       status: parsed.status,
       available: true,
       authStatus: parsed.auth.status,
@@ -1421,6 +1459,8 @@ export const makeCheckGrokProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1434,6 +1474,8 @@ export const makeCheckGrokProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1447,6 +1489,8 @@ export const makeCheckGrokProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: GROK_PROVIDER,
+        instanceId: GROK_PROVIDER,
+        driver: GROK_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1461,6 +1505,8 @@ export const makeCheckGrokProviderStatus = (
 
     return {
       provider: GROK_PROVIDER,
+      instanceId: GROK_PROVIDER,
+      driver: GROK_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
@@ -1489,6 +1535,8 @@ function openCodeCompatibleExternalServerStatus(input: {
   } catch {
     return {
       provider: input.provider,
+      instanceId: input.provider,
+      driver: input.provider,
       status: "error" as const,
       available: false,
       authStatus: "unknown" as const,
@@ -1500,6 +1548,8 @@ function openCodeCompatibleExternalServerStatus(input: {
   const label = input.provider === OPENCODE_PROVIDER ? "OpenCode" : "Kilo";
   return {
     provider: input.provider,
+    instanceId: input.provider,
+    driver: input.provider,
     status: "ready" as const,
     available: true,
     authStatus: "unknown" as const,
@@ -1547,6 +1597,8 @@ export const makeCheckOpenCodeProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1560,6 +1612,8 @@ export const makeCheckOpenCodeProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1573,6 +1627,8 @@ export const makeCheckOpenCodeProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: OPENCODE_PROVIDER,
+        instanceId: OPENCODE_PROVIDER,
+        driver: OPENCODE_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1586,6 +1642,8 @@ export const makeCheckOpenCodeProviderStatus = (
 
     return {
       provider: OPENCODE_PROVIDER,
+      instanceId: OPENCODE_PROVIDER,
+      driver: OPENCODE_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
@@ -1632,6 +1690,8 @@ export const makeCheckKiloProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: KILO_PROVIDER,
+        instanceId: KILO_PROVIDER,
+        driver: KILO_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1645,6 +1705,8 @@ export const makeCheckKiloProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: KILO_PROVIDER,
+        instanceId: KILO_PROVIDER,
+        driver: KILO_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1658,6 +1720,8 @@ export const makeCheckKiloProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: KILO_PROVIDER,
+        instanceId: KILO_PROVIDER,
+        driver: KILO_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1671,6 +1735,8 @@ export const makeCheckKiloProviderStatus = (
 
     return {
       provider: KILO_PROVIDER,
+      instanceId: KILO_PROVIDER,
+      driver: KILO_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
@@ -1705,6 +1771,8 @@ export const checkPiProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1718,6 +1786,8 @@ export const checkPiProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1732,6 +1802,8 @@ export const checkPiProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: PI_PROVIDER,
+        instanceId: PI_PROVIDER,
+        driver: PI_PROVIDER,
         status: "warning" as const,
         available: true,
         authStatus: "unknown" as const,
@@ -1746,6 +1818,8 @@ export const checkPiProviderStatus = (
     const configuredAgentDir = nonEmptyTrimmed(agentDir);
     return {
       provider: PI_PROVIDER,
+      instanceId: PI_PROVIDER,
+      driver: PI_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
@@ -1777,6 +1851,8 @@ export const makeCheckCursorProviderStatus = (
       const error = versionProbe.failure;
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1790,6 +1866,8 @@ export const makeCheckCursorProviderStatus = (
     if (Option.isNone(versionProbe.success)) {
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1804,6 +1882,8 @@ export const makeCheckCursorProviderStatus = (
       const detail = detailFromResult(version);
       return {
         provider: CURSOR_PROVIDER,
+        instanceId: CURSOR_PROVIDER,
+        driver: CURSOR_PROVIDER,
         status: "error" as const,
         available: false,
         authStatus: "unknown" as const,
@@ -1817,6 +1897,8 @@ export const makeCheckCursorProviderStatus = (
 
     return {
       provider: CURSOR_PROVIDER,
+      instanceId: CURSOR_PROVIDER,
+      driver: CURSOR_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
@@ -1928,6 +2010,8 @@ export function makeDisabledProviderStatus(
 ): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     status: "warning" as const,
     available: false,
     authStatus: "unknown" as const,

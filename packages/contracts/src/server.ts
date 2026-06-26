@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema, SchemaTransformation } from "effect";
 import {
   IsoDateTime,
   NonNegativeInt,
@@ -46,10 +46,10 @@ export const ServerProviderAuthStatus = Schema.Literals([
 ]);
 export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
-export const ServerProviderStatus = Schema.Struct({
+const ServerProviderStatusWire = Schema.Struct({
   provider: ProviderDriverKind,
-  instanceId: Schema.optional(ProviderInstanceId),
-  driver: Schema.optional(ProviderDriverKind),
+  instanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
@@ -84,6 +84,64 @@ export const ServerProviderStatus = Schema.Struct({
     }),
   ),
 });
+
+const ServerProviderStatusSource = Schema.Struct({
+  provider: Schema.optionalKey(ProviderDriverKind),
+  instanceId: Schema.optionalKey(ProviderInstanceId),
+  driver: Schema.optionalKey(ProviderDriverKind),
+  displayName: Schema.optional(TrimmedNonEmptyString),
+  enabled: Schema.optional(Schema.Boolean),
+  status: ServerProviderStatusState,
+  available: Schema.Boolean,
+  availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
+  authStatus: ServerProviderAuthStatus,
+  authType: Schema.optional(TrimmedNonEmptyString),
+  authLabel: Schema.optional(TrimmedNonEmptyString),
+  voiceTranscriptionAvailable: Schema.optional(Schema.Boolean),
+  version: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  checkedAt: IsoDateTime,
+  message: Schema.optional(TrimmedNonEmptyString),
+  versionAdvisory: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["unknown", "current", "behind_latest"]),
+      currentVersion: Schema.NullOr(TrimmedNonEmptyString),
+      latestVersion: Schema.NullOr(TrimmedNonEmptyString),
+      updateCommand: Schema.NullOr(TrimmedNonEmptyString),
+      canUpdate: Schema.Boolean,
+      checkedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+    }),
+  ),
+  updateState: Schema.optionalKey(
+    Schema.Struct({
+      status: Schema.Literals(["idle", "queued", "running", "succeeded", "failed", "unchanged"]),
+      startedAt: Schema.NullOr(IsoDateTime),
+      finishedAt: Schema.NullOr(IsoDateTime),
+      message: Schema.NullOr(TrimmedNonEmptyString),
+      output: Schema.NullOr(Schema.String.check(Schema.isMaxLength(10_000))),
+    }),
+  ),
+});
+
+export const ServerProviderStatus = ServerProviderStatusSource.pipe(
+  Schema.decodeTo(
+    ServerProviderStatusWire,
+    SchemaTransformation.transformOrFail({
+      decode: (raw) => {
+        const driver = raw.driver ?? raw.provider;
+        const instanceId = raw.instanceId ?? driver;
+        return Effect.succeed({
+          ...raw,
+          provider: driver,
+          driver,
+          instanceId,
+        } as typeof ServerProviderStatusWire.Encoded);
+      },
+      encode: (value) => Effect.succeed(value as typeof ServerProviderStatusSource.Encoded),
+    }),
+  ),
+);
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
 export type ServerProviderVersionAdvisory = NonNullable<ServerProviderStatus["versionAdvisory"]>;

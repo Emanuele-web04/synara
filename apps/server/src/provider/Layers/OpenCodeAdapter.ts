@@ -1824,8 +1824,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }),
       );
 
+      const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
+        const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
+        return providerInstanceId && event.providerInstanceId !== providerInstanceId
+          ? { ...event, providerInstanceId }
+          : event;
+      };
+
       const emit = (event: ProviderRuntimeEvent) =>
-        Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+        Queue.offer(runtimeEvents, stampRuntimeEventForInstance(event)).pipe(Effect.asVoid);
       const writeNativeEvent = (
         threadId: ThreadId,
         event: {
@@ -3755,6 +3762,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const createdAt = nowIso();
           const session: ProviderSession = {
             provider,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd: directory,

@@ -212,6 +212,41 @@ describe("resolvePreferredComposerModelSelection", () => {
     );
   });
 
+  it("does not infer an active instance from arbitrary same-provider draft selections", () => {
+    const resolved = resolvePreferredComposerModelSelection({
+      draft: {
+        modelSelectionByProvider: {
+          claude_work: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-work",
+            undefined,
+            "claude_work",
+          ),
+          claude_personal: modelSelection(
+            "claudeAgent",
+            "claude-sonnet-personal",
+            undefined,
+            "claude_personal",
+          ),
+        },
+        activeProvider: null,
+      },
+      threadModelSelection: null,
+      projectModelSelection: null,
+      defaultProvider: "claudeAgent",
+      resolveProviderForInstanceId: (instanceId) =>
+        instanceId === providerInstanceId("claude_work") ||
+        instanceId === providerInstanceId("claude_personal")
+          ? "claudeAgent"
+          : null,
+    });
+
+    expect(resolved).toEqual({
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
   it("falls back to the exact active draft provider instance when no draft model exists", () => {
     const resolved = resolvePreferredComposerModelSelection({
       draft: {

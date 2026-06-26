@@ -16,7 +16,6 @@ import type {
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
-  ProviderKind,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,

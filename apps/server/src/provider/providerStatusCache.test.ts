@@ -89,6 +89,8 @@ describe("providerStatusCache", () => {
           cachePath,
           `${JSON.stringify({
             provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            driver: "claudeAgent",
             status: "ready",
             available: true,
             authStatus: "authenticated",
@@ -146,6 +148,8 @@ describe("providerStatusCache", () => {
       orderProviderStatuses([
         {
           provider: "gemini",
+          instanceId: "gemini",
+          driver: "gemini",
           status: "ready",
           available: true,
           authStatus: "authenticated",
@@ -153,6 +157,8 @@ describe("providerStatusCache", () => {
         },
         {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           status: "warning",
           available: true,
           authStatus: "unknown",
@@ -160,6 +166,8 @@ describe("providerStatusCache", () => {
         },
         {
           provider: "cursor",
+          instanceId: "cursor",
+          driver: "cursor",
           status: "ready",
           available: true,
           authStatus: "unknown",
@@ -167,6 +175,8 @@ describe("providerStatusCache", () => {
         },
         {
           provider: "grok",
+          instanceId: "grok",
+          driver: "grok",
           status: "ready",
           available: true,
           authStatus: "unknown",
@@ -178,6 +188,8 @@ describe("providerStatusCache", () => {
       readyCodexStatus,
       {
         provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
         status: "warning",
         available: true,
         authStatus: "unknown",
@@ -185,6 +197,8 @@ describe("providerStatusCache", () => {
       },
       {
         provider: "cursor",
+        instanceId: "cursor",
+        driver: "cursor",
         status: "ready",
         available: true,
         authStatus: "unknown",
@@ -192,6 +206,8 @@ describe("providerStatusCache", () => {
       },
       {
         provider: "gemini",
+        instanceId: "gemini",
+        driver: "gemini",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -199,6 +215,8 @@ describe("providerStatusCache", () => {
       },
       {
         provider: "grok",
+        instanceId: "grok",
+        driver: "grok",
         status: "ready",
         available: true,
         authStatus: "unknown",

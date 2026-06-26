@@ -142,6 +142,8 @@ function createBaseServerConfig(): ServerConfig {
     providers: [
       {
         provider: "codex",
+        instanceId: "codex",
+        driver: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -3269,6 +3271,15 @@ describe("ChatView timeline estimator parity (full app)", () => {
       const newWorktreeOption = page.getByText("New worktree");
       await expect.element(newWorktreeOption).toBeInTheDocument();
       await newWorktreeOption.click();
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(newThreadId)?.envMode).toBe(
+            "worktree",
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
 
       useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it");
       const composerEditor = await waitForComposerEditor();
