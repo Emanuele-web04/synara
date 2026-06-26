@@ -167,6 +167,7 @@ export const AutomationMisfirePolicy = Schema.Literals(["skip", "coalesce", "run
 export type AutomationMisfirePolicy = typeof AutomationMisfirePolicy.Type;
 
 export const DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS = 60;
+export const DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS = 10;
 export const DEFAULT_AUTOMATION_MAX_RUNTIME_SECONDS = 60 * 60;
 export const DEFAULT_AUTOMATION_RETRY_POLICY: AutomationRetryPolicy = { type: "none" };
 export const DEFAULT_AUTOMATION_MISFIRE_POLICY: AutomationMisfirePolicy = "coalesce";
@@ -207,13 +208,15 @@ export const AutomationDefinition = Schema.Struct({
   /** When true, a failed run disables the automation (stops a runaway loop). */
   stopOnError: Schema.Boolean,
   /** Heartbeat-only natural language stop condition. Standalone runs ignore it for now. */
-  completionPolicy: AutomationCompletionPolicy.pipe(
+  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
     Schema.withDecodingDefault(() => DEFAULT_AUTOMATION_COMPLETION_POLICY),
   ),
   /** Increments whenever the persisted stop policy changes; run snapshots use it for stale checks. */
-  completionPolicyVersion: NonNegativeInt.pipe(Schema.withDecodingDefault(() => 0)),
+  completionPolicyVersion: Schema.optional(NonNegativeInt).pipe(
+    Schema.withDecodingDefault(() => 0),
+  ),
   /** Save time for the current completion policy; used only for legacy run snapshots. */
-  completionPolicyUpdatedAt: AutomationIsoDateTime.pipe(
+  completionPolicyUpdatedAt: Schema.optional(AutomationIsoDateTime).pipe(
     Schema.withDecodingDefault(() => "1970-01-01T00:00:00.000Z"),
   ),
   minimumIntervalSeconds: PositiveInt,

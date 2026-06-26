@@ -66,6 +66,30 @@ describe("ProfileStatsQuery", () => {
     ]);
   });
 
+  it("counts repeated slash and dollar skill tokens without double-counting structured echoes", () => {
+    expect(
+      aggregateProfileSkillUsageRows([
+        {
+          messageId: "message-repeat",
+          text: "Use $check-code, /check-code, and /logic-consolidator /logic-consolidator",
+          skillsJson: JSON.stringify([
+            { name: "check-code", path: "/skills/check-code/SKILL.md" },
+            { name: "logic-consolidator", path: "/skills/logic-consolidator/SKILL.md" },
+          ]),
+          mentionsJson: null,
+        },
+      ]),
+    ).toEqual([
+      { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 2 },
+      {
+        name: "logic-consolidator",
+        displayName: "$logic-consolidator",
+        kind: "skill",
+        runCount: 2,
+      },
+    ]);
+  });
+
   it("does not count serialized prompt block closing tags as slash skills", () => {
     expect(
       aggregateProfileSkillUsageRows([
@@ -270,18 +294,83 @@ describe("ProfileStatsQuery", () => {
             updated_at,
             deleted_at
           )
-          VALUES (
-            'thread-skills',
-            'project-profile',
-            'Skill Thread',
-            '{"provider":"codex","model":"gpt-5-codex"}',
-            'full-access',
-            'default',
-            'local',
-            '2026-06-14T09:00:00.000Z',
-            '2026-06-14T09:00:00.000Z',
-            NULL
+          VALUES
+            (
+              'thread-skills',
+              'project-profile',
+              'Skill Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-14T09:00:00.000Z',
+              '2026-06-14T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'thread-retention-hidden',
+              'project-profile',
+              'Retention Hidden Skill Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-08T09:00:00.000Z',
+              '2026-06-08T09:00:00.000Z',
+              '2026-06-15T09:00:00.000Z'
+            ),
+            (
+              'thread-manual-deleted',
+              'project-profile',
+              'Manual Deleted Skill Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-08T10:00:00.000Z',
+              '2026-06-08T10:00:00.000Z',
+              '2026-06-15T10:00:00.000Z'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            command_id,
+            actor_kind,
+            payload_json,
+            metadata_json
           )
+          VALUES
+            (
+              'event-retention-hidden-delete',
+              'thread',
+              'thread-retention-hidden',
+              1,
+              'thread.deleted',
+              '2026-06-15T09:00:00.000Z',
+              'thread-retention:test-hidden',
+              'system',
+              '{"threadId":"thread-retention-hidden","deletedAt":"2026-06-15T09:00:00.000Z"}',
+              '{}'
+            ),
+            (
+              'event-manual-delete',
+              'thread',
+              'thread-manual-deleted',
+              1,
+              'thread.deleted',
+              '2026-06-15T10:00:00.000Z',
+              'manual-delete:test-hidden',
+              'user',
+              '{"threadId":"thread-manual-deleted","deletedAt":"2026-06-15T10:00:00.000Z"}',
+              '{}'
+            )
         `;
 
         yield* sql`
@@ -326,6 +415,32 @@ describe("ProfileStatsQuery", () => {
               '2026-06-14T09:35:00.000Z'
             ),
             (
+              'message-skill-retention-hidden',
+              'thread-retention-hidden',
+              'turn-skill-retention-hidden',
+              'user',
+              'Retention-hidden /check-code and $check-code should still count',
+              '[{"name":"check-code","path":"/skills/check-code/SKILL.md"}]',
+              NULL,
+              0,
+              'native',
+              '2026-06-08T09:05:00.000Z',
+              '2026-06-08T09:05:00.000Z'
+            ),
+            (
+              'message-skill-manual-deleted',
+              'thread-manual-deleted',
+              'turn-skill-manual-deleted',
+              'user',
+              'Manual deleted /openai-docs should not count',
+              '[{"name":"openai-docs","path":"/skills/openai-docs/SKILL.md"}]',
+              NULL,
+              0,
+              'native',
+              '2026-06-08T10:05:00.000Z',
+              '2026-06-08T10:05:00.000Z'
+            ),
+            (
               'message-skill-import',
               'thread-skills',
               'turn-skill-import',
@@ -343,9 +458,11 @@ describe("ProfileStatsQuery", () => {
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
         expect(stats.insights.skillsExplored).toBe(4);
-        expect(stats.insights.totalSkillsUsed).toBe(5);
+        expect(stats.insights.totalSkillsUsed).toBe(7);
+        expect(stats.activity.totalPromptsSent).toBe(3);
+        expect(stats.activity.totalThreads).toBe(2);
         expect(stats.skills.slice(0, 4)).toEqual([
-          { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 2 },
+          { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 4 },
           { name: "planner", displayName: "$planner", kind: "skill", runCount: 1 },
           { name: "refactor-code", displayName: "$refactor-code", kind: "skill", runCount: 1 },
           { name: "reviewer", displayName: "@reviewer", kind: "agent", runCount: 1 },

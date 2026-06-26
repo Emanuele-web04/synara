@@ -10,7 +10,7 @@ import {
 } from "@t3tools/contracts";
 
 import { compareActivitiesByOrder } from "./session-logic.shared";
-import type { ChatMessage, SessionPhase, ThreadSession, TurnDiffSummary } from "./types";
+import type { ChatMessage, SessionPhase, Thread, ThreadSession, TurnDiffSummary } from "./types";
 
 export type { PendingApproval, PendingUserInput } from "./session-logic.pending";
 export { derivePendingApprovals, derivePendingUserInputs } from "./session-logic.pending";
@@ -60,6 +60,19 @@ export function canSessionAnswerPendingRequests(
     return true;
   }
   return session.status !== "closed" && session.status !== "error";
+}
+
+export function isSessionRunningTurn(
+  session: Pick<ThreadSession, "orchestrationStatus" | "status"> | null | undefined,
+): boolean {
+  if (!session) {
+    return false;
+  }
+  return session.orchestrationStatus === "running" || session.status === "running";
+}
+
+export function isThreadRunningTurn(thread: Pick<Thread, "session"> | null | undefined): boolean {
+  return isSessionRunningTurn(thread?.session);
 }
 
 export interface ActiveTaskListState {

@@ -1440,6 +1440,91 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["turn-2"]);
   });
 
+  it("keeps work for every visible transcript turn when requested", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({ id: "turn-1", turnId: "turn-1", summary: "First tool", kind: "tool.started" }),
+      makeActivity({
+        id: "turn-2",
+        turnId: "turn-2",
+        summary: "Second tool complete",
+        kind: "tool.completed",
+      }),
+      makeActivity({
+        id: "turn-3",
+        turnId: "turn-3",
+        summary: "Hidden tool",
+        kind: "tool.started",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1"), TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => [entry.id, entry.turnId])).toEqual([
+      ["turn-1", TurnId.makeUnsafe("turn-1")],
+      ["turn-2", TurnId.makeUnsafe("turn-2")],
+    ]);
+  });
+
+  it("falls back to the latest-turn filter when visible turn ids are empty", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({ id: "turn-1", turnId: "turn-1", summary: "First tool", kind: "tool.started" }),
+      makeActivity({
+        id: "turn-2",
+        turnId: "turn-2",
+        summary: "Second tool complete",
+        kind: "tool.completed",
+      }),
+    ];
+
+    const filtered = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set(),
+    });
+    expect(filtered.map((entry) => entry.id)).toEqual(["turn-2"]);
+
+    const unfiltered = deriveWorkLogEntries(activities, undefined, {
+      visibleTurnIds: new Set(),
+    });
+    expect(unfiltered.map((entry) => entry.id)).toEqual(["turn-1", "turn-2"]);
+  });
+
+  it("keeps created-automation milestones and exposes their card fields despite a null turn id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1",
+        turnId: "turn-1",
+        summary: "First tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "automation-created",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "automation.created",
+        summary: "Created automation: Watch Synara PR 231 - Every 5m",
+        tone: "info",
+        payload: {
+          source: "chat-composer",
+          automationId: "automation-7",
+          automationName: "Watch Synara PR 231",
+          cadenceLabel: "Every 5m",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+
+    const automationEntry = entries.find((entry) => entry.id === "automation-created");
+    expect(automationEntry).toBeDefined();
+    expect(automationEntry?.automation).toEqual({
+      id: "automation-7",
+      name: "Watch Synara PR 231",
+      cadenceLabel: "Every 5m",
+    });
+  });
+
   it("omits checkpoint captured info entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1560,6 +1645,117 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
     expect(entry?.command).toBe("bun run lint");
+  });
+
+  it("keeps full command output details for command tool activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-details",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-detail-1",
+            item: {
+              command: `/bin/zsh -lc 'rg -n "toolDetails" apps/web/src'`,
+            },
+            rawOutput: {
+              stdout: "apps/web/src/session-logic.ts:55: toolDetails\nsecond line",
+              stderr: "warning: ignored binary file",
+              exitCode: 2,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "command",
+      title: "Searched",
+      command: `/bin/zsh -lc 'rg -n "toolDetails" apps/web/src'`,
+      output: {
+        stdout: "apps/web/src/session-logic.ts:55: toolDetails\nsecond line",
+        stderr: "warning: ignored binary file",
+        exitCode: 2,
+      },
+    });
+  });
+
+  it("keeps command output details when rawOutput is stored as a string", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-string-output",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "gemini --version",
+            },
+            rawOutput: "gemini 1.2.3\n",
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "command",
+      title: "Ran",
+      command: "gemini --version",
+      output: {
+        output: "gemini 1.2.3\n",
+      },
+    });
+  });
+
+  it("merges command detail payloads across started and completed lifecycle rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-merge-1",
+            command: "bun run --cwd apps/web test session-logic.test.ts",
+          },
+        },
+      }),
+      makeActivity({
+        id: "command-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-merge-1",
+            rawOutput: {
+              stdout: "passed",
+              exitCode: 0,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.id).toBe("command-complete");
+    expect(entry?.toolDetails).toMatchObject({
+      kind: "command",
+      command: "bun run --cwd apps/web test session-logic.test.ts",
+      output: { stdout: "passed", exitCode: 0 },
+    });
   });
 
   it("falls back to command-like detail when structured command metadata is missing", () => {
@@ -2384,6 +2580,85 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
     ]);
+    expect(entry?.toolDetails).toBeUndefined();
+  });
+
+  it("does not create tool details from a path-only file-change input", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool-path-only-input",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            rawInput: {
+              path: "apps/web/src/session-logic.ts",
+            },
+            item: {
+              changes: [{ path: "apps/web/src/session-logic.ts" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual(["apps/web/src/session-logic.ts"]);
+    expect(entry?.toolDetails).toBeUndefined();
+  });
+
+  it("keeps edit diff details for file-change tool activities", () => {
+    const unifiedDiff = [
+      "diff --git a/apps/web/src/session-logic.ts b/apps/web/src/session-logic.ts",
+      "--- a/apps/web/src/session-logic.ts",
+      "+++ b/apps/web/src/session-logic.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old line",
+      "+new line",
+    ].join("\n");
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool-details",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          title: "File change",
+          data: {
+            unifiedDiff,
+            rawInput: {
+              path: "apps/web/src/session-logic.ts",
+              oldText: "old line",
+              newText: "new line",
+            },
+            edits: [
+              {
+                path: "apps/web/src/session-logic.ts",
+                oldText: "old line",
+                newText: "new line",
+              },
+            ],
+            files: [{ path: "apps/web/src/session-logic.ts" }],
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "file-change",
+      title: "Edited",
+      diff: unifiedDiff,
+      edits: [
+        {
+          path: "apps/web/src/session-logic.ts",
+          oldText: "old line",
+          newText: "new line",
+        },
+      ],
+      files: ["apps/web/src/session-logic.ts"],
+    });
   });
 
   it("extracts nested changed files once and caps runaway file lists", () => {

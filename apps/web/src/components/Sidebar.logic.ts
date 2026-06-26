@@ -11,7 +11,10 @@ import type { LastThreadRoute } from "../chatRouteRestore";
 import { cn } from "../lib/utils";
 import { derivePinnedIds, isLatestPinMutation, orderPinnedItemsFirst } from "../pinning.logic";
 import { shortcutLabelForCommand, threadJumpCommandForIndex } from "../keybindings";
-import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
+import {
+  resolveThreadEnvironmentMode,
+  resolveThreadEnvironmentPresentation,
+} from "../lib/threadEnvironment";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -20,6 +23,7 @@ import {
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -67,6 +71,61 @@ export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-
 export const SIDEBAR_THREAD_PREWARM_LIMIT = 10;
 export const DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY = "synara:show-debug-feature-flags-menu";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
+
+export type SidebarThreadHoverMetadata = {
+  projectName: string | null;
+  projectCwd: string | null;
+  sourceProjectName: string | null;
+  branch: string | null;
+  worktreeName: string | null;
+};
+
+function nonEmptyDisplayValue(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function differentDisplayValue(
+  value: string | null | undefined,
+  existing: string | null,
+): string | null {
+  const normalized = nonEmptyDisplayValue(value);
+  if (!normalized) {
+    return null;
+  }
+  return existing !== null && normalized === existing ? null : normalized;
+}
+
+export function resolveThreadHoverCardMetadata(input: {
+  thread: Pick<
+    SidebarThreadSummary,
+    "envMode" | "branch" | "worktreePath" | "associatedWorktreePath" | "associatedWorktreeBranch"
+  >;
+  project: Pick<Project, "name" | "folderName" | "cwd"> | null;
+}): SidebarThreadHoverMetadata {
+  const projectName =
+    nonEmptyDisplayValue(input.project?.name) ?? nonEmptyDisplayValue(input.project?.folderName);
+  const activeWorktreePath = nonEmptyDisplayValue(input.thread.worktreePath);
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: input.thread.envMode,
+      worktreePath: activeWorktreePath,
+    }) === "worktree";
+  const associatedWorktreePath = nonEmptyDisplayValue(input.thread.associatedWorktreePath);
+  const worktreePath = isWorktree ? (associatedWorktreePath ?? activeWorktreePath) : null;
+
+  return {
+    projectName,
+    projectCwd: input.project?.cwd ?? null,
+    sourceProjectName: isWorktree
+      ? differentDisplayValue(input.project?.folderName, projectName)
+      : null,
+    branch:
+      nonEmptyDisplayValue(input.thread.associatedWorktreeBranch) ??
+      nonEmptyDisplayValue(input.thread.branch),
+    worktreeName: worktreePath ? formatWorktreePathForDisplay(worktreePath) : null,
+  };
+}
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -152,11 +211,28 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
-export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
+export function resolveThreadRowTrailingReserveClass(
+  input:
+    | number
+    | {
+        readonly metaChipCount: number;
+        readonly hasTrailingGlyph?: boolean | undefined;
+      },
+): string {
+  const metaChipCount = typeof input === "number" ? input : input.metaChipCount;
+  const hasTrailingGlyph = typeof input === "number" ? true : (input.hasTrailingGlyph ?? true);
+  if (!hasTrailingGlyph && metaChipCount <= 0) return "pr-2";
   if (metaChipCount <= 0) return "pr-[2.75rem]";
   if (metaChipCount === 1) return "pr-[3.75rem]";
   if (metaChipCount === 2) return "pr-[4.25rem]";
   return "pr-[4.75rem]";
+}
+
+export function createSidebarThreadHoverAnchorId(input: {
+  readonly scope: "pinned" | "chat" | "project";
+  readonly threadId: ThreadId;
+}): string {
+  return `${input.scope}:${input.threadId}`;
 }
 
 export function resolveThreadRowClassName(input: {

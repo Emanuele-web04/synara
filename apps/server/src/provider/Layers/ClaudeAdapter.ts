@@ -2203,7 +2203,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                     method: "claude/stream_event/content_block_delta",
                     payload: message,
                   })
-                  : undefined;
+                : undefined;
             if (assistantBlockEntry?.block && event.delta.type === "text_delta") {
               assistantBlockEntry.block.emittedTextDelta = true;
             }

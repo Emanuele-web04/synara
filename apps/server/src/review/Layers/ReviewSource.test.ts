@@ -400,6 +400,7 @@ function makeLayer(options: {
     listLocalBranchNames: () => unexpectedEffect("GitCore.listLocalBranchNames"),
     stageFiles: () => unexpectedEffect("GitCore.stageFiles"),
     unstageFiles: () => unexpectedEffect("GitCore.unstageFiles"),
+    deleteBranch: () => unexpectedEffect("GitCore.deleteBranch"),
   };
 
   const cacheStore: ReviewCacheStoreShape = {
@@ -691,6 +692,7 @@ function makeSurfaceLayer(
     listLocalBranchNames: () => unexpectedEffect("GitCore.listLocalBranchNames"),
     stageFiles: () => unexpectedEffect("GitCore.stageFiles"),
     unstageFiles: () => unexpectedEffect("GitCore.unstageFiles"),
+    deleteBranch: () => unexpectedEffect("GitCore.deleteBranch"),
   };
 
   const cacheStore: ReviewCacheStoreShape = {
@@ -872,6 +874,7 @@ function makeWalkthroughLayer(
     listLocalBranchNames: () => unexpectedEffect("GitCore.listLocalBranchNames"),
     stageFiles: () => unexpectedEffect("GitCore.stageFiles"),
     unstageFiles: () => unexpectedEffect("GitCore.unstageFiles"),
+    deleteBranch: () => unexpectedEffect("GitCore.deleteBranch"),
   };
 
   const cacheStore: ReviewCacheStoreShape = {

@@ -26,6 +26,15 @@ describe("resolveWorkspaceFileOpenTarget", () => {
     );
   });
 
+  it("maps Synara public asset URLs to their workspace files", () => {
+    expect(
+      resolveWorkspaceFileOpenTarget("/central-icons-reversed/magnifying-glass.svg", "/repo/app"),
+    ).toBe("apps/web/public/central-icons-reversed/magnifying-glass.svg");
+    expect(resolveWorkspaceFileOpenTarget("/central-icons-fill/search.svg:12", "/repo/app")).toBe(
+      "apps/web/public/central-icons-fill/search.svg",
+    );
+  });
+
   it("returns null for paths outside the workspace", () => {
     expect(resolveWorkspaceFileOpenTarget("/elsewhere/file.ts", "/repo/app")).toBeNull();
     expect(resolveWorkspaceFileOpenTarget("/repo/app/file.ts", null)).toBeNull();
@@ -88,5 +97,11 @@ describe("resolveDockFileOpenTarget", () => {
       "src/page.tsx",
     );
     expect(resolveDockFileOpenTarget("src/page.tsx", "/repo/app")).toBe("src/page.tsx");
+  });
+
+  it("opens absolute local paths directly instead of falling back to the editor", () => {
+    expect(resolveDockFileOpenTarget("/Users/dev/Downloads/report.txt:4", "/repo/app")).toBe(
+      "/Users/dev/Downloads/report.txt",
+    );
   });
 });

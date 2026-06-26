@@ -21,8 +21,9 @@ import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
-import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
+import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
@@ -194,7 +195,6 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -233,7 +233,6 @@ function ChatRouteGlobalShortcuts() {
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
-  const allowProjectFallback = pathname !== "/";
   const activeProject =
     activeProjectId !== null
       ? (projects.find((project) => project.id === activeProjectId) ?? null)
@@ -353,19 +352,14 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command === "chat.newTerminal") {
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
+        void handleNewThread(target.projectId, {
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
           entryPoint: "terminal",
         });
         return;
@@ -398,38 +392,34 @@ function ChatRouteGlobalShortcuts() {
           });
           return;
         }
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
+        void handleNewThread(target.projectId, {
           provider,
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
         });
         return;
       }
 
       if (command !== "chat.new") return;
-      if (!currentProjectId) return;
+      // Falls back to the most recent project when none is focused (e.g. the landing
+      // view) so the primary "new thread" chord always creates a thread; on that
+      // fallback the active branch/worktree context belongs to the absent project, so
+      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+      if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(currentProjectId, {
-        branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-        worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-        envMode:
-          activeDraftThread?.envMode ??
-          resolveThreadEnvironmentMode({
-            envMode: activeThread?.envMode,
-            worktreePath: activeThread?.worktreePath ?? null,
-          }),
-      });
+      void handleNewThread(
+        target.projectId,
+        target.inheritContext
+          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+          : undefined,
+      );
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
@@ -438,9 +428,7 @@ function ChatRouteGlobalShortcuts() {
     };
   }, [
     activeDraftThread,
-    activeProjectId,
     activeThread,
-    allowProjectFallback,
     cancelRecentSwitcher,
     clearSelection,
     commitRecentSwitcherSelection,
@@ -451,7 +439,6 @@ function ChatRouteGlobalShortcuts() {
     latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
     providerStatuses,
-    projects,
     recentSwitcherState,
     selectedThreadIdsSize,
     terminalOpen,

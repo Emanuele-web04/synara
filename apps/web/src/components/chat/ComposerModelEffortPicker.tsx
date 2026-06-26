@@ -31,17 +31,13 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PROVIDER_ICON_COMPONENT_BY_PROVIDER } from "../ProviderIcon";
 import {
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
 } from "./composerPickerStyles";
-import {
-  ComposerPickerMenuPopup,
-  ComposerPickerMenuSubPopup,
-  ComposerPickerTooltipPopup,
-} from "./ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import { COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME } from "./composerPickerStyles";
 import { getComposerTraitSelection, hasVisibleComposerTraitControls } from "./composerTraits";
 import {
@@ -243,7 +239,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
             {triggerContent}
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
+            <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -251,7 +247,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </ComposerPickerTooltipPopup>
+            </TooltipPopup>
           ) : null}
         </Tooltip>
       ) : (

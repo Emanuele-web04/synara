@@ -399,9 +399,9 @@ describe("ReviewPrView visual composition", () => {
       await expect.element(page.getByText("Current Findings")).toBeVisible();
       const firstFilesDiff = document.querySelector<HTMLElement>(".diff-render-file");
       expect(firstFilesDiff).toBeTruthy();
-      expect(Number.parseFloat(getComputedStyle(firstFilesDiff!).borderTopLeftRadius)).toBeGreaterThan(
-        0,
-      );
+      expect(
+        Number.parseFloat(getComputedStyle(firstFilesDiff!).borderTopLeftRadius),
+      ).toBeGreaterThan(0);
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeVisible();
       await expect.element(page.getByRole("tab", { name: "Chat" })).toBeVisible();
       const desktopFileSelect = document.querySelector<HTMLElement>(

@@ -7,6 +7,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 
 import { MODEL_OPTIONS_BY_PROVIDER, type ThreadId } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect } from "effect";
 
 import { ProviderAdapterProcessError } from "../Errors.ts";
@@ -76,13 +77,18 @@ export const spawnGeminiProcess = Effect.fn("spawnGeminiProcess")(function* (
   cwd: string,
   env?: NodeJS.ProcessEnv,
 ) {
+  const prepared = prepareWindowsSafeProcess(binaryPath, ["--acp"], {
+    cwd,
+    env: env ?? process.env,
+  });
   return yield* Effect.try({
     try: () =>
-      spawn(binaryPath, ["--acp"], {
+      spawn(prepared.command, prepared.args, {
         cwd,
         env: env ?? process.env,
         stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        shell: prepared.shell,
+        ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
       }),
     catch: (cause) =>
       new ProviderAdapterProcessError({

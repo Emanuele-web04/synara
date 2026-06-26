@@ -24,6 +24,7 @@ import {
 } from "@t3tools/contracts";
 import { Deferred, Effect, ServiceMap, Stream } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 import { CODEX_DEFAULT_MODEL } from "./codexAppServer.config.ts";
 import {
@@ -270,13 +271,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return factory(input);
     }
     const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+    const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+      cwd: input.cwd,
+      env,
+    });
     return this.runTransportEffect(
       makeCodexProcessTransport({
-        command: input.binaryPath,
-        args: ["app-server"],
+        command: prepared.command,
+        args: prepared.args,
         cwd: input.cwd,
         env,
-        shell: process.platform === "win32",
+        shell: prepared.shell,
       }),
     );
   }

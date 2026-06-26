@@ -1,3 +1,4 @@
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -204,12 +205,17 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const env = options.spawn.env ? { ...process.env, ...options.spawn.env } : process.env;
+    const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
+      cwd: options.spawn.cwd,
+      env,
+    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(options.spawn.command, [...options.spawn.args], {
+        ChildProcess.make(prepared.command, prepared.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(options.spawn.env ? { env: { ...process.env, ...options.spawn.env } } : {}),
-          shell: process.platform === "win32",
+          env,
+          shell: prepared.shell,
         }),
       )
       .pipe(

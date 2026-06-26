@@ -25,7 +25,7 @@ import {
 } from "electron";
 import type { BrowserWindowConstructorOptions, MenuItemConstructorOptions } from "electron";
 import * as Effect from "effect/Effect";
-import { autoUpdater, CancellationToken } from "electron-updater";
+import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 import { NetService } from "@t3tools/shared/Net";
 import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { RotatingFileSink } from "@t3tools/shared/logging";
@@ -34,6 +34,11 @@ import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import {
+  installResumableUpdateDownloader,
+  type ResumableDownloaderTarget,
+} from "./resumableUpdateDownload";
+import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import { getAutoUpdateDisabledReason } from "./updateState";
@@ -987,6 +992,12 @@ async function installDownloadedUpdate(): Promise<{
 }
 
 function configureAutoUpdater(): void {
+  hardenElectronUpdater({ BaseUpdater }, autoUpdater);
+  if (!installResumableUpdateDownloader(autoUpdater as unknown as ResumableDownloaderTarget)) {
+    console.warn(
+      "[desktop-updater] Could not install resumable update downloader; falling back to default transfer.",
+    );
+  }
   updateController.configure();
 }
 

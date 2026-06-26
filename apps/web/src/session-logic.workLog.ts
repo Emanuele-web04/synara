@@ -16,6 +16,11 @@ import {
   isGenericToolTitle,
   normalizeCompactToolLabel,
 } from "./lib/toolCallLabel";
+import {
+  deriveWorkLogToolDetails,
+  mergeWorkLogToolDetails,
+  type WorkLogToolDetails,
+} from "./lib/toolCallDetails";
 import type { PendingApproval } from "./session-logic.pending";
 import {
   asRecord,
@@ -41,13 +46,21 @@ export interface WorkLogEntry {
   toolTitle?: string;
   toolName?: string;
   toolCallId?: string;
+  toolDetails?: WorkLogToolDetails;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
+  automation?: WorkLogAutomation;
 }
 
 export const WORK_LOG_PRESENTATION_VERSION = 6;
+
+export interface WorkLogAutomation {
+  id: string;
+  name: string;
+  cadenceLabel: string;
+}
 
 export interface WorkLogSubagent {
   threadId: string;
@@ -143,15 +156,12 @@ function isLiveTurnlessWorkActivity(activity: OrchestrationThreadActivity): bool
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
   latestTurnId: TurnId | undefined,
+  options: { visibleTurnIds?: ReadonlySet<TurnId | string> } = {},
 ): WorkLogEntry[] {
+  const visibleTurnIds = options.visibleTurnIds;
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
-    .filter((activity) =>
-      latestTurnId
-        ? activity.turnId === latestTurnId ||
-          (activity.turnId === null && isLiveTurnlessWorkActivity(activity))
-        : true,
-    )
+    .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter((activity) => !isCollabAgentToolActivity(activity))
     .filter((activity) => !isQuietTaskLifecycleActivity(activity))
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
@@ -173,6 +183,25 @@ export function deriveWorkLogEntries(
       ...entry
     }) => entry,
   );
+}
+
+function shouldKeepActivityForWorkLog(
+  activity: OrchestrationThreadActivity,
+  latestTurnId: TurnId | undefined,
+  visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+): boolean {
+  if (activity.kind === "automation.created") {
+    return true;
+  }
+
+  if (visibleTurnIds && visibleTurnIds.size > 0) {
+    return activity.turnId !== null && visibleTurnIds.has(activity.turnId);
+  }
+
+  return latestTurnId
+    ? activity.turnId === latestTurnId ||
+        (activity.turnId === null && isLiveTurnlessWorkActivity(activity))
+    : true;
 }
 
 function isQuietTurnLifecycleActivity(activity: OrchestrationThreadActivity): boolean {
@@ -203,6 +232,21 @@ function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): bool
 
   const payload = asRecord(activity.payload);
   return typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:");
+}
+
+function extractWorkLogAutomation(
+  payload: Record<string, unknown> | null,
+): WorkLogAutomation | null {
+  if (!payload) {
+    return null;
+  }
+  const id = asTrimmedString(payload.automationId);
+  const name = asTrimmedString(payload.automationName);
+  if (!id || !name) {
+    return null;
+  }
+  const cadenceLabel = asTrimmedString(payload.cadenceLabel) ?? "";
+  return { id, name, cadenceLabel };
 }
 
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
@@ -300,6 +344,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (subagentAction) {
     entry.subagentAction = subagentAction;
   }
+  if (activity.kind === "automation.created") {
+    const automation = extractWorkLogAutomation(payload);
+    if (automation) {
+      entry.automation = automation;
+    }
+  }
   const readableTitle = deriveReadableToolTitle({
     title: commandActionDisplay?.title ?? title,
     fallbackLabel: activity.summary,
@@ -313,12 +363,25 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     entry.toolTitle = readableTitle;
   }
   if (
-    itemType === "collab_agent_tool_call" &&
     entry.detail &&
     normalizeCompactToolLabel(entry.detail) ===
-      normalizeCompactToolLabel(readableTitle ?? activity.summary)
+      normalizeCompactToolLabel(entry.toolTitle ?? entry.label)
   ) {
     delete entry.detail;
+  }
+  const toolDetails = deriveWorkLogToolDetails({
+    payload,
+    itemType,
+    requestKind,
+    command: entry.command,
+    rawCommand: entry.rawCommand,
+    detail: entry.detail,
+    changedFiles: entry.changedFiles ?? changedFiles,
+    label: entry.label,
+    toolTitle: entry.toolTitle,
+  });
+  if (toolDetails) {
+    entry.toolDetails = toolDetails;
   }
   const collapseKey = deriveToolLifecycleCollapseKey(entry);
   if (collapseKey) {
@@ -485,6 +548,7 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolName = next.toolName ?? previous.toolName;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const streamKind = next.streamKind ?? previous.streamKind;
   return {
     ...previous,
@@ -502,6 +566,7 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolName ? { toolName } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(toolDetails ? { toolDetails } : {}),
     ...(streamKind ? { streamKind } : {}),
   };
 }

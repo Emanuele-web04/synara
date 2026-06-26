@@ -20,7 +20,7 @@ import {
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { AutomationService } from "./automation/Services/AutomationService";
@@ -35,6 +35,7 @@ import { GitManager } from "./git/Services/GitManager";
 import { GitStatusBroadcaster } from "./git/Services/GitStatusBroadcaster";
 import { TextGeneration } from "./git/Services/TextGeneration";
 import { Keybindings } from "./keybindings";
+import { createLocalPreviewGrant } from "./localImageFiles";
 import { listLocalServers, stopLocalServer } from "./localServerMonitor";
 import { Open, resolveAvailableEditors } from "./open";
 import { makeDispatchCommandNormalizer } from "./orchestration/dispatchCommandNormalization";
@@ -62,6 +63,7 @@ import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
+import { shouldRejectUntrustedRequestOrigin } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
@@ -713,6 +715,11 @@ export const makeWsRpcLayer = () =>
           rpcEffect(workspaceEntries.searchLocal(input), "Failed to search local entries"),
         [WS_METHODS.projectsReadFile]: (input) =>
           rpcEffect(workspaceFileSystem.readFile(input), "Failed to read workspace file"),
+        [WS_METHODS.projectsCreateLocalFilePreviewGrant]: (input) =>
+          rpcEffect(
+            Effect.promise(() => createLocalPreviewGrant({ requestedPath: input.path })),
+            "Failed to create local file preview grant",
+          ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           rpcEffect(workspaceFileSystem.writeFile(input), "Failed to write workspace file"),
         [WS_METHODS.projectsRunDevServer]: (input) =>
@@ -1241,7 +1248,17 @@ export const websocketRpcRouteLayer = Layer.effectDiscard(
         const serverAuth = yield* ServerAuth;
         const sessions = yield* SessionCredentialService;
         const url = HttpServerRequest.toURL(request);
-        const legacyToken = url ? url.searchParams.get("token") : null;
+        if (
+          !url ||
+          shouldRejectUntrustedRequestOrigin({
+            rawOrigin: request.headers.origin,
+            requestOrigin: url.origin,
+            config,
+          })
+        ) {
+          return HttpServerResponse.text("Forbidden", { status: 403 });
+        }
+        const legacyToken = url.searchParams.get("token");
         const authenticatedSession =
           !config.authToken || legacyToken === config.authToken
             ? null

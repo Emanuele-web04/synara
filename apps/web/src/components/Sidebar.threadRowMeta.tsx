@@ -35,11 +35,7 @@ const RUNTIME_META_TONE_CLASS: Record<RuntimeStatusTone, string> = {
 export function resolveThreadRowMetaChips(input: {
   thread: Pick<
     Thread,
-    | "forkSourceThreadId"
-    | "sidechatSourceThreadId"
-    | "envMode"
-    | "worktreePath"
-    | "handoff"
+    "forkSourceThreadId" | "sidechatSourceThreadId" | "envMode" | "worktreePath" | "handoff"
   > & { runtimePresentation?: RuntimeHeaderPresentation | null };
   includeHandoffBadge: boolean;
   /**

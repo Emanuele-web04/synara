@@ -223,10 +223,7 @@ export function ReviewBoard(props: { cwd: string | null }) {
     const lanePullRequests = REVIEW_BOARD_COLUMNS.flatMap(
       (column) => boardLaneResultForColumn(boardLanesQuery.data, column.id)?.pullRequests ?? [],
     );
-    return uniqueReviewPullRequests([
-      ...columnPullRequests,
-      ...lanePullRequests,
-    ]);
+    return uniqueReviewPullRequests([...columnPullRequests, ...lanePullRequests]);
   }, [columnQueries, boardLanesQuery.data]);
 
   const facetItems = useMemo(
@@ -248,11 +245,9 @@ export function ReviewBoard(props: { cwd: string | null }) {
         const queryData = query.data;
         const sourceData = queryData ?? laneData;
         const pullRequests = filterReviewPullRequests(
-          filterByView(
-            sourceData?.pullRequests ?? [],
-            view,
-            viewerLogin,
-          ).filter((summary) => deriveReviewColumn(summary) === column.id),
+          filterByView(sourceData?.pullRequests ?? [], view, viewerLogin).filter(
+            (summary) => deriveReviewColumn(summary) === column.id,
+          ),
           clientSearch,
           activeFilters,
         );

@@ -146,8 +146,9 @@ export function resolveEnvironmentPanelVisible(input: {
 // The composer live strip prefers the turn's computed diff (the
 // `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
 // Before that lands, it falls back to mid-turn file-edit work-log activity so
-// the strip still appears while the turn is running — it just renders a
-// stat-less "Files changed" label (fileCount: null) until the diff totals land.
+// the strip can appear while the turn is running, but without a reviewable
+// turn id. Once a turn diff exists, its empty file list is authoritative and
+// must not be overwritten by tool metadata.
 export function resolveActiveTurnLiveDiffState(input: {
   latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
@@ -174,6 +175,15 @@ export function resolveActiveTurnLiveDiffState(input: {
       hasChanges: true,
     };
   }
+  if (summary) {
+    return {
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    };
+  }
 
   // No diff totals yet: keep the strip visible from in-turn file-edit work so it
   // does not vanish between the first edit and the turn-diff-completed event.
@@ -193,7 +203,7 @@ export function resolveActiveTurnLiveDiffState(input: {
 
   if (hasFileEditWork && input.latestTurnId) {
     return {
-      turnId: input.latestTurnId,
+      turnId: null,
       fileCount: workLogFilePaths.size > 0 ? workLogFilePaths.size : null,
       additions: 0,
       deletions: 0,

@@ -310,6 +310,35 @@ describe("EditorWorkspaceView", () => {
     expect(markup).not.toContain("cwd=");
   });
 
+  it("renders absolute local image previews without an attached workspace", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot={null}
+          projectName="project"
+          selectedFilePath="/Users/tester/Downloads/shot.png"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Loading file..."');
+    expect(markup).not.toContain("/api/local-image?path=%2FUsers%2Ftester%2FDownloads%2Fshot.png");
+    expect(markup).not.toContain("No workspace is attached");
+    expect(markup).not.toContain("cwd=");
+  });
+
   it("shows the file-preview path breadcrumb and overflow menu for Markdown files", () => {
     const queryClient = new QueryClient();
     const markup = renderToStaticMarkup(

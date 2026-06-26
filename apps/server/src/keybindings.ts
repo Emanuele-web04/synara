@@ -89,15 +89,23 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+e", command: "traitsPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
-  { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
-  { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus" },
-  { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
-  { key: "mod+shift+t", command: "chat.newTerminal", when: "!terminalFocus" },
-  { key: "mod+alt+c", command: "chat.newClaude", when: "!terminalFocus" },
-  { key: "mod+alt+x", command: "chat.newCodex", when: "!terminalFocus" },
-  { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus" },
-  { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus" },
-  { key: "mod+\\", command: "chat.split", when: "!terminalFocus" },
+  // New thread (chat.new) is the primary create action; it falls back to the most
+  // recent project when no project is active.
+  //
+  // These new-surface chords use `!terminalFocus || isMac`: on macOS `mod` is Cmd and
+  // xterm never forwards a Cmd-chord to the PTY, so the bare `!terminalFocus` guard just
+  // dropped the chord while the terminal had focus (you couldn't open a new chat/terminal
+  // from the terminal). The `|| isMac` escape hatch fires them on macOS regardless of
+  // focus, while Linux/Windows keep `!terminalFocus` so Ctrl-chords still reach the shell.
+  { key: "mod+n", command: "chat.new", when: "!terminalFocus || isMac" },
+  { key: "mod+shift+n", command: "chat.newLatestProject", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus || isMac" },
+  { key: "mod+shift+t", command: "chat.newTerminal", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+c", command: "chat.newClaude", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+x", command: "chat.newCodex", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+r", command: "chat.newCursor", when: "!terminalFocus || isMac" },
+  { key: "mod+alt+g", command: "chat.newGemini", when: "!terminalFocus || isMac" },
+  { key: "mod+\\", command: "chat.split", when: "!terminalFocus || isMac" },
   // Recent-view switcher (Ctrl+Tab) is an installed-app feature only: Electron and
   // standalone PWA windows have no tab strip, so the chord reaches the page. It remains
   // app-level even with terminal focus; the web route captures it before xterm input.
@@ -510,6 +518,26 @@ const RECENT_VIEW_SHORTCUT_BY_COMMAND: Partial<Record<KeybindingRule["command"],
   "view.recent.previous": "ctrl+shift+tab",
 };
 
+// New-surface creation commands shipped guarded by a bare `!terminalFocus`. On macOS
+// `mod` is Cmd and xterm never forwards a Cmd-chord to the PTY, so that guard silently
+// dropped "new chat/terminal" chords whenever the terminal had focus. The relaxed guard
+// adds an `|| isMac` escape hatch (see DEFAULT_KEYBINDINGS) so the chord fires on macOS
+// regardless of focus while Linux/Windows keep yielding Ctrl-chords to the shell.
+const OUTDATED_CREATION_TERMINAL_GUARD = "!terminalFocus";
+const RELAXED_CREATION_TERMINAL_GUARD = "!terminalFocus || isMac";
+const CREATION_COMMANDS_WITH_TERMINAL_ESCAPE = new Set<KeybindingRule["command"]>([
+  "chat.new",
+  "chat.newLatestProject",
+  "chat.newChat",
+  "chat.newLocal",
+  "chat.newTerminal",
+  "chat.newClaude",
+  "chat.newCodex",
+  "chat.newCursor",
+  "chat.newGemini",
+  "chat.split",
+]);
+
 function readKeybindingEntryCommand(entry: unknown): string | null {
   if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
     return null;
@@ -548,17 +576,19 @@ function normalizeLegacyKeybindingEntry(entry: unknown): {
   };
 }
 
-// Update exact old recent-view defaults so existing configs gain terminal-focus support.
+// Update exact old recent-view defaults so existing configs gain terminal-focus support
+// (drop the `!terminalFocus` guard). Per-rule because it never changes the key, so it
+// cannot collide with a sibling entry.
 function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
   readonly rule: KeybindingRule;
   readonly migrated: boolean;
 } {
-  const expectedShortcut = RECENT_VIEW_SHORTCUT_BY_COMMAND[rule.command];
-  if (expectedShortcut === undefined) {
-    return { rule, migrated: false };
-  }
-
-  if (rule.key !== expectedShortcut || rule.when !== OUTDATED_RECENT_VIEW_TERMINAL_GUARD) {
+  const recentViewShortcut = RECENT_VIEW_SHORTCUT_BY_COMMAND[rule.command];
+  if (
+    recentViewShortcut === undefined ||
+    rule.key !== recentViewShortcut ||
+    rule.when !== OUTDATED_RECENT_VIEW_TERMINAL_GUARD
+  ) {
     return { rule, migrated: false };
   }
 
@@ -569,6 +599,30 @@ function migrateOutdatedDefaultKeybindingRule(rule: KeybindingRule): {
     },
     migrated: true,
   };
+}
+
+// Add the `|| isMac` escape hatch to new-surface creation commands still pinned to the
+// bare `!terminalFocus` guard, so existing configs gain the macOS terminal-focus fix the
+// shipped defaults already carry. Matched on command + exact old guard (not key) so it
+// also reaches a creation command the user rebound to a different chord — the guard, not
+// the key, is what was too aggressive. Idempotent: once relaxed the guard no longer
+// matches the old one.
+function relaxCreationCommandTerminalGuards(rules: readonly KeybindingRule[]): {
+  readonly rules: KeybindingRule[];
+  readonly migratedCount: number;
+} {
+  let migratedCount = 0;
+  const next = rules.map((rule) => {
+    if (
+      rule.when !== OUTDATED_CREATION_TERMINAL_GUARD ||
+      !CREATION_COMMANDS_WITH_TERMINAL_ESCAPE.has(rule.command)
+    ) {
+      return rule;
+    }
+    migratedCount += 1;
+    return { ...rule, when: RELAXED_CREATION_TERMINAL_GUARD };
+  });
+  return { rules: next, migratedCount };
 }
 
 function mergeWithDefaultKeybindings(custom: ResolvedKeybindingsConfig): ResolvedKeybindingsConfig {
@@ -813,7 +867,15 @@ const makeKeybindings = Effect.gen(function* () {
       keybindings.push(migratedDefaultRule.rule);
     }
 
-    return { keybindings, issues, migratedLegacyCommandCount, migratedDefaultRuleCount };
+    const relaxed = relaxCreationCommandTerminalGuards(keybindings);
+    migratedDefaultRuleCount += relaxed.migratedCount;
+
+    return {
+      keybindings: relaxed.rules,
+      issues,
+      migratedLegacyCommandCount,
+      migratedDefaultRuleCount,
+    };
   });
 
   const writeConfigAtomically = (rules: readonly KeybindingRule[]) => {

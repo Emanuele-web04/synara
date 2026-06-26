@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
+  createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
   derivePinnedThreadIdsForSidebar,
   deriveSidebarProjectData,
@@ -34,6 +35,7 @@ import {
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
+  resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldShowDebugFeatureFlagsMenu,
@@ -145,6 +147,54 @@ describe("debug feature flags menu visibility", () => {
         storageValue: null,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveThreadHoverCardMetadata", () => {
+  it("includes source project and worktree names for worktree-backed chats", () => {
+    const metadata = resolveThreadHoverCardMetadata({
+      thread: makeSidebarThreadSummary({
+        envMode: "worktree",
+        branch: "codex/synara-mobile",
+        worktreePath: "/Users/me/.codex/worktrees/1234/Remodex",
+        associatedWorktreePath: "/Users/me/.codex/worktrees/1234/Remodex",
+        associatedWorktreeBranch: "codex/synara-mobile",
+      }),
+      project: {
+        name: "synara-mobile",
+        folderName: "Remodex",
+        cwd: "/Users/me/Developer/Remodex",
+      },
+    });
+
+    expect(metadata).toEqual({
+      projectName: "synara-mobile",
+      projectCwd: "/Users/me/Developer/Remodex",
+      sourceProjectName: "Remodex",
+      branch: "codex/synara-mobile",
+      worktreeName: "Remodex",
+    });
+  });
+
+  it("keeps local chats compact", () => {
+    const metadata = resolveThreadHoverCardMetadata({
+      thread: makeSidebarThreadSummary({
+        branch: "main",
+      }),
+      project: {
+        name: "synara",
+        folderName: "synara",
+        cwd: "/Users/me/Developer/synara",
+      },
+    });
+
+    expect(metadata).toEqual({
+      projectName: "synara",
+      projectCwd: "/Users/me/Developer/synara",
+      sourceProjectName: null,
+      branch: "main",
+      worktreeName: null,
+    });
   });
 });
 
@@ -1064,6 +1114,45 @@ describe("getVisibleSidebarThreadIds", () => {
     ]);
   });
 
+  it("groups interleaved thread input by project before flattening", () => {
+    const visibleThreadIds = getVisibleSidebarThreadIds({
+      projects: [
+        makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true }),
+        makeProject({ id: ProjectId.makeUnsafe("project-2"), expanded: true }),
+      ],
+      threads: [
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-project-2"),
+          projectId: ProjectId.makeUnsafe("project-2"),
+          createdAt: "2026-03-09T10:03:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-project-1-newer"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:02:00.000Z",
+        }),
+        makeThread({
+          id: ThreadId.makeUnsafe("thread-project-1-older"),
+          projectId: ProjectId.makeUnsafe("project-1"),
+          createdAt: "2026-03-09T10:01:00.000Z",
+        }),
+      ],
+      activeThreadId: undefined,
+      expandedThreadListsByProject: new Set<ProjectId>([
+        ProjectId.makeUnsafe("project-1"),
+        ProjectId.makeUnsafe("project-2"),
+      ]),
+      previewLimit: 10,
+      threadSortOrder: "created_at",
+    });
+
+    expect(visibleThreadIds).toEqual([
+      ThreadId.makeUnsafe("thread-project-1-newer"),
+      ThreadId.makeUnsafe("thread-project-1-older"),
+      ThreadId.makeUnsafe("thread-project-2"),
+    ]);
+  });
+
   it("reveals selected subagent children even when only the parent is expanded implicitly", () => {
     const visibleThreadIds = getVisibleSidebarThreadIds({
       projects: [makeProject({ id: ProjectId.makeUnsafe("project-1"), expanded: true })],
@@ -1227,6 +1316,15 @@ describe("getSidebarThreadIdsToPrewarm", () => {
   });
 });
 
+describe("createSidebarThreadHoverAnchorId", () => {
+  it("keeps duplicated thread rows addressable by sidebar surface", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+
+    expect(createSidebarThreadHoverAnchorId({ scope: "pinned", threadId })).toBe("pinned:thread-1");
+    expect(createSidebarThreadHoverAnchorId({ scope: "chat", threadId })).toBe("chat:thread-1");
+  });
+});
+
 function makeProject(overrides: Partial<Project> = {}): Project {
   const { defaultModelSelection, ...rest } = overrides;
   return {
@@ -1306,6 +1404,39 @@ function makeSidebarThreadSummary(
 }
 
 describe("deriveSidebarProjectData", () => {
+  it("keeps pinned threads in the total project thread count", () => {
+    const project = makeProject();
+    const pinnedThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-pinned"),
+      title: "Pinned",
+    });
+    const unpinnedThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-unpinned"),
+      title: "Unpinned",
+      createdAt: "2026-03-09T10:05:00.000Z",
+      updatedAt: "2026-03-09T10:05:00.000Z",
+    });
+
+    const data = deriveSidebarProjectData({
+      projects: [project],
+      sortedSidebarThreadsByProjectId: groupSidebarThreadsByProjectId([
+        pinnedThread,
+        unpinnedThread,
+      ]),
+      pinnedThreadIds: [pinnedThread.id],
+      expandedParentThreadIds: new Set(),
+      expandedThreadListProjectCwds: new Set(),
+      normalizeProjectCwd: (cwd) => cwd,
+      activeSidebarThreadId: undefined,
+      previewLimit: 5,
+    });
+
+    expect(data.get(project.id)).toMatchObject({
+      allProjectThreadCount: 2,
+      orderedProjectThreadIds: [unpinnedThread.id],
+    });
+  });
+
   it("shows split member threads as normal project rows", () => {
     const project = makeProject();
     const sourceThread = makeSidebarThreadSummary({

@@ -30,10 +30,7 @@ type ThreadSessionEnsureCommand = Extract<
 >;
 type ThreadTurnStartCommand = Extract<ClientOrchestrationCommand, { type: "thread.turn.start" }>;
 type ReviewChatApi = {
-  readonly orchestration: Pick<
-    NativeApi["orchestration"],
-    "dispatchCommand" | "getShellSnapshot"
-  >;
+  readonly orchestration: Pick<NativeApi["orchestration"], "dispatchCommand" | "getShellSnapshot">;
 };
 export type ReviewChatThreadResult =
   | { status: "ready"; threadId: ThreadId; created: boolean }

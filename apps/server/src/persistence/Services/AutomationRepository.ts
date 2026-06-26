@@ -50,6 +50,14 @@ export const SetAutomationDefinitionNextRunAtInput = Schema.Struct({
 export type SetAutomationDefinitionNextRunAtInput =
   typeof SetAutomationDefinitionNextRunAtInput.Type;
 
+export const RestartAutomationDefinitionLoopInput = Schema.Struct({
+  id: AutomationId,
+  enabled: Schema.Boolean,
+  nextRunAt: Schema.NullOr(Schema.String),
+  updatedAt: Schema.String,
+});
+export type RestartAutomationDefinitionLoopInput = typeof RestartAutomationDefinitionLoopInput.Type;
+
 export const ArchiveAutomationDefinitionInput = Schema.Struct({
   id: AutomationId,
   archivedAt: Schema.String,
@@ -249,6 +257,15 @@ export interface AutomationRepositoryShape {
   readonly markRunResult: (
     input: MarkAutomationRunResultInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
+  /**
+   * Like {@link markRunResult}, but preserves the run's triage fields
+   * (`archivedAt`/`unread`) from the current row instead of from the supplied
+   * result. Background completion-evaluation must not clobber a concurrent user
+   * archive/mark-read; this write merges those fields atomically, SQL-side.
+   */
+  readonly markRunCompletionResult: (
+    input: MarkAutomationRunResultInput,
+  ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
   readonly markRunInterrupted: (
     input: MarkAutomationRunInterruptedInput,
   ) => Effect.Effect<AutomationRun, AutomationRepositoryError>;
@@ -297,6 +314,9 @@ export interface AutomationRepositoryShape {
   ) => Effect.Effect<boolean, AutomationRepositoryError>;
   readonly incrementDefinitionIterationCount: (
     input: IncrementAutomationIterationInput,
+  ) => Effect.Effect<void, AutomationRepositoryError>;
+  readonly restartDefinitionLoop: (
+    input: RestartAutomationDefinitionLoopInput,
   ) => Effect.Effect<void, AutomationRepositoryError>;
   readonly tryAcquireSchedulerLease: (
     input: AcquireAutomationSchedulerLeaseInput,

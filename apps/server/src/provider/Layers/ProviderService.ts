@@ -54,6 +54,7 @@ import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly runtimeIdleStopMs?: number;
 }
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
@@ -71,6 +72,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const directory = yield* ProviderSessionDirectory;
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
+    const runtimeIdleStopMs = options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS;
     let stopIdleRuntimeSession: ((threadId: ThreadId) => void) | null = null;
 
     const clearRuntimeIdleTimer = (threadId: ThreadId) => {
@@ -84,14 +86,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const scheduleRuntimeIdleStop = (threadId: ThreadId) => {
       clearRuntimeIdleTimer(threadId);
-      if (PROVIDER_RUNTIME_IDLE_STOP_MS <= 0) {
+      if (runtimeIdleStopMs <= 0) {
         return;
       }
 
       const timer = setTimeout(() => {
         runtimeIdleTimers.delete(threadId);
         stopIdleRuntimeSession?.(threadId);
-      }, PROVIDER_RUNTIME_IDLE_STOP_MS);
+      }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
     };

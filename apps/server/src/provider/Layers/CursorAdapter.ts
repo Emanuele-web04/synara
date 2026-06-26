@@ -22,6 +22,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -1476,15 +1477,18 @@ export function makeCursorAdapter(
       );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
+        const args = [
+          ...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []),
+          "models",
+        ];
+        const prepared = prepareWindowsSafeProcess(effectiveBinaryPath, args, {
+          env: process.env,
+        });
         const child = yield* childProcessSpawner.spawn(
-          ChildProcess.make(
-            effectiveBinaryPath,
-            [...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []), "models"],
-            {
-              shell: process.platform === "win32",
-              env: process.env,
-            },
-          ),
+          ChildProcess.make(prepared.command, prepared.args, {
+            shell: prepared.shell,
+            env: process.env,
+          }),
         );
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [

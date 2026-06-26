@@ -68,6 +68,28 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
+  ProjectListDirectoriesInput,
+  ProjectListDirectoriesResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
+  ProjectSearchEntriesInput,
+  ProjectSearchEntriesResult,
+  ProjectSearchLocalEntriesInput,
+  ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
+  ProjectWriteFileInput,
+  ProjectWriteFileResult,
+} from "./project";
+import type {
   ReviewAddCommentInput,
   ReviewAgentResult,
   ReviewBoardLanesResult,
@@ -114,26 +136,6 @@ import type {
   ReviewViewerResult,
   ReviewWalkthroughResult,
 } from "./review";
-import type {
-  ProjectDevServerEvent,
-  ProjectDiscoverScriptsInput,
-  ProjectDiscoverScriptsResult,
-  ProjectListDirectoriesInput,
-  ProjectListDirectoriesResult,
-  ProjectListDevServersResult,
-  ProjectReadFileInput,
-  ProjectReadFileResult,
-  ProjectRunDevServerInput,
-  ProjectRunDevServerResult,
-  ProjectSearchEntriesInput,
-  ProjectSearchEntriesResult,
-  ProjectSearchLocalEntriesInput,
-  ProjectSearchLocalEntriesResult,
-  ProjectStopDevServerInput,
-  ProjectStopDevServerResult,
-  ProjectWriteFileInput,
-  ProjectWriteFileResult,
-} from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import type {
   ServerConfig,
@@ -463,6 +465,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    createLocalFilePreviewGrant: (
+      input: ProjectCreateLocalFilePreviewGrantInput,
+    ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     runDevServer: (input: ProjectRunDevServerInput) => Promise<ProjectRunDevServerResult>;
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;

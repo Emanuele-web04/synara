@@ -14,8 +14,7 @@ function shouldWakeScheduler(event: AutomationStreamEvent): boolean {
   return (
     event.type === "definition-upserted" ||
     event.type === "definition-deleted" ||
-    (event.type === "run-upserted" &&
-      event.run.result?.completionEvaluation !== undefined)
+    (event.type === "run-upserted" && event.run.result?.completionEvaluation !== undefined)
   );
 }
 

@@ -38,10 +38,10 @@ import {
   BotIcon,
   CheckIcon,
   ChangesIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
   GitHubIcon,
-  GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
@@ -52,14 +52,19 @@ import {
   SteerIcon,
   TerminalIcon,
   Undo2Icon,
+  WebSearchIcon,
   ZapIcon,
 } from "~/lib/icons";
+import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
+import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
+import { CentralIcon } from "~/lib/central-icons";
 import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineAgentChip } from "./InlineAgentChip";
@@ -78,7 +83,7 @@ import {
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -233,6 +238,8 @@ interface MessagesTimelineProps {
   controllerRef?: RefObject<MessagesTimelineController | null>;
   /** Message ids currently pinned for the active thread (drives the footer pin toggle state). */
   pinnedMessageIds?: ReadonlySet<MessageId>;
+  /** Excludes transient rows from persistent pin affordances. */
+  canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
@@ -245,6 +252,8 @@ interface MessagesTimelineProps {
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  /** Open an automation's detail page from a "created automation" transcript card. */
+  onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
@@ -285,6 +294,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   listRef,
   controllerRef,
   pinnedMessageIds,
+  canPinMessage,
   onTogglePinMessage,
   threadMarkers = [],
   timelineEntries,
@@ -295,6 +305,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
+  onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onEditUserMessage,
@@ -382,6 +393,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
   const [submittingEditedUserMessageId, setSubmittingEditedUserMessageId] =
     useState<MessageId | null>(null);
+  const [selectedToolDetailsEntryId, setSelectedToolDetailsEntryId] = useState<string | null>(null);
+  const openToolDetails = useCallback((workEntry: TimelineWorkEntry) => {
+    setSelectedToolDetailsEntryId(workEntry.id);
+  }, []);
+  const handleToolDetailsOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      setSelectedToolDetailsEntryId(null);
+    }
+  }, []);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
   // Index markers once per update so each assistant row avoids a full marker scan.
@@ -457,6 +477,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const selectedToolDetailsEntry = useMemo(
+    () => findToolDetailsEntryById(rows, selectedToolDetailsEntryId),
+    [rows, selectedToolDetailsEntryId],
+  );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
   // index lazily without re-installing the controller on every transcript change.
   const rowsRef = useRef(rows);
@@ -740,8 +764,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     markdownCwd={markdownCwd}
                     onImageExpand={onImageExpand}
+                    onOpenToolDetails={openToolDetails}
                     {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
+                    {...(onOpenAutomation ? { onOpenAutomation } : {})}
                   />
                 ))}
               </div>
@@ -1017,10 +1043,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             streaming: row.assistantCopyStreaming,
           });
           const messagePinned = pinnedMessageIds?.has(row.message.id) ?? false;
+          const messageCanPin = canPinMessage?.(row.message.id) ?? true;
           // Offer the pin toggle wherever copy is offered (a complete, terminal answer);
           // keep it visible for an already-pinned message so it can always be unpinned.
           const showPinToggle =
-            Boolean(onTogglePinMessage) && (assistantCopyState.visible || messagePinned);
+            messageCanPin &&
+            Boolean(onTogglePinMessage) &&
+            (assistantCopyState.visible || messagePinned);
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -1109,8 +1138,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               }
                               markdownCwd={markdownCwd}
                               onImageExpand={onImageExpand}
+                              onOpenToolDetails={openToolDetails}
                               {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                               {...(onOpenThread ? { onOpenThread } : {})}
+                              {...(onOpenAutomation ? { onOpenAutomation } : {})}
                             />
                           ) : (
                             <div
@@ -1158,8 +1189,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           markdownCwd={markdownCwd}
                           onImageExpand={onImageExpand}
                           onOpenTurnDiff={onOpenTurnDiff}
+                          onOpenToolDetails={openToolDetails}
                           {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                           {...(onOpenThread ? { onOpenThread } : {})}
+                          {...(onOpenAutomation ? { onOpenAutomation } : {})}
                           {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
                         />
                       ))}
@@ -1192,8 +1225,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                         markdownCwd={markdownCwd}
                         onImageExpand={onImageExpand}
+                        onOpenToolDetails={openToolDetails}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                         {...(onOpenThread ? { onOpenThread } : {})}
+                        {...(onOpenAutomation ? { onOpenAutomation } : {})}
                       />
                     ))}
                   </div>
@@ -1204,35 +1239,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group/file-row flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group/file-row flex w-full max-w-full items-center gap-2 px-0 py-1.5 text-left transition-colors duration-150 focus-visible:outline-none"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
-                        <span
-                          className="font-system-ui shrink-0 text-[#7b7b84]"
-                          style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                        >
-                          Edited
-                        </span>
-                        <span
-                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                          style={{
-                            fontSize: `${normalizedChatFontSizePx}px`,
-                          }}
-                        >
-                          {basename(file.path)}
-                        </span>
-                        {(file.additions ?? 0) + (file.deletions ?? 0) > 0 ? (
-                          <span
-                            className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
-                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                          >
-                            <DiffStatLabel
-                              additions={file.additions ?? 0}
-                              deletions={file.deletions ?? 0}
-                            />
-                          </span>
-                        ) : null}
+                        <EditedFileRowContent
+                          filePath={file.path}
+                          additions={file.additions}
+                          deletions={file.deletions}
+                          fontSizePx={normalizedChatFontSizePx}
+                          compact={false}
+                        />
                       </button>
                     ))}
                   </div>
@@ -1247,7 +1264,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     // unpinned message only reveals it on hover, like the other footer actions.
                     // Same Central pin glyph in both states — persistence signals the pinned state.
                     <MessageActionButton
-                      label={messagePinned ? "Unpin message" : "Pin message"}
+                      label={pinActionLabel("message", messagePinned)}
                       tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
                       aria-pressed={messagePinned}
                       className={
@@ -1461,7 +1478,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="pt-0.5 text-muted-foreground/70 font-system-ui"
+          className="working-shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {row.createdAt ? (
@@ -1528,12 +1545,49 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         )}
         {...(listScrollStyle ? { style: listScrollStyle } : {})}
       />
+      <ToolCallDetailsDialog
+        entry={selectedToolDetailsEntry}
+        open={selectedToolDetailsEntry !== null}
+        onOpenChange={handleToolDetailsOpenChange}
+      />
     </div>
   );
 });
 
 type TimelineMessage = Extract<MessagesTimelineRow, { kind: "message" }>["message"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
+
+export function findToolDetailsEntryById(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  entryId: string | null,
+): TimelineWorkEntry | null {
+  if (!entryId) {
+    return null;
+  }
+  for (const row of rows) {
+    if (row.kind === "work") {
+      const matchingEntry = row.groupedEntries.find((entry) => entry.id === entryId);
+      if (matchingEntry) {
+        return matchingEntry;
+      }
+      continue;
+    }
+    if (row.kind !== "message") {
+      continue;
+    }
+    const matchingInlineEntry = row.inlineWorkEntries?.find((entry) => entry.id === entryId);
+    if (matchingInlineEntry) {
+      return matchingInlineEntry;
+    }
+    const matchingCollapsedEntry = row.collapsedTurnItems?.find(
+      (item) => item.kind === "work" && item.entry.id === entryId,
+    );
+    if (matchingCollapsedEntry?.kind === "work") {
+      return matchingCollapsedEntry.entry;
+    }
+  }
+  return null;
+}
 
 // Reuse stable row references so streaming updates only force React work for
 // rows whose visible content actually changed.
@@ -2014,7 +2068,7 @@ function workEntryPreview(
 
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
     const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveInlineCommandCall(command);
+    if (command) return deriveReadableCommandDisplay(command).target;
   }
 
   if (workEntry.preview) return workEntry.preview;
@@ -2082,7 +2136,7 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.itemType === "file_change") {
     return SquarePenIcon;
   }
-  if (workEntry.itemType === "web_search") return GlobeIcon;
+  if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
@@ -2244,8 +2298,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
+  onOpenToolDetails?: (workEntry: TimelineWorkEntry) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenAutomation?: (automationId: string) => void;
 }) {
   const {
     workEntry,
@@ -2257,8 +2313,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onImageExpand,
     turnId,
     onOpenTurnDiff,
+    onOpenToolDetails,
     onOpenAgentActivity,
     onOpenThread,
+    onOpenAutomation,
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
@@ -2293,9 +2351,28 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
+  const canOpenToolDetails = Boolean(onOpenToolDetails) && Boolean(workEntry.toolDetails);
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
+
+  // A created-automation row renders as its own card instead of a tool-call line.
+  // Kept after the lone hook above so the early return never changes hook order.
+  const automation = workEntry.automation;
+  if (automation) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <AutomationCreatedCard
+          name={automation.name}
+          cadenceLabel={automation.cadenceLabel}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
+        />
+      </div>
+    );
+  }
+
   const readFilePath =
     opener !== null &&
     !canOpenAgentActivity &&
@@ -2320,50 +2397,51 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           {changedFiles.map((changedFilePath) => {
             const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
             const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
+            const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
+            const editedRowClassName = cn(
+              "group/file-row flex w-full max-w-full items-center text-left transition-colors duration-150",
+              compact ? "gap-1.5" : "gap-2",
+              canOpenEditedRow ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
+            );
+            const editedRowChildren = (
+              <EditedFileRowContent
+                filePath={changedFilePath}
+                additions={changedFileStat?.additions}
+                deletions={changedFileStat?.deletions}
+                fontSizePx={rowFontSizePx}
+                compact={compact}
+              />
+            );
+            if (canOpenToolDetails && workEntry.toolDetails) {
+              return (
+                <ToolDetailsDisclosure
+                  key={`${workEntry.id}:${changedFilePath}`}
+                  details={workEntry.toolDetails}
+                  compact={compact}
+                  title="View tool details"
+                  summaryClassName={editedRowClassName}
+                  dataFileChangeRow
+                >
+                  {editedRowChildren}
+                </ToolDetailsDisclosure>
+              );
+            }
             return (
               <button
                 key={`${workEntry.id}:${changedFilePath}`}
                 type="button"
                 data-file-change-row="true"
-                className={cn(
-                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
-                  compact
-                    ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
-                  canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
-                )}
+                className={editedRowClassName}
                 title={changedFilePath}
-                disabled={!canOpenEditedDiff}
+                disabled={!canOpenEditedRow}
                 onClick={() => {
-                  if (!turnId || !onOpenTurnDiff) return;
+                  if (!turnId || !onOpenTurnDiff) {
+                    return;
+                  }
                   onOpenTurnDiff(turnId, changedFilePath);
                 }}
               >
-                <span
-                  className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
-                  style={{ fontSize: `${rowFontSizePx}px` }}
-                >
-                  Edited
-                </span>
-                <span
-                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                  style={{
-                    fontSize: `${rowFontSizePx}px`,
-                  }}
-                >
-                  {basename(changedFilePath)}
-                </span>
-                {changedFileStat ? (
-                  <span
-                    className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
-                    style={{ fontSize: `${rowFontSizePx}px` }}
-                  >
-                    <DiffStatLabel
-                      additions={changedFileStat.additions}
-                      deletions={changedFileStat.deletions}
-                    />
-                  </span>
-                ) : null}
+                {editedRowChildren}
               </button>
             );
           })}
@@ -2519,14 +2597,22 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <>
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                  "flex shrink-0 items-center justify-center text-muted-foreground/40 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
                   compact ? "size-4" : "size-5",
                 )}
                 data-tool-icon={leftIconKind}
               >
                 <LeftIcon className={compact ? "size-3.5" : "size-4"} />
               </span>
-              <div className="min-w-0 flex-1 overflow-hidden">
+              <div
+                className={cn(
+                  "min-w-0 overflow-hidden",
+                  // Single-line tool labels size to their content so the disclosure
+                  // chevron can sit right after the name; the multi-line markdown
+                  // preview still needs the full row width.
+                  showInlineAgentTaskPreview && "flex-1",
+                )}
+              >
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
@@ -2552,8 +2638,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <p
                     className={cn(
                       compact ? "truncate leading-5" : "truncate leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit.
-                      "text-muted-foreground/40",
+                      // Match the leading icon's tone so the row reads as one muted unit, and
+                      // brighten the whole row to foreground on hover/focus instead of a fill.
+                      "text-muted-foreground/40 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
@@ -2577,6 +2664,18 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </div>
             </>
           );
+          if (canOpenToolDetails && workEntry.toolDetails) {
+            return (
+              <ToolDetailsDisclosure
+                details={workEntry.toolDetails}
+                compact={compact}
+                title={rawCommand ?? displayText}
+              >
+                {rowContentChildren}
+              </ToolDetailsDisclosure>
+            );
+          }
+
           const rowContent = (
             <AgentActivityOpenSurface
               canOpen={canOpenAgentActivity || canOpenReadFile}
@@ -2607,6 +2706,54 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   );
 });
 
+// Inner content for an "Edited <file> +n/-m" row. Mirrors the tool-call row treatment
+// (muted leading icon + label that brightens to foreground on hover/focus, same font
+// size) so edited rows read as the same visual unit. Callers own the interactive wrapper
+// (`group/file-row` button or disclosure summary) and pass the diff stat when available.
+function EditedFileRowContent(props: {
+  filePath: string;
+  additions: number | undefined;
+  deletions: number | undefined;
+  fontSizePx: number;
+  compact: boolean;
+}) {
+  const { filePath, additions, deletions, fontSizePx, compact } = props;
+  const hasStat = (additions ?? 0) + (deletions ?? 0) > 0;
+  return (
+    <>
+      <span
+        className={cn(
+          "flex shrink-0 items-center justify-center text-muted-foreground/40 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+          compact ? "size-4" : "size-5",
+        )}
+        data-tool-icon="edit"
+      >
+        <CentralIcon name="pencil" className={compact ? "size-3.5" : "size-4"} />
+      </span>
+      <span
+        className="font-system-ui shrink-0 text-muted-foreground/40 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground"
+        style={{ fontSize: `${fontSizePx}px` }}
+      >
+        Edited
+      </span>
+      <span
+        className="font-system-ui max-w-[28rem] truncate text-muted-foreground/40 underline-offset-2 transition-colors group-hover/file-row:text-foreground group-hover/file-row:underline group-focus-visible/file-row:text-foreground group-focus-visible/file-row:underline"
+        style={{ fontSize: `${fontSizePx}px` }}
+      >
+        {basename(filePath)}
+      </span>
+      {hasStat ? (
+        <span
+          className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
+          style={{ fontSize: `${fontSizePx}px` }}
+        >
+          <DiffStatLabel additions={additions ?? 0} deletions={deletions ?? 0} />
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function AgentActivityOpenSurface(props: {
   canOpen: boolean;
   children: ReactNode;
@@ -2615,13 +2762,12 @@ function AgentActivityOpenSurface(props: {
   onHover?: (() => void) | undefined;
   onOpen?: (() => void) | undefined;
   title?: string | undefined;
+  dataToolDetailTrigger?: boolean | undefined;
 }) {
   const className = cn(
-    "flex w-full items-center text-left transition-[opacity,translate] duration-200",
+    "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
     props.compact ? "gap-1.5" : "gap-2",
-    props.canOpen
-      ? "cursor-pointer rounded-md hover:bg-[var(--color-background-button-secondary-hover)]"
-      : "cursor-default",
+    props.canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
   );
 
   if (props.canOpen) {
@@ -2631,6 +2777,7 @@ function AgentActivityOpenSurface(props: {
         className={className}
         title={props.title}
         onClick={props.onOpen}
+        data-tool-detail-trigger={props.dataToolDetailTrigger ? "true" : undefined}
         {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
       >
         {props.children}
@@ -2642,5 +2789,55 @@ function AgentActivityOpenSurface(props: {
     <div className={className} title={props.title}>
       {props.children}
     </div>
+  );
+}
+
+function ToolDetailsDisclosure(props: {
+  children: ReactNode;
+  compact: boolean;
+  dataFileChangeRow?: boolean | undefined;
+  details: NonNullable<TimelineWorkEntry["toolDetails"]>;
+  summaryClassName?: string | undefined;
+  title?: string | undefined;
+}) {
+  const summaryClassName =
+    props.summaryClassName ??
+    cn(
+      "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
+      props.compact ? "gap-1.5" : "gap-2",
+      "cursor-pointer focus-visible:outline-none",
+    );
+  const [hasOpened, setHasOpened] = useState(false);
+
+  return (
+    <details
+      className="group/tool-details min-w-0"
+      onToggle={(event) => {
+        if (event.currentTarget.open) {
+          setHasOpened(true);
+        }
+      }}
+    >
+      <summary
+        className={cn("list-none [&::-webkit-details-marker]:hidden", summaryClassName)}
+        title={props.title ?? "View tool details"}
+        data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
+        data-tool-detail-trigger="true"
+      >
+        {props.children}
+        <ChevronRightIcon
+          aria-hidden="true"
+          className="size-3.5 shrink-0 text-muted-foreground/38 transition-[transform,color] duration-200 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground group-open/tool-details:rotate-90"
+        />
+      </summary>
+      {hasOpened ? (
+        <div
+          className={cn("mt-2 min-w-0", props.compact ? "ml-5" : "ml-7")}
+          data-tool-details-inline="true"
+        >
+          <ToolCallDetailsContent details={props.details} />
+        </div>
+      ) : null}
+    </details>
   );
 }

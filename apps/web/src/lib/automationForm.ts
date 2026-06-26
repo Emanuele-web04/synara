@@ -1,0 +1,633 @@
+// FILE: automationForm.ts
+// Purpose: Owns automation form state, schedule conversion, and API payload helpers.
+// Layer: Web lib (pure form/domain helpers)
+// Exports: form builders, schedule formatters, warning adapters, and payload mappers.
+
+import {
+  DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
+  DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
+} from "@t3tools/contracts";
+import type {
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationMode,
+  AutomationSchedule,
+  AutomationUpdateInput,
+  AutomationWorktreeMode,
+  ModelSelection,
+  ProjectId,
+  ProviderStartOptions,
+  RuntimeMode,
+  ThreadId,
+} from "@t3tools/contracts";
+
+import {
+  completionPolicyFromStopWhen,
+  stopWhenFromCompletionPolicy,
+} from "./automationCompletionPolicy";
+import {
+  acknowledgedRiskIdsForDraft,
+  buildAutomationDraftWarnings,
+  type AutomationDraftWarning,
+  type AutomationDraftWarningId,
+} from "./automationDraft";
+
+export const defaultModelSelection: ModelSelection = {
+  provider: "codex",
+  model: "gpt-5-codex",
+};
+
+export const TIME_OF_DAY_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+const LEGACY_WALL_CLOCK_TIMEZONE = "UTC";
+
+// --- Schedule form shape ----------------------------------------------------
+
+/** UI-level cadence options shown in the schedule picker (each maps onto an AutomationSchedule). */
+export type ScheduleKind =
+  | "manual"
+  | "once"
+  | "hourly"
+  | "daily"
+  | "weekdays"
+  | "weekly"
+  | "custom"
+  | "cron";
+
+export type IntervalUnit = "seconds" | "minutes";
+
+export const SCHEDULE_KIND_OPTIONS: readonly { value: ScheduleKind; label: string }[] = [
+  { value: "manual", label: "Manual" },
+  { value: "once", label: "Once" },
+  { value: "hourly", label: "Hourly" },
+  { value: "daily", label: "Daily" },
+  { value: "weekdays", label: "Weekdays" },
+  { value: "weekly", label: "Weekly" },
+  { value: "custom", label: "Custom" },
+  { value: "cron", label: "Cron" },
+];
+
+export type AutomationFormState = {
+  readonly name: string;
+  readonly projectId: string;
+  readonly prompt: string;
+  readonly enabled: boolean;
+  readonly scheduleKind: ScheduleKind;
+  readonly intervalAmount: string;
+  readonly intervalUnit: IntervalUnit;
+  readonly timeOfDay: string;
+  readonly dayOfWeek: string;
+  readonly onceRunAt: string;
+  readonly cronExpression: string;
+  readonly timezone: string;
+  readonly runtimeMode: RuntimeMode;
+  readonly worktreeMode: AutomationWorktreeMode;
+  readonly modelSelection: ModelSelection;
+  readonly mode: AutomationMode;
+  readonly targetThreadId: string;
+  readonly maxIterations: string;
+  readonly stopOnError: boolean;
+  readonly stopWhen: string;
+};
+
+export type AutomationProjectModelSelectionSource = {
+  readonly id: string;
+  readonly defaultModelSelection?: ModelSelection | null;
+};
+
+function localTimezone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
+function scheduleTimezone(schedule: AutomationSchedule, fallbackTimezone: string): string {
+  return (
+    (schedule.type === "daily" ||
+    schedule.type === "weekly" ||
+    schedule.type === "weekdays" ||
+    schedule.type === "cron"
+      ? schedule.timezone
+      : undefined) ?? fallbackTimezone
+  );
+}
+
+// --- Schedule conversion and labels ----------------------------------------
+
+/** Pick the schedule option that represents a stored schedule (interval 1h reads as "Hourly"). */
+export function scheduleKindFromSchedule(schedule: AutomationSchedule): ScheduleKind {
+  switch (schedule.type) {
+    case "daily":
+      return "daily";
+    case "weekdays":
+      return "weekdays";
+    case "weekly":
+      return "weekly";
+    case "interval":
+      return schedule.everySeconds === 3600 ? "hourly" : "custom";
+    case "manual":
+      return "manual";
+    case "once":
+      return "once";
+    case "cron":
+      return "cron";
+  }
+}
+
+/** Build a schedule for the chosen kind, reusing time/day/interval from `current` where it applies. */
+export function scheduleFromKind(
+  kind: ScheduleKind,
+  current: AutomationSchedule,
+  fallbackTimezone: string = localTimezone(),
+): AutomationSchedule {
+  const timeOfDay =
+    current.type === "daily" || current.type === "weekly" || current.type === "weekdays"
+      ? current.timeOfDay
+      : "09:00";
+  const timezone = scheduleTimezone(current, fallbackTimezone);
+  switch (kind) {
+    case "manual":
+      return { type: "manual" };
+    case "once":
+      return { type: "once", runAt: new Date(Date.now() + 15 * 60_000).toISOString() };
+    case "hourly":
+      return { type: "interval", everySeconds: 3600 };
+    case "custom":
+      return {
+        type: "interval",
+        everySeconds:
+          current.type === "interval" && current.everySeconds !== 3600
+            ? current.everySeconds
+            : 1800,
+      };
+    case "daily":
+      return { type: "daily", timeOfDay, timezone };
+    case "weekdays":
+      return { type: "weekdays", timeOfDay, timezone };
+    case "weekly":
+      return {
+        type: "weekly",
+        dayOfWeek: current.type === "weekly" ? current.dayOfWeek : 1,
+        timeOfDay,
+        timezone,
+      };
+    case "cron":
+      return {
+        type: "cron",
+        expression: current.type === "cron" ? current.expression : "0 9 * * *",
+        timezone,
+      };
+  }
+}
+
+export function datetimeLocalFromIso(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  const localIso = new Date(date.getTime() - offsetMs).toISOString();
+  return localIso.slice(0, date.getSeconds() === 0 && date.getMilliseconds() === 0 ? 16 : 19);
+}
+
+export function isoFromDatetimeLocal(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? new Date(Date.now() + 15 * 60_000).toISOString()
+    : date.toISOString();
+}
+
+export function updateWeeklyScheduleDay(
+  schedule: Extract<AutomationSchedule, { type: "weekly" }>,
+  dayOfWeek: number,
+): AutomationSchedule {
+  return { ...schedule, dayOfWeek };
+}
+
+export function updateWeeklyScheduleTime(
+  schedule: Extract<AutomationSchedule, { type: "weekly" }>,
+  timeOfDay: string,
+): AutomationSchedule {
+  return { ...schedule, timeOfDay };
+}
+
+export function formatDateTime(value: string | null): string {
+  if (!value) return "Not scheduled";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)}`;
+}
+
+function timezoneSuffix(schedule: AutomationSchedule): string {
+  if (
+    (schedule.type === "daily" ||
+      schedule.type === "weekdays" ||
+      schedule.type === "weekly" ||
+      schedule.type === "cron") &&
+    schedule.timezone
+  ) {
+    return ` ${schedule.timezone}`;
+  }
+  return " UTC";
+}
+
+function formatIntervalSchedule(seconds: number): string {
+  return seconds % 60 === 0 ? `Every ${seconds / 60} min` : `Every ${seconds} sec`;
+}
+
+function formatIntervalCadence(seconds: number): string {
+  if (seconds === 3600) return "Hourly";
+  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
+  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
+  return `Every ${seconds}s`;
+}
+
+export function formatSchedule(schedule: AutomationSchedule): string {
+  switch (schedule.type) {
+    case "manual":
+      return "Manual";
+    case "once":
+      return `Once ${formatDateTime(schedule.runAt)}`;
+    case "interval":
+      return formatIntervalSchedule(schedule.everySeconds);
+    case "daily":
+      return `Daily ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+    case "weekdays":
+      return `Weekdays ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+    case "weekly":
+      return `Weekly ${weekdayLabel(schedule.dayOfWeek)} ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+    case "cron":
+      return `Cron ${schedule.expression} ${schedule.timezone}`;
+  }
+}
+
+/** "09:00" -> "9:00": drops the leading zero on the hour for friendlier cadence labels. */
+export function formatClockTime(timeOfDay: string): string {
+  const [hours, minutes] = timeOfDay.split(":");
+  const hour = Number.parseInt(hours ?? "", 10);
+  if (Number.isNaN(hour)) return timeOfDay;
+  return `${hour}:${minutes ?? "00"}`;
+}
+
+export function formatCadence(schedule: AutomationSchedule): string {
+  switch (schedule.type) {
+    case "manual":
+      return "Manual";
+    case "once":
+      return formatDateTime(schedule.runAt);
+    case "interval":
+      return formatIntervalCadence(schedule.everySeconds);
+    case "daily":
+      return `Daily at ${formatClockTime(schedule.timeOfDay)}`;
+    case "weekdays":
+      return `Weekdays at ${formatClockTime(schedule.timeOfDay)}`;
+    case "weekly":
+      return `${weekdayLabel(schedule.dayOfWeek)} at ${formatClockTime(schedule.timeOfDay)}`;
+    case "cron":
+      return `Cron ${schedule.expression}`;
+  }
+}
+
+export function weekdayLabel(value: number): string {
+  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
+}
+
+// --- Thread automation lookups ---------------------------------------------
+// Heartbeat automations are the only kind bound to a specific thread; both the
+// Environment panel and the sidebar surface them keyed by their target thread.
+
+const byAutomationName = (left: AutomationDefinition, right: AutomationDefinition): number =>
+  left.name.localeCompare(right.name);
+
+/** Heartbeat automations targeting a single thread, sorted by name. */
+export function heartbeatAutomationsForThread(
+  definitions: readonly AutomationDefinition[],
+  threadId: ThreadId,
+): AutomationDefinition[] {
+  return definitions
+    .filter(
+      (definition) => definition.mode === "heartbeat" && definition.targetThreadId === threadId,
+    )
+    .toSorted(byAutomationName);
+}
+
+/** All heartbeat automations grouped by the thread they target (each list sorted by name). */
+export function groupHeartbeatAutomationsByTargetThread(
+  definitions: readonly AutomationDefinition[],
+): Map<ThreadId, AutomationDefinition[]> {
+  const byThreadId = new Map<ThreadId, AutomationDefinition[]>();
+  for (const definition of definitions) {
+    if (definition.mode !== "heartbeat" || !definition.targetThreadId) {
+      continue;
+    }
+    const existing = byThreadId.get(definition.targetThreadId);
+    if (existing) {
+      existing.push(definition);
+    } else {
+      byThreadId.set(definition.targetThreadId, [definition]);
+    }
+  }
+  for (const [threadId, automations] of byThreadId) {
+    byThreadId.set(threadId, automations.toSorted(byAutomationName));
+  }
+  return byThreadId;
+}
+
+// --- Form state and API payloads -------------------------------------------
+
+function intervalFormPartsFromSeconds(everySeconds: number): {
+  readonly amount: string;
+  readonly unit: IntervalUnit;
+} {
+  return everySeconds >= 60 && everySeconds % 60 === 0
+    ? { amount: String(everySeconds / 60), unit: "minutes" }
+    : { amount: String(everySeconds), unit: "seconds" };
+}
+
+export function formFromDefinition(
+  definition: AutomationDefinition | null,
+  fallbackProjectId: string,
+  fallbackModelSelection: ModelSelection = defaultModelSelection,
+): AutomationFormState {
+  // New automations default to a daily schedule; existing definitions keep their saved cadence.
+  const schedule = definition?.schedule ?? { type: "daily" as const, timeOfDay: "09:00" };
+  const timezone = scheduleTimezone(
+    schedule,
+    definition ? LEGACY_WALL_CLOCK_TIMEZONE : localTimezone(),
+  );
+  return {
+    name: definition?.name ?? "",
+    projectId: definition?.projectId ?? fallbackProjectId,
+    prompt: definition?.prompt ?? "",
+    enabled: definition?.enabled ?? true,
+    scheduleKind: scheduleKindFromSchedule(schedule),
+    intervalAmount:
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
+        : "30",
+    intervalUnit:
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
+        : "minutes",
+    timeOfDay:
+      schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
+        ? schedule.timeOfDay
+        : "09:00",
+    dayOfWeek: schedule.type === "weekly" ? String(schedule.dayOfWeek) : "1",
+    onceRunAt:
+      schedule.type === "once"
+        ? datetimeLocalFromIso(schedule.runAt)
+        : datetimeLocalFromIso(new Date(Date.now() + 15 * 60_000).toISOString()),
+    cronExpression: schedule.type === "cron" ? schedule.expression : "0 9 * * *",
+    timezone,
+    runtimeMode: definition?.runtimeMode ?? "approval-required",
+    worktreeMode: definition?.worktreeMode ?? "auto",
+    modelSelection: definition?.modelSelection ?? fallbackModelSelection,
+    mode: definition?.mode ?? "standalone",
+    targetThreadId: definition?.targetThreadId ?? "",
+    maxIterations: definition?.maxIterations != null ? String(definition.maxIterations) : "",
+    stopOnError: definition?.stopOnError ?? true,
+    stopWhen: definition
+      ? stopWhenFromCompletionPolicy(definition.completionPolicy ?? { type: "none" })
+      : "",
+  };
+}
+
+export function applyScheduleToForm(
+  form: AutomationFormState,
+  schedule: AutomationSchedule,
+  fallbackTimezone: string = localTimezone(),
+): AutomationFormState {
+  const timezone = scheduleTimezone(schedule, fallbackTimezone);
+  return {
+    ...form,
+    scheduleKind: scheduleKindFromSchedule(schedule),
+    intervalAmount:
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).amount
+        : form.intervalAmount,
+    intervalUnit:
+      schedule.type === "interval" && schedule.everySeconds !== 3600
+        ? intervalFormPartsFromSeconds(schedule.everySeconds).unit
+        : form.intervalUnit,
+    timeOfDay:
+      schedule.type === "daily" || schedule.type === "weekly" || schedule.type === "weekdays"
+        ? schedule.timeOfDay
+        : form.timeOfDay,
+    dayOfWeek: schedule.type === "weekly" ? String(schedule.dayOfWeek) : form.dayOfWeek,
+    onceRunAt: schedule.type === "once" ? datetimeLocalFromIso(schedule.runAt) : form.onceRunAt,
+    cronExpression: schedule.type === "cron" ? schedule.expression : form.cronExpression,
+    timezone,
+  };
+}
+
+export function scheduleFromForm(form: AutomationFormState): AutomationSchedule {
+  const timezone = form.timezone.trim();
+  switch (form.scheduleKind) {
+    case "hourly":
+      return { type: "interval", everySeconds: 3600 };
+    case "manual":
+      return { type: "manual" };
+    case "once":
+      return { type: "once", runAt: isoFromDatetimeLocal(form.onceRunAt) };
+    case "custom": {
+      const amount = Math.max(1, Number.parseInt(form.intervalAmount, 10) || 1);
+      return {
+        type: "interval",
+        everySeconds: form.intervalUnit === "seconds" ? amount : amount * 60,
+      };
+    }
+    case "daily":
+      return { type: "daily", timeOfDay: form.timeOfDay, timezone };
+    case "weekdays":
+      return { type: "weekdays", timeOfDay: form.timeOfDay, timezone };
+    case "weekly": {
+      const dayOfWeek = Math.min(6, Math.max(0, Number.parseInt(form.dayOfWeek, 10) || 0));
+      return { type: "weekly", dayOfWeek, timeOfDay: form.timeOfDay, timezone };
+    }
+    case "cron":
+      return {
+        type: "cron",
+        expression: form.cronExpression.trim() || "0 9 * * *",
+        timezone,
+      };
+  }
+}
+
+function maxIterationsFromForm(form: Pick<AutomationFormState, "maxIterations">): number | null {
+  const trimmed = form.maxIterations.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const parsed = Number.parseInt(trimmed, 10);
+  return parsed > 0 ? parsed : null;
+}
+
+export function automationFastIntervalLimitMessage(form: AutomationFormState): string | null {
+  const schedule = scheduleFromForm(form);
+  const maxIterations = maxIterationsFromForm(form);
+  if (
+    schedule.type === "interval" &&
+    schedule.everySeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
+    (maxIterations === null || maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS)
+  ) {
+    return `Intervals under one minute need max iterations set to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
+  }
+  return null;
+}
+
+export function projectModelSelection(
+  projects: readonly AutomationProjectModelSelectionSource[],
+  projectId: string,
+): ModelSelection {
+  return (
+    projects.find((project) => project.id === projectId)?.defaultModelSelection ??
+    defaultModelSelection
+  );
+}
+
+function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): boolean {
+  const leftOptions = "options" in left ? left.options : undefined;
+  const rightOptions = "options" in right ? right.options : undefined;
+  return (
+    left.provider === right.provider &&
+    left.model === right.model &&
+    JSON.stringify(leftOptions ?? null) === JSON.stringify(rightOptions ?? null)
+  );
+}
+
+function modelIdentityMatches(left: ModelSelection, right: ModelSelection): boolean {
+  return left.provider === right.provider && left.model === right.model;
+}
+
+// Automation edits keep saved provider start options unless the provider/model identity changes.
+export function providerOptionsForAutomationModelSelection(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  nextModelSelection: ModelSelection,
+  currentProviderOptions?: ProviderStartOptions,
+): ProviderStartOptions | undefined {
+  return modelIdentityMatches(definition.modelSelection, nextModelSelection)
+    ? definition.providerOptions
+    : (currentProviderOptions ?? {});
+}
+
+export function providerOptionsForAutomationEdit(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  form: Pick<AutomationFormState, "modelSelection">,
+  currentProviderOptions?: ProviderStartOptions,
+): ProviderStartOptions | undefined {
+  return providerOptionsForAutomationModelSelection(
+    definition,
+    form.modelSelection,
+    currentProviderOptions,
+  );
+}
+
+export function modelSelectionForProjectChange(
+  projects: readonly AutomationProjectModelSelectionSource[],
+  currentProjectId: string,
+  nextProjectId: string,
+  currentModelSelection: ModelSelection,
+): ModelSelection {
+  const currentDefaultModelSelection = projectModelSelection(projects, currentProjectId);
+  const nextDefaultModelSelection = projectModelSelection(projects, nextProjectId);
+  return modelSelectionsMatch(currentModelSelection, currentDefaultModelSelection)
+    ? nextDefaultModelSelection
+    : currentModelSelection;
+}
+
+export function createInputFromForm(
+  form: AutomationFormState,
+  providerOptions?: ProviderStartOptions,
+  acknowledgedRisks?: AutomationCreateInput["acknowledgedRisks"],
+  sourceThreadId?: ThreadId | null,
+): AutomationCreateInput {
+  const maxIterations = maxIterationsFromForm(form);
+  const stopWhen = form.stopWhen.trim();
+  return {
+    name: form.name.trim(),
+    projectId: form.projectId as ProjectId,
+    ...(sourceThreadId !== undefined ? { sourceThreadId } : {}),
+    prompt: form.prompt.trim(),
+    schedule: scheduleFromForm(form),
+    enabled: form.enabled,
+    modelSelection: form.modelSelection,
+    runtimeMode: form.runtimeMode,
+    interactionMode: "default",
+    worktreeMode: form.worktreeMode,
+    ...(providerOptions ? { providerOptions } : {}),
+    mode: form.mode,
+    targetThreadId: form.mode === "heartbeat" ? (form.targetThreadId as ThreadId) : null,
+    maxIterations,
+    ...(form.mode === "heartbeat"
+      ? {
+          stopOnError: form.stopOnError,
+          completionPolicy: completionPolicyFromStopWhen(stopWhen),
+        }
+      : { completionPolicy: { type: "none" as const } }),
+    ...(acknowledgedRisks ? { acknowledgedRisks } : {}),
+  };
+}
+
+export function updateInputFromForm(
+  definition: AutomationDefinition,
+  form: AutomationFormState,
+  providerOptions?: ProviderStartOptions,
+  acknowledgedRisks?: AutomationCreateInput["acknowledgedRisks"],
+): AutomationUpdateInput {
+  return {
+    id: definition.id,
+    ...createInputFromForm(form, providerOptions, acknowledgedRisks),
+  };
+}
+
+export function buildAutomationFormWarnings(form: AutomationFormState) {
+  return buildAutomationDraftWarnings({
+    schedule: scheduleFromForm(form),
+    mode: form.mode,
+    runtimeMode: form.runtimeMode,
+    worktreeMode: form.worktreeMode,
+    hasEphemeralContext: false,
+    generatedConfidence: null,
+    generatedNeedsConfirmation: false,
+    prompt: form.prompt,
+  });
+}
+
+export function acknowledgedRiskIdsForFormWarnings(
+  warnings: readonly AutomationDraftWarning[],
+  acknowledgedWarningIds: ReadonlySet<AutomationDraftWarningId>,
+) {
+  return acknowledgedRiskIdsForDraft(warnings, acknowledgedWarningIds);
+}
+
+export function isFormSubmittable(form: AutomationFormState): boolean {
+  if (!form.name.trim() || !form.prompt.trim() || !form.projectId) return false;
+  if (form.mode === "heartbeat" && !form.targetThreadId) return false;
+  if (automationFastIntervalLimitMessage(form)) return false;
+  if (
+    form.scheduleKind === "custom" &&
+    (!form.intervalAmount.trim() || Number.parseInt(form.intervalAmount, 10) <= 0)
+  ) {
+    return false;
+  }
+  if (form.scheduleKind === "cron" && !form.cronExpression.trim()) return false;
+  if (form.scheduleKind === "once" && !form.onceRunAt.trim()) return false;
+  if (
+    (form.scheduleKind === "daily" ||
+      form.scheduleKind === "weekdays" ||
+      form.scheduleKind === "cron" ||
+      form.scheduleKind === "weekly") &&
+    !form.timezone.trim()
+  ) {
+    return false;
+  }
+  if (
+    (form.scheduleKind === "daily" ||
+      form.scheduleKind === "weekdays" ||
+      form.scheduleKind === "weekly") &&
+    !TIME_OF_DAY_PATTERN.test(form.timeOfDay)
+  ) {
+    return false;
+  }
+  return true;
+}

@@ -46,13 +46,12 @@ export function automationCompletionRunResult(input: {
   readonly severity?: NonNullable<AutomationRunResult["severity"]>;
   readonly unread?: boolean;
 }): AutomationRunResult {
-  const base =
-    input.baseResult ?? {
-      outcome: "unknown" as const,
-      summary: null,
-      unread: true,
-      archivedAt: null,
-    };
+  const base = input.baseResult ?? {
+    outcome: "unknown" as const,
+    summary: null,
+    unread: true,
+    archivedAt: null,
+  };
 
   return {
     ...base,

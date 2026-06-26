@@ -4,9 +4,17 @@
 // Exports: SidebarMetaChip, SidebarMetaChipStack, SidebarMetaChipPlaceholder
 
 import type { ReactNode } from "react";
+import { SIDEBAR_TRAILING_ICON_FORCE_CLASS } from "./sidebarGlyphs";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-const CHIP_SLOT = "inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center";
+// Right-aligned thread-row meta chips (automation clock, worktree, fork, handoff). Their
+// icons are forced to the shared trailing size at the slot so they match the pin/archive
+// buttons and the whole right-side cluster reads as one uniform set — including the worktree
+// Central icon, which the shared force class covers via its [data-slot=central-icon] selector.
+// CHIP_SLOT_PX drives the overlapping-stack layout math below (Tailwind can only scan literal
+// class strings, so keep it in step with the slot's h-[15px]/w-[15px]).
+const CHIP_SLOT_PX = 15;
+const CHIP_SLOT = `inline-flex h-[15px] w-[15px] shrink-0 items-center justify-center ${SIDEBAR_TRAILING_ICON_FORCE_CLASS}`;
 
 export function SidebarMetaChip({ tooltip, children }: { tooltip: string; children: ReactNode }) {
   return (
@@ -31,7 +39,7 @@ export function SidebarMetaChipStack({
   }
 
   const tooltipText = chips.map((chip) => chip.tooltip).join(" · ");
-  const chipSize = 14;
+  const chipSize = CHIP_SLOT_PX;
   const step = 8;
   const width = chipSize + step * (chips.length - 1);
 
@@ -40,14 +48,14 @@ export function SidebarMetaChipStack({
       <TooltipTrigger
         render={
           <div
-            className="relative h-3.5 shrink-0"
+            className="relative h-[15px] shrink-0"
             style={{ width: `${width}px` }}
             aria-label={tooltipText}
           >
             {chips.map((chip, index) => (
               <span
                 key={chip.id}
-                className="sidebar-icon-chip absolute top-1/2 inline-flex size-3.5 -translate-y-1/2 items-center justify-center rounded-full"
+                className={`sidebar-icon-chip absolute top-1/2 inline-flex size-[15px] -translate-y-1/2 items-center justify-center rounded-full ${SIDEBAR_TRAILING_ICON_FORCE_CLASS}`}
                 style={{ left: `${index * step}px`, zIndex: index + 1 }}
               >
                 {chip.icon}
