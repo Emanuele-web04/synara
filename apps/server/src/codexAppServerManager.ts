@@ -1472,10 +1472,9 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         provider: "codex",
         status: "connecting",
         runtimeMode: input.runtimeMode,
-        model:
-          input.modelSelection?.provider === "codex"
-            ? normalizeCodexModelSlug(input.modelSelection.model)
-            : undefined,
+        model: input.modelSelection
+          ? normalizeCodexModelSlug(input.modelSelection.model)
+          : undefined,
         cwd: resolvedCwd,
         threadId,
         createdAt: now,
@@ -1548,15 +1547,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Fork can proceed without account metadata; model fallback will stay best-effort.
       }
 
-      const normalizedModel =
-        input.modelSelection?.provider === "codex"
-          ? resolveCodexModelForAccount(
-              normalizeCodexModelSlug(input.modelSelection.model),
-              context.account,
-            )
-          : undefined;
+      const normalizedModel = input.modelSelection
+        ? resolveCodexModelForAccount(
+            normalizeCodexModelSlug(input.modelSelection.model),
+            context.account,
+          )
+        : undefined;
       const useFastServiceTier =
-        input.modelSelection?.provider === "codex" &&
+        input.modelSelection !== undefined &&
         getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
       const forkParams = {
         threadId: sourceProviderThreadId,
@@ -1987,7 +1985,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async transcribeVoice(
-    input: ServerVoiceTranscriptionInput,
+    input: ServerVoiceTranscriptionInput & { codexOptions?: CodexDiscoveryOptions },
   ): Promise<ServerVoiceTranscriptionResult> {
     return transcribeVoiceWithChatGptSession({
       request: input,
@@ -1995,6 +1993,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.resolveVoiceTranscriptionAuth({
           cwd: input.cwd,
           ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.codexOptions ? { codexOptions: input.codexOptions } : {}),
           refreshToken,
         }),
     });
@@ -2036,7 +2035,6 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const normalizedCwd = cwd?.trim() || undefined;
     const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
     const isCompatibleContext = (context: CodexSessionContext): boolean =>
-      optionsKey === "__default__" ||
       codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
     if (normalizedThreadId) {
       try {
@@ -2076,11 +2074,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
     // Voice transcription should always resolve auth from a fresh discovery context
     // instead of reusing a possibly stale thread-bound session token.
-    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
+    const context = await this.getOrCreateDiscoverySession(
+      input.cwd?.trim() || process.cwd(),
+      input.codexOptions,
+    );
     const readAuthStatus = async (refreshToken: boolean) => {
       const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
         includeToken: true,

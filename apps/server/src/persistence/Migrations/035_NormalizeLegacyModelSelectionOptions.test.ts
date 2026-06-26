@@ -193,7 +193,7 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
             projectId: "project-legacy-options",
             title: "Legacy Options Thread",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
               options: [{ id: "reasoningEffort", value: "xhigh" }],
             },
@@ -246,40 +246,40 @@ layer("035_NormalizeLegacyModelSelectionOptions", (it) => {
       };
 
       assert.deepStrictEqual(decodeModelSelection(projectSelection), {
-        provider: "codex",
         instanceId: "codex",
         model: "gpt-5.5",
-        options: { reasoningEffort: "medium" },
+        options: [{ id: "reasoningEffort", value: "medium" }],
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("claude-opus-4-6")), {
-        provider: "claudeAgent",
         instanceId: "local-claude-runtime-instance",
         model: "claude-opus-4-6",
-        options: { effort: "high", fastMode: true },
+        options: [
+          { id: "effort", value: "high" },
+          { id: "fastMode", value: true },
+        ],
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("openai/gpt-5.4")), {
-        provider: "opencode",
         instanceId: "local-opencode-runtime-instance",
         model: "openai/gpt-5.4",
-        options: { agent: "plan", variant: "fast" },
+        options: [
+          { id: "agent", value: "plan" },
+          { id: "variant", value: "fast" },
+        ],
       });
       assert.deepStrictEqual(decodeModelSelection(threadSelections.get("gpt-5.4")), {
-        provider: "cursor",
         instanceId: "workspace-cursor-runtime-instance",
         model: "gpt-5.4",
-        options: { reasoningEffort: "high" },
+        options: [{ id: "reasoningEffort", value: "high" }],
       });
       assert.deepStrictEqual(decodeModelSelection(projectEventPayload.defaultModelSelection), {
-        provider: "codex",
         instanceId: "codex",
         model: "gpt-5.5",
-        options: { reasoningEffort: "low" },
+        options: [{ id: "reasoningEffort", value: "low" }],
       });
       assert.deepStrictEqual(decodeModelSelection(threadEventPayload.modelSelection), {
-        provider: "codex",
         instanceId: "codex",
         model: "gpt-5.5",
-        options: { reasoningEffort: "xhigh" },
+        options: [{ id: "reasoningEffort", value: "xhigh" }],
       });
     }),
   );

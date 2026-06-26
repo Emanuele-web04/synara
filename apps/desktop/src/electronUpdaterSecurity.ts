@@ -13,7 +13,10 @@ import {
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@t3tools/shared/windowsProcess";
+import {
+  prepareWindowsSafeProcess,
+  resolveWindowsSystemRoot,
+} from "@t3tools/shared/windowsProcess";
 
 type Logger = {
   info?(message: string): void;
@@ -368,7 +371,9 @@ export async function verifyWindowsUpdateCodeSignature(
     const result =
       `publisherNames: ${publisherNames.join(" | ")}, raw info: ` +
       JSON.stringify(data, (name, value) => (name === "RawData" ? undefined : value), 2);
-    logger.warn?.(`Sign verification failed, installer signed with incorrect certificate: ${result}`);
+    logger.warn?.(
+      `Sign verification failed, installer signed with incorrect certificate: ${result}`,
+    );
     return result;
   } catch (error) {
     return handleSignatureError(logger, error, null, options);

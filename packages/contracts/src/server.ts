@@ -253,6 +253,8 @@ export type ServerDiagnosticsResult = typeof ServerDiagnosticsResult.Type;
 
 export const ServerVoiceTranscriptionInput = Schema.Struct({
   provider: ProviderKind,
+  providerInstanceId: Schema.optional(ProviderInstanceId),
+  providerOptions: Schema.optional(ProviderStartOptions),
   cwd: TrimmedNonEmptyString,
   threadId: Schema.optional(ThreadId),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),

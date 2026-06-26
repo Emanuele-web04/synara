@@ -201,7 +201,7 @@ describe("ProviderRuntimeIngestion", () => {
         title: "Provider Project",
         workspaceRoot,
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         createdAt,
@@ -215,7 +215,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1131,7 +1131,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Plan Source",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: "plan",
@@ -1166,7 +1166,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Plan Target",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -1318,7 +1318,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Plan Source",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: "plan",
@@ -1471,7 +1471,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Plan Source",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: "plan",
@@ -1506,7 +1506,7 @@ describe("ProviderRuntimeIngestion", () => {
         projectId: asProjectId("project-1"),
         title: "Plan Target",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -4077,7 +4077,6 @@ describe("ProviderRuntimeIngestion", () => {
         commandId: CommandId.makeUnsafe("cmd-thread-instance-model"),
         threadId: asThreadId("thread-1"),
         modelSelection: {
-          provider: "codex",
           instanceId: "codex_work",
           model: "gpt-5-codex",
         },
@@ -4159,7 +4158,6 @@ describe("ProviderRuntimeIngestion", () => {
     );
 
     expect(childThread.modelSelection).toEqual({
-      provider: "codex",
       instanceId: "codex_work",
       model: "gpt-5.1-codex",
     });

@@ -27,7 +27,10 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
-import { codexAccountInstanceId } from "@t3tools/shared/providerInstances";
+import {
+  codexAccountInstanceId,
+  inferLegacyProviderKindFromModelSelection,
+} from "@t3tools/shared/providerInstances";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";
@@ -246,8 +249,16 @@ export interface AppModelOption extends ProviderModelOption {
   isCustom: boolean;
 }
 
+export interface GitTextGenerationModelPickerOption {
+  readonly key: string;
+  readonly value: string;
+  readonly instance: ProviderInstanceOption;
+  readonly option: AppModelOption;
+}
+
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
+const GIT_TEXT_GENERATION_PROVIDERS = new Set<ProviderKind>(["codex", "kilo", "opencode"]);
 
 const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConfig> = {
   codex: {
@@ -781,6 +792,12 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
 }
 
 function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSettings> {
+  const textGenerationInstanceId = settings.textGenerationModelSelection.instanceId;
+  const configuredTextGenerationDriver =
+    settings.providerInstances[textGenerationInstanceId]?.driver;
+  const textGenerationProvider = Schema.is(ProviderKind)(configuredTextGenerationDriver)
+    ? configuredTextGenerationDriver
+    : inferLegacyProviderKindFromModelSelection(settings.textGenerationModelSelection);
   return {
     claudeBinaryPath: settings.providers.claudeAgent.binaryPath,
     claudeHomePath: settings.providers.claudeAgent.homePath,
@@ -812,8 +829,8 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customOpenCodeModels: settings.providers.opencode.customModels,
     customPiModels: settings.providers.pi.customModels,
     providerInstances: settings.providerInstances,
-    textGenerationProvider: settings.textGenerationModelSelection.provider,
-    textGenerationProviderInstanceId: settings.textGenerationModelSelection.instanceId,
+    textGenerationProvider,
+    textGenerationProviderInstanceId: textGenerationInstanceId,
     textGenerationModel: settings.textGenerationModelSelection.model,
   };
 }
@@ -1098,22 +1115,15 @@ export function patchCustomModelsForProviderInstance(
   instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
   models: string[],
 ): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
-  if (instance.isDefault || instance.instanceId === instance.provider) {
-    return patchCustomModels(instance.provider, models);
-  }
-
   const existing = settings.providerInstances[instance.instanceId];
-  if (!existing) {
-    return {};
-  }
 
   return {
     providerInstances: {
       ...settings.providerInstances,
       [instance.instanceId]: {
-        ...existing,
+        ...(existing ?? { driver: instance.provider, enabled: true }),
         config: {
-          ...(isRecord(existing.config) ? existing.config : {}),
+          ...(isRecord(existing?.config) ? existing.config : {}),
           customModels: models,
         },
       },
@@ -1146,7 +1156,7 @@ export function getCustomModelsForProviderInstance(
   if (Array.isArray(instanceCustomModels)) {
     return instanceCustomModels.filter((entry): entry is string => typeof entry === "string");
   }
-  if (instance.isDefault || instance.provider === "codex") {
+  if (instance.isDefault || instance.instanceId === instance.provider) {
     return getCustomModelsForProvider(settings, instance.provider);
   }
   return [];
@@ -1241,6 +1251,60 @@ export function getGitTextGenerationModelOptions(
   }
 
   return deduped;
+}
+
+export function getGitTextGenerationPickerOptions(
+  settings: Pick<
+    AppSettings,
+    | CustomModelSettingsKey
+    | "codexAccounts"
+    | "codexHomePath"
+    | "providerInstances"
+    | "selectedCodexAccountId"
+    | "textGenerationModel"
+    | "textGenerationProvider"
+    | "textGenerationProviderInstanceId"
+  >,
+): GitTextGenerationModelPickerOption[] {
+  const selectedModel = settings.textGenerationModel?.trim();
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  const selectedInstanceId = settings.textGenerationProviderInstanceId?.trim() || selectedProvider;
+  const entries: GitTextGenerationModelPickerOption[] = [];
+  const seen = new Set<string>();
+
+  for (const instance of getProviderInstanceOptions(settings)) {
+    if (!instance.enabled || !GIT_TEXT_GENERATION_PROVIDERS.has(instance.provider)) {
+      continue;
+    }
+    const selectedModelForInstance =
+      selectedModel &&
+      instance.provider === selectedProvider &&
+      instance.instanceId === selectedInstanceId
+        ? selectedModel
+        : undefined;
+    const options = getAppModelOptions(
+      instance.provider,
+      getCustomModelsForProviderInstance(settings, instance),
+      selectedModelForInstance,
+    );
+    for (const option of options) {
+      const key = `${instance.instanceId}:${option.provider}:${option.slug}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({
+        key,
+        value: key,
+        instance,
+        option,
+      });
+    }
+  }
+
+  return entries;
 }
 
 export function resolveAppModelSelection(
@@ -1400,6 +1464,15 @@ function mergeProviderStartOptionsForApp(
   };
 }
 
+function omitProviderStartOptions(
+  providerOptions: ProviderStartOptions,
+  provider: ProviderKind,
+): ProviderStartOptions {
+  const { [provider]: _omittedProviderOptions, ...remainingProviderOptions } = providerOptions;
+  void _omittedProviderOptions;
+  return remainingProviderOptions as ProviderStartOptions;
+}
+
 export function getProviderStartOptions(
   settings: Pick<
     AppSettings,
@@ -1529,7 +1602,14 @@ export function getProviderStartOptions(
           providerInstance.config,
         )
       : undefined;
-  const mergedProviderOptions = mergeProviderStartOptionsForApp(providerOptions, instanceOverlay);
+  const providerOptionsBase =
+    providerInstance && Schema.is(ProviderKind)(providerInstance.driver)
+      ? omitProviderStartOptions(providerOptions, providerInstance.driver)
+      : providerOptions;
+  const mergedProviderOptions = mergeProviderStartOptionsForApp(
+    providerOptionsBase,
+    instanceOverlay,
+  );
   return mergedProviderOptions && Object.keys(mergedProviderOptions).length > 0
     ? mergedProviderOptions
     : undefined;

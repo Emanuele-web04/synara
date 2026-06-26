@@ -588,10 +588,7 @@ function workLogToolEditsEqual(
   });
 }
 
-function workLogToolDetailsEqual(
-  a: WorkLogEntry["toolDetails"],
-  b: WorkLogEntry["toolDetails"],
-) {
+function workLogToolDetailsEqual(a: WorkLogEntry["toolDetails"], b: WorkLogEntry["toolDetails"]) {
   if (a === b) return true;
   if (!a || !b) return false;
   return (

@@ -37,6 +37,11 @@ import {
   resolveSelectableModel,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
+import {
+  inferLegacyProviderKindFromInstanceId,
+  inferLegacyProviderKindFromModel,
+  inferLegacyProviderKindFromModelSelection,
+} from "@t3tools/shared/providerInstances";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";
@@ -66,7 +71,7 @@ import {
 } from "./lib/composerPastedText";
 import { normalizeAssistantSelectionAttachment } from "./lib/assistantSelections";
 import { cloneComposerImageAttachment } from "./lib/composerSend";
-import { buildModelSelection } from "./providerModelOptions";
+import { buildModelSelection, buildProviderOptionPatch } from "./providerModelOptions";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
@@ -573,10 +578,12 @@ function mergeProviderModelOptionsFromSelections(
   const result: Partial<Record<ProviderKind, ProviderModelOptions[ProviderKind]>> = {};
   for (const selection of selections) {
     if (!selection) continue;
-    if (selection.options) {
-      result[selection.provider] = selection.options;
+    const provider = inferLegacyProviderKindFromModelSelection(selection);
+    const options = providerModelOptionsFromSelection(selection, provider);
+    if (options) {
+      result[provider] = options;
     } else {
-      delete result[selection.provider];
+      delete result[provider];
     }
   }
   return Object.keys(result).length > 0 ? (result as ProviderModelOptions) : null;
@@ -587,12 +594,27 @@ function modelSelectionMatchesProviderInstance(
   provider: ProviderKind,
   instanceId: ProviderInstanceId | null | undefined,
 ): selection is ModelSelection {
-  if (!selection || selection.provider !== provider) {
+  if (!selection) {
     return false;
   }
   const targetInstanceId = instanceId ?? provider;
-  const selectionInstanceId = selection.instanceId ?? selection.provider;
+  const selectionInstanceId =
+    selection.instanceId ?? inferLegacyProviderKindFromModelSelection(selection);
   return selectionInstanceId === targetInstanceId;
+}
+
+function providerModelOptionsFromSelection(
+  selection: ModelSelection,
+  provider: ProviderKind,
+): ProviderModelOptions[ProviderKind] | undefined {
+  if (!selection.options || selection.options.length === 0) {
+    return undefined;
+  }
+  const optionPatch = selection.options.reduce<Record<string, unknown>>((acc, option) => {
+    Object.assign(acc, buildProviderOptionPatch(provider, option.id, option.value));
+    return acc;
+  }, {});
+  return normalizeProviderModelOptions({ [provider]: optionPatch }, provider)?.[provider];
 }
 
 function deriveEffectiveComposerModelOptions(input: {
@@ -608,12 +630,19 @@ function deriveEffectiveComposerModelOptions(input: {
   const selectionForOptions = (
     selection: ModelSelection | null | undefined,
   ): ModelSelection | null | undefined => {
-    if (!selection || selection.provider !== input.selectedProvider) {
+    if (!selection) {
       return selection;
     }
-    const targetInstanceId = input.selectedProviderInstanceId ?? input.selectedProvider;
-    const selectionInstanceId = selection.instanceId ?? selection.provider;
-    if (selectionInstanceId !== targetInstanceId) {
+    if (
+      modelSelectionMatchesProviderInstance(
+        selection,
+        input.selectedProvider,
+        input.selectedProviderInstanceId,
+      )
+    ) {
+      return selection;
+    }
+    if (inferLegacyProviderKindFromModelSelection(selection) === input.selectedProvider) {
       return null;
     }
     return selection;
@@ -632,7 +661,13 @@ function deriveEffectiveComposerModelOptions(input: {
     : {};
   for (const selection of Object.values(draftSelections)) {
     if (!selection) continue;
-    const provider = selection.provider;
+    const provider = modelSelectionMatchesProviderInstance(
+      selection,
+      input.selectedProvider,
+      input.selectedProviderInstanceId,
+    )
+      ? input.selectedProvider
+      : inferLegacyProviderKindFromModelSelection(selection);
     if (
       provider === input.selectedProvider &&
       !modelSelectionMatchesProviderInstance(
@@ -644,8 +679,9 @@ function deriveEffectiveComposerModelOptions(input: {
       delete result[provider];
       continue;
     }
-    if (selection.options) {
-      result[provider] = selection.options;
+    const options = providerModelOptionsFromSelection(selection, provider);
+    if (options) {
+      result[provider] = options;
     } else {
       delete result[provider];
     }
@@ -1000,7 +1036,8 @@ export function providerInstanceModelSelectionKey(
 }
 
 function modelSelectionStorageKey(selection: ModelSelection): ProviderInstanceId {
-  return providerInstanceModelSelectionKey(selection.provider, selection.instanceId);
+  return (normalizeProviderInstanceId(selection.instanceId) ??
+    inferLegacyProviderKindFromModelSelection(selection)) as ProviderInstanceId;
 }
 
 function readModelSelectionForProviderInstance(
@@ -1035,6 +1072,28 @@ function makeModelSelection(
   instanceId?: ProviderInstanceId | null | undefined,
 ): ModelSelection {
   return buildModelSelection(provider, model, options, { instanceId });
+}
+
+function mutableModelSelection(selection: ModelSelection): DeepMutable<ModelSelection> {
+  return {
+    instanceId: selection.instanceId,
+    model: selection.model,
+    ...(selection.options
+      ? { options: selection.options.map((option) => ({ id: option.id, value: option.value })) }
+      : {}),
+  };
+}
+
+function mutableModelSelectionMap(
+  selections: ModelSelectionByProviderInstance,
+): DeepMutable<ModelSelectionByProviderInstance> {
+  const next: DeepMutable<ModelSelectionByProviderInstance> = {};
+  for (const [key, selection] of Object.entries(selections)) {
+    if (selection) {
+      next[key] = mutableModelSelection(selection);
+    }
+  }
+  return next;
 }
 
 function normalizeProviderModelOptions(
@@ -1257,15 +1316,15 @@ function normalizeModelSelection(
   },
 ): ModelSelection | null {
   const candidate = value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-  const provider = normalizeProviderKind(candidate?.provider ?? legacy?.provider);
-  if (provider === null) {
-    return null;
-  }
   const rawModel = candidate?.model ?? legacy?.model;
   if (typeof rawModel !== "string") {
     return null;
   }
   const instanceId = normalizeProviderInstanceId(candidate?.instanceId);
+  const provider =
+    normalizeProviderKind(candidate?.provider ?? legacy?.provider) ??
+    inferLegacyProviderKindFromInstanceId(instanceId) ??
+    inferLegacyProviderKindFromModel(rawModel);
   const inferredClaudeContextWindow =
     provider === "claudeAgent" && /\[1m\]$/iu.test(rawModel) ? "1m" : undefined;
   const model = normalizeModelSlug(rawModel, provider);
@@ -1273,7 +1332,20 @@ function normalizeModelSelection(
     return null;
   }
   const modelOptions = normalizeProviderModelOptions(
-    candidate?.options ? { [provider]: candidate.options } : legacy?.modelOptions,
+    Array.isArray(candidate?.options)
+      ? {
+          [provider]: providerModelOptionsFromSelection(
+            {
+              instanceId: instanceId ?? provider,
+              model: rawModel,
+              options: candidate.options as ModelSelection["options"],
+            },
+            provider,
+          ),
+        }
+      : candidate?.options
+        ? { [provider]: candidate.options }
+        : legacy?.modelOptions,
     provider,
     provider === "codex" ? legacy?.legacyCodex : undefined,
   );
@@ -1313,13 +1385,9 @@ function legacySyncModelSelectionOptions(
   if (modelSelection === null) {
     return null;
   }
-  const options = modelOptions?.[modelSelection.provider];
-  return makeModelSelection(
-    modelSelection.provider,
-    modelSelection.model,
-    options,
-    modelSelection.instanceId,
-  );
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
+  const options = modelOptions?.[provider];
+  return makeModelSelection(provider, modelSelection.model, options, modelSelection.instanceId);
 }
 
 function legacyMergeModelSelectionIntoProviderModelOptions(
@@ -1329,10 +1397,11 @@ function legacyMergeModelSelectionIntoProviderModelOptions(
   if (modelSelection?.options === undefined) {
     return normalizeProviderModelOptions(currentModelOptions);
   }
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
   return legacyReplaceProviderModelOptions(
     normalizeProviderModelOptions(currentModelOptions),
-    modelSelection.provider,
-    modelSelection.options,
+    provider,
+    providerModelOptionsFromSelection(modelSelection, provider),
   );
 }
 
@@ -1367,7 +1436,9 @@ function legacyToModelSelectionByProvider(
       const options = modelOptions[provider];
       if (options && Object.keys(options).length > 0) {
         const model =
-          modelSelection?.provider === provider ? modelSelection.model : getDefaultModel(provider);
+          modelSelection && inferLegacyProviderKindFromModelSelection(modelSelection) === provider
+            ? modelSelection.model
+            : getDefaultModel(provider);
         if (model) {
           result[providerInstanceModelSelectionKey(provider)] = makeModelSelection(
             provider,
@@ -1487,13 +1558,20 @@ export function resolvePreferredComposerModelSelection(input: {
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
 }): ModelSelection {
-  const draftProviderWithSelection =
-    Object.values(input.draft?.modelSelectionByProvider ?? {})[0]?.provider ?? null;
+  const draftProviderWithSelection = Object.values(input.draft?.modelSelectionByProvider ?? {})[0]
+    ? inferLegacyProviderKindFromModelSelection(
+        Object.values(input.draft?.modelSelectionByProvider ?? {})[0]!,
+      )
+    : null;
   const preferredProvider =
     input.draft?.activeProvider ??
     draftProviderWithSelection ??
-    input.threadModelSelection?.provider ??
-    input.projectModelSelection?.provider ??
+    (input.threadModelSelection
+      ? inferLegacyProviderKindFromModelSelection(input.threadModelSelection)
+      : null) ??
+    (input.projectModelSelection
+      ? inferLegacyProviderKindFromModelSelection(input.projectModelSelection)
+      : null) ??
     input.defaultProvider ??
     "codex";
 
@@ -1503,17 +1581,21 @@ export function resolvePreferredComposerModelSelection(input: {
       preferredProvider,
       input.draft?.modelSelectionByProvider
         ? Object.values(input.draft.modelSelectionByProvider).find(
-            (selection) => selection?.provider === preferredProvider,
+            (selection) =>
+              selection &&
+              inferLegacyProviderKindFromModelSelection(selection) === preferredProvider,
           )?.instanceId
         : undefined,
     ) ??
-    (input.threadModelSelection?.provider === preferredProvider
+    (input.threadModelSelection &&
+    inferLegacyProviderKindFromModelSelection(input.threadModelSelection) === preferredProvider
       ? input.threadModelSelection
       : null) ??
-    (input.projectModelSelection?.provider === preferredProvider
+    (input.projectModelSelection &&
+    inferLegacyProviderKindFromModelSelection(input.projectModelSelection) === preferredProvider
       ? input.projectModelSelection
       : null) ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
+      instanceId: preferredProvider === "pi" ? "codex" : preferredProvider,
       model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
     }
   );
@@ -1864,7 +1946,7 @@ function normalizePersistedQueuedTurns(
         selectedProvider,
         selectedModel,
         selectedPromptEffort,
-        modelSelection,
+        modelSelection: mutableModelSelection(modelSelection),
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         runtimeMode,
@@ -1893,7 +1975,7 @@ function normalizePersistedQueuedTurns(
         selectedProvider,
         selectedModel,
         selectedPromptEffort,
-        modelSelection,
+        modelSelection: mutableModelSelection(modelSelection),
         ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
         runtimeMode,
       });
@@ -2147,7 +2229,9 @@ function normalizePersistedDraftsByThreadId(
         modelSelection,
         mergedModelOptions,
       );
-      activeProvider = modelSelection?.provider ?? null;
+      activeProvider = modelSelection
+        ? inferLegacyProviderKindFromModelSelection(modelSelection)
+        : null;
     }
 
     const normalizedQueuedTurns = queuedTurns ?? [];
@@ -2187,7 +2271,12 @@ function normalizePersistedDraftsByThreadId(
       ...(mentions.length > 0 ? { mentions } : {}),
       ...(hasQueuedTurns ? { queuedTurns: normalizedQueuedTurns } : {}),
       ...(restoredSourceProposedPlan ? { restoredSourceProposedPlan } : {}),
-      ...(hasModelData ? { modelSelectionByProvider, activeProvider } : {}),
+      ...(hasModelData
+        ? {
+            modelSelectionByProvider: mutableModelSelectionMap(modelSelectionByProvider),
+            activeProvider,
+          }
+        : {}),
       ...(runtimeMode ? { runtimeMode } : {}),
       ...(interactionMode ? { interactionMode } : {}),
     };
@@ -2275,7 +2364,7 @@ function partializeComposerDraftStoreState(
           selectedProvider: queuedTurn.selectedProvider,
           selectedModel: queuedTurn.selectedModel,
           selectedPromptEffort: queuedTurn.selectedPromptEffort,
-          modelSelection: queuedTurn.modelSelection,
+          modelSelection: mutableModelSelection(queuedTurn.modelSelection),
           ...(queuedTurn.providerOptionsForDispatch
             ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
             : {}),
@@ -2298,7 +2387,7 @@ function partializeComposerDraftStoreState(
         selectedProvider: queuedTurn.selectedProvider,
         selectedModel: queuedTurn.selectedModel,
         selectedPromptEffort: queuedTurn.selectedPromptEffort,
-        modelSelection: queuedTurn.modelSelection,
+        modelSelection: mutableModelSelection(queuedTurn.modelSelection),
         ...(queuedTurn.providerOptionsForDispatch
           ? { providerOptionsForDispatch: queuedTurn.providerOptionsForDispatch }
           : {}),
@@ -2378,7 +2467,7 @@ function partializeComposerDraftStoreState(
         : {}),
       ...(hasModelData
         ? {
-            modelSelectionByProvider: draft.modelSelectionByProvider,
+            modelSelectionByProvider: mutableModelSelectionMap(draft.modelSelectionByProvider),
             activeProvider: draft.activeProvider,
           }
         : {}),
@@ -3058,18 +3147,19 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (!normalized) {
             return state;
           }
+          const normalizedProvider = inferLegacyProviderKindFromModelSelection(normalized);
           const nextMap: ModelSelectionByProviderInstance = {
             ...state.stickyModelSelectionByProvider,
             [modelSelectionStorageKey(normalized)]: normalized,
           };
           if (Equal.equals(state.stickyModelSelectionByProvider, nextMap)) {
-            return state.stickyActiveProvider === normalized.provider
+            return state.stickyActiveProvider === normalizedProvider
               ? state
-              : { stickyActiveProvider: normalized.provider };
+              : { stickyActiveProvider: normalizedProvider };
           }
           return {
             stickyModelSelectionByProvider: nextMap,
-            stickyActiveProvider: normalized.provider,
+            stickyActiveProvider: normalizedProvider,
           };
         });
       },
@@ -3225,15 +3315,20 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
               nextMap[selectionKey] = normalized;
             } else {
               // No options in selection → preserve existing options, update provider+model
+              const normalizedProvider = inferLegacyProviderKindFromModelSelection(normalized);
               nextMap[selectionKey] = makeModelSelection(
-                normalized.provider,
+                normalizedProvider,
                 normalized.model,
-                current?.options,
+                current
+                  ? providerModelOptionsFromSelection(current, normalizedProvider)
+                  : undefined,
                 normalized.instanceId,
               );
             }
           }
-          const nextActiveProvider = normalized?.provider ?? base.activeProvider;
+          const nextActiveProvider = normalized
+            ? inferLegacyProviderKindFromModelSelection(normalized)
+            : base.activeProvider;
           if (
             Equal.equals(base.modelSelectionByProvider, nextMap) &&
             base.activeProvider === nextActiveProvider

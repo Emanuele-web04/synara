@@ -61,7 +61,7 @@ export function useHandleNewThread() {
           return;
         }
         setModelSelection(threadId, {
-          provider: options.provider,
+          instanceId: options.provider,
           model: defaultModel,
         });
       };

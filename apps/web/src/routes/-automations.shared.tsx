@@ -15,6 +15,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
@@ -709,13 +710,14 @@ export function AutomationModelPicker({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const selectedProvider = inferLegacyProviderKindFromModelSelection(value);
   const selectedProviderInstanceId = useMemo(
-    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
-    [settings, value.instanceId, value.provider],
+    () => resolveSelectableProviderInstanceId(settings, selectedProvider, value.instanceId),
+    [settings, selectedProvider, value.instanceId],
   );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
-    () => ({ [value.provider]: value.model }),
-    [value.model, value.provider],
+    () => ({ [selectedProvider]: value.model }),
+    [selectedProvider, value.model],
   );
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: null,
@@ -724,7 +726,7 @@ export function AutomationModelPicker({
   });
   const { modelOptionsByProvider, modelOptionsByProviderInstance, loadingModelProviders } =
     useProviderModelCatalog({
-      selectedProvider: value.provider,
+      selectedProvider,
       selectedProviderInstanceId,
       discoveryEnabled: open,
       cwd: providerModelDiscoveryCwd,
@@ -732,33 +734,36 @@ export function AutomationModelPicker({
     });
   const selectedInstanceModelOptions =
     modelOptionsByProviderInstance[selectedProviderInstanceId] ??
-    modelOptionsByProvider[value.provider];
+    modelOptionsByProvider[selectedProvider];
 
   useEffect(() => {
-    const currentInstanceId = value.instanceId ?? value.provider;
+    const currentInstanceId = value.instanceId;
     const instanceChanged = currentInstanceId !== selectedProviderInstanceId;
     const modelStillAvailable = selectedInstanceModelOptions.some(
       (option) => option.slug === value.model,
     );
     const nextModel =
-      instanceChanged && !modelStillAvailable
-        ? (selectedInstanceModelOptions[0]?.slug ?? getDefaultModel(value.provider) ?? value.model)
+      instanceChanged || !modelStillAvailable
+        ? (selectedInstanceModelOptions[0]?.slug ??
+          getDefaultModel(selectedProvider) ??
+          value.model)
         : value.model;
     if (!instanceChanged && nextModel === value.model) {
       return;
     }
-    const options = "options" in value ? value.options : null;
     onChange(
-      buildModelSelection(value.provider, nextModel, options, {
-        instanceId: selectedProviderInstanceId,
-      }),
+      instanceChanged
+        ? buildModelSelection(selectedProvider, nextModel, null, {
+            instanceId: selectedProviderInstanceId,
+          })
+        : { ...value, model: nextModel, instanceId: selectedProviderInstanceId },
     );
-  }, [onChange, selectedInstanceModelOptions, selectedProviderInstanceId, value]);
+  }, [onChange, selectedInstanceModelOptions, selectedProvider, selectedProviderInstanceId, value]);
 
   return (
     <ProviderModelPicker
       compact
-      provider={value.provider}
+      provider={selectedProvider}
       model={value.model}
       lockedProvider={null}
       providers={providerStatuses}

@@ -17,6 +17,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   EventId,
+  type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   MODEL_OPTIONS_BY_PROVIDER,
@@ -33,9 +34,11 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import {
+  geminiModelOptionsFromEffortValue,
   getModelCapabilities,
   getGeminiThinkingConfigKind,
   getGeminiThinkingModelAlias,
+  getModelSelectionStringOptionValue,
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
@@ -255,6 +258,19 @@ export function buildGeminiThinkingModelConfigAliases(
   }
 
   return aliases;
+}
+
+function geminiModelOptionsFromSelection(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+): GeminiModelOptions | undefined {
+  return (
+    geminiModelOptionsFromEffortValue(
+      getModelSelectionStringOptionValue(modelSelection, "thinkingLevel"),
+    ) ??
+    geminiModelOptionsFromEffortValue(
+      getModelSelectionStringOptionValue(modelSelection, "thinkingBudget"),
+    )
+  );
 }
 
 export function geminiRequestTimeoutMs(method: string): number {
@@ -2124,8 +2140,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       const providerOptions = input.providerOptions?.gemini;
       const binaryPath = trimToUndefined(providerOptions?.binaryPath) ?? "gemini";
       const runtimeModeId = runtimeModeToGeminiModeId(input.runtimeMode);
-      const selectedGeminiModel =
-        input.modelSelection?.provider === PROVIDER ? input.modelSelection.model : undefined;
+      const selectedGeminiModel = input.modelSelection?.model;
       const launchConfig = yield* prepareGeminiLaunchConfig({
         threadId: input.threadId,
         ...(selectedGeminiModel ? { selectedModel: selectedGeminiModel } : {}),
@@ -2168,12 +2183,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       const bootstrapInput = {
         allowResumeFallback: true,
         ...(requestedResumeSessionId ? { resumeSessionId: requestedResumeSessionId } : {}),
-        ...(input.modelSelection?.provider === PROVIDER
+        ...(input.modelSelection
           ? {
               model: input.modelSelection.model,
               apiModelId: resolveGeminiApiModelId(
                 input.modelSelection.model,
-                input.modelSelection.options,
+                geminiModelOptionsFromSelection(input.modelSelection),
               ),
             }
           : {}),
@@ -2227,12 +2242,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       });
     }
 
-    if (input.modelSelection?.provider === PROVIDER) {
+    if (input.modelSelection) {
       yield* setGeminiModel(context, {
         model: input.modelSelection.model,
         acpModelId: resolveGeminiApiModelId(
           input.modelSelection.model,
-          input.modelSelection.options,
+          geminiModelOptionsFromSelection(input.modelSelection),
         ),
       });
     }
@@ -2268,7 +2283,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     updateGeminiSession(context, {
       status: "running",
       activeTurnId: turnId,
-      ...(input.modelSelection?.provider === PROVIDER ? { model: input.modelSelection.model } : {}),
+      ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
     });
 
     yield* emitSessionState(context, "running");

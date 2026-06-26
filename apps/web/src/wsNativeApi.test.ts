@@ -289,7 +289,7 @@ describe("wsNativeApi", () => {
         enableAssistantStreaming: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
-        textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+        textGenerationModelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
         providers: {
           codex: {
             enabled: true,
@@ -470,7 +470,7 @@ describe("wsNativeApi", () => {
       title: "Project",
       workspaceRoot: "/tmp/project",
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
       },
       createdAt: "2026-02-24T00:00:00.000Z",

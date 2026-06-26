@@ -91,7 +91,6 @@ describe("threadHandoff", () => {
 
   it("prefers sticky model selection for the chosen handoff target", () => {
     const stickySelection = {
-      provider: "gemini",
       instanceId: "gemini_work",
       model: "gemini-2.5-pro",
     } satisfies ModelSelection;
@@ -100,14 +99,14 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-sonnet-4-6",
           },
         },
         targetProvider: "gemini",
         targetProviderInstanceId: "gemini_work",
         projectDefaultModelSelection: {
-          provider: "gemini",
+          instanceId: "gemini",
           model: "gemini-3.1-pro-preview",
         },
         stickyModelSelectionByProvider: {
@@ -122,7 +121,7 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-sonnet-4-6",
           },
         },
@@ -131,13 +130,12 @@ describe("threadHandoff", () => {
         projectDefaultModelSelection: null,
         stickyModelSelectionByProvider: {
           gemini: {
-            provider: "gemini",
+            instanceId: "gemini",
             model: "gemini-3.1-pro-preview",
           },
         },
       }),
     ).toEqual({
-      provider: "gemini",
       instanceId: "gemini_work",
       model: "auto-gemini-3",
     });
@@ -148,20 +146,19 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.4",
           },
         },
         targetProvider: "claudeAgent",
         targetProviderInstanceId: "claude_work",
         projectDefaultModelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
         },
         stickyModelSelectionByProvider: {},
       }),
     ).toEqual({
-      provider: "claudeAgent",
       instanceId: "claude_work",
       model: "claude-sonnet-4-6",
     });
@@ -172,7 +169,7 @@ describe("threadHandoff", () => {
       resolveThreadHandoffModelSelection({
         sourceThread: {
           modelSelection: {
-            provider: "gemini",
+            instanceId: "gemini",
             model: "gemini-2.5-pro",
           },
         },
@@ -182,7 +179,6 @@ describe("threadHandoff", () => {
         stickyModelSelectionByProvider: {},
       }),
     ).toEqual({
-      provider: "codex",
       instanceId: "codex_personal",
       model: "gpt-5.5",
     });

@@ -116,10 +116,87 @@ export function defaultInstanceIdForProvider(provider: ProviderKind): ProviderIn
   return provider;
 }
 
+export function inferLegacyProviderKindFromInstanceId(
+  instanceId: string | null | undefined,
+): ProviderKind | undefined {
+  if (!instanceId) {
+    return undefined;
+  }
+  if (isProviderKind(instanceId)) {
+    return instanceId;
+  }
+  const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId.startsWith("claude")) {
+    return "claudeAgent";
+  }
+  if (lowerInstanceId.startsWith("codex")) {
+    return "codex";
+  }
+  if (lowerInstanceId.startsWith("cursor")) {
+    return "cursor";
+  }
+  if (lowerInstanceId.startsWith("gemini")) {
+    return "gemini";
+  }
+  if (lowerInstanceId.startsWith("grok")) {
+    return "grok";
+  }
+  if (lowerInstanceId.startsWith("kilo")) {
+    return "kilo";
+  }
+  if (lowerInstanceId.startsWith("opencode") || lowerInstanceId.startsWith("open_code")) {
+    return "opencode";
+  }
+  if (lowerInstanceId.startsWith("pi")) {
+    return "pi";
+  }
+  return undefined;
+}
+
+export function inferLegacyProviderKindFromModel(model: string | null | undefined): ProviderKind {
+  const lowerModel = model?.toLowerCase() ?? "";
+  if (
+    lowerModel.includes("claude") ||
+    lowerModel.includes("sonnet") ||
+    lowerModel.includes("opus") ||
+    lowerModel.includes("haiku")
+  ) {
+    return "claudeAgent";
+  }
+  if (lowerModel.includes("gemini")) {
+    return "gemini";
+  }
+  if (lowerModel.includes("grok")) {
+    return "grok";
+  }
+  if (lowerModel.includes("opencode") || lowerModel.includes("open_code")) {
+    return "opencode";
+  }
+  if (lowerModel.includes("kilo")) {
+    return "kilo";
+  }
+  if (lowerModel.includes("cursor")) {
+    return "cursor";
+  }
+  if (lowerModel.startsWith("pi/") || lowerModel.includes("/pi/")) {
+    return "pi";
+  }
+  return "codex";
+}
+
+export function inferLegacyProviderKindFromModelSelection(
+  selection: Pick<ModelSelection, "instanceId" | "model"> | null | undefined,
+): ProviderKind {
+  return (
+    inferLegacyProviderKindFromInstanceId(selection?.instanceId) ??
+    inferLegacyProviderKindFromModel(selection?.model)
+  );
+}
+
 export function resolveModelSelectionInstanceId(
-  selection: Pick<ModelSelection, "provider" | "instanceId"> | null | undefined,
+  selection: Pick<ModelSelection, "instanceId"> | null | undefined,
 ): ProviderInstanceId {
-  return selection?.instanceId ?? selection?.provider ?? "codex";
+  return selection?.instanceId ?? "codex";
 }
 
 export function resolveProviderStatusInstanceId(input: {
@@ -138,10 +215,20 @@ function stableSlugHash(value: string): string {
   return (hash >>> 0).toString(36).padStart(7, "0");
 }
 
+function slugCodexAccountId(accountId: string): string {
+  const slug = accountId
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  return slug.length > 0 ? slug : "account";
+}
+
 export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
   const normalizedAccountId = accountId.trim();
-  const raw = `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId}`;
-  if (raw.length <= PROVIDER_INSTANCE_ID_MAX_CHARS) {
+  const slug = slugCodexAccountId(normalizedAccountId);
+  const raw = `${CODEX_ACCOUNT_INSTANCE_PREFIX}${slug}`;
+  if (raw.length <= PROVIDER_INSTANCE_ID_MAX_CHARS && slug === normalizedAccountId) {
     return raw;
   }
   const hash = stableSlugHash(normalizedAccountId);
@@ -150,10 +237,7 @@ export function codexAccountInstanceId(accountId: string): ProviderInstanceId {
     CODEX_ACCOUNT_INSTANCE_PREFIX.length -
     "_".length -
     hash.length;
-  return `${CODEX_ACCOUNT_INSTANCE_PREFIX}${normalizedAccountId.slice(
-    0,
-    availableAccountChars,
-  )}_${hash}`;
+  return `${CODEX_ACCOUNT_INSTANCE_PREFIX}${slug.slice(0, availableAccountChars)}_${hash}`;
 }
 
 function legacyProviderConfig(
@@ -215,14 +299,14 @@ function displayNameForInstance(
   if (explicit) {
     return explicit;
   }
-  if (instanceId === driver) {
+  if (String(instanceId) === String(driver)) {
     switch (driver) {
       case "claudeAgent":
         return "Claude";
       case "opencode":
         return "OpenCode";
       default:
-        return driver.charAt(0).toUpperCase() + driver.slice(1);
+        return String(driver).charAt(0).toUpperCase() + String(driver).slice(1);
     }
   }
   return instanceId

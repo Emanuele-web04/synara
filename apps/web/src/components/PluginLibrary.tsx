@@ -9,6 +9,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
 } from "@t3tools/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useQuery } from "@tanstack/react-query";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { IconType } from "react-icons";
@@ -380,8 +381,12 @@ export function PluginLibrary() {
   const activeProject = focusedProject ?? firstProject ?? null;
 
   const preferredProvider =
-    activeThread?.modelSelection.provider ??
-    activeProject?.defaultModelSelection?.provider ??
+    (activeThread
+      ? inferLegacyProviderKindFromModelSelection(activeThread.modelSelection)
+      : undefined) ??
+    (activeProject?.defaultModelSelection
+      ? inferLegacyProviderKindFromModelSelection(activeProject.defaultModelSelection)
+      : undefined) ??
     "codex";
 
   const [selectedProvider, setSelectedProvider] = useState<ProviderKind>(preferredProvider);

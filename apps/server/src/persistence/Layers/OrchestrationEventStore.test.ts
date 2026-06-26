@@ -146,7 +146,7 @@ layer("OrchestrationEventStore", (it) => {
             projectId: "project-imported",
             title: "Imported Thread",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
               options: [{ id: "reasoningEffort", value: "medium" }],
             },
@@ -174,7 +174,7 @@ layer("OrchestrationEventStore", (it) => {
             threadId: "thread-imported",
             messageId: "message-imported",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
               options: [{ id: "reasoningEffort", value: "medium" }],
             },
@@ -205,7 +205,6 @@ layer("OrchestrationEventStore", (it) => {
           ? projectCreated.payload.defaultModelSelection
           : null,
         {
-          provider: "codex",
           instanceId: "codex",
           model: "imported-project-model",
         },
@@ -213,12 +212,9 @@ layer("OrchestrationEventStore", (it) => {
       assert.deepStrictEqual(
         threadCreated?.type === "thread.created" ? threadCreated.payload.modelSelection : null,
         {
-          provider: "codex",
           instanceId: "codex",
           model: "gpt-5.5",
-          options: {
-            reasoningEffort: "medium",
-          },
+          options: [{ id: "reasoningEffort", value: "medium" }],
         },
       );
       assert.deepStrictEqual(
@@ -226,12 +222,9 @@ layer("OrchestrationEventStore", (it) => {
           ? turnStartRequested.payload.modelSelection
           : null,
         {
-          provider: "codex",
           instanceId: "codex",
           model: "gpt-5.5",
-          options: {
-            reasoningEffort: "medium",
-          },
+          options: [{ id: "reasoningEffort", value: "medium" }],
         },
       );
     }),
@@ -352,7 +345,6 @@ providerInstanceSettingsLayer("OrchestrationEventStore with settings", (it) => {
       assert.deepStrictEqual(
         threadCreated?.type === "thread.created" ? threadCreated.payload.modelSelection : null,
         {
-          provider: "claudeAgent",
           instanceId: "work",
           model: "custom-model",
         },

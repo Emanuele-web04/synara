@@ -1476,14 +1476,64 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
+function openCodeCompatibleExternalServerStatus(input: {
+  readonly provider: typeof OPENCODE_PROVIDER | typeof KILO_PROVIDER;
+  readonly checkedAt: string;
+  readonly serverUrl: string;
+  readonly hasServerPassword: boolean;
+  readonly experimentalWebSockets?: boolean | undefined;
+}): ServerProviderStatus {
+  try {
+    new URL(input.serverUrl);
+  } catch {
+    return {
+      provider: input.provider,
+      status: "error" as const,
+      available: false,
+      authStatus: "unknown" as const,
+      checkedAt: input.checkedAt,
+      message: `Configured ${input.provider === OPENCODE_PROVIDER ? "OpenCode" : "Kilo"} server URL is invalid.`,
+    } satisfies ServerProviderStatus;
+  }
+
+  const label = input.provider === OPENCODE_PROVIDER ? "OpenCode" : "Kilo";
+  return {
+    provider: input.provider,
+    status: "ready" as const,
+    available: true,
+    authStatus: "unknown" as const,
+    checkedAt: input.checkedAt,
+    ...(input.hasServerPassword
+      ? { authType: "serverPassword", authLabel: "Configured server password" }
+      : {}),
+    message: `${label} will use the configured server at ${input.serverUrl}${input.experimentalWebSockets ? " with experimental WebSockets enabled" : ""}.`,
+  } satisfies ServerProviderStatus;
+}
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
+  connection?: {
+    readonly serverUrl?: string | undefined;
+    readonly serverPassword?: string | undefined;
+    readonly experimentalWebSockets?: boolean | undefined;
+  },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
+    const configuredServerUrl = nonEmptyTrimmed(connection?.serverUrl);
+    if (configuredServerUrl) {
+      return openCodeCompatibleExternalServerStatus({
+        provider: OPENCODE_PROVIDER,
+        checkedAt,
+        serverUrl: configuredServerUrl,
+        hasServerPassword: nonEmptyTrimmed(connection?.serverPassword) !== undefined,
+        experimentalWebSockets: connection?.experimentalWebSockets,
+      });
+    }
+
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
     const probeEnv = makeProviderProbeEnv(environment);
 
@@ -1552,9 +1602,23 @@ export const checkOpenCodeProviderStatus = makeCheckOpenCodeProviderStatus();
 export const makeCheckKiloProviderStatus = (
   binaryPath?: string,
   environment?: Readonly<Record<string, string>>,
+  connection?: {
+    readonly serverUrl?: string | undefined;
+    readonly serverPassword?: string | undefined;
+  },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
+    const configuredServerUrl = nonEmptyTrimmed(connection?.serverUrl);
+    if (configuredServerUrl) {
+      return openCodeCompatibleExternalServerStatus({
+        provider: KILO_PROVIDER,
+        checkedAt,
+        serverUrl: configuredServerUrl,
+        hasServerPassword: nonEmptyTrimmed(connection?.serverPassword) !== undefined,
+      });
+    }
+
     const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
     const probeEnv = makeProviderProbeEnv(environment);
 
@@ -1898,9 +1962,10 @@ function projectStatusForProviderInstance(
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
-  const { authType, authLabel, ...withoutAuthMetadata } = projected;
+  const { authType, authLabel, voiceTranscriptionAvailable, ...withoutAuthMetadata } = projected;
   void authType;
   void authLabel;
+  void voiceTranscriptionAvailable;
   return {
     ...withoutAuthMetadata,
     status: projected.status === "ready" ? "warning" : projected.status,
@@ -2077,6 +2142,10 @@ export const ProviderHealthLive = Layer.effect(
             provider: instance.driver,
             instanceId: instance.instanceId,
           }),
+          {
+            provider: instance.driver,
+            instanceId: instance.instanceId,
+          },
         ).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem)),
       { concurrency: "unbounded" },
     ).pipe(
@@ -2135,6 +2204,13 @@ export const ProviderHealthLive = Layer.effect(
     ): string | undefined => {
       const value = instance.config[key];
       return typeof value === "string" ? nonEmptyTrimmed(value) : undefined;
+    };
+    const readInstanceConfigBoolean = (
+      instance: ResolvedProviderInstance,
+      key: string,
+    ): boolean | undefined => {
+      const value = instance.config[key];
+      return typeof value === "boolean" ? value : undefined;
     };
 
     const resolveProviderInstanceTarget = (
@@ -2365,12 +2441,19 @@ export const ProviderHealthLive = Layer.effect(
         case "kilo":
           return checkProviderInstanceWhenEnabled(
             instance,
-            makeCheckKiloProviderStatus(binaryPath, instance.environment),
+            makeCheckKiloProviderStatus(binaryPath, instance.environment, {
+              serverUrl: readInstanceConfigString(instance, "serverUrl"),
+              serverPassword: readInstanceConfigString(instance, "serverPassword"),
+            }),
           );
         case "opencode":
           return checkProviderInstanceWhenEnabled(
             instance,
-            makeCheckOpenCodeProviderStatus(binaryPath, instance.environment),
+            makeCheckOpenCodeProviderStatus(binaryPath, instance.environment, {
+              serverUrl: readInstanceConfigString(instance, "serverUrl"),
+              serverPassword: readInstanceConfigString(instance, "serverPassword"),
+              experimentalWebSockets: readInstanceConfigBoolean(instance, "experimentalWebSockets"),
+            }),
           );
         case "pi":
           return checkProviderInstanceWhenEnabled(
@@ -2673,7 +2756,7 @@ export const ProviderHealthLive = Layer.effect(
       });
 
       return yield* commandCoordinator.withCommandLock({
-        targetKey: provider,
+        targetKey: `instance:${providerStatusKey(target)}`,
         lockKey: update.lockKey,
         onQueued: setProviderUpdateState(
           target,

@@ -215,7 +215,7 @@ function AutomationsRouteView() {
     if (hasBlockingAutomationDraftWarnings(dialogWarnings, acknowledgedWarningIds)) return;
     const providerOptionsForDispatch = getProviderStartOptions(
       settings,
-      form.modelSelection.instanceId ?? form.modelSelection.provider,
+      form.modelSelection.instanceId,
     );
     const acknowledgedRisks = acknowledgedRiskIdsForFormWarnings(
       dialogWarnings,

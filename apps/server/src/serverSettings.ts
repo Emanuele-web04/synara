@@ -9,6 +9,7 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
   type ProviderKind,
   type ProviderWithDefaultModel,
@@ -38,6 +39,8 @@ import {
   Stream,
 } from "effect";
 import * as Semaphore from "effect/Semaphore";
+import { ServerSecretStore } from "./auth/Services/ServerSecretStore";
+import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { ServerConfig } from "./config";
 
 export interface ServerSettingsShape {
@@ -96,6 +99,15 @@ const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
   "kilo",
   "opencode",
 ];
+const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
+
+function providerEnvironmentSecretName(input: {
+  readonly instanceId: string;
+  readonly name: string;
+}): string {
+  return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
+}
 
 function defaultTextGenerationModel(provider: ProviderKind): string {
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
@@ -135,13 +147,11 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
   const selection = settings.textGenerationModelSelection;
   const selectedInstance = findTextGenerationSelectionInstance(settings, selection);
   if (selectedInstance?.enabled) {
-    return selectedInstance.driver === selection.provider &&
-      selectedInstance.instanceId === selection.instanceId
+    return selectedInstance.instanceId === selection.instanceId
       ? settings
       : {
           ...settings,
           textGenerationModelSelection: {
-            provider: selectedInstance.driver,
             instanceId: selectedInstance.instanceId,
             model: selection.model,
           } as ModelSelection,
@@ -159,7 +169,6 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
   return {
     ...settings,
     textGenerationModelSelection: {
-      provider: fallback.driver,
       instanceId: fallback.instanceId,
       model: defaultTextGenerationModel(fallback.driver),
     } as ModelSelection,
@@ -284,6 +293,22 @@ function redactProviderInstanceConfig(config: unknown): unknown {
   return didRedact ? redacted : config;
 }
 
+function redactProviderEnvironmentVariable(
+  variable: ProviderInstanceEnvironmentVariable,
+): ProviderInstanceEnvironmentVariable {
+  if (!variable.sensitive) {
+    const { valueRedacted: _valueRedacted, ...rest } = variable;
+    return rest;
+  }
+  return {
+    ...variable,
+    value: "",
+    ...((variable.value ?? "").length > 0 || variable.valueRedacted === true
+      ? { valueRedacted: true }
+      : {}),
+  };
+}
+
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
   const providerInstances = Object.fromEntries(
     Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
@@ -295,11 +320,7 @@ export function redactServerSettingsForClient(settings: ServerSettings): ServerS
           : {}),
         ...(instance.environment
           ? {
-              environment: instance.environment.map((entry) =>
-                entry.sensitive || entry.valueRedacted === true
-                  ? { ...entry, value: "", valueRedacted: true }
-                  : entry,
-              ),
+              environment: instance.environment.map(redactProviderEnvironmentVariable),
             }
           : {}),
       },
@@ -349,6 +370,7 @@ const makeServerSettings = Effect.gen(function* () {
   const { settingsPath } = yield* ServerConfig;
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const secretStore = yield* ServerSecretStore;
   const writeSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const settingsRef = yield* Ref.make<ServerSettings>(DEFAULT_SERVER_SETTINGS);
@@ -357,6 +379,153 @@ const makeServerSettings = Effect.gen(function* () {
 
   const emitChange = (settings: ServerSettings) =>
     PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
+
+  const materializeProviderEnvironmentSecrets = (
+    settings: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const providerInstances: Record<string, ProviderInstanceConfig> = {
+        ...settings.providerInstances,
+      };
+
+      for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+        if (!instance.environment) {
+          continue;
+        }
+        const environment: ProviderInstanceEnvironmentVariable[] = [];
+        for (const variable of instance.environment) {
+          if (!variable.sensitive || variable.valueRedacted !== true) {
+            environment.push(variable);
+            continue;
+          }
+          const secret = yield* secretStore
+            .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: `failed to read secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                    cause,
+                  }),
+              ),
+            );
+          const { valueRedacted: _valueRedacted, ...materialized } = variable;
+          environment.push({
+            ...materialized,
+            value: secret ? textDecoder.decode(secret) : "",
+          });
+        }
+        providerInstances[instanceId] = {
+          ...instance,
+          environment,
+        };
+      }
+
+      return {
+        ...settings,
+        providerInstances: providerInstances as ServerSettings["providerInstances"],
+      };
+    });
+
+  const persistProviderEnvironmentSecrets = (
+    current: ServerSettings,
+    next: ServerSettings,
+  ): Effect.Effect<ServerSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const providerInstances: Record<string, ProviderInstanceConfig> = {
+        ...next.providerInstances,
+      };
+      const nextSecretKeys = new Set<string>();
+
+      for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
+        if (!instance.environment) {
+          continue;
+        }
+        const environment: ProviderInstanceEnvironmentVariable[] = [];
+        for (const variable of instance.environment) {
+          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
+          if (!variable.sensitive) {
+            yield* secretStore.remove(secretName).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: `failed to remove secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                    cause,
+                  }),
+              ),
+            );
+            environment.push(redactProviderEnvironmentVariable(variable));
+            continue;
+          }
+
+          nextSecretKeys.add(secretName);
+          if (variable.valueRedacted !== true) {
+            const value = variable.value ?? "";
+            if (value.length > 0) {
+              yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      detail: `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                      cause,
+                    }),
+                ),
+              );
+              environment.push({ ...variable, value: "", valueRedacted: true });
+            } else {
+              yield* secretStore.remove(secretName).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ServerSettingsError({
+                      settingsPath,
+                      detail: `failed to remove secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                      cause,
+                    }),
+                ),
+              );
+              const { valueRedacted: _valueRedacted, ...withoutRedaction } = variable;
+              environment.push(withoutRedaction);
+            }
+            continue;
+          }
+
+          environment.push(redactProviderEnvironmentVariable(variable));
+        }
+        providerInstances[instanceId] = {
+          ...instance,
+          environment,
+        };
+      }
+
+      for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
+        for (const variable of instance.environment ?? []) {
+          if (!variable.sensitive) {
+            continue;
+          }
+          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
+          if (!nextSecretKeys.has(secretName)) {
+            yield* secretStore.remove(secretName).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: `failed to remove stale secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                    cause,
+                  }),
+              ),
+            );
+          }
+        }
+      }
+
+      return {
+        ...next,
+        providerInstances: providerInstances as ServerSettings["providerInstances"],
+      };
+    });
 
   const loadSettingsFromDisk = Effect.gen(function* () {
     const exists = yield* fs.exists(settingsPath).pipe(
@@ -391,7 +560,7 @@ const makeServerSettings = Effect.gen(function* () {
       });
       return DEFAULT_SERVER_SETTINGS;
     }
-    return decoded.value;
+    return yield* materializeProviderEnvironmentSecrets(decoded.value);
   });
 
   const writeSettingsAtomically = (settings: ServerSettings) => {
@@ -451,7 +620,8 @@ const makeServerSettings = Effect.gen(function* () {
         Effect.gen(function* () {
           const current = yield* Ref.get(settingsRef);
           const next = yield* normalizeSettings(settingsPath, current, patch);
-          yield* writeSettingsAtomically(next);
+          const persisted = yield* persistProviderEnvironmentSecrets(current, next);
+          yield* writeSettingsAtomically(persisted);
           yield* Ref.set(settingsRef, next);
           yield* emitChange(next);
           return resolveTextGenerationProvider(next);
@@ -463,4 +633,6 @@ const makeServerSettings = Effect.gen(function* () {
   } satisfies ServerSettingsShape;
 });
 
-export const ServerSettingsLive = Layer.effect(ServerSettingsService, makeServerSettings);
+export const ServerSettingsLive = Layer.effect(ServerSettingsService, makeServerSettings).pipe(
+  Layer.provide(ServerSecretStoreLive),
+);

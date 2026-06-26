@@ -24,6 +24,7 @@ import {
   getCustomModelsForProviderInstance,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  getGitTextGenerationPickerOptions,
   getProviderInstanceOptions,
   getProviderStartOptions,
   MODEL_PROVIDER_SETTINGS,
@@ -155,6 +156,48 @@ describe("getGitTextGenerationModelOptions", () => {
       provider: "opencode",
       isCustom: true,
     });
+  });
+});
+
+describe("getGitTextGenerationPickerOptions", () => {
+  it("builds git-writing model options from each provider instance custom model list", () => {
+    const options = getGitTextGenerationPickerOptions({
+      customCodexModels: ["custom/default-codex"],
+      customClaudeModels: [],
+      customCursorModels: [],
+      customGeminiModels: [],
+      customGrokModels: [],
+      customKiloModels: [],
+      customOpenCodeModels: [],
+      customPiModels: [],
+      codexAccounts: [],
+      codexHomePath: "",
+      selectedCodexAccountId: "default",
+      textGenerationModel: "custom/work-codex",
+      textGenerationProvider: "codex",
+      textGenerationProviderInstanceId: "codex_work",
+      providerInstances: {
+        codex_work: {
+          driver: "codex",
+          enabled: true,
+          config: {
+            customModels: ["custom/work-codex"],
+          },
+        },
+      },
+    });
+
+    const defaultModels = options
+      .filter((entry) => entry.instance.instanceId === "codex")
+      .map((entry) => entry.option.slug);
+    const workModels = options
+      .filter((entry) => entry.instance.instanceId === "codex_work")
+      .map((entry) => entry.option.slug);
+
+    expect(defaultModels).toContain("custom/default-codex");
+    expect(defaultModels).not.toContain("custom/work-codex");
+    expect(workModels).toContain("custom/work-codex");
+    expect(workModels).not.toContain("custom/default-codex");
   });
 });
 
@@ -620,6 +663,55 @@ describe("getProviderStartOptions", () => {
     });
   });
 
+  it("builds custom Codex instance options without selected-account fallbacks", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "/Users/default/.codex",
+          codexAccounts: [
+            {
+              id: "selected",
+              label: "Selected",
+              homePath: "/Users/selected/.codex",
+              shadowHomePath: "/Users/selected/.codex-shadow",
+            },
+          ],
+          selectedCodexAccountId: "selected",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          geminiBinaryPath: "",
+          grokBinaryPath: "",
+          kiloBinaryPath: "",
+          kiloServerPassword: "",
+          kiloServerUrl: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerPassword: "",
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Codex Work",
+              enabled: true,
+              config: {
+                homePath: "/Users/work/.codex",
+              },
+            },
+          },
+        },
+        "codex_work",
+      ),
+    ).toEqual({
+      codex: {
+        homePath: "/Users/work/.codex",
+      },
+    });
+  });
+
   it("emits an empty Codex options object when switching back to default among accounts", () => {
     expect(
       getProviderStartOptions({
@@ -912,6 +1004,30 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for the default provider instance into providerInstances", () => {
+    expect(
+      patchCustomModelsForProviderInstance(
+        {
+          providerInstances: {},
+        },
+        {
+          instanceId: "claudeAgent",
+          provider: "claudeAgent",
+          isDefault: true,
+        },
+        ["claude/default-instance"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claudeAgent: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { customModels: ["claude/default-instance"] },
+        },
+      },
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -1025,6 +1141,11 @@ describe("provider-indexed custom model settings", () => {
           enabled: true,
           config: {},
         },
+        codex_work: {
+          driver: "codex",
+          enabled: true,
+          config: {},
+        },
       },
     } as const;
 
@@ -1046,6 +1167,13 @@ describe("provider-indexed custom model settings", () => {
       getCustomModelsForProviderInstance(modelSettings, {
         instanceId: "claude_empty",
         provider: "claudeAgent",
+        isDefault: false,
+      }),
+    ).toEqual([]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "codex_work",
+        provider: "codex",
         isDefault: false,
       }),
     ).toEqual([]);

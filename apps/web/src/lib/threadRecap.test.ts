@@ -59,7 +59,7 @@ function thread(overrides: Partial<Thread> = {}): Thread {
     codexThreadId: null,
     projectId: "project-1" as Thread["projectId"],
     title: "Environment panel",
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,

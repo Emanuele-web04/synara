@@ -82,7 +82,7 @@ describe("ServerSettingsService", () => {
         Effect.provide(
           ServerSettingsService.layerTest({
             textGenerationModelSelection: {
-              provider: "gemini",
+              instanceId: "gemini",
               model: DEFAULT_MODEL_BY_PROVIDER.gemini,
             },
             providers: {
@@ -93,7 +93,7 @@ describe("ServerSettingsService", () => {
       ),
     );
 
-    expect(settings.textGenerationModelSelection.provider).toBe("codex");
+    expect(settings.textGenerationModelSelection.instanceId).toBe("codex");
     expect(settings.textGenerationModelSelection.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
   });
 
@@ -106,7 +106,6 @@ describe("ServerSettingsService", () => {
         Effect.provide(
           ServerSettingsService.layerTest({
             textGenerationModelSelection: {
-              provider: "claudeAgent",
               instanceId: "claude_work",
               model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
             },
@@ -126,7 +125,6 @@ describe("ServerSettingsService", () => {
     );
 
     expect(settings.textGenerationModelSelection).toMatchObject({
-      provider: "claudeAgent",
       instanceId: "claude_work",
       model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
     });
@@ -145,7 +143,6 @@ describe("ServerSettingsService", () => {
             },
           },
           textGenerationModelSelection: {
-            provider: "codex",
             instanceId: "work",
             model: "custom-model",
           },
@@ -154,7 +151,6 @@ describe("ServerSettingsService", () => {
     );
 
     expect(settings.textGenerationModelSelection).toMatchObject({
-      provider: "claudeAgent",
       instanceId: "work",
       model: "custom-model",
     });
@@ -169,7 +165,6 @@ describe("ServerSettingsService", () => {
         Effect.provide(
           ServerSettingsService.layerTest({
             textGenerationModelSelection: {
-              provider: "claudeAgent",
               instanceId: "claude_work",
               model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
             },
@@ -196,7 +191,6 @@ describe("ServerSettingsService", () => {
     );
 
     expect(settings.textGenerationModelSelection).toMatchObject({
-      provider: "gemini",
       instanceId: "gemini_work",
       model: DEFAULT_MODEL_BY_PROVIDER.gemini,
     });
@@ -312,6 +306,37 @@ describe("ServerSettingsService", () => {
     expect(
       redactServerSettingsForClient(settings).providerInstances.grok_work?.environment,
     ).toEqual([{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }]);
+  });
+
+  it("persists sensitive provider-instance environment values in the secret store", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+
+        const updated = yield* service.updateSettings({
+          providerInstances: {
+            grok_work: {
+              driver: "grok",
+              enabled: true,
+              environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: true }],
+            },
+          },
+        });
+        const raw = yield* fs.readFileString(settingsPath);
+        return { updated, parsed: JSON.parse(raw) as any, raw };
+      }),
+    );
+
+    expect(result.raw).not.toContain("secret-token");
+    expect(result.updated.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "secret-token", sensitive: true },
+    ]);
+    expect(result.parsed.providerInstances.grok_work.environment).toEqual([
+      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+    ]);
   });
 
   it("preserves redacted provider-instance config secrets on writeback", async () => {

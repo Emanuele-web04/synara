@@ -166,16 +166,12 @@ describe("windowsProcess", () => {
     }));
 
     expect(
-      prepareWindowsSafeProcess(
-        "C:\\Users\\test\\AppData\\Roaming\\npm\\codex",
-        ["app-server"],
-        {
-          platform: "win32",
-          cwd: "C:\\projects\\synara",
-          env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
-          spawnSync,
-        },
-      ),
+      prepareWindowsSafeProcess("C:\\Users\\test\\AppData\\Roaming\\npm\\codex", ["app-server"], {
+        platform: "win32",
+        cwd: "C:\\projects\\synara",
+        env: { ComSpec: "C:\\Windows\\System32\\cmd.exe", SystemRoot: "C:\\Windows" },
+        spawnSync,
+      }),
     ).toEqual({
       command: "C:\\Windows\\System32\\cmd.exe",
       args: [
@@ -208,7 +204,7 @@ describe("windowsProcess", () => {
   it("escapes batch arguments that cmd.exe can expand or reinterpret", () => {
     expect(
       buildWindowsBatchCommandArgs("C:\\tools\\bad%path\\codex.cmd", [
-        '%PATH%',
+        "%PATH%",
         'approval_policy="never"',
         "one&two",
         "bang!value",

@@ -7,7 +7,6 @@ describe("resolveTextGenerationInputForSelection", () => {
     expect(
       resolveTextGenerationInputForSelection(
         {
-          provider: "claudeAgent",
           instanceId: "claude_work",
           model: "claude-opus-4-6",
         },
@@ -20,7 +19,6 @@ describe("resolveTextGenerationInputForSelection", () => {
       ),
     ).toEqual({
       modelSelection: {
-        provider: "claudeAgent",
         instanceId: "claude_work",
         model: "claude-opus-4-6",
       },

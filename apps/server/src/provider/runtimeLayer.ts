@@ -3,6 +3,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config";
+import type { SecretStoreError } from "../auth/Services/ServerSecretStore";
 import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
@@ -26,7 +27,7 @@ import { ProviderSessionRuntimeRepositoryLive } from "../persistence/Layers/Prov
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService | ProviderDiscoveryService | ProviderAdapterRegistry | ProviderSessionDirectory,
-  ProviderUnsupportedError,
+  ProviderUnsupportedError | SecretStoreError,
   | SqlClient.SqlClient
   | ServerConfig
   | FileSystem.FileSystem

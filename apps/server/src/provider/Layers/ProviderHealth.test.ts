@@ -1281,6 +1281,30 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("uses configured OpenCode server URLs without probing the local CLI", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus(
+          "/custom/bin/opencode",
+          { SYNARA_TEST_INSTANCE: "opencode-server" },
+          {
+            serverUrl: " http://127.0.0.1:9999 ",
+            serverPassword: "secret-password",
+            experimentalWebSockets: true,
+          },
+        );
+
+        assert.strictEqual(status.provider, "opencode");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authType, "serverPassword");
+        assert.strictEqual(status.authLabel, "Configured server password");
+        assert.strictEqual(
+          status.message,
+          "OpenCode will use the configured server at http://127.0.0.1:9999 with experimental WebSockets enabled.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("OpenCode health should not spawn"))),
+    );
+
     it.effect("returns unavailable when opencode is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkOpenCodeProviderStatus;
@@ -1330,6 +1354,29 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           }),
         ),
       ),
+    );
+
+    it.effect("uses configured Kilo server URLs without probing the local CLI", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckKiloProviderStatus(
+          "/custom/bin/kilo",
+          { SYNARA_TEST_INSTANCE: "kilo-server" },
+          {
+            serverUrl: "http://127.0.0.1:9998",
+            serverPassword: "secret-password",
+          },
+        );
+
+        assert.strictEqual(status.provider, "kilo");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authType, "serverPassword");
+        assert.strictEqual(status.authLabel, "Configured server password");
+        assert.strictEqual(
+          status.message,
+          "Kilo will use the configured server at http://127.0.0.1:9998.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("Kilo health should not spawn"))),
     );
   });
 

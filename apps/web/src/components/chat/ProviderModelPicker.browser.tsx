@@ -1,9 +1,14 @@
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
+import {
+  type ModelSlug,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+} from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
-import { ProviderModelPicker } from "./ProviderModelPicker";
+import { ProviderModelPicker, type ProviderModelPickerInstance } from "./ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 const MODEL_OPTIONS_BY_PROVIDER = {
@@ -126,6 +131,11 @@ async function mountPicker(props: {
   providers?: ReadonlyArray<ServerProviderStatus>;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   onSelectionCommitted?: () => void;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  modelOptionsByProviderInstance?: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>>
+  >;
   modelOptionsByProvider?: Record<
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { slug: ModelSlug }>
@@ -144,6 +154,13 @@ async function mountPicker(props: {
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
       {...(props.providers ? { providers: props.providers } : {})}
+      {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+      {...(props.selectedProviderInstanceId
+        ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+        : {})}
+      {...(props.modelOptionsByProviderInstance
+        ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+        : {})}
       {...(props.onSelectionCommitted ? { onSelectionCommitted: props.onSelectionCommitted } : {})}
       onProviderModelChange={onProviderModelChange}
     />,
@@ -221,6 +238,132 @@ describe("ProviderModelPicker", () => {
       expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
         "claudeAgent",
         "claude-sonnet-4-6",
+        "claudeAgent",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("switches between same-provider instances and chooses the first model from the selected instance", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        {
+          provider: "codex",
+          instanceId: "codex",
+          driver: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "codex",
+          instanceId: "codex_work",
+          driver: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [{ slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" }],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Work" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-codex",
+        "codex_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("preserves the selected same-provider instance when selecting one of its models", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-work-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex_work",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        {
+          provider: "codex",
+          instanceId: "codex",
+          driver: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+        {
+          provider: "codex",
+          instanceId: "codex_work",
+          driver: "codex",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [
+          { slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" },
+          { slug: "gpt-5-work-fast", name: "GPT-5 Work Fast" },
+        ],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "GPT-5 Work Fast" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-fast",
+        "codex_work",
       );
     } finally {
       await mounted.cleanup();
@@ -357,6 +500,98 @@ describe("ProviderModelPicker", () => {
       ).toHaveLength(1);
     } finally {
       await mounted.cleanup();
+    }
+  });
+
+  it("keeps OpenCode model favourites scoped to the selected provider instance", async () => {
+    const openCodeProviders: ReadonlyArray<ServerProviderStatus> = [
+      {
+        provider: "opencode",
+        instanceId: "opencode",
+        driver: "opencode",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: "2026-04-10T10:00:00.000Z",
+      },
+      {
+        provider: "opencode",
+        instanceId: "opencode_work",
+        driver: "opencode",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: "2026-04-10T10:00:00.000Z",
+      },
+    ];
+    const openCodeInstances: ReadonlyArray<ProviderModelPickerInstance> = [
+      {
+        instanceId: "opencode",
+        provider: "opencode",
+        label: "Default OpenCode",
+        enabled: true,
+        isDefault: true,
+      },
+      {
+        instanceId: "opencode_work",
+        provider: "opencode",
+        label: "Work OpenCode",
+        enabled: true,
+        isDefault: false,
+      },
+    ];
+    const mounted = await mountPicker({
+      provider: "opencode",
+      model: "anthropic/claude-favorite-sort",
+      lockedProvider: "opencode",
+      providers: openCodeProviders,
+      providerInstances: openCodeInstances,
+      selectedProviderInstanceId: "opencode_work",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: OPENCODE_FAVORITE_SORT_MODELS,
+      },
+      modelOptionsByProviderInstance: {
+        opencode: OPENCODE_FAVORITE_SORT_MODELS,
+        opencode_work: OPENCODE_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("button", { name: "Add GPT Favorite Sort to favourites" }).click();
+
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").toContain("Favourites");
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+
+    const defaultMounted = await mountPicker({
+      provider: "opencode",
+      model: "anthropic/claude-favorite-sort",
+      lockedProvider: "opencode",
+      providers: openCodeProviders,
+      providerInstances: openCodeInstances,
+      selectedProviderInstanceId: "opencode",
+      modelOptionsByProvider: {
+        ...MODEL_OPTIONS_BY_PROVIDER,
+        opencode: OPENCODE_FAVORITE_SORT_MODELS,
+      },
+      modelOptionsByProviderInstance: {
+        opencode: OPENCODE_FAVORITE_SORT_MODELS,
+        opencode_work: OPENCODE_FAVORITE_SORT_MODELS,
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").not.toContain("Favourites");
+      });
+    } finally {
+      await defaultMounted.cleanup();
     }
   });
 

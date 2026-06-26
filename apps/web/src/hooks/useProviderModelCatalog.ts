@@ -64,6 +64,14 @@ function readOptionString(options: unknown, key: string): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+function readOptionBoolean(options: unknown, key: string): boolean | undefined {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return undefined;
+  }
+  const value = (options as Record<string, unknown>)[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
 function modelQueryOptionsForProviderInstance(input: {
   readonly settings: Parameters<typeof getProviderStartOptions>[0];
   readonly provider: ProviderKind;
@@ -82,6 +90,12 @@ function modelQueryOptionsForProviderInstance(input: {
     shadowHomePath: readOptionString(providerOptions, "shadowHomePath"),
     accountId: readOptionString(providerOptions, "accountId"),
     apiEndpoint: readOptionString(providerOptions, "apiEndpoint"),
+    serverUrl: readOptionString(providerOptions, "serverUrl"),
+    serverPassword: readOptionString(providerOptions, "serverPassword"),
+    experimentalWebSockets:
+      input.provider === "opencode"
+        ? readOptionBoolean(providerOptions, "experimentalWebSockets")
+        : undefined,
     agentDir: readOptionString(providerOptions, "agentDir"),
     cwd: input.cwd,
     enabled: input.enabled,
@@ -195,6 +209,9 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
+      serverUrl: settings.openCodeServerUrl || null,
+      serverPassword: settings.openCodeServerPassword || null,
+      experimentalWebSockets: settings.openCodeExperimentalWebSockets,
       cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
     }),
@@ -204,6 +221,8 @@ export function useProviderModelCatalog(input: {
       provider: "kilo",
       ...selectedInstanceQueryOption("kilo"),
       binaryPath: settings.kiloBinaryPath || null,
+      serverUrl: settings.kiloServerUrl || null,
+      serverPassword: settings.kiloServerPassword || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,
     }),
@@ -239,6 +258,9 @@ export function useProviderModelCatalog(input: {
       provider: "opencode",
       ...selectedInstanceQueryOption("opencode"),
       binaryPath: settings.openCodeBinaryPath || null,
+      serverUrl: settings.openCodeServerUrl || null,
+      serverPassword: settings.openCodeServerPassword || null,
+      experimentalWebSockets: settings.openCodeExperimentalWebSockets,
       cwd: discoveryCwd,
       enabled: selectedProvider === "opencode" || discoveryEnabled,
     }),
@@ -248,6 +270,8 @@ export function useProviderModelCatalog(input: {
       provider: "kilo",
       ...selectedInstanceQueryOption("kilo"),
       binaryPath: settings.kiloBinaryPath || null,
+      serverUrl: settings.kiloServerUrl || null,
+      serverPassword: settings.kiloServerPassword || null,
       cwd: discoveryCwd,
       enabled: selectedProvider === "kilo" || discoveryEnabled,
     }),
@@ -435,8 +459,8 @@ export function useProviderModelCatalog(input: {
 
   const runtimeModelsByProvider = useMemo<
     Record<ProviderKind, ReadonlyArray<ProviderModelDescriptor>>
-  >(
-    () => ({
+  >(() => {
+    const byProvider = {
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
@@ -445,18 +469,27 @@ export function useProviderModelCatalog(input: {
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
-    }),
-    [
-      claudeDynamicModelsQuery.data?.models,
-      codexDynamicModelsQuery.data?.models,
-      cursorRuntimeModels,
-      geminiModelsQuery.data?.models,
-      grokDynamicModelsQuery.data?.models,
-      kiloDynamicModelsQuery.data?.models,
-      openCodeDynamicModelsQuery.data?.models,
-      piDynamicModelsQuery.data?.models,
-    ],
-  );
+    };
+    const selectedInstanceId = (selectedProviderInstanceId?.trim() ||
+      selectedProvider) as ProviderInstanceId;
+    const selectedInstanceModels = dynamicModelsByProviderInstance[selectedInstanceId]?.models;
+    return {
+      ...byProvider,
+      [selectedProvider]: selectedInstanceModels ?? byProvider[selectedProvider],
+    };
+  }, [
+    claudeDynamicModelsQuery.data?.models,
+    codexDynamicModelsQuery.data?.models,
+    cursorRuntimeModels,
+    dynamicModelsByProviderInstance,
+    geminiModelsQuery.data?.models,
+    grokDynamicModelsQuery.data?.models,
+    kiloDynamicModelsQuery.data?.models,
+    openCodeDynamicModelsQuery.data?.models,
+    piDynamicModelsQuery.data?.models,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
 
   const selectedRuntimeModel = useMemo(
     () =>

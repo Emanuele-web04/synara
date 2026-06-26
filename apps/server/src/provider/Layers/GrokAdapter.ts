@@ -8,6 +8,7 @@ import * as nodePath from "node:path";
 import {
   ApprovalRequestId,
   type GrokModelOptions,
+  type ModelSelection,
   EventId,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
@@ -22,6 +23,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   Cause,
   DateTime,
@@ -898,8 +900,7 @@ export function makeGrokAdapter(
             });
           }
 
-          const grokModelSelection =
-            input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const grokModelSelection = input.modelSelection;
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -922,6 +923,7 @@ export function makeGrokAdapter(
           });
           const acpRuntimeLoggers = makeGrokAcpRuntimeLoggers(acpNativeLoggers);
           const providerGrokOptions = input.providerOptions?.grok;
+          const grokModelOptions = grokModelOptionsFromSelection(grokModelSelection);
           const effectiveGrokSettings: GrokAcpRuntimeSettings = {
             ...(grokSettings.binaryPath !== undefined
               ? { binaryPath: grokSettings.binaryPath }
@@ -930,8 +932,8 @@ export function makeGrokAdapter(
               ? { binaryPath: providerGrokOptions.binaryPath }
               : {}),
             ...(grokModelSelection?.model ? { model: grokModelSelection.model } : {}),
-            ...(grokModelSelection?.options?.reasoningEffort
-              ? { reasoningEffort: grokModelSelection.options.reasoningEffort }
+            ...(grokModelOptions?.reasoningEffort
+              ? { reasoningEffort: grokModelOptions.reasoningEffort }
               : {}),
             ...(input.runtimeMode === "full-access" ? { alwaysApprove: true } : {}),
             ...(providerGrokOptions?.environment !== undefined
@@ -1068,7 +1070,12 @@ export function makeGrokAdapter(
             runtime: acp,
             runtimeMode: input.runtimeMode,
             interactionMode: undefined,
-            modelSelection: grokModelSelection,
+            modelSelection: grokModelSelection
+              ? {
+                  model: grokModelSelection.model,
+                  options: grokModelOptions,
+                }
+              : undefined,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -1340,8 +1347,7 @@ export function makeGrokAdapter(
           yield* Deferred.await(ctx.resumeReplayReady);
         }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const turnModelSelection =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+        const turnModelSelection = input.modelSelection;
         const model = turnModelSelection?.model ?? ctx.session.model;
         yield* applyRequestedSessionConfiguration({
           runtime: ctx.acp,
@@ -1352,7 +1358,7 @@ export function makeGrokAdapter(
               ? undefined
               : {
                   model,
-                  options: turnModelSelection?.options,
+                  options: grokModelOptionsFromSelection(turnModelSelection),
                 },
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1807,4 +1813,18 @@ export function makeGrokAdapterLive(
   options?: GrokAdapterLiveOptions,
 ) {
   return Layer.effect(GrokAdapter, makeGrokAdapter(grokSettings, options));
+}
+function grokModelOptionsFromSelection(
+  modelSelection: ModelSelection | null | undefined,
+): GrokModelOptions | undefined {
+  const reasoningEffort = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+  if (
+    reasoningEffort === "none" ||
+    reasoningEffort === "low" ||
+    reasoningEffort === "medium" ||
+    reasoningEffort === "high"
+  ) {
+    return { reasoningEffort };
+  }
+  return undefined;
 }

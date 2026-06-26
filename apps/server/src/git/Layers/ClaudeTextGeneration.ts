@@ -251,7 +251,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
     operation: TextGenerationOperation,
     modelSelection: Parameters<TextGenerationShape["generateThreadTitle"]>[0]["modelSelection"],
   ) =>
-    modelSelection?.provider === "claudeAgent"
+    modelSelection
       ? Effect.succeed(modelSelection)
       : Effect.fail(
           new TextGenerationError({

@@ -81,6 +81,7 @@ import {
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { pluralize } from "@t3tools/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
@@ -2347,7 +2348,7 @@ export default function Sidebar() {
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: options.createIfMissing === true,
           defaultModelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: getDefaultModel("codex"),
           },
           createdAt,
@@ -2521,11 +2522,12 @@ export default function Sidebar() {
 
       const providerDefaultModel = getDefaultModel(provider);
       const modelSelection =
-        activeProject.defaultModelSelection?.provider === provider
+        activeProject.defaultModelSelection &&
+        inferLegacyProviderKindFromModelSelection(activeProject.defaultModelSelection) === provider
           ? activeProject.defaultModelSelection
           : providerDefaultModel
             ? {
-                provider,
+                instanceId: provider,
                 model: providerDefaultModel,
               }
             : null;
@@ -3221,7 +3223,7 @@ export default function Sidebar() {
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
         ? resolveAvailableHandoffTargets({
-            sourceProvider: thread.modelSelection.provider,
+            sourceProvider: inferLegacyProviderKindFromModelSelection(thread.modelSelection),
             sourceProviderInstanceId:
               thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
             providerInstances: getProviderInstanceOptions(appSettings),
@@ -4796,7 +4798,10 @@ export default function Sidebar() {
             />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
-              provider={thread.session?.provider ?? thread.modelSelection.provider}
+              provider={
+                thread.session?.provider ??
+                inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+              }
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
               handoffTooltip={handoffBadgeLabel}
               terminalStatus={terminalStatus}
@@ -5038,7 +5043,10 @@ export default function Sidebar() {
             />
           ) : showThreadProviderAvatar ? (
             <ProviderAvatarWithTerminal
-              provider={thread.session?.provider ?? thread.modelSelection.provider}
+              provider={
+                thread.session?.provider ??
+                inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+              }
               handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
               handoffTooltip={handoffBadgeLabel}
               terminalStatus={terminalStatus}
@@ -7008,7 +7016,7 @@ function SidebarSearchPaletteController(props: {
           projectName: props.projectById.get(thread.projectId)?.name ?? "Unknown project",
           projectRemoteName:
             props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
-          provider: thread.modelSelection.provider,
+          provider: inferLegacyProviderKindFromModelSelection(thread.modelSelection),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           messages: thread.messages.map((message) => ({

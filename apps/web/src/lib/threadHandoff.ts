@@ -14,6 +14,7 @@ import {
   type ThreadHandoffImportedMessage,
 } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import type { ProviderInstanceOption } from "../appSettings";
 import { type Thread } from "../types";
 import { stripEmbeddedAssistantSelections } from "./assistantSelections";
@@ -200,10 +201,13 @@ export function resolveThreadHandoffModelSelection(input: {
   const isCompatibleSelection = (
     selection: ModelSelection | null | undefined,
   ): selection is ModelSelection => {
-    if (!selection || selection.provider !== input.targetProvider) {
+    if (
+      !selection ||
+      inferLegacyProviderKindFromModelSelection(selection) !== input.targetProvider
+    ) {
       return false;
     }
-    const selectionInstanceId = selection.instanceId ?? selection.provider;
+    const selectionInstanceId = selection.instanceId;
     if (selectionInstanceId !== targetInstanceId) {
       return false;
     }
@@ -213,7 +217,7 @@ export function resolveThreadHandoffModelSelection(input: {
   const stickySelection = input.stickyModelSelectionByProvider[targetInstanceId];
   const withTargetInstance = (selection: ModelSelection): ModelSelection => ({
     ...selection,
-    ...(input.targetProviderInstanceId ? { instanceId: input.targetProviderInstanceId } : {}),
+    instanceId: targetInstanceId,
   });
 
   if (isCompatibleSelection(stickySelection)) {
@@ -227,7 +231,7 @@ export function resolveThreadHandoffModelSelection(input: {
     throw new Error("Select a Pi model before handing off to Pi.");
   }
   return withTargetInstance({
-    provider: input.targetProvider,
+    instanceId: targetInstanceId,
     model: defaultModel,
   });
 }

@@ -24,6 +24,7 @@ import {
   useComposerThreadDraft,
   useEffectiveComposerModelState,
 } from "../../composerDraftStore";
+import { buildModelSelection } from "../../providerModelOptions";
 
 // ── Claude TraitsPicker tests ─────────────────────────────────────────
 
@@ -102,11 +103,7 @@ async function mountClaudePicker(props?: {
         ? {}
         : {
             claudeAgent: {
-              provider: "claudeAgent",
-              model,
-              ...(claudeOptions && Object.keys(claudeOptions).length > 0
-                ? { options: claudeOptions }
-                : {}),
+              ...buildModelSelection("claudeAgent", model, claudeOptions),
             },
           },
       activeProvider: "claudeAgent",
@@ -123,11 +120,7 @@ async function mountClaudePicker(props?: {
   document.body.append(host);
   const fallbackModelSelection =
     props?.fallbackModelOptions !== undefined
-      ? ({
-          provider: "claudeAgent",
-          model,
-          options: props.fallbackModelOptions ?? undefined,
-        } satisfies ModelSelection)
+      ? buildModelSelection("claudeAgent", model, props.fallbackModelOptions)
       : null;
   const screen = await render(
     <ClaudeTraitsPickerHarness model={model} fallbackModelSelection={fallbackModelSelection} />,
@@ -275,10 +268,11 @@ describe("TraitsPicker (Claude)", () => {
     expect(
       useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
     ).toMatchObject({
-      provider: "claudeAgent",
-      options: {
-        effort: "max",
-      },
+      instanceId: "claudeAgent",
+      options: [
+        { id: "effort", value: "max" },
+        { id: "fastMode", value: false },
+      ],
     });
   });
 
@@ -305,10 +299,8 @@ describe("TraitsPicker (Claude)", () => {
     expect(
       useComposerDraftStore.getState().stickyModelSelectionByProvider.claudeAgent,
     ).toMatchObject({
-      provider: "claudeAgent",
-      options: {
-        contextWindow: "1m",
-      },
+      instanceId: "claudeAgent",
+      options: [{ id: "contextWindow", value: "1m" }],
     });
   });
 });
@@ -333,11 +325,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       mentions: [],
       queuedTurns: [],
       modelSelectionByProvider: {
-        codex: {
-          provider: "codex",
-          model,
-          ...(props.options ? { options: props.options } : {}),
-        },
+        codex: buildModelSelection("codex", model, props.options),
       },
       activeProvider: "codex",
       runtimeMode: null,
@@ -457,8 +445,8 @@ describe("TraitsPicker (Codex)", () => {
     await page.getByRole("menuitemradio", { name: "Fast" }).click();
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.codex).toMatchObject({
-      provider: "codex",
-      options: { fastMode: true },
+      instanceId: "codex",
+      options: [{ id: "fastMode", value: true }],
     });
   });
 });
@@ -670,11 +658,7 @@ async function mountOpenCodePicker(props?: {
       queuedTurns: [],
       assistantSelections: [],
       modelSelectionByProvider: {
-        opencode: {
-          provider: "opencode",
-          model,
-          ...(props?.options ? { options: props.options } : {}),
-        },
+        opencode: buildModelSelection("opencode", model, props?.options),
       },
       activeProvider: "opencode",
       runtimeMode: null,
@@ -690,9 +674,7 @@ async function mountOpenCodePicker(props?: {
   const host = document.createElement("div");
   document.body.append(host);
   const fallbackModelSelection: ModelSelection = {
-    provider: "opencode",
-    model,
-    ...(props?.fallbackModelOptions ? { options: props.fallbackModelOptions } : {}),
+    ...buildModelSelection("opencode", model, props?.fallbackModelOptions),
   };
   const screen = await render(
     <OpenCodeTraitsPickerHarness
@@ -781,10 +763,8 @@ describe("TraitsPicker (OpenCode)", () => {
     await page.getByRole("menuitemradio", { name: /^High$/u }).click();
 
     expect(useComposerDraftStore.getState().stickyModelSelectionByProvider.opencode).toMatchObject({
-      provider: "opencode",
-      options: {
-        variant: "high",
-      },
+      instanceId: "opencode",
+      options: [{ id: "variant", value: "high" }],
     });
 
     await vi.waitFor(() => {

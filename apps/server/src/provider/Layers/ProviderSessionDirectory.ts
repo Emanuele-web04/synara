@@ -1,4 +1,4 @@
-import { ProviderInstanceId, ProviderKind, type ThreadId } from "@t3tools/contracts";
+import { ProviderKind, type ThreadId } from "@t3tools/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
@@ -50,26 +50,6 @@ function mergeRuntimePayload(
   return next;
 }
 
-function readProviderInstanceId(
-  provider: ProviderKind,
-  runtimePayload: unknown | null | undefined,
-): ProviderInstanceId {
-  if (!isRecord(runtimePayload)) {
-    return provider;
-  }
-  const rawProviderInstanceId =
-    "providerInstanceId" in runtimePayload ? runtimePayload.providerInstanceId : undefined;
-  if (Schema.is(ProviderInstanceId)(rawProviderInstanceId)) {
-    return rawProviderInstanceId;
-  }
-  const rawModelSelection =
-    "modelSelection" in runtimePayload ? runtimePayload.modelSelection : undefined;
-  if (isRecord(rawModelSelection) && Schema.is(ProviderInstanceId)(rawModelSelection.instanceId)) {
-    return rawModelSelection.instanceId;
-  }
-  return provider;
-}
-
 const makeProviderSessionDirectory = Effect.gen(function* () {
   const repository = yield* ProviderSessionRuntimeRepository;
 
@@ -85,7 +65,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
                 Option.some({
                   threadId: value.threadId,
                   provider,
-                  providerInstanceId: readProviderInstanceId(provider, value.runtimePayload),
+                  providerInstanceId: value.providerInstanceId,
                   adapterKey: value.adapterKey,
                   runtimeMode: value.runtimeMode,
                   status: value.status,
@@ -116,19 +96,21 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
     const now = new Date().toISOString();
     const providerChanged =
       existingRuntime !== undefined && existingRuntime.providerName !== binding.provider;
-    const providerInstanceId =
-      binding.providerInstanceId ??
-      readProviderInstanceId(binding.provider, existingRuntime?.runtimePayload);
-    const previousProviderInstanceId =
-      existingRuntime !== undefined
-        ? readProviderInstanceId(binding.provider, existingRuntime.runtimePayload)
-        : providerInstanceId;
+    const providerInstanceId = binding.providerInstanceId ?? existingRuntime?.providerInstanceId;
+    if (!providerInstanceId) {
+      return yield* new ProviderValidationError({
+        operation: "ProviderSessionDirectory.upsert",
+        issue: "providerInstanceId must be a non-empty string.",
+      });
+    }
+    const previousProviderInstanceId = existingRuntime?.providerInstanceId ?? providerInstanceId;
     const providerInstanceChanged =
       existingRuntime !== undefined && previousProviderInstanceId !== providerInstanceId;
     yield* repository
       .upsert({
         threadId: resolvedThreadId,
         providerName: binding.provider,
+        providerInstanceId,
         adapterKey:
           binding.adapterKey ??
           (providerChanged ? binding.provider : (existingRuntime?.adapterKey ?? binding.provider)),
@@ -188,7 +170,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               Option.some({
                 threadId: row.threadId,
                 provider,
-                providerInstanceId: readProviderInstanceId(provider, row.runtimePayload),
+                providerInstanceId: row.providerInstanceId,
                 adapterKey: row.adapterKey,
                 runtimeMode: row.runtimeMode,
                 status: row.status,

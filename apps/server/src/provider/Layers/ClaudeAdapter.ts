@@ -56,6 +56,8 @@ import {
 } from "@t3tools/contracts";
 import {
   getDefaultContextWindow,
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
   hasEffortLevel,
   hasContextWindowOption,
   applyClaudePromptEffortPrefix,
@@ -371,6 +373,21 @@ function getEffectiveClaudeCodeEffort(
     return null;
   }
   return effort === "ultracode" ? "xhigh" : effort;
+}
+
+function toClaudeCodeEffort(value: string | null | undefined): ClaudeCodeEffort | null {
+  switch (value) {
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+    case "ultrathink":
+    case "ultracode":
+      return value;
+    default:
+      return null;
+  }
 }
 
 function isClaudeInterruptedMessage(message: string): boolean {
@@ -856,11 +873,10 @@ function buildClaudeSdkSubagents(): Record<string, AgentDefinition> {
 
 function buildPromptText(input: ProviderSendTurnInput): string {
   const basePrompt = buildClaudeSubagentPrompt(input.input?.trim() ?? "").prompt;
-  const rawEffort =
-    input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.options?.effort : null;
-  const requestedEffort = trimOrNull(rawEffort);
-  const claudeModel =
-    input.modelSelection?.provider === "claudeAgent" ? input.modelSelection.model : undefined;
+  const requestedEffort = toClaudeCodeEffort(
+    trimOrNull(getModelSelectionStringOptionValue(input.modelSelection, "effort") ?? null),
+  );
+  const claudeModel = input.modelSelection?.model;
   const caps = getModelCapabilities("claudeAgent", claudeModel);
   const promptEffort =
     requestedEffort === "ultrathink" && caps.promptInjectedEffortLevels.includes("ultrathink")
@@ -3350,18 +3366,24 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           environment: providerOptions?.environment,
           includeCwd: false,
         });
-        const modelSelection =
-          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
-        const requestedEffort = trimOrNull(modelSelection?.options?.effort ?? null);
-        const requestedContextWindow = trimOrNull(modelSelection?.options?.contextWindow ?? null);
+        const modelSelection = input.modelSelection;
+        const requestedEffort = toClaudeCodeEffort(
+          trimOrNull(getModelSelectionStringOptionValue(modelSelection, "effort") ?? null),
+        );
+        const requestedContextWindow = trimOrNull(
+          getModelSelectionStringOptionValue(modelSelection, "contextWindow") ?? null,
+        );
         const caps = getModelCapabilities("claudeAgent", modelSelection?.model);
         const apiModelId = modelSelection ? resolveApiModelId(modelSelection) : undefined;
         const effort =
           requestedEffort && hasEffortLevel(caps, requestedEffort) ? requestedEffort : null;
-        const fastMode = modelSelection?.options?.fastMode === true && caps.supportsFastMode;
+        const fastMode =
+          getModelSelectionBooleanOptionValue(modelSelection, "fastMode") === true &&
+          caps.supportsFastMode;
         const thinking =
-          typeof modelSelection?.options?.thinking === "boolean" && caps.supportsThinkingToggle
-            ? modelSelection.options.thinking
+          typeof getModelSelectionBooleanOptionValue(modelSelection, "thinking") === "boolean" &&
+          caps.supportsThinkingToggle
+            ? getModelSelectionBooleanOptionValue(modelSelection, "thinking")
             : undefined;
         const effectiveEffort = getEffectiveClaudeCodeEffort(effort);
         const ultracode = effort === "ultracode" && hasEffortLevel(caps, "xhigh");
@@ -3578,11 +3600,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const sendTurn: ClaudeAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
-        const modelSelection =
-          input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+        const modelSelection = input.modelSelection;
         const requestedContextWindowMaxTokens = resolveSelectedClaudeContextWindowMaxTokens(
           modelSelection?.model,
-          modelSelection?.options?.contextWindow,
+          getModelSelectionStringOptionValue(modelSelection, "contextWindow"),
         );
 
         if (context.turnState) {

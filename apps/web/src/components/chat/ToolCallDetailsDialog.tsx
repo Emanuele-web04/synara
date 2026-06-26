@@ -29,11 +29,7 @@ interface ToolCallDetailsDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
-export function ToolCallDetailsDialog({
-  entry,
-  open,
-  onOpenChange,
-}: ToolCallDetailsDialogProps) {
+export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
   const details = entry?.toolDetails;
   const Icon = details?.kind === "file-change" ? ChangesIcon : TerminalIcon;
   return (
@@ -185,11 +181,7 @@ function ToolOutputSection({ output }: { output: WorkLogToolOutputDetails }) {
   );
 }
 
-function LabeledCodeBlock(props: {
-  title: string;
-  tone: "output" | "error";
-  children: string;
-}) {
+function LabeledCodeBlock(props: { title: string; tone: "output" | "error"; children: string }) {
   return (
     <div className="overflow-hidden rounded-lg border border-border/45 bg-background/58">
       <div
@@ -205,11 +197,7 @@ function LabeledCodeBlock(props: {
   );
 }
 
-function TextChangeBlock(props: {
-  title: string;
-  tone: "add" | "remove";
-  children: string;
-}) {
+function TextChangeBlock(props: { title: string; tone: "add" | "remove"; children: string }) {
   return (
     <div
       className={cn(
@@ -230,11 +218,7 @@ function TextChangeBlock(props: {
   );
 }
 
-function ToolCodeBlock(props: {
-  children: string;
-  tone?: "default" | "command";
-  bare?: boolean;
-}) {
+function ToolCodeBlock(props: { children: string; tone?: "default" | "command"; bare?: boolean }) {
   return (
     <pre
       className={cn(

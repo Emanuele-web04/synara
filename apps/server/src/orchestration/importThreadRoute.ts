@@ -375,14 +375,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         importMessagesError(`Unknown provider instance '${instanceId}' for thread import.`),
       );
     }
-    if (instance.driver !== input.modelSelection.provider) {
-      return yield* Effect.fail(
-        importMessagesError(
-          `Provider instance '${instance.instanceId}' uses '${instance.driver}', not '${input.modelSelection.provider}'.`,
-        ),
-      );
-    }
-    return providerStartOptionsFromInstance(instance);
+    return { instance, providerOptions: providerStartOptionsFromInstance(instance) };
   });
 
   return Effect.fnUntraced(function* (body: ImportThreadRequest) {
@@ -414,17 +407,16 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : [],
     });
     const externalId = body.externalId.trim();
-    const providerOptions = yield* resolveThreadProviderOptions({
+    const resolvedProvider = yield* resolveThreadProviderOptions({
       modelSelection: thread.modelSelection,
     });
+    const provider = resolvedProvider.instance.driver;
+    const providerOptions = resolvedProvider.providerOptions;
 
     const importedProviderContext =
-      (thread.modelSelection.provider === "codex" ||
-        thread.modelSelection.provider === "kilo" ||
-        thread.modelSelection.provider === "opencode") &&
-      project
+      (provider === "codex" || provider === "kilo" || provider === "opencode") && project
         ? yield* resolveImportedProviderThreadContext({
-            provider: thread.modelSelection.provider,
+            provider,
             externalId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
@@ -441,7 +433,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
-    if (thread.modelSelection.provider === "claudeAgent") {
+    if (provider === "claudeAgent") {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
@@ -451,28 +443,27 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
 
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
-      provider: thread.modelSelection.provider,
+      provider,
       ...((importedProviderContext?.runtimeCwd ?? cwd)
         ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
         : {}),
       modelSelection: thread.modelSelection,
       ...(providerOptions ? { providerOptions } : {}),
       resumeCursor:
-        thread.modelSelection.provider === "claudeAgent"
+        provider === "claudeAgent"
           ? { resume: externalId }
-          : thread.modelSelection.provider === "kilo" ||
-              thread.modelSelection.provider === "opencode"
+          : provider === "kilo" || provider === "opencode"
             ? { openCodeSessionId: externalId }
             : { threadId: externalId },
       runtimeMode: thread.runtimeMode,
     });
 
-    if (thread.modelSelection.provider === "codex") {
+    if (provider === "codex") {
       yield* importCodexThreadHistory({
         threadId: thread.id,
         importedAt: session.updatedAt,
       });
-    } else if (thread.modelSelection.provider === "claudeAgent") {
+    } else if (provider === "claudeAgent") {
       yield* importClaudeThreadHistory({
         threadId: thread.id,
         externalId,
@@ -480,12 +471,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ...(providerOptions ? { providerOptions } : {}),
         importedAt: session.updatedAt,
       });
-    } else if (
-      thread.modelSelection.provider === "kilo" ||
-      thread.modelSelection.provider === "opencode"
-    ) {
+    } else if (provider === "kilo" || provider === "opencode") {
       yield* importOpenCodeCompatibleThreadHistory({
-        provider: thread.modelSelection.provider,
+        provider,
         threadId: thread.id,
         importedAt: session.updatedAt,
       });

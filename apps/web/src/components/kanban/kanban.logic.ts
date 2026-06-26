@@ -6,6 +6,7 @@
 
 import type { ProjectId, ProviderKind, ThreadEnvironmentMode, ThreadId } from "@t3tools/contracts";
 import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { isPendingThreadWorktree } from "@t3tools/shared/threadEnvironment";
 import type { ComposerThreadDraftState } from "../../composerDraftStore";
 import {
@@ -283,7 +284,8 @@ function buildThreadCard(
   const timestamp = resolveThreadCardTimestamp(thread, column);
   const threadProvider = isTerminal
     ? null
-    : (thread.session?.provider ?? thread.modelSelection.provider);
+    : (thread.session?.provider ??
+      inferLegacyProviderKindFromModelSelection(thread.modelSelection));
   const activeWorkStartedAt =
     column === "inProgress"
       ? deriveActiveWorkStartedAt(thread.latestTurn, thread.session, timestamp)
@@ -327,7 +329,8 @@ function buildUnsentPromptCard(
   const titleSeed = composerDraft.prompt.length > 0 ? composerDraft.prompt : "Attached references";
   const threadProvider = isTerminal
     ? null
-    : (thread.session?.provider ?? thread.modelSelection.provider);
+    : (thread.session?.provider ??
+      inferLegacyProviderKindFromModelSelection(thread.modelSelection));
   return {
     cardId: kanbanDraftCardId(thread.id),
     threadId: thread.id,

@@ -24,6 +24,7 @@ import type {
   ProviderInstanceId,
   ProviderKind,
   ProviderModelOptions,
+  ProviderOptionSelections,
 } from "@t3tools/contracts";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
@@ -318,6 +319,25 @@ export function buildProviderOptionPatch(
   return { [optionId]: value };
 }
 
+export function providerOptionsFromSelections(
+  provider: ProviderKind,
+  selections: ProviderOptionSelections | null | undefined,
+): ProviderOptions | null {
+  if (!selections || selections.length === 0) {
+    return null;
+  }
+
+  let options: ProviderOptions | null = null;
+  for (const selection of selections) {
+    options = buildNextProviderOptions(
+      provider,
+      options,
+      buildProviderOptionPatch(provider, selection.id, selection.value),
+    );
+  }
+  return options;
+}
+
 export function buildModelSelection(
   provider: "codex",
   model: string,
@@ -379,102 +399,30 @@ export function buildModelSelection(
   options?: ProviderOptions | null | undefined,
   metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection {
-  switch (provider) {
-    case "codex":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as CodexModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "claudeAgent":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as ClaudeModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "cursor":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as CursorModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "gemini":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as GeminiModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "grok":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as GrokModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "kilo":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as OpenCodeModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "opencode":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as OpenCodeModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-    case "pi":
-      return attachModelSelectionMetadata(
-        options
-          ? {
-              provider,
-              model,
-              options: options as PiModelOptions,
-            }
-          : { provider, model },
-        metadata,
-      );
-  }
+  const instanceId = metadata?.instanceId?.trim() || provider;
+  const selections = providerOptionsToSelections(options);
+  return selections ? { instanceId, model, options: selections } : { instanceId, model };
 }
 
-function attachModelSelectionMetadata<T extends ModelSelection>(
-  selection: T,
-  metadata: ModelSelectionBuildMetadata | null | undefined,
-): T {
-  const instanceId = metadata?.instanceId?.trim();
-  return instanceId ? ({ ...selection, instanceId } as T) : selection;
+function providerOptionsToSelections(
+  options: ProviderOptions | null | undefined,
+): ProviderOptionSelections | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const selections: Array<{ id: string; value: string | boolean }> = [];
+  for (const [id, value] of Object.entries(options)) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      selections.push({ id, value: value.trim() });
+      continue;
+    }
+    if (typeof value === "boolean") {
+      selections.push({ id, value });
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      selections.push({ id, value: String(value) });
+    }
+  }
+  return selections.length > 0 ? selections : undefined;
 }

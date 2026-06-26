@@ -4,6 +4,7 @@ import {
   ProjectId,
   ThreadId,
   type ModelSelection,
+  type ProviderKind,
   type ProviderModelOptions,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +25,7 @@ import {
   type TerminalContextDraft,
 } from "./lib/terminalContext";
 import { createDebouncedStorage } from "./lib/storage";
+import { buildModelSelection, type ProviderOptions } from "./providerModelOptions";
 
 function makeImage(input: {
   id: string;
@@ -84,7 +86,7 @@ function makeQueuedTurn(id: string): QueuedComposerTurn {
     selectedModel: "gpt-5",
     selectedPromptEffort: null,
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5",
     },
     runtimeMode: "full-access",
@@ -110,7 +112,7 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     selectedModel: "gpt-5",
     selectedPromptEffort: null,
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5",
     },
     sourceProposedPlan: {
@@ -134,17 +136,12 @@ function resetComposerDraftStore() {
 }
 
 function modelSelection(
-  provider: ModelSelection["provider"],
+  provider: ProviderKind,
   model: string,
-  options?: ModelSelection["options"],
+  options?: ProviderOptions,
   instanceId?: string,
 ): ModelSelection {
-  return {
-    provider,
-    ...(instanceId ? { instanceId } : {}),
-    model,
-    ...(options ? { options } : {}),
-  } as ModelSelection;
+  return buildModelSelection(provider, model, options, { instanceId });
 }
 
 function providerModelOptions(options: ProviderModelOptions): ProviderModelOptions {
@@ -482,13 +479,9 @@ describe("composerDraftStore copyTransferableComposerState", () => {
     expect(useComposerDraftStore.getState().draftsByThreadId[targetThreadId]).toMatchObject({
       prompt: "follow-up for the other provider",
       modelSelectionByProvider: {
-        claudeAgent: {
-          provider: "claudeAgent",
-          model: "claude-sonnet-4-6",
-          options: {
-            effort: "high",
-          },
-        },
+        claudeAgent: modelSelection("claudeAgent", "claude-sonnet-4-6", {
+          effort: "high",
+        }),
       },
       activeProvider: "claudeAgent",
     });
@@ -1368,8 +1361,12 @@ describe("composerDraftStore modelSelection", () => {
     store.setModelOptions(threadId, providerModelOptions({ codex: { reasoningEffort: "xhigh" } }));
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
-    expect(draft?.modelSelectionByProvider.codex?.options).toEqual({ reasoningEffort: "xhigh" });
-    expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual({ effort: "max" });
+    expect(draft?.modelSelectionByProvider.codex?.options).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+    ]);
+    expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual([
+      { id: "effort", value: "max" },
+    ]);
   });
 
   it("preserves other provider options when switching the active model selection", () => {
@@ -1389,7 +1386,9 @@ describe("composerDraftStore modelSelection", () => {
     expect(draft?.modelSelectionByProvider.claudeAgent).toEqual(
       modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),
     );
-    expect(draft?.modelSelectionByProvider.codex?.options).toEqual({ fastMode: true });
+    expect(draft?.modelSelectionByProvider.codex?.options).toEqual([
+      { id: "fastMode", value: true },
+    ]);
     expect(draft?.activeProvider).toBe("claudeAgent");
   });
 
@@ -1856,8 +1855,8 @@ describe("composerDraftStore sticky composer settings", () => {
       },
       4,
     ) as {
-      stickyModelSelectionByProvider: Partial<Record<ModelSelection["provider"], ModelSelection>>;
-      stickyActiveProvider: ModelSelection["provider"] | null;
+      stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>>;
+      stickyActiveProvider: ProviderKind | null;
     };
 
     expect(migratedState.stickyModelSelectionByProvider.claudeAgent).toEqual(
@@ -1904,7 +1903,9 @@ describe("composerDraftStore provider-scoped option updates", () => {
     expect(draft?.modelSelectionByProvider.codex).toEqual(
       modelSelection("codex", "gpt-5.3-codex", { reasoningEffort: "medium" }),
     );
-    expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual({ effort: "max" });
+    expect(draft?.modelSelectionByProvider.claudeAgent?.options).toEqual([
+      { id: "effort", value: "max" },
+    ]);
     expect(draft?.activeProvider).toBe("codex");
   });
 

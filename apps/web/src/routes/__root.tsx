@@ -294,9 +294,12 @@ function ProviderUpdateNotifications() {
         const api = ensureNativeApi();
         for (const provider of providers) {
           try {
-            const result = await api.server.updateProvider({ provider: provider.provider });
+            const result = await api.server.updateProvider({
+              provider: provider.provider,
+              instanceId: provider.instanceId,
+            });
             const refreshed = result.providers.find(
-              (entry) => entry.provider === provider.provider,
+              (entry) => entry.instanceId === provider.instanceId,
             );
             const updateState = refreshed?.updateState;
             if (updateState?.status === "failed" || updateState?.status === "unchanged") {
@@ -1328,22 +1331,10 @@ function EventRouter() {
         providers: payload.providers,
       });
       if (shouldInvalidateProviderDiscovery) {
-        // Model and agent discovery can depend on auth, availability, and installed versions,
+        // Discovery depends on provider-instance identity, auth, availability, and versions,
         // but not on every provider-status timestamp replay.
         void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "kilo"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "opencode"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: ["provider-discovery", "models", "cursor"],
-        });
-        void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("kilo", null),
-        });
-        void queryClient.invalidateQueries({
-          queryKey: providerDiscoveryQueryKeys.agentsForProvider("opencode", null),
+          queryKey: providerDiscoveryQueryKeys.all,
         });
       }
     });

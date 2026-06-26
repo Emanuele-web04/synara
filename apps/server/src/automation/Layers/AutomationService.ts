@@ -23,6 +23,7 @@ import {
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
+  inferLegacyProviderKindFromModelSelection,
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
@@ -267,7 +268,7 @@ function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAll
 
 function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
   return {
-    provider: definition.modelSelection.provider,
+    provider: inferLegacyProviderKindFromModelSelection(definition.modelSelection),
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
     completionPolicyVersion: completionPolicyVersionForDefinition(definition),
@@ -1264,6 +1265,7 @@ export const AutomationServiceLive = Layer.effect(
         const directInput = resolveTextGenerationInputForSelection(
           definition.modelSelection,
           definition.providerOptions,
+          inferLegacyProviderKindFromModelSelection(definition.modelSelection),
         );
         if (directInput) {
           return directInput;
@@ -1273,7 +1275,6 @@ export const AutomationServiceLive = Layer.effect(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
         const fallbackInstance = resolveProviderInstance(settings, {
-          provider: settings.textGenerationModelSelection.provider,
           instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
         });
         const fallbackProviderOptions = fallbackInstance
@@ -1283,6 +1284,7 @@ export const AutomationServiceLive = Layer.effect(
           resolveTextGenerationInputForSelection(
             settings.textGenerationModelSelection,
             fallbackProviderOptions,
+            fallbackInstance?.driver,
           ) ?? {}
         );
       });

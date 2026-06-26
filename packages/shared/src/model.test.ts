@@ -494,9 +494,9 @@ describe("resolveApiModelId", () => {
   it("adds the 1m suffix for Claude models when selected", () => {
     expect(
       resolveApiModelId({
-        provider: "claudeAgent",
+        instanceId: "claudeAgent",
         model: "claude-opus-4-6",
-        options: { contextWindow: "1m" },
+        options: [{ id: "contextWindow", value: "1m" }],
       }),
     ).toBe("claude-opus-4-6[1m]");
   });
@@ -504,9 +504,9 @@ describe("resolveApiModelId", () => {
   it("leaves Claude models unchanged for the default context window", () => {
     expect(
       resolveApiModelId({
-        provider: "claudeAgent",
+        instanceId: "claudeAgent",
         model: "claude-opus-4-6",
-        options: { contextWindow: "200k" },
+        options: [{ id: "contextWindow", value: "200k" }],
       }),
     ).toBe("claude-opus-4-6");
   });

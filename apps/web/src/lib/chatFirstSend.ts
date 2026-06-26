@@ -91,7 +91,7 @@ export function resolveFirstSendTarget(input: {
         kind: "chat",
         createWorkspaceRootIfMissing: true,
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: DEFAULT_MODEL_BY_PROVIDER.codex,
         },
       },
@@ -117,7 +117,7 @@ export function resolveFirstSendTarget(input: {
       kind: "project",
       createWorkspaceRootIfMissing: false,
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: "codex",
         model: DEFAULT_MODEL_BY_PROVIDER.codex,
       },
     },

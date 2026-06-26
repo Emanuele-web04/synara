@@ -3,9 +3,8 @@ import * as Semaphore from "effect/Semaphore";
 
 import type {
   ChatAttachment,
-  KiloModelSelection,
+  ModelSelection,
   OpenCodeModelSelection,
-  OpenCodeModelOptions,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
@@ -112,7 +111,7 @@ interface AcquiredOpenCodeTextGenerationServer {
 }
 
 type OpenCodeCompatibleTextGenerationProvider = "opencode" | "kilo";
-type OpenCodeCompatibleModelSelection = OpenCodeModelSelection | KiloModelSelection;
+type OpenCodeCompatibleModelSelection = OpenCodeModelSelection;
 
 function environmentFingerprint(
   environment: Readonly<Record<string, string>> | undefined,
@@ -146,11 +145,11 @@ function resolveOpenCodeCompatibleModelSelection(
   config: OpenCodeCompatibleTextGenerationConfig,
   input: {
     readonly model?: string;
-    readonly modelSelection?: { provider: string; model: string; options?: unknown };
+    readonly modelSelection?: ModelSelection;
   },
 ): OpenCodeCompatibleModelSelection | null {
-  if (input.modelSelection?.provider === config.provider) {
-    return input.modelSelection as OpenCodeCompatibleModelSelection;
+  if (input.modelSelection) {
+    return input.modelSelection;
   }
 
   const model = input.model?.trim();
@@ -159,7 +158,7 @@ function resolveOpenCodeCompatibleModelSelection(
   }
 
   return {
-    provider: "opencode",
+    instanceId: config.provider,
     model,
   };
 }
@@ -396,8 +395,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const environmentKey = environmentFingerprint(environment);
       const providerId = parsedModel.providerID;
       const modelId = parsedModel.modelID;
-      const modelOptions = input.modelSelection.options as OpenCodeModelOptions | undefined;
-      const agent = modelOptions?.agent?.trim();
+      const agent = getModelSelectionStringOptionValue(input.modelSelection, "agent")?.trim();
       const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant")?.trim();
 
       const fileParts = toOpenCodeFileParts({

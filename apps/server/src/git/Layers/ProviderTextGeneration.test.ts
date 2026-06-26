@@ -163,12 +163,12 @@ describe("ProviderTextGenerationLive", () => {
           cwd: "/repo",
           message: "Plan the deployment work",
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5",
-            options: {
-              agent: "plan",
-              variant: "balanced",
-            },
+            options: [
+              { id: "agent", value: "plan" },
+              { id: "variant", value: "balanced" },
+            ],
           },
           providerOptions: {
             opencode: {
@@ -186,12 +186,11 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: expect.objectContaining({
           instanceId: "opencode",
-          provider: "opencode",
           model: "openai/gpt-5",
-          options: {
-            agent: "plan",
-            variant: "balanced",
-          },
+          options: [
+            { id: "agent", value: "plan" },
+            { id: "variant", value: "balanced" },
+          ],
         }),
         providerOptions: {
           opencode: {
@@ -216,12 +215,12 @@ describe("ProviderTextGenerationLive", () => {
           cwd: "/repo",
           message: "Plan the Cursor integration work",
           modelSelection: {
-            provider: "cursor",
+            instanceId: "cursor",
             model: "composer-2",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "high" },
+              { id: "fastMode", value: true },
+            ],
           },
           providerOptions: {
             cursor: {
@@ -238,12 +237,11 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         modelSelection: expect.objectContaining({
           instanceId: "cursor",
-          provider: "cursor",
           model: "composer-2",
-          options: {
-            reasoningEffort: "high",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
         }),
         providerOptions: {
           cursor: {
@@ -269,7 +267,7 @@ describe("ProviderTextGenerationLive", () => {
           defaultMode: "heartbeat",
           nowIso: "2026-06-19T10:00:00.000Z",
           modelSelection: {
-            provider: "cursor",
+            instanceId: "cursor",
             model: "composer-2",
           },
         });
@@ -301,7 +299,7 @@ describe("ProviderTextGenerationLive", () => {
           runUserMessage: "Check PR readiness.",
           runAssistantText: "Still working.",
           modelSelection: {
-            provider: "cursor",
+            instanceId: "cursor",
             model: "composer-2",
           },
         });
@@ -341,7 +339,6 @@ describe("ProviderTextGenerationLive", () => {
           cwd: "/repo",
           message: "Name the account-isolated work",
           modelSelection: {
-            provider: "codex",
             instanceId: "claude_work",
             model: "claude-sonnet-4",
           },
@@ -354,7 +351,6 @@ describe("ProviderTextGenerationLive", () => {
       expect.objectContaining({
         model: "claude-sonnet-4",
         modelSelection: expect.objectContaining({
-          provider: "claudeAgent",
           instanceId: "claude_work",
           model: "claude-sonnet-4",
         }),
@@ -389,7 +385,6 @@ describe("ProviderTextGenerationLive", () => {
             cwd: "/repo",
             message: "This should not run",
             modelSelection: {
-              provider: "claudeAgent",
               instanceId: "claude_disabled",
               model: "claude-sonnet-4",
             },

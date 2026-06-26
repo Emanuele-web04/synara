@@ -5,6 +5,10 @@ import {
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderListModelsResult,
+  type ProviderListPluginsResult,
+  type ProviderListSkillsResult,
+  type ProviderReadPluginResult,
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
@@ -95,6 +99,64 @@ class FakeCodexManager extends CodexAppServerManager {
 
   public stopAllImpl = vi.fn(() => undefined);
 
+  public listSkillsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listSkills"]>[0],
+    ): Promise<ProviderListSkillsResult> => ({
+      skills: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listPluginsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listPlugins"]>[0],
+    ): Promise<ProviderListPluginsResult> => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError: null,
+      featuredPluginIds: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public readPluginImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["readPlugin"]>[0],
+    ): Promise<ProviderReadPluginResult> => ({
+      plugin: {
+        marketplaceName: "local",
+        marketplacePath: "/marketplace",
+        summary: {
+          id: "plugin",
+          name: "plugin",
+          source: { type: "local", path: "/marketplace/plugin" },
+          installed: true,
+          enabled: true,
+          installPolicy: "INSTALLED_BY_DEFAULT",
+          authPolicy: "ON_USE",
+        },
+        skills: [],
+        apps: [],
+        mcpServers: [],
+      },
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listModelsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listModels"]>[0],
+    ): Promise<ProviderListModelsResult> => ({
+      models: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
   override startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
     return this.startSessionImpl(input);
   }
@@ -152,6 +214,22 @@ class FakeCodexManager extends CodexAppServerManager {
   override stopAll(): void {
     this.stopAllImpl();
   }
+
+  override listSkills(input: Parameters<CodexAppServerManager["listSkills"]>[0]) {
+    return this.listSkillsImpl(input);
+  }
+
+  override listPlugins(input: Parameters<CodexAppServerManager["listPlugins"]>[0]) {
+    return this.listPluginsImpl(input);
+  }
+
+  override readPlugin(input: Parameters<CodexAppServerManager["readPlugin"]>[0]) {
+    return this.readPluginImpl(input);
+  }
+
+  override listModels(input: Parameters<CodexAppServerManager["listModels"]>[0]) {
+    return this.listModelsImpl(input);
+  }
 }
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
@@ -206,12 +284,12 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
-          options: {
-            reasoningEffort: "high",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
         },
         runtimeMode: "full-access",
       });
@@ -224,6 +302,65 @@ validationLayer("CodexAdapterLive validation", (it) => {
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
+    }),
+  );
+
+  it.effect("forwards Codex discovery environment options to the manager", () =>
+    Effect.gen(function* () {
+      validationManager.listSkillsImpl.mockClear();
+      validationManager.listPluginsImpl.mockClear();
+      validationManager.readPluginImpl.mockClear();
+      validationManager.listModelsImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const environment = { CODEX_PROFILE: "work" };
+
+      const listSkills = adapter.listSkills;
+      const listPlugins = adapter.listPlugins;
+      const readPlugin = adapter.readPlugin;
+      const listModels = adapter.listModels;
+      if (!listSkills || !listPlugins || !readPlugin || !listModels) {
+        throw new Error("Expected Codex adapter to expose discovery APIs.");
+      }
+
+      yield* listSkills({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* listPlugins({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* readPlugin({
+        provider: "codex",
+        marketplacePath: "/marketplace",
+        pluginName: "plugin",
+        environment,
+      });
+      yield* listModels({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+
+      assert.deepStrictEqual(
+        validationManager.listSkillsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.listPluginsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.readPluginImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        (validationManager.listModelsImpl.mock.calls[0]?.[0] as { codexOptions?: unknown })
+          ?.codexOptions,
+        { environment },
+      );
     }),
   );
 });
@@ -277,12 +414,12 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           threadId: asThreadId("sess-missing"),
           input: "hello",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "high" },
+              { id: "fastMode", value: true },
+            ],
           },
           attachments: [],
         }),

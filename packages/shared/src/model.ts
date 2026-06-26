@@ -702,16 +702,11 @@ export function normalizeClaudeModelOptions(
 }
 
 export function resolveApiModelId(modelSelection: ModelSelection): string {
-  switch (modelSelection.provider) {
-    case "claudeAgent": {
-      const caps = getModelCapabilities(modelSelection.provider, modelSelection.model);
-      return modelSelection.options?.contextWindow === "1m" && hasContextWindowOption(caps, "1m")
-        ? `${modelSelection.model}[1m]`
-        : modelSelection.model;
-    }
-    default:
-      return modelSelection.model;
-  }
+  const caps = getModelCapabilities("claudeAgent", modelSelection.model);
+  const contextWindow = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
+  return contextWindow === "1m" && hasContextWindowOption(caps, "1m")
+    ? `${modelSelection.model}[1m]`
+    : modelSelection.model;
 }
 
 export function normalizeGeminiModelOptions(

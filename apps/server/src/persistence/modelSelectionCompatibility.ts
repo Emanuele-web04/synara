@@ -121,22 +121,39 @@ function readLegacyProviderOptions(options: unknown, provider: ModelProviderKind
 }
 
 function normalizeModelOptions(input: unknown): unknown {
-  if (!Array.isArray(input)) {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+
+  if (Array.isArray(input)) {
+    const selections: Array<{ id: string; value: string | boolean }> = [];
+    for (const option of input) {
+      if (!isRecord(option)) {
+        return input;
+      }
+      const id = readTrimmedString(option, "id");
+      const value = option.value;
+      if (id === undefined || (typeof value !== "string" && typeof value !== "boolean")) {
+        return input;
+      }
+      selections.push({ id, value });
+    }
+    return selections;
+  }
+
+  if (!isRecord(input)) {
     return input;
   }
 
-  const entries: Array<readonly [string, unknown]> = [];
-  for (const option of input) {
-    if (!isRecord(option)) {
-      return input;
+  const selections: Array<{ id: string; value: string | boolean }> = [];
+  for (const [id, value] of Object.entries(input)) {
+    if (typeof value === "string" || typeof value === "boolean") {
+      selections.push({ id, value });
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      selections.push({ id, value: String(value) });
     }
-    const id = readTrimmedString(option, "id");
-    if (id === undefined) {
-      return input;
-    }
-    entries.push([id, option.value]);
   }
-  return Object.fromEntries(entries);
+  return selections.length > 0 ? selections : input;
 }
 
 export function normalizeLegacyModelSelection(input: {
@@ -152,7 +169,6 @@ export function normalizeLegacyModelSelection(input: {
       ? input.instanceId.trim()
       : provider;
   return {
-    provider,
     instanceId,
     model: input.model,
     ...(options === undefined ? {} : { options }),

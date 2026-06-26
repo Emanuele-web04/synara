@@ -7,7 +7,7 @@ import {
   GrokModelOptions,
   OpenCodeModelOptions,
   PiModelOptions,
-  DEFAULT_MODEL_BY_PROVIDER,
+  ProviderOptionSelections,
 } from "./model";
 import { ProviderInstanceId } from "./providerInstance";
 import { ProviderMentionReference, ProviderSkillReference } from "./providerDiscovery";
@@ -77,203 +77,90 @@ export const ProviderSandboxMode = Schema.Literals([
 export type ProviderSandboxMode = typeof ProviderSandboxMode.Type;
 export const DEFAULT_PROVIDER_KIND: ProviderKind = "codex";
 
-const ProviderInstanceIdForDriver = (_provider: ProviderKind) =>
-  Schema.optional(ProviderInstanceId);
-
-const isProviderKindValue = Schema.is(ProviderKind);
-
-function inferProviderFromInstanceId(instanceId: string): ProviderKind | undefined {
-  if (isProviderKindValue(instanceId)) {
-    return instanceId;
-  }
-
-  const lowerInstanceId = instanceId.toLowerCase();
-  if (lowerInstanceId.startsWith("claude")) {
-    return "claudeAgent";
-  }
-  if (lowerInstanceId.startsWith("codex")) {
-    return "codex";
-  }
-  if (lowerInstanceId.startsWith("cursor")) {
-    return "cursor";
-  }
-  if (lowerInstanceId.startsWith("gemini")) {
-    return "gemini";
-  }
-  if (lowerInstanceId.startsWith("grok")) {
-    return "grok";
-  }
-  if (lowerInstanceId.startsWith("kilo")) {
-    return "kilo";
-  }
-  if (lowerInstanceId.startsWith("opencode") || lowerInstanceId.startsWith("open_code")) {
-    return "opencode";
-  }
-  if (lowerInstanceId.startsWith("pi")) {
-    return "pi";
-  }
-  return undefined;
-}
-
-function inferProviderFromModel(model: string): ProviderKind {
-  const lowerModel = model.toLowerCase();
-  if (
-    lowerModel.includes("claude") ||
-    lowerModel.includes("sonnet") ||
-    lowerModel.includes("opus") ||
-    lowerModel.includes("haiku")
-  ) {
-    return "claudeAgent";
-  }
-  if (lowerModel.includes("gemini")) {
-    return "gemini";
-  }
-  if (lowerModel.includes("grok")) {
-    return "grok";
-  }
-  if (lowerModel.includes("opencode") || lowerModel.includes("open_code")) {
-    return "opencode";
-  }
-  if (lowerModel.includes("kilo")) {
-    return "kilo";
-  }
-  if (lowerModel.includes("cursor")) {
-    return "cursor";
-  }
-  if (lowerModel.startsWith("pi/") || lowerModel.includes("/pi/")) {
-    return "pi";
-  }
-  return "codex";
-}
-
-function inferProviderForModelSelection(input: {
-  readonly provider?: unknown;
-  readonly instanceId?: unknown;
-  readonly model?: unknown;
-}): ProviderKind | undefined {
-  if (isProviderKindValue(input.provider)) {
-    return input.provider;
-  }
-  if (typeof input.instanceId === "string") {
-    const provider = inferProviderFromInstanceId(input.instanceId);
-    if (provider) {
-      return provider;
-    }
-  }
-  return typeof input.model === "string" ? inferProviderFromModel(input.model) : undefined;
-}
-
-function defaultModelForProvider(provider: ProviderKind): string {
-  return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
-}
-
-export const CodexModelSelection = Schema.Struct({
-  provider: Schema.Literal("codex"),
-  instanceId: ProviderInstanceIdForDriver("codex"),
+const ModelSelectionWire = Schema.Struct({
+  instanceId: ProviderInstanceId,
   model: TrimmedNonEmptyString,
-  options: Schema.optional(CodexModelOptions),
+  options: Schema.optional(ProviderOptionSelections),
 });
-export type CodexModelSelection = typeof CodexModelSelection.Type;
 
-export const ClaudeModelSelection = Schema.Struct({
-  provider: Schema.Literal("claudeAgent"),
-  instanceId: ProviderInstanceIdForDriver("claudeAgent"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(ClaudeModelOptions),
-});
-export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
-
-export const CursorModelSelection = Schema.Struct({
-  provider: Schema.Literal("cursor"),
-  instanceId: ProviderInstanceIdForDriver("cursor"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(CursorModelOptions),
-});
-export type CursorModelSelection = typeof CursorModelSelection.Type;
-
-export const GeminiModelSelection = Schema.Struct({
-  provider: Schema.Literal("gemini"),
-  instanceId: ProviderInstanceIdForDriver("gemini"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(GeminiModelOptions),
-});
-export type GeminiModelSelection = typeof GeminiModelSelection.Type;
-
-export const GrokModelSelection = Schema.Struct({
-  provider: Schema.Literal("grok"),
-  instanceId: ProviderInstanceIdForDriver("grok"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(GrokModelOptions),
-});
-export type GrokModelSelection = typeof GrokModelSelection.Type;
-
-export const OpenCodeModelSelection = Schema.Struct({
-  provider: Schema.Literal("opencode"),
-  instanceId: ProviderInstanceIdForDriver("opencode"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(OpenCodeModelOptions),
-});
-export type OpenCodeModelSelection = typeof OpenCodeModelSelection.Type;
-
-export const KiloModelSelection = Schema.Struct({
-  provider: Schema.Literal("kilo"),
-  instanceId: ProviderInstanceIdForDriver("kilo"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(OpenCodeModelOptions),
-});
-export type KiloModelSelection = typeof KiloModelSelection.Type;
-
-export const PiModelSelection = Schema.Struct({
-  provider: Schema.Literal("pi"),
-  instanceId: ProviderInstanceIdForDriver("pi"),
-  model: TrimmedNonEmptyString,
-  options: Schema.optional(PiModelOptions),
-});
-export type PiModelSelection = typeof PiModelSelection.Type;
-
-const ModelSelectionByProvider = Schema.Union([
-  CodexModelSelection,
-  ClaudeModelSelection,
-  CursorModelSelection,
-  GeminiModelSelection,
-  GrokModelSelection,
-  KiloModelSelection,
-  OpenCodeModelSelection,
-  PiModelSelection,
+const LegacyProviderOptionSelectionRecord = Schema.Record(
+  Schema.String,
+  Schema.Union([TrimmedNonEmptyString, Schema.Boolean, Schema.Number]),
+);
+const ModelSelectionOptionsSource = Schema.Union([
+  ProviderOptionSelections,
+  LegacyProviderOptionSelectionRecord,
 ]);
 
 const ModelSelectionSource = Schema.Struct({
-  provider: Schema.optional(Schema.Unknown),
-  instanceId: Schema.optional(Schema.Unknown),
-  model: Schema.Unknown,
-  options: Schema.optional(Schema.Unknown),
+  provider: Schema.optional(Schema.String),
+  instanceId: Schema.optional(Schema.String),
+  model: TrimmedNonEmptyString,
+  options: Schema.optional(ModelSelectionOptionsSource),
 });
+
+function normalizeModelSelectionOptions(input: unknown): unknown {
+  if (input === undefined || input === null) {
+    return undefined;
+  }
+  if (Array.isArray(input)) {
+    return input;
+  }
+  if (typeof input !== "object") {
+    return input;
+  }
+
+  const record = input as Record<string, unknown>;
+  const selections: Array<{ id: string; value: string | boolean }> = [];
+  for (const [id, value] of Object.entries(record)) {
+    if (typeof value === "string" || typeof value === "boolean") {
+      selections.push({ id, value });
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      selections.push({ id, value: String(value) });
+    }
+  }
+  return selections.length > 0 ? selections : input;
+}
 
 export const ModelSelection = ModelSelectionSource.pipe(
   Schema.decodeTo(
-    ModelSelectionByProvider,
+    ModelSelectionWire,
     SchemaTransformation.transformOrFail({
       decode: (raw) => {
-        const provider = inferProviderForModelSelection(raw) ?? "codex";
-        const model =
-          typeof raw.model === "string" && raw.model.trim().length > 0
-            ? raw.model
-            : defaultModelForProvider(provider);
         const base: Record<string, unknown> = {
-          provider,
-          model,
+          instanceId:
+            typeof raw.instanceId === "string" && raw.instanceId.trim().length > 0
+              ? raw.instanceId.trim()
+              : raw.provider,
+          model: raw.model,
         };
-        base.instanceId = raw.instanceId ?? provider;
         if (raw.options !== undefined) {
-          base.options = raw.options;
+          base.options = normalizeModelSelectionOptions(raw.options);
         }
-        return Effect.succeed(base as typeof ModelSelectionByProvider.Encoded);
+        return Effect.succeed(base as typeof ModelSelectionWire.Encoded);
       },
-      encode: (value) => Effect.succeed(value as typeof ModelSelectionSource.Encoded),
+      encode: (value) => {
+        const base: Record<string, unknown> = {
+          instanceId: value.instanceId,
+          model: value.model,
+        };
+        if (value.options !== undefined) {
+          base.options = value.options;
+        }
+        return Effect.succeed(base as typeof ModelSelectionSource.Encoded);
+      },
     }),
   ),
 );
 export type ModelSelection = typeof ModelSelection.Type;
+export type CodexModelSelection = ModelSelection;
+export type ClaudeModelSelection = ModelSelection;
+export type CursorModelSelection = ModelSelection;
+export type GeminiModelSelection = ModelSelection;
+export type GrokModelSelection = ModelSelection;
+export type OpenCodeModelSelection = ModelSelection;
+export type KiloModelSelection = ModelSelection;
+export type PiModelSelection = ModelSelection;
 
 export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),

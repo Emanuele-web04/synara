@@ -11,6 +11,7 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -50,6 +51,7 @@ import {
   buildModelSelection,
   buildNextProviderOptions,
   buildProviderOptionPatch,
+  providerOptionsFromSelections,
   type ProviderOptions,
 } from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
@@ -299,10 +301,7 @@ function AutomationDetailView() {
     const providerOptions = providerOptionsForAutomationModelSelection(
       definition,
       nextModelSelection,
-      getProviderStartOptions(
-        settings,
-        nextModelSelection.instanceId ?? nextModelSelection.provider,
-      ),
+      getProviderStartOptions(settings, nextModelSelection.instanceId),
     );
     patch({
       modelSelection: nextModelSelection,
@@ -345,10 +344,7 @@ function AutomationDetailView() {
       dialogWarnings,
       acknowledgedWarningIds,
     );
-    const formProviderOptions = getProviderStartOptions(
-      settings,
-      form.modelSelection.instanceId ?? form.modelSelection.provider,
-    );
+    const formProviderOptions = getProviderStartOptions(settings, form.modelSelection.instanceId);
     updateMutation.mutate(
       updateInputFromForm(
         definition,
@@ -935,12 +931,14 @@ function ModelOptionRows({
   readonly modelSelection: ModelSelection;
   readonly onChange: (next: ModelSelection) => void;
 }) {
-  const { provider, model } = modelSelection;
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
+  const { model } = modelSelection;
+  const modelOptions = providerOptionsFromSelections(provider, modelSelection.options);
   const caps = getModelCapabilities(provider, model);
   const descriptors = getProviderOptionDescriptors({
     provider,
     caps,
-    selections: modelSelection.options as Record<string, unknown> | undefined,
+    selections: modelOptions ?? undefined,
   });
   if (descriptors.length === 0) {
     return null;
@@ -948,11 +946,7 @@ function ModelOptionRows({
 
   const setOption = (descriptor: ProviderOptionDescriptor, value: string | boolean) => {
     const optionPatch = buildProviderOptionPatch(provider, descriptor.id, value);
-    const nextOptions = buildNextProviderOptions(
-      provider,
-      modelSelection.options as ProviderOptions | undefined,
-      optionPatch,
-    );
+    const nextOptions = buildNextProviderOptions(provider, modelOptions, optionPatch);
     onChange(
       buildModelSelection(provider, model, nextOptions, {
         ...(modelSelection.instanceId ? { instanceId: modelSelection.instanceId } : {}),

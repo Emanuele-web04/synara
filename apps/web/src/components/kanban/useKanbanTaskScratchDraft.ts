@@ -5,6 +5,7 @@
 
 import type { ModelSlug, ProviderInstanceId, ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -21,7 +22,7 @@ import {
   useComposerDraftStore,
   useComposerThreadDraft,
 } from "../../composerDraftStore";
-import { buildModelSelection } from "../../providerModelOptions";
+import { buildModelSelection, providerOptionsFromSelections } from "../../providerModelOptions";
 import { toastManager } from "../ui/toast";
 
 export function useKanbanTaskScratchDraft(input: {
@@ -71,10 +72,14 @@ export function useKanbanTaskScratchDraft(input: {
     input.settings,
     selectedProvider,
     Object.values(scratchDraft.modelSelectionByProvider).find(
-      (selection) => selection?.provider === selectedProvider,
+      (selection) =>
+        selection !== undefined &&
+        inferLegacyProviderKindFromModelSelection(selection) === selectedProvider,
     )?.instanceId ??
       Object.values(stickyModelSelectionByProvider).find(
-        (selection) => selection?.provider === selectedProvider,
+        (selection) =>
+          selection !== undefined &&
+          inferLegacyProviderKindFromModelSelection(selection) === selectedProvider,
       )?.instanceId,
   );
   const selectionKey = providerInstanceModelSelectionKey(
@@ -86,7 +91,10 @@ export function useKanbanTaskScratchDraft(input: {
     stickyModelSelectionByProvider[selectionKey];
   const selectedModel: ModelSlug | null =
     draftModelSelection?.model ?? getDefaultModel(selectedProvider);
-  const selectedProviderModelOptions = draftModelSelection?.options;
+  const selectedProviderModelOptions = providerOptionsFromSelections(
+    selectedProvider,
+    draftModelSelection?.options,
+  );
 
   const previousSelectedProviderRef = useRef<{
     threadId: string;

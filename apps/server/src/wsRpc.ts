@@ -740,19 +740,20 @@ export const makeWsRpcLayer = () =>
         [WS_METHODS.gitSummarizeDiff]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
-              if (input.providerOptions || !input.textGenerationModelSelection) {
-                return yield* gitManager.summarizeDiff(input);
-              }
               const settings = yield* serverSettings.getSettings;
+              const modelSelection =
+                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
               const instance = resolveProviderInstance(settings, {
-                provider: input.textGenerationModelSelection.provider,
-                instanceId: resolveModelSelectionInstanceId(input.textGenerationModelSelection),
+                instanceId: resolveModelSelectionInstanceId(modelSelection),
               });
               return yield* gitManager.summarizeDiff({
                 ...input,
-                ...(instance
-                  ? { providerOptions: providerStartOptionsFromInstance(instance) }
-                  : {}),
+                textGenerationModelSelection: modelSelection,
+                ...(input.providerOptions
+                  ? { providerOptions: input.providerOptions }
+                  : instance
+                    ? { providerOptions: providerStartOptionsFromInstance(instance) }
+                    : {}),
               });
             }),
             "Failed to summarize diff",
@@ -766,19 +767,20 @@ export const makeWsRpcLayer = () =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
               Effect.gen(function* () {
-                if (input.providerOptions || !input.textGenerationModelSelection) {
-                  return input;
-                }
                 const settings = yield* serverSettings.getSettings;
+                const modelSelection =
+                  input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
                 const instance = resolveProviderInstance(settings, {
-                  provider: input.textGenerationModelSelection.provider,
-                  instanceId: resolveModelSelectionInstanceId(input.textGenerationModelSelection),
+                  instanceId: resolveModelSelectionInstanceId(modelSelection),
                 });
                 return {
                   ...input,
-                  ...(instance
-                    ? { providerOptions: providerStartOptionsFromInstance(instance) }
-                    : {}),
+                  textGenerationModelSelection: modelSelection,
+                  ...(input.providerOptions
+                    ? { providerOptions: input.providerOptions }
+                    : instance
+                      ? { providerOptions: providerStartOptionsFromInstance(instance) }
+                      : {}),
                 };
               }).pipe(
                 Effect.flatMap((runInput) =>
@@ -941,7 +943,10 @@ export const makeWsRpcLayer = () =>
             "Failed to load server settings",
           ),
         [WS_METHODS.serverUpdateSettings]: (input) =>
-          rpcEffect(serverSettings.updateSettings(input), "Failed to update server settings"),
+          rpcEffect(
+            serverSettings.updateSettings(input).pipe(Effect.map(redactServerSettingsForClient)),
+            "Failed to update server settings",
+          ),
         [WS_METHODS.serverRefreshProviders]: () =>
           rpcEffect(
             providerHealth.refresh.pipe(Effect.map((providers) => ({ providers }))),
@@ -1003,19 +1008,40 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.serverTranscribeVoice]: (input) =>
           rpcEffect(
-            providerAdapterRegistry
-              .getByProvider(input.provider)
-              .pipe(
-                Effect.flatMap((adapter) =>
-                  adapter.transcribeVoice
-                    ? adapter.transcribeVoice(input)
-                    : Effect.fail(
-                        new Error(
-                          `Voice transcription is unavailable for provider '${input.provider}'.`,
-                        ),
-                      ),
-                ),
-              ),
+            Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const instance = resolveProviderInstance(settings, {
+                provider: input.provider,
+                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+              });
+              if (!instance || instance.driver !== input.provider) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Voice transcription provider instance '${input.providerInstanceId ?? input.provider}' is unavailable.`,
+                  ),
+                );
+              }
+              if (!instance.enabled) {
+                return yield* Effect.fail(
+                  new Error(
+                    `Voice transcription provider instance '${instance.instanceId}' is disabled.`,
+                  ),
+                );
+              }
+              const adapter = yield* providerAdapterRegistry.getByProvider(instance.driver);
+              if (!adapter.transcribeVoice) {
+                return yield* Effect.fail(
+                  new Error(`Voice transcription is unavailable for provider '${input.provider}'.`),
+                );
+              }
+              const providerOptions = providerStartOptionsFromInstance(instance);
+              const { providerOptions: _ignoredProviderOptions, ...transcriptionInput } = input;
+              return yield* adapter.transcribeVoice({
+                ...transcriptionInput,
+                providerInstanceId: instance.instanceId,
+                ...(providerOptions ? { providerOptions } : {}),
+              });
+            }),
             "Voice transcription failed",
           ),
         [WS_METHODS.serverGenerateThreadRecap]: (input) =>
@@ -1025,7 +1051,6 @@ export const makeWsRpcLayer = () =>
               const modelSelection =
                 input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
               const fallbackInstance = resolveProviderInstance(settings, {
-                provider: modelSelection.provider,
                 instanceId: resolveModelSelectionInstanceId(modelSelection),
               });
               const providerOptions =
@@ -1051,7 +1076,6 @@ export const makeWsRpcLayer = () =>
               const modelSelection =
                 input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
               const fallbackInstance = resolveProviderInstance(settings, {
-                provider: modelSelection.provider,
                 instanceId: resolveModelSelectionInstanceId(modelSelection),
               });
               const providerOptions =

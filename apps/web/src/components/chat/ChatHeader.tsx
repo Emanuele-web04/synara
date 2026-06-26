@@ -13,6 +13,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { FiGitBranch } from "react-icons/fi";
 import { HiMiniArrowsPointingOut } from "react-icons/hi2";
@@ -197,7 +198,10 @@ function EditorChatHistoryMenu(props: {
               }}
             >
               <ProviderIcon
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
+                provider={
+                  thread.session?.provider ??
+                  inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+                }
                 tone="header"
                 className="size-3.5 shrink-0"
               />
@@ -315,7 +319,9 @@ function EditorRailTabs(props: {
         {
           id: thread.id,
           title: thread.title,
-          provider: thread.session?.provider ?? thread.modelSelection.provider,
+          provider:
+            thread.session?.provider ??
+            inferLegacyProviderKindFromModelSelection(thread.modelSelection),
         },
       ]),
     );
@@ -355,7 +361,9 @@ function EditorRailTabs(props: {
       const nextTab = {
         id: sidebarThread.id,
         title: sidebarThread.title,
-        provider: sidebarThread.session?.provider ?? sidebarThread.modelSelection.provider,
+        provider:
+          sidebarThread.session?.provider ??
+          inferLegacyProviderKindFromModelSelection(sidebarThread.modelSelection),
       };
       setAndStoreOpenChatTabs((current) =>
         current.some((thread) => thread.id === threadId) ? current : [...current, nextTab],

@@ -1,9 +1,13 @@
 import { Effect, Layer, Option, Ref, Schema } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import type { CursorModelSelection, ProviderStartOptions } from "@t3tools/contracts";
+import type { CursorModelOptions, ModelSelection, ProviderStartOptions } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 
 import {
   applyCursorAcpModelSelection,
@@ -61,17 +65,28 @@ function isTextGenerationError(error: unknown): error is TextGenerationError {
 
 function resolveCursorModelSelection(input: {
   readonly model?: string;
-  readonly modelSelection?: {
-    readonly provider: string;
-    readonly model: string;
-    readonly options?: unknown;
-  };
-}): CursorModelSelection | null {
-  if (input.modelSelection?.provider === "cursor") {
-    return input.modelSelection as CursorModelSelection;
-  }
+  readonly modelSelection?: ModelSelection;
+}): ModelSelection | null {
+  return input.modelSelection ?? null;
+}
 
-  return null;
+function cursorModelOptionsFromSelection(
+  modelSelection: ModelSelection | null | undefined,
+): CursorModelOptions | undefined {
+  if (!modelSelection) {
+    return undefined;
+  }
+  const reasoningEffort = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+  const contextWindow = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
+  const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+  const thinking = getModelSelectionBooleanOptionValue(modelSelection, "thinking");
+  const options: CursorModelOptions = {
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(contextWindow ? { contextWindow } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 function resolveCursorSettings(
@@ -102,7 +117,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     prompt: string;
     outputSchemaJson: S;
     rawTextFallback?: RawTextFallback;
-    modelSelection: CursorModelSelection;
+    modelSelection: ModelSelection;
     providerOptions?: ProviderStartOptions;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
@@ -132,7 +147,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
         yield* applyCursorAcpModelSelection({
           runtime,
           model: modelSelection.model,
-          options: modelSelection.options,
+          options: cursorModelOptionsFromSelection(modelSelection),
           mapError: ({ cause, configId, step }) =>
             mapCursorAcpError(
               operation,

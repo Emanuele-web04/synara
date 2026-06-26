@@ -6,6 +6,7 @@
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback } from "react";
 import { type ProviderInstanceId, type ProviderKind } from "@t3tools/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import {
@@ -47,14 +48,12 @@ export function useThreadHandoff() {
         throw new Error("This thread cannot be handed off yet.");
       }
       const sourceProviderInstanceId =
-        thread.session?.providerInstanceId ??
-        thread.modelSelection.instanceId ??
-        thread.modelSelection.provider;
+        thread.session?.providerInstanceId ?? thread.modelSelection.instanceId;
       const targetInstanceId = targetProviderInstanceId ?? targetProvider;
-      if (
-        targetProvider === thread.modelSelection.provider &&
-        targetInstanceId === sourceProviderInstanceId
-      ) {
+      const sourceProvider =
+        thread.session?.provider ??
+        inferLegacyProviderKindFromModelSelection(thread.modelSelection);
+      if (targetProvider === sourceProvider && targetInstanceId === sourceProviderInstanceId) {
         throw new Error("This handoff target is not available for the current thread.");
       }
       const targetAvailability = resolveProviderSendAvailability({

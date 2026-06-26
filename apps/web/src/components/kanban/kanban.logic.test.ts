@@ -54,7 +54,7 @@ function makeSidebarThreadSummary(
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.4",
     },
     interactionMode: DEFAULT_INTERACTION_MODE,

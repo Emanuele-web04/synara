@@ -124,6 +124,7 @@ function createMockOpenCodeRuntime(options?: {
   const abortCalls: Array<{ sessionID: string }> = [];
   const cliModelCalls: Array<Parameters<OpenCodeRuntimeShape["listOpenCodeCliModels"]>[0]> = [];
   const connectCalls: Array<Parameters<OpenCodeRuntimeShape["connectToOpenCodeServer"]>[0]> = [];
+  const sdkClientCalls: Array<Parameters<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>[0]> = [];
   const createCalls: Array<Record<string, unknown>> = [];
   const forkCalls: Array<{ sessionID: string }> = [];
   const promptCalls: Array<Record<string, unknown>> = [];
@@ -188,7 +189,8 @@ function createMockOpenCodeRuntime(options?: {
       }),
     );
 
-  const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = () => {
+  const createOpenCodeSdkClient: OpenCodeRuntimeShape["createOpenCodeSdkClient"] = (input) => {
+    sdkClientCalls.push(input);
     const commandList = options?.commandLists?.[createClientCallCount];
     createClientCallCount += 1;
     if (!commandList) {
@@ -239,7 +241,16 @@ function createMockOpenCodeRuntime(options?: {
     loadOpenCodeCredentialProviderIDs: () => Effect.succeed([]),
   };
 
-  return { abortCalls, cliModelCalls, connectCalls, createCalls, forkCalls, promptCalls, runtime };
+  return {
+    abortCalls,
+    cliModelCalls,
+    connectCalls,
+    sdkClientCalls,
+    createCalls,
+    forkCalls,
+    promptCalls,
+    runtime,
+  };
 }
 
 function createSubscribedEventQueue() {
@@ -1109,6 +1120,66 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     expect(runtime.cliModelCalls[0]).toMatchObject({ cwd: "/repo/model-discovery-config" });
   });
 
+  it("does not reuse an active OpenCode session for model discovery when the instance envelope differs", async () => {
+    const serverUrl = "http://127.0.0.1:4555";
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        const listModels = adapter.listModels;
+        if (!listModels) {
+          throw new Error("Expected OpenCode adapter to support runtime model listing.");
+        }
+
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-discovery-envelope"),
+          cwd: "/repo/discovery-envelope",
+          runtimeMode: "full-access",
+          providerOptions: {
+            opencode: {
+              serverUrl,
+              serverPassword: "old-password",
+              environment: { OPENCODE_PROFILE: "old" },
+            },
+          },
+        });
+
+        return yield* listModels({
+          provider: "opencode",
+          cwd: "/repo/discovery-envelope",
+          serverUrl,
+          serverPassword: "new-password",
+          experimentalWebSockets: true,
+          environment: { OPENCODE_PROFILE: "new" },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    expect(runtime.connectCalls).toHaveLength(2);
+    expect(runtime.connectCalls[1]).toMatchObject({
+      cwd: "/repo/discovery-envelope",
+      serverUrl,
+      experimentalWebSockets: true,
+      environment: { OPENCODE_PROFILE: "new" },
+    });
+    expect(runtime.sdkClientCalls[1]).toMatchObject({
+      baseUrl: serverUrl,
+      directory: "/repo/discovery-envelope",
+      serverPassword: "new-password",
+    });
+  });
+
   it("lists OpenCode CLI models when server inventory discovery fails", async () => {
     const runtime = createMockOpenCodeRuntime({
       connectError: new OpenCodeRuntimeError({
@@ -1194,6 +1265,10 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           provider: "opencode",
           binaryPath: "opencode",
           cwd: "/repo/agent-discovery-config",
+          serverUrl: "http://127.0.0.1:4666",
+          serverPassword: "agent-password",
+          experimentalWebSockets: true,
+          environment: { OPENCODE_PROFILE: "agents" },
         });
       }).pipe(
         Effect.provide(
@@ -1219,7 +1294,17 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
       ],
     });
     expect(runtime.connectCalls).toHaveLength(1);
-    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/agent-discovery-config" });
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/agent-discovery-config",
+      serverUrl: "http://127.0.0.1:4666",
+      experimentalWebSockets: true,
+      environment: { OPENCODE_PROFILE: "agents" },
+    });
+    expect(runtime.sdkClientCalls[0]).toMatchObject({
+      baseUrl: "http://127.0.0.1:4666",
+      directory: "/repo/agent-discovery-config",
+      serverPassword: "agent-password",
+    });
   });
 
   it("does not reuse an unrelated active OpenCode session for command discovery", async () => {
@@ -1378,6 +1463,13 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-target"),
           sourceResumeCursor: { openCodeSessionId: "source-session-1" },
           sourceCwd: "/repo/source",
+          providerOptions: {
+            opencode: {
+              serverUrl: "http://127.0.0.1:4777",
+              serverPassword: "fork-password",
+              experimentalWebSockets: true,
+            },
+          },
           runtimeMode: "full-access",
         });
       }).pipe(
@@ -1394,8 +1486,18 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
 
     expect(runtime.forkCalls).toEqual([{ sessionID: "source-session-1" }]);
     expect(runtime.connectCalls).toHaveLength(2);
-    expect(runtime.connectCalls[0]).toMatchObject({ cwd: "/repo/source" });
-    expect(runtime.connectCalls[1]).toMatchObject({ cwd: "/repo/source" });
+    expect(runtime.connectCalls[0]).toMatchObject({
+      cwd: "/repo/source",
+      serverUrl: "http://127.0.0.1:4777",
+      experimentalWebSockets: true,
+    });
+    expect(runtime.connectCalls[1]).toMatchObject({
+      cwd: "/repo/source",
+      serverUrl: "http://127.0.0.1:4777",
+      experimentalWebSockets: true,
+    });
+    expect(runtime.sdkClientCalls[0]).toMatchObject({ serverPassword: "fork-password" });
+    expect(runtime.sdkClientCalls[1]).toMatchObject({ serverPassword: "fork-password" });
     expect(result.resumeCursor).toMatchObject({
       openCodeSessionId: "forked-session-1",
       cwd: "/repo/source",
@@ -1491,12 +1593,12 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           threadId: asThreadId("thread-model-pin"),
           runtimeMode: "full-access",
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "opencode/big-pickle",
-            options: {
-              agent: "build",
-              variant: "fast",
-            },
+            options: [
+              { id: "agent", value: "build" },
+              { id: "variant", value: "fast" },
+            ],
           },
         });
       }).pipe(
@@ -1543,11 +1645,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
-            options: {
-              variant: "high",
-            },
+            options: [{ id: "variant", value: "high" }],
           },
         });
 
@@ -1634,7 +1734,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -1770,7 +1870,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -1909,7 +2009,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "plan",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -1997,7 +2097,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2037,7 +2137,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "plan",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2077,11 +2177,9 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
-            options: {
-              agent: "reviewer",
-            },
+            options: [{ id: "agent", value: "reviewer" }],
           },
         });
       }).pipe(
@@ -2133,7 +2231,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           interactionMode: "default",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2229,7 +2327,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2310,7 +2408,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2367,7 +2465,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2435,7 +2533,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "count tokens",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2520,7 +2618,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "work through todos",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2594,7 +2692,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2707,7 +2805,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2810,7 +2908,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -2940,7 +3038,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "inspect files",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });
@@ -3036,7 +3134,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             input: "hello",
             attachments: [],
             modelSelection: {
-              provider: "opencode",
+              instanceId: "opencode",
               model: "opencode/claude-opus-4-7",
             },
           })
@@ -3097,7 +3195,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
             input: "hello",
             attachments: [],
             modelSelection: {
-              provider: "opencode",
+              instanceId: "opencode",
               model: "opencode/claude-opus-4-7",
             },
           }),
@@ -3166,7 +3264,7 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
           input: "hello",
           attachments: [],
           modelSelection: {
-            provider: "opencode",
+            instanceId: "opencode",
             model: "openai/gpt-5.4",
           },
         });

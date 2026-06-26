@@ -50,7 +50,13 @@ export function resolveProviderStatusCachePath(input: {
 
 // Ignore unreadable or malformed cache entries so the server can still boot
 // and fall back to fresh probes or empty state.
-export const readProviderStatusCache = (filePath: string) =>
+export const readProviderStatusCache = (
+  filePath: string,
+  expected?: {
+    readonly provider: ServerProviderStatus["provider"];
+    readonly instanceId?: ProviderInstanceId | undefined;
+  },
+) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const exists = yield* fs.exists(filePath).pipe(Effect.orElseSucceed(() => false));
@@ -64,7 +70,7 @@ export const readProviderStatusCache = (filePath: string) =>
       return undefined;
     }
 
-    return yield* decodeProviderStatusCache(trimmed).pipe(
+    const status = yield* decodeProviderStatusCache(trimmed).pipe(
       Effect.matchCauseEffect({
         onFailure: (cause) =>
           Effect.logWarning("failed to parse provider status cache, ignoring", {
@@ -74,6 +80,24 @@ export const readProviderStatusCache = (filePath: string) =>
         onSuccess: Effect.succeed,
       }),
     );
+    if (!status || !expected) {
+      return status;
+    }
+
+    const expectedInstanceId = expected.instanceId ?? expected.provider;
+    const actualInstanceId = status.instanceId ?? status.provider;
+    if (status.provider === expected.provider && actualInstanceId === expectedInstanceId) {
+      return status;
+    }
+
+    yield* Effect.logWarning("provider status cache identity mismatch, ignoring", {
+      path: filePath,
+      expectedProvider: expected.provider,
+      expectedInstanceId,
+      actualProvider: status.provider,
+      actualInstanceId,
+    });
+    return undefined;
   });
 
 export const writeProviderStatusCache = (input: {

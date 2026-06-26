@@ -9,6 +9,8 @@
  *
  * @module ProviderServiceLive
  */
+import { isDeepStrictEqual } from "node:util";
+
 import {
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
@@ -199,6 +201,14 @@ function readPersistedProviderOptions(
   return Schema.is(ProviderStartOptions)(raw) ? raw : undefined;
 }
 
+function providerStartOptionsEqualForProvider(
+  provider: ProviderKind,
+  left: ProviderStartOptions | undefined,
+  right: ProviderStartOptions | undefined,
+): boolean {
+  return isDeepStrictEqual(left?.[provider], right?.[provider]);
+}
+
 function readPersistedProviderInstanceId(
   runtimePayload: ProviderRuntimeBinding["runtimePayload"],
 ): string | undefined {
@@ -226,24 +236,30 @@ function modelSelectionForInstance(
   modelSelection: ModelSelection | undefined,
   instance: ResolvedProviderInstance,
 ): ModelSelection | undefined {
-  return modelSelectionForRoute(modelSelection, instance.driver, instance.instanceId);
+  return modelSelectionForRoute(modelSelection, instance.instanceId);
 }
 
 function modelSelectionForRoute(
   modelSelection: ModelSelection | undefined,
-  provider: ProviderKind,
   providerInstanceId: string,
 ): ModelSelection | undefined {
   if (modelSelection === undefined) {
     return undefined;
   }
-  const shouldPreserveOptions = modelSelection.provider === provider;
-  const { options: _options, ...modelSelectionWithoutOptions } = modelSelection;
   return {
-    ...(shouldPreserveOptions ? modelSelection : modelSelectionWithoutOptions),
-    provider,
+    ...modelSelection,
     instanceId: providerInstanceId,
   } as ModelSelection;
+}
+
+function sessionMatchesProviderInstance(
+  session: ProviderSession,
+  providerInstanceId: string,
+): boolean {
+  return (
+    session.providerInstanceId === providerInstanceId ||
+    (session.providerInstanceId === undefined && providerInstanceId === session.provider)
+  );
 }
 
 function validateModelSelectionMatchesRoute(input: {
@@ -264,12 +280,6 @@ function validateModelSelectionMatchesRoute(input: {
       );
     }
     return undefined;
-  }
-  if (selection.provider !== input.provider) {
-    return toValidationError(
-      input.operation,
-      `Model selection provider '${selection.provider}' does not match routed provider '${input.provider}'.`,
-    );
   }
   return undefined;
 }
@@ -431,7 +441,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     }) =>
       Effect.gen(function* () {
         const explicitProvider = input.provider !== undefined;
-        const provider = input.provider ?? input.modelSelection?.provider ?? "codex";
+        const provider = input.provider ?? "codex";
         const requestedInstanceId =
           input.providerInstanceId ??
           (input.modelSelection ? resolveModelSelectionInstanceId(input.modelSelection) : provider);
@@ -460,17 +470,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return yield* toValidationError(
             input.operation,
             `Provider instance '${instance.instanceId}' is disabled.`,
-          );
-        }
-        const selectionHasExplicitInstance = input.modelSelection?.instanceId !== undefined;
-        if (
-          input.modelSelection &&
-          input.modelSelection.provider !== instance.driver &&
-          !selectionHasExplicitInstance
-        ) {
-          return yield* toValidationError(
-            input.operation,
-            `Model selection provider '${input.modelSelection.provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
           );
         }
         return {
@@ -637,17 +636,30 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       threadId: ThreadId,
       stoppedAt: string,
     ): Effect.Effect<void, ProviderSessionDirectoryWriteError> =>
-      directory.getProvider(threadId).pipe(
-        Effect.flatMap((provider) =>
-          directory.upsert({
-            threadId,
-            provider,
-            status: "stopped",
-            runtimePayload: {
-              activeTurnId: null,
-              lastRuntimeEvent: "provider.stopAll",
-              lastRuntimeEventAt: stoppedAt,
-            },
+      directory.getBinding(threadId).pipe(
+        Effect.flatMap((bindingOption) =>
+          Option.match(bindingOption, {
+            onNone: () =>
+              Effect.fail(
+                new ProviderValidationError({
+                  operation: "ProviderService.markPersistedThreadStopped",
+                  issue: `No persisted provider binding found for thread '${threadId}'.`,
+                }),
+              ),
+            onSome: (binding) =>
+              directory.upsert({
+                threadId,
+                provider: binding.provider,
+                providerInstanceId: binding.providerInstanceId,
+                ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+                ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+                status: "stopped",
+                runtimePayload: {
+                  activeTurnId: null,
+                  lastRuntimeEvent: "provider.stopAll",
+                  lastRuntimeEventAt: stoppedAt,
+                },
+              }),
           }),
         ),
       );
@@ -665,7 +677,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       return Effect.gen(function* () {
         const adapter = yield* registry.getByProvider(binding.provider);
         const sessions = yield* adapter.listSessions();
-        const activeSession = sessions.find((session) => session.threadId === event.threadId);
+        const activeSession = sessions.find(
+          (session) =>
+            session.threadId === event.threadId &&
+            session.providerInstanceId === binding.providerInstanceId,
+        );
         return activeSession?.resumeCursor ?? binding.resumeCursor;
       }).pipe(
         Effect.catchCause((cause) =>
@@ -801,16 +817,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
         });
         const adapter = yield* registry.getByProvider(resolved.instance.driver);
-        const hasActiveSession = yield* adapter.hasSession(input.binding.threadId);
-        if (hasActiveSession) {
-          const activeSessions = yield* adapter.listSessions();
-          const existing = activeSessions.find(
-            (session) => session.threadId === input.binding.threadId,
-          );
-          if (existing) {
+        const activeSessions = yield* adapter.listSessions();
+        const existing = activeSessions.find(
+          (session) => session.threadId === input.binding.threadId,
+        );
+        if (existing) {
+          if (sessionMatchesProviderInstance(existing, resolved.instance.instanceId)) {
             const existingWithInstance: ProviderSession = {
               ...existing,
-              providerInstanceId: resolved.instance.instanceId,
+              providerInstanceId: existing.providerInstanceId ?? resolved.instance.instanceId,
             };
             yield* upsertSessionBinding(existingWithInstance, input.binding.threadId);
             yield* analytics.record("provider.session.recovered", {
@@ -821,6 +836,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             });
             return { adapter, session: existingWithInstance } as const;
           }
+
+          yield* adapter.stopSession(input.binding.threadId).pipe(
+            Effect.tap(() =>
+              analytics.record("provider.session.stopped", {
+                provider: adapter.provider,
+                providerInstanceId: existing.providerInstanceId,
+                reason: "stale-provider-instance",
+              }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning("provider.session.stop-stale-failed", {
+                threadId: input.binding.threadId,
+                provider: adapter.provider,
+                providerInstanceId: existing.providerInstanceId,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          );
         }
 
         if (!hasPersistedResumeCursor) {
@@ -966,14 +999,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
         const adapter = yield* registry.getByProvider(resolved.instance.driver);
 
-        const hasRequestedSession = yield* adapter.hasSession(input.threadId);
-        if (hasRequestedSession) {
+        const activeSessions = yield* adapter.listSessions();
+        const activeSession = activeSessions.find((session) => session.threadId === input.threadId);
+        if (
+          activeSession &&
+          sessionMatchesProviderInstance(activeSession, resolved.instance.instanceId)
+        ) {
           return {
             adapter,
             threadId: input.threadId,
             providerInstanceId: resolved.instance.instanceId,
             isActive: true,
           } as const;
+        }
+        if (activeSession) {
+          yield* stopStaleSessionsForThread({
+            threadId: input.threadId,
+            provider: resolved.instance.driver,
+            providerInstanceId: resolved.instance.instanceId,
+          });
         }
 
         if (!input.allowRecovery) {
@@ -1005,7 +1049,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const input = {
           ...parsed,
           threadId,
-          provider: parsed.provider ?? parsed.modelSelection?.provider ?? "codex",
+          provider: parsed.provider ?? "codex",
         };
         clearRuntimeIdleTimer(threadId);
         yield* waitForRuntimeIdleStop(threadId);
@@ -1020,21 +1064,23 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
-        const effectiveResumeCursor =
-          input.resumeCursor ??
-          (persistedBinding?.provider === resolved.instance.driver &&
-          persistedBinding.providerInstanceId === resolved.instance.instanceId
-            ? persistedBinding.resumeCursor
-            : undefined);
         const persistedProviderOptions =
           persistedBinding?.provider === resolved.instance.driver &&
           persistedBinding.providerInstanceId === resolved.instance.instanceId
             ? readPersistedProviderOptions(persistedBinding.runtimePayload)
             : undefined;
-        const effectiveProviderOptions = mergeProviderStartOptions(
-          input.providerOptions ?? persistedProviderOptions,
-          resolved.providerOptions,
-        );
+        const effectiveProviderOptions = resolved.providerOptions;
+        const canReusePersistedResumeCursor =
+          persistedBinding?.provider === resolved.instance.driver &&
+          persistedBinding.providerInstanceId === resolved.instance.instanceId &&
+          providerStartOptionsEqualForProvider(
+            resolved.instance.driver,
+            persistedProviderOptions,
+            effectiveProviderOptions,
+          );
+        const effectiveResumeCursor =
+          input.resumeCursor ??
+          (canReusePersistedResumeCursor ? persistedBinding?.resumeCursor : undefined);
         const adapter = yield* registry.getByProvider(resolved.instance.driver);
         yield* stopStaleSessionsForThread({
           threadId,
@@ -1194,7 +1240,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 ? { modelSelection: resolvedSource.modelSelection }
                 : {}),
               ...(effectiveProviderOptions !== undefined
-                ? { providerOptions: effectiveProviderOptions }
+                ? { providerOptions: redactProviderOptionsForPersistence(effectiveProviderOptions) }
                 : {}),
               lastRuntimeEvent: "provider.thread.forked",
               lastRuntimeEventAt: new Date().toISOString(),
@@ -1245,7 +1291,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
             const routedModelSelection = modelSelectionForRoute(
               input.modelSelection,
-              routed.adapter.provider,
               routed.providerInstanceId,
             );
             const turn = yield* routed.adapter.sendTurn({
@@ -1327,7 +1372,6 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             }
             const routedModelSelection = modelSelectionForRoute(
               input.modelSelection,
-              routed.adapter.provider,
               routed.providerInstanceId,
             );
             const turn = yield* routed.adapter.steerTurn({
@@ -1696,8 +1740,33 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         });
       });
 
-    const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
-      registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
+    const getCapabilities: ProviderServiceShape["getCapabilities"] = (instanceId) =>
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError((cause) =>
+            toValidationError(
+              "ProviderService.getCapabilities",
+              "Failed to load provider instance settings.",
+              cause,
+            ),
+          ),
+        );
+        const instance = resolveProviderInstance(settings, { instanceId });
+        if (!instance) {
+          return yield* toValidationError(
+            "ProviderService.getCapabilities",
+            `Provider instance '${instanceId}' is not configured.`,
+          );
+        }
+        if (!instance.enabled) {
+          return yield* toValidationError(
+            "ProviderService.getCapabilities",
+            `Provider instance '${instanceId}' is disabled.`,
+          );
+        }
+        const adapter = yield* registry.getByProvider(instance.driver);
+        return adapter.capabilities;
+      });
 
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {

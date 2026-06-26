@@ -94,7 +94,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       const thread = snapshot.threads.find((candidate) => candidate.id === "thread-providerless");
 
       assert.deepStrictEqual(thread?.modelSelection, {
-        provider: "claudeAgent",
         instanceId: "work",
         model: "auto",
       });
@@ -377,7 +376,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           title: "Project 1",
           workspaceRoot: "/tmp/project-1",
           defaultModelSelection: {
-            provider: "codex",
             instanceId: "codex",
             model: "gpt-5-codex",
           },
@@ -402,7 +400,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-1"),
           title: "Thread 1",
           modelSelection: {
-            provider: "codex",
             instanceId: "codex",
             model: "gpt-5-codex",
           },
@@ -822,16 +819,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       const expectedProjectSelection = {
-        provider: "codex",
         instanceId: "codex",
         model: "imported-project-model",
-        options: { reasoningEffort: "medium" },
+        options: [{ id: "reasoningEffort", value: "medium" }],
       } as const;
       const expectedThreadSelection = {
-        provider: "codex",
         instanceId: "codex",
         model: "gpt-5.5",
-        options: { reasoningEffort: "medium" },
+        options: [{ id: "reasoningEffort", value: "medium" }],
       } as const;
 
       const snapshot = yield* snapshotQuery.getSnapshot();
@@ -1344,7 +1339,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           projectId: asProjectId("project-shell"),
           title: "Shell Thread",
           modelSelection: {
-            provider: "codex",
             instanceId: "codex",
             model: "gpt-5-codex",
           },

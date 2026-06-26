@@ -13,6 +13,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 import { buildPromptThreadTitleFallback } from "@t3tools/shared/chatThreads";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { isPendingThreadWorktree } from "@t3tools/shared/threadEnvironment";
 import {
   buildKanbanComposerDraftSnapshot,
@@ -147,6 +148,7 @@ async function dispatchKanbanDraftThreadOnce(
     projectModelSelection: project?.defaultModelSelection ?? null,
     defaultProvider: input.defaultProvider,
   });
+  const selectedProvider = inferLegacyProviderKindFromModelSelection(modelSelection);
   const draftThread = composerStore.getDraftThread(threadId);
   // Worktree creation is owned by the full chat composer path. Kanban stays a
   // control surface and opens chat when a draft still needs that preflight.
@@ -201,7 +203,7 @@ async function dispatchKanbanDraftThreadOnce(
     composerFileComments,
   );
   const outgoingMessageText = formatOutgoingComposerPrompt({
-    provider: modelSelection.provider,
+    provider: selectedProvider,
     model: modelSelection.model,
     effort: resolvePromptEffortFromModelSelection(modelSelection),
     text: messageText || (composerImages.length > 0 ? IMAGE_ONLY_BOOTSTRAP_PROMPT : ""),
@@ -209,7 +211,7 @@ async function dispatchKanbanDraftThreadOnce(
   const mentionedSkills = filterPromptSkillReferences(
     outgoingMessageText,
     skills,
-    modelSelection.provider,
+    selectedProvider,
   );
   const mentionedMentions = filterPromptProviderMentionReferences(outgoingMessageText, mentions);
   const turnAttachmentsPromise = buildUploadComposerAttachments({
@@ -230,7 +232,7 @@ async function dispatchKanbanDraftThreadOnce(
   kanbanUi.markOptimisticDispatch(threadId, {
     projectId,
     title: thread?.title ?? fallbackTitle,
-    provider: modelSelection.provider,
+    provider: selectedProvider,
     baselineTurnId: thread?.latestTurn?.turnId ?? null,
     droppedAtMs,
   });

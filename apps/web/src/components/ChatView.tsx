@@ -39,6 +39,7 @@ import {
   RuntimeMode,
 } from "@t3tools/contracts";
 import { getModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
@@ -693,6 +694,16 @@ function modelQueryOptionsForProviderInstance(input: {
     shadowHomePath: readProviderOptionString(providerOptions, "shadowHomePath"),
     accountId: readProviderOptionString(providerOptions, "accountId"),
     apiEndpoint: readProviderOptionString(providerOptions, "apiEndpoint"),
+    serverUrl: readProviderOptionString(providerOptions, "serverUrl"),
+    serverPassword: readProviderOptionString(providerOptions, "serverPassword"),
+    experimentalWebSockets:
+      input.provider === "opencode" &&
+      providerOptions &&
+      typeof providerOptions === "object" &&
+      !Array.isArray(providerOptions) &&
+      (providerOptions as Record<string, unknown>).experimentalWebSockets === true
+        ? true
+        : undefined,
     agentDir: readProviderOptionString(providerOptions, "agentDir"),
     cwd: input.cwd,
     enabled: input.enabled,
@@ -1391,7 +1402,7 @@ export default function ChatView({
             threadId,
             draftThread,
             fallbackDraftProject?.defaultModelSelection ?? {
-              provider: "codex",
+              instanceId: "codex",
               model: DEFAULT_MODEL_BY_PROVIDER.codex,
             },
             localDraftError,
@@ -1717,8 +1728,13 @@ export default function ChatView({
 
   const sessionProvider = activeThread?.session?.provider ?? null;
   const selectedProviderByThreadId = composerDraft.activeProvider ?? null;
-  const threadProvider =
-    activeThread?.modelSelection.provider ?? activeProject?.defaultModelSelection?.provider ?? null;
+  const activeThreadModelProvider = activeThread
+    ? inferLegacyProviderKindFromModelSelection(activeThread.modelSelection)
+    : null;
+  const activeProjectDefaultProvider = activeProject?.defaultModelSelection
+    ? inferLegacyProviderKindFromModelSelection(activeProject.defaultModelSelection)
+    : null;
+  const threadProvider = activeThreadModelProvider ?? activeProjectDefaultProvider ?? null;
   const hasThreadStarted = Boolean(
     activeThread &&
     (activeThread.latestTurn !== null ||
@@ -1751,9 +1767,19 @@ export default function ChatView({
     const draftSelections = composerDraft.modelSelectionByProvider;
 
     const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
+      Object.values(draftSelections).find(
+        (selection) =>
+          selection !== undefined &&
+          inferLegacyProviderKindFromModelSelection(selection) === provider,
+      )?.model ??
+      (threadModelSelection &&
+      inferLegacyProviderKindFromModelSelection(threadModelSelection) === provider
+        ? threadModelSelection.model
+        : null) ??
+      (projectModelSelection &&
+      inferLegacyProviderKindFromModelSelection(projectModelSelection) === provider
+        ? projectModelSelection.model
+        : null);
 
     return {
       codex: resolveHint("codex"),
@@ -1789,14 +1815,17 @@ export default function ChatView({
     const draftSelection =
       candidateInstanceId === undefined
         ? Object.values(composerDraft.modelSelectionByProvider).find(
-            (selection) => selection?.provider === selectedProvider,
+            (selection) =>
+              selection !== undefined &&
+              inferLegacyProviderKindFromModelSelection(selection) === selectedProvider,
           )
         : composerDraft.modelSelectionByProvider[
             providerInstanceModelSelectionKey(selectedProvider, candidateInstanceId)
           ];
     if (
       candidateInstanceId === undefined &&
-      draftSelection?.provider === selectedProvider &&
+      draftSelection !== undefined &&
+      inferLegacyProviderKindFromModelSelection(draftSelection) === selectedProvider &&
       draftSelection.instanceId
     ) {
       candidateInstanceId = draftSelection.instanceId;
@@ -1804,7 +1833,8 @@ export default function ChatView({
 
     if (
       candidateInstanceId === undefined &&
-      activeThread?.modelSelection.provider === selectedProvider &&
+      activeThread !== undefined &&
+      activeThreadModelProvider === selectedProvider &&
       activeThread.modelSelection.instanceId
     ) {
       candidateInstanceId = activeThread.modelSelection.instanceId;
@@ -1812,7 +1842,9 @@ export default function ChatView({
 
     if (
       candidateInstanceId === undefined &&
-      activeProject?.defaultModelSelection?.provider === selectedProvider &&
+      activeProject?.defaultModelSelection !== null &&
+      activeProject?.defaultModelSelection !== undefined &&
+      activeProjectDefaultProvider === selectedProvider &&
       activeProject.defaultModelSelection.instanceId
     ) {
       candidateInstanceId = activeProject.defaultModelSelection.instanceId;
@@ -1821,7 +1853,9 @@ export default function ChatView({
     return resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
   }, [
     activeProject?.defaultModelSelection,
+    activeProjectDefaultProvider,
     activeThread?.modelSelection,
+    activeThreadModelProvider,
     activeThread?.session?.provider,
     activeThread?.session?.providerInstanceId,
     composerDraft.modelSelectionByProvider,
@@ -1930,6 +1964,9 @@ export default function ChatView({
           ? selectedProviderInstanceId
           : "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      serverUrl: settings.openCodeServerUrl || null,
+      serverPassword: settings.openCodeServerPassword || null,
+      experimentalWebSockets: settings.openCodeExperimentalWebSockets,
       cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),
@@ -1942,6 +1979,8 @@ export default function ChatView({
           ? selectedProviderInstanceId
           : "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      serverUrl: settings.kiloServerUrl || null,
+      serverPassword: settings.kiloServerPassword || null,
       cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
     }),
@@ -1983,6 +2022,9 @@ export default function ChatView({
           ? selectedProviderInstanceId
           : "opencode",
       binaryPath: settings.openCodeBinaryPath || null,
+      serverUrl: settings.openCodeServerUrl || null,
+      serverPassword: settings.openCodeServerPassword || null,
+      experimentalWebSockets: settings.openCodeExperimentalWebSockets,
       cwd: providerModelDiscoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),
@@ -1995,6 +2037,8 @@ export default function ChatView({
           ? selectedProviderInstanceId
           : "kilo",
       binaryPath: settings.kiloBinaryPath || null,
+      serverUrl: settings.kiloServerUrl || null,
+      serverPassword: settings.kiloServerPassword || null,
       cwd: providerModelDiscoveryCwd,
       enabled: kiloModelDiscoveryEnabled,
     }),
@@ -2182,8 +2226,8 @@ export default function ChatView({
     customModelsByProvider,
     availableModelOptionsByProvider: selectedInstanceModelOptionsByProvider,
   });
-  const runtimeModelsByProvider = useMemo(
-    () => ({
+  const runtimeModelsByProvider = useMemo(() => {
+    const byProvider = {
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
@@ -2192,18 +2236,26 @@ export default function ChatView({
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
-    }),
-    [
-      claudeDynamicModelsQuery.data?.models,
-      codexDynamicModelsQuery.data?.models,
-      cursorRuntimeModels,
-      geminiModelsQuery.data?.models,
-      grokDynamicModelsQuery.data?.models,
-      kiloDynamicModelsQuery.data?.models,
-      openCodeDynamicModelsQuery.data?.models,
-      piDynamicModelsQuery.data?.models,
-    ],
-  );
+    };
+    const selectedInstanceModels =
+      dynamicModelsByProviderInstance[selectedProviderInstanceId]?.models;
+    return {
+      ...byProvider,
+      [selectedProvider]: selectedInstanceModels ?? byProvider[selectedProvider],
+    };
+  }, [
+    claudeDynamicModelsQuery.data?.models,
+    codexDynamicModelsQuery.data?.models,
+    cursorRuntimeModels,
+    dynamicModelsByProviderInstance,
+    geminiModelsQuery.data?.models,
+    grokDynamicModelsQuery.data?.models,
+    kiloDynamicModelsQuery.data?.models,
+    openCodeDynamicModelsQuery.data?.models,
+    piDynamicModelsQuery.data?.models,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
   const providerModelsQueryByProvider = {
     claudeAgent: claudeDynamicModelsQuery,
     codex: codexDynamicModelsQuery,
@@ -2241,13 +2293,15 @@ export default function ChatView({
       providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
     ] ?? null;
   const selectedModelSelection = useMemo<ModelSelection>(() => {
-    if (selectedProvider === "pi" && draftModelSelectionForSelectedProvider?.provider === "pi") {
-      return buildModelSelection(
-        selectedProvider,
-        draftModelSelectionForSelectedProvider.model,
-        selectedModelOptionsForDispatch ?? draftModelSelectionForSelectedProvider.options,
-        { instanceId: selectedProviderInstanceId },
-      );
+    if (
+      selectedProvider === "pi" &&
+      draftModelSelectionForSelectedProvider !== null &&
+      inferLegacyProviderKindFromModelSelection(draftModelSelectionForSelectedProvider) === "pi"
+    ) {
+      return {
+        ...draftModelSelectionForSelectedProvider,
+        instanceId: selectedProviderInstanceId,
+      };
     }
     return buildModelSelection(selectedProvider, selectedModel, selectedModelOptionsForDispatch, {
       instanceId: selectedProviderInstanceId,
@@ -2264,7 +2318,7 @@ export default function ChatView({
     [selectedProviderInstanceId, settings],
   );
   const selectedModelForPicker =
-    selectedModelSelection.provider === selectedProvider
+    inferLegacyProviderKindFromModelSelection(selectedModelSelection) === selectedProvider
       ? selectedModelSelection.model
       : selectedModel;
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
@@ -2282,8 +2336,8 @@ export default function ChatView({
     selectedProviderInstanceId,
   ]);
   const persistedComposerModelSelection =
-    sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
-      ? activeProject?.defaultModelSelection?.provider === selectedProvider
+    sessionProvider && activeThreadModelProvider !== sessionProvider
+      ? activeProjectDefaultProvider === selectedProvider && activeProject?.defaultModelSelection
         ? activeProject.defaultModelSelection
         : null
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
@@ -3461,14 +3515,12 @@ export default function ChatView({
     [activeThread],
   );
   const handoffBadgeSourceProvider = activeThread?.handoff?.sourceProvider ?? null;
-  const handoffBadgeTargetProvider = activeThread?.handoff
-    ? activeThread.modelSelection.provider
-    : null;
+  const handoffBadgeTargetProvider = activeThread?.handoff ? activeThreadModelProvider : null;
   const handoffTargets = useMemo(
     () =>
       activeThread
         ? resolveAvailableHandoffTargets({
-            sourceProvider: activeThread.modelSelection.provider,
+            sourceProvider: activeThreadModelProvider ?? "codex",
             sourceProviderInstanceId:
               activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId,
             providerInstances,
@@ -3478,7 +3530,7 @@ export default function ChatView({
             ),
           )
         : [],
-    [activeThread, providerInstances, providerStatuses],
+    [activeThread, activeThreadModelProvider, providerInstances, providerStatuses],
   );
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
@@ -3495,8 +3547,13 @@ export default function ChatView({
       ? null
       : activeProviderStatus;
   const voiceProviderStatus = useMemo(
-    () => findProviderStatus(providerStatuses, "codex"),
-    [providerStatuses],
+    () =>
+      findProviderStatus(
+        providerStatuses,
+        "codex",
+        selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
+      ),
+    [providerStatuses, selectedProvider, selectedProviderInstanceId],
   );
   const refreshVoiceStatus = useRefreshProviderStatusesNow();
   const voiceRecordingDurationLabel = useMemo(
@@ -4772,7 +4829,6 @@ export default function ChatView({
       if (
         input.modelSelection !== undefined &&
         (input.modelSelection.model !== serverThread.modelSelection.model ||
-          input.modelSelection.provider !== serverThread.modelSelection.provider ||
           input.modelSelection.instanceId !== serverThread.modelSelection.instanceId ||
           JSON.stringify(input.modelSelection.options ?? null) !==
             JSON.stringify(serverThread.modelSelection.options ?? null))
@@ -5937,6 +5993,7 @@ export default function ChatView({
       }
       const result = await api.server.transcribeVoice({
         provider: "codex",
+        providerInstanceId: selectedProvider === "codex" ? selectedProviderInstanceId : "codex",
         cwd: activeProject.cwd,
         ...(activeThread ? { threadId: activeThread.id } : {}),
         ...payload,
@@ -6791,6 +6848,9 @@ export default function ChatView({
     const selectedPromptEffortForSend =
       queuedChatTurn?.selectedPromptEffort ?? selectedPromptEffort;
     const selectedModelSelectionForSend = queuedChatTurn?.modelSelection ?? selectedModelSelection;
+    const selectedModelSelectionProviderForSend = inferLegacyProviderKindFromModelSelection(
+      selectedModelSelectionForSend,
+    );
     const providerOptionsForDispatchForSend =
       queuedChatTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
     const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
@@ -7049,7 +7109,7 @@ export default function ChatView({
       }
     }
     const sendProviderAvailability = resolveProviderSendAvailability({
-      provider: selectedModelSelectionForSend.provider,
+      provider: selectedModelSelectionProviderForSend,
       instanceId: selectedModelSelectionForSend.instanceId,
       statuses: providerStatuses,
     });
@@ -7447,21 +7507,17 @@ export default function ChatView({
         }
       }
 
-      const threadCreateModelSelection: ModelSelection = buildModelSelection(
-        selectedProviderForSend,
-        selectedModelSelectionForSend.provider === selectedProviderForSend
-          ? selectedModelSelectionForSend.model
-          : selectedModelForSend ||
-              targetProjectDefaultModelSelectionForSend?.model ||
-              DEFAULT_MODEL_BY_PROVIDER.codex,
-        selectedModelSelectionForSend.options,
-        {
-          instanceId:
-            selectedModelSelectionForSend.provider === selectedProviderForSend
-              ? selectedModelSelectionForSend.instanceId
-              : selectedProviderInstanceId,
-        },
-      );
+      const threadCreateModelSelection: ModelSelection =
+        selectedModelSelectionProviderForSend === selectedProviderForSend
+          ? selectedModelSelectionForSend
+          : buildModelSelection(
+              selectedProviderForSend,
+              selectedModelForSend ||
+                targetProjectDefaultModelSelectionForSend?.model ||
+                DEFAULT_MODEL_BY_PROVIDER.codex,
+              null,
+              { instanceId: selectedProviderInstanceId },
+            );
 
       if (isLocalDraftThread) {
         const inheritedProjectInstructions =
@@ -7550,7 +7606,7 @@ export default function ChatView({
       const turnAttachments = await turnAttachmentsPromise;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: selectedModelSelectionForSend.provider,
+        provider: selectedModelSelectionProviderForSend,
         providerOptions: providerOptionsForDispatchForSend,
       });
       await api.orchestration.dispatchCommand({
@@ -7947,6 +8003,9 @@ export default function ChatView({
       const providerOptionsForPlanDispatch =
         queuedTurn?.providerOptionsForDispatch ?? providerOptionsForDispatch;
       const modelSelectionForPlanDispatch = queuedTurn?.modelSelection ?? selectedModelSelection;
+      const providerForPlanDispatch = inferLegacyProviderKindFromModelSelection(
+        modelSelectionForPlanDispatch,
+      );
       const sourceProposedPlan =
         nextInteractionMode === "default"
           ? buildSourceProposedPlanReference({
@@ -7956,7 +8015,7 @@ export default function ChatView({
           : undefined;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
-        provider: modelSelectionForPlanDispatch.provider,
+        provider: providerForPlanDispatch,
         providerOptions: providerOptionsForPlanDispatch,
       });
       await api.orchestration.dispatchCommand({
@@ -8251,7 +8310,7 @@ export default function ChatView({
       .then(() => {
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
-          provider: selectedModelSelection.provider,
+          provider: selectedProvider,
           providerOptions: providerOptionsForDispatch,
         });
         return api.orchestration.dispatchCommand({
@@ -9612,7 +9671,7 @@ export default function ChatView({
     keybindings,
     availableEditors,
     activeThreadId: activeThread.id,
-    activeProvider: activeThread.session?.provider ?? activeThread.modelSelection.provider,
+    activeProvider: activeThread.session?.provider ?? activeThreadModelProvider ?? "codex",
     showGitActions,
     diffOpen: resolvedDiffOpen,
     threadAutomations: threadAutomationItems,
@@ -10190,7 +10249,7 @@ export default function ChatView({
           activeThreadId={activeThread.id}
           activeThreadTitle={activeThreadDisplayTitle}
           activeThreadEntryPoint={terminalState.entryPoint}
-          activeProvider={activeThread.session?.provider ?? activeThread.modelSelection.provider}
+          activeProvider={activeThread.session?.provider ?? activeThreadModelProvider ?? "codex"}
           activeProjectName={isEditorRail ? undefined : activeProjectDisplayName}
           threadBreadcrumbs={threadBreadcrumbs}
           {...(isEditorRail

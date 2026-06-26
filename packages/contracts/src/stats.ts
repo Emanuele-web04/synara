@@ -7,6 +7,7 @@
 import { Schema } from "effect";
 import { IsoDateTime, NonNegativeInt, TrimmedNonEmptyString } from "./baseSchemas";
 import { ProviderKind } from "./orchestration";
+import { ProviderInstanceId } from "./providerInstance";
 
 // ── Input ────────────────────────────────────────────────────────────
 
@@ -35,6 +36,7 @@ export type ProfileHeatmapCell = typeof ProfileHeatmapCell.Type;
 
 export const ProfileProviderUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   turnCount: NonNegativeInt,
   percent: Schema.Number,

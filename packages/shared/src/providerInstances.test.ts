@@ -34,4 +34,11 @@ describe("provider instance resolution", () => {
     expect(instanceId.length).toBeLessThanOrEqual(64);
     expect(Schema.is(ProviderInstanceId)(instanceId)).toBe(true);
   });
+
+  it("slugifies arbitrary Codex account ids into valid provider instance ids", () => {
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(instanceId).toMatch(/^codex_work_example_com_[a-z0-9]+$/);
+    expect(Schema.is(ProviderInstanceId)(instanceId)).toBe(true);
+  });
 });

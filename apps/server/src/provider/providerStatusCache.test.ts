@@ -69,6 +69,37 @@ describe("providerStatusCache", () => {
     expect(result).toBeUndefined();
   });
 
+  it("ignores cache entries that do not match the requested provider instance", async () => {
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const tempDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-provider-status-cache-identity-",
+        });
+        const cachePath = resolveProviderStatusCachePath({
+          stateDir: tempDir,
+          provider: "codex",
+          instanceId: "codex_work",
+        });
+
+        yield* writeProviderStatusCache({
+          filePath: cachePath,
+          provider: {
+            ...readyCodexStatus,
+            instanceId: "codex_personal",
+          },
+        });
+
+        return yield* readProviderStatusCache(cachePath, {
+          provider: "codex",
+          instanceId: "codex_work",
+        });
+      }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+    );
+
+    expect(result).toBeUndefined();
+  });
+
   it("keeps provider ordering stable for transport consumers", () => {
     expect(
       orderProviderStatuses([

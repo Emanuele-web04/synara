@@ -15,6 +15,7 @@ import type {
   ServerProviderStatus,
   ThreadId,
 } from "@t3tools/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 
@@ -95,14 +96,13 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       scratchState?.modelSelectionByProvider[
         providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
       ];
-    const modelSelection = buildModelSelection(
-      selectedProvider,
-      draftModelSelection?.model ?? selectedModel,
-      draftModelSelection?.options ?? null,
-      {
-        instanceId: selectedProviderInstanceId,
-      },
-    );
+    const modelSelection =
+      draftModelSelection &&
+      inferLegacyProviderKindFromModelSelection(draftModelSelection) === selectedProvider
+        ? { ...draftModelSelection, instanceId: selectedProviderInstanceId }
+        : buildModelSelection(selectedProvider, selectedModel, null, {
+            instanceId: selectedProviderInstanceId,
+          });
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,
@@ -126,7 +126,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
 
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = resolveProviderSendAvailability({
-      provider: modelSelection.provider,
+      provider: selectedProvider,
       instanceId: modelSelection.instanceId,
       statuses: providerStatuses,
     });

@@ -49,7 +49,7 @@ import {
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
-  getGitTextGenerationModelOptions,
+  getGitTextGenerationPickerOptions,
   getProviderInstanceOptions,
   getUnsupportedProviderInstanceOptions,
   MAX_CUSTOM_MODEL_LENGTH,
@@ -914,34 +914,15 @@ function SettingsRouteView() {
   // narrow inputs the helper actually uses (destructured so exhaustive-deps stays exact) so
   // typing in any other settings field — every keystroke re-renders this monolithic route —
   // doesn't rebuild these lists.
-  const {
-    customCodexModels,
-    customKiloModels,
-    customOpenCodeModels,
-    textGenerationModel,
-    textGenerationProvider,
-  } = settings;
+  const { textGenerationModel, textGenerationProvider } = settings;
   const providerInstanceOptions = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const unsupportedProviderInstanceOptions = useMemo(
     () => getUnsupportedProviderInstanceOptions(settings),
     [settings],
   );
   const gitTextGenerationModelOptions = useMemo(
-    () =>
-      getGitTextGenerationModelOptions({
-        customCodexModels,
-        customKiloModels,
-        customOpenCodeModels,
-        textGenerationModel,
-        textGenerationProvider,
-      }),
-    [
-      customCodexModels,
-      customKiloModels,
-      customOpenCodeModels,
-      textGenerationModel,
-      textGenerationProvider,
-    ],
+    () => getGitTextGenerationPickerOptions(settings),
+    [settings],
   );
   const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
   const currentGitTextGenerationInstanceId =
@@ -958,20 +939,7 @@ function SettingsRouteView() {
     currentGitTextGenerationProvider !== defaultGitTextGenerationProvider ||
     currentGitTextGenerationInstanceId !== defaultGitTextGenerationInstanceId ||
     currentGitTextGenerationModel !== defaultGitTextGenerationModel;
-  const gitTextGenerationPickerOptions = useMemo(
-    () =>
-      gitTextGenerationModelOptions.flatMap((option) =>
-        providerInstanceOptions
-          .filter((instance) => instance.provider === option.provider && instance.enabled)
-          .map((instance) => ({
-            key: `${instance.instanceId}:${option.provider}:${option.slug}`,
-            value: `${instance.instanceId}:${option.provider}:${option.slug}`,
-            instance,
-            option,
-          })),
-      ),
-    [gitTextGenerationModelOptions, providerInstanceOptions],
-  );
+  const gitTextGenerationPickerOptions = gitTextGenerationModelOptions;
   const selectedGitTextGenerationPickerOption = gitTextGenerationPickerOptions.find(
     (entry) =>
       entry.instance.instanceId === currentGitTextGenerationInstanceId &&
@@ -981,10 +949,11 @@ function SettingsRouteView() {
   const selectedGitTextGenerationModelName =
     selectedGitTextGenerationPickerOption?.option.name ??
     gitTextGenerationModelOptions.find(
-      (option) =>
-        option.provider === currentGitTextGenerationProvider &&
-        option.slug === currentGitTextGenerationModel,
-    )?.name ??
+      (entry) =>
+        entry.instance.instanceId === currentGitTextGenerationInstanceId &&
+        entry.option.provider === currentGitTextGenerationProvider &&
+        entry.option.slug === currentGitTextGenerationModel,
+    )?.option.name ??
     currentGitTextGenerationModel;
   const selectedGitTextGenerationInstanceLabel =
     selectedGitTextGenerationPickerOption?.instance.label ??
@@ -1319,12 +1288,14 @@ function SettingsRouteView() {
     ) => {
       const existing = settings.providerInstances[instanceId];
       if (!existing) return;
+      const { displayName: _existingDisplayName, ...existingWithoutDisplayName } = existing;
+      const trimmedDisplayName = patch.displayName?.trim();
       updateSettings({
         providerInstances: {
           ...settings.providerInstances,
           [instanceId]: {
-            ...existing,
-            ...(patch.displayName !== undefined ? { displayName: patch.displayName } : {}),
+            ...(patch.displayName !== undefined ? existingWithoutDisplayName : existing),
+            ...(trimmedDisplayName ? { displayName: trimmedDisplayName } : {}),
             ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
             ...(patch.config
               ? {

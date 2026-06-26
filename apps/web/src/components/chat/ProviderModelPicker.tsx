@@ -134,7 +134,7 @@ const FAVORITE_MODEL_STORAGE_KEYS = {
   opencode: "synara:opencode-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
 } as const;
-const FavoriteModelSlugs = Schema.Array(Schema.String);
+const FavoriteModelKeys = Schema.Array(Schema.String);
 type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
 
 function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
@@ -189,12 +189,52 @@ function resolveModelOptionsForProviderInstance(input: {
   );
 }
 
-// Keeps persisted favorite slugs compact and stable while preserving the user's order.
-function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
-  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
-  return normalizedCurrent.includes(slug)
-    ? normalizedCurrent.filter((entry) => entry !== slug)
-    : [...normalizedCurrent, slug];
+function favoriteModelKey(instanceId: ProviderInstanceId, slug: string): string {
+  return `${instanceId}:${slug}`;
+}
+
+function normalizeFavoriteModelKeys(
+  provider: FavoriteModelProvider,
+  entries: ReadonlyArray<string>,
+): string[] {
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+        .map((entry) => (entry.includes(":") ? entry : favoriteModelKey(provider, entry))),
+    ),
+  );
+}
+
+// Keeps persisted favorite model keys compact and stable while preserving the user's order.
+function toggleFavoriteModelKey(
+  current: ReadonlyArray<string>,
+  provider: FavoriteModelProvider,
+  instanceId: ProviderInstanceId,
+  slug: string,
+): string[] {
+  const normalizedCurrent = normalizeFavoriteModelKeys(provider, current);
+  const key = favoriteModelKey(instanceId, slug);
+  return normalizedCurrent.includes(key)
+    ? normalizedCurrent.filter((entry) => entry !== key)
+    : [...normalizedCurrent, key];
+}
+
+function favoriteModelSlugsForInstance(input: {
+  provider: FavoriteModelProvider;
+  instanceId: ProviderInstanceId;
+  keys: ReadonlySet<string>;
+}): ReadonlySet<string> {
+  const prefix = `${input.instanceId}:`;
+  const slugs = new Set<string>();
+  for (const key of input.keys) {
+    const normalizedKey = key.includes(":") ? key : favoriteModelKey(input.provider, key);
+    if (normalizedKey.startsWith(prefix)) {
+      slugs.add(normalizedKey.slice(prefix.length));
+    }
+  }
+  return slugs;
 }
 
 function stripParameterizedModelSuffix(model: string): string {
@@ -266,22 +306,22 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.opencode,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.pi,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
@@ -510,7 +550,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
     );
   };
   const toggleFavoriteModel = useCallback(
-    (provider: FavoriteModelProvider, slug: string) => {
+    (provider: FavoriteModelProvider, instanceId: ProviderInstanceId, slug: string) => {
       const setFavoriteModelSlugs =
         provider === "cursor"
           ? setCursorFavoriteModelSlugs
@@ -519,7 +559,9 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             : provider === "pi"
               ? setPiFavoriteModelSlugs
               : setOpenCodeFavoriteModelSlugs;
-      setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
+      setFavoriteModelSlugs((current) =>
+        toggleFavoriteModelKey(current, provider, instanceId, slug),
+      );
     },
     [
       setCursorFavoriteModelSlugs,
@@ -561,8 +603,17 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           )
         : providerOptions;
     const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
-    const favoriteModelSlugSet =
+    const selectedInstanceId = getSelectedInstanceIdForProvider(provider);
+    const favoriteModelKeySet =
       favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
+    const favoriteModelSlugSet =
+      favoriteProvider !== null && favoriteModelKeySet !== undefined
+        ? favoriteModelSlugsForInstance({
+            provider: favoriteProvider,
+            instanceId: selectedInstanceId,
+            keys: favoriteModelKeySet,
+          })
+        : undefined;
     const groupedOptions =
       favoriteModelSlugSet !== undefined
         ? groupProviderModelOptionsWithFavorites({
@@ -582,6 +633,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             provider={provider}
             activeModel={props.model}
             isSearching={normalizedModelSearchQuery.length > 0}
+            instanceId={selectedInstanceId}
             favoriteProvider={favoriteProvider}
             favoriteModelSlugSet={favoriteModelSlugSet}
             onToggleFavorite={toggleFavoriteModel}

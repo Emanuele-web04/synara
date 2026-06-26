@@ -19,7 +19,7 @@ function makeProject(): Project {
     folderName: "project",
     localName: null,
     cwd: "/tmp/project",
-    defaultModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    defaultModelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
     expanded: true,
     scripts: [],
   };
@@ -31,7 +31,7 @@ function makeThread(threadId: ThreadId, overrides: Partial<Thread> = {}): Thread
     codexThreadId: null,
     projectId: PROJECT_ID,
     title: `Thread ${threadId}`,
-    modelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    modelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
     runtimeMode: "full-access",
     interactionMode: "default",
     session: null,

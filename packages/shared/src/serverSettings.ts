@@ -35,22 +35,23 @@ export function applyServerSettingsPatch(
     return next;
   }
 
+  const instances = deriveProviderInstances(next);
+  const currentInstance = instances.find(
+    (instance) => instance.instanceId === current.textGenerationModelSelection.instanceId,
+  );
   const patchedInstanceId =
     selectionPatch.instanceId ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
+    (selectionPatch.provider && selectionPatch.provider !== currentInstance?.driver
       ? selectionPatch.provider
       : current.textGenerationModelSelection.instanceId);
   const patchedInstance =
     patchedInstanceId !== undefined
-      ? deriveProviderInstances(next).find((instance) => instance.instanceId === patchedInstanceId)
+      ? instances.find((instance) => instance.instanceId === patchedInstanceId)
       : undefined;
   const provider =
-    patchedInstance?.driver ??
-    selectionPatch.provider ??
-    current.textGenerationModelSelection.provider;
-  const instanceId = patchedInstance?.instanceId ?? patchedInstanceId;
-  const providerChanged = provider !== current.textGenerationModelSelection.provider;
+    patchedInstance?.driver ?? selectionPatch.provider ?? currentInstance?.driver ?? "codex";
+  const instanceId = patchedInstance?.instanceId ?? patchedInstanceId ?? provider;
+  const providerChanged = provider !== (currentInstance?.driver ?? "codex");
   const model =
     selectionPatch.model ??
     (providerChanged
@@ -63,10 +64,9 @@ export function applyServerSettingsPatch(
   return {
     ...next,
     textGenerationModelSelection: {
-      provider,
-      ...(instanceId !== undefined ? { instanceId } : {}),
+      instanceId,
       model,
-      ...(options !== undefined ? { options } : {}),
+      ...(options !== undefined ? { options: options as ModelSelection["options"] } : {}),
     } as ModelSelection,
   };
 }

@@ -28,6 +28,10 @@ import {
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 import { Effect, FileSystem, Layer, Queue, Schema, ServiceMap, Stream } from "effect";
 
 import {
@@ -1600,6 +1604,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
+      const requestedEffort = getModelSelectionStringOptionValue(
+        input.modelSelection,
+        "reasoningEffort",
+      );
+      const fastMode =
+        getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
@@ -1607,16 +1617,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
         runtimeMode: input.runtimeMode,
-        ...(input.modelSelection?.provider === "codex"
-          ? { model: input.modelSelection.model }
-          : {}),
-        ...(input.modelSelection?.provider === "codex" &&
-        input.modelSelection.options?.reasoningEffort !== undefined
-          ? { effort: input.modelSelection.options.reasoningEffort }
-          : {}),
-        ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-          ? { serviceTier: "fast" }
-          : {}),
+        ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+        ...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
+        ...(fastMode ? { serviceTier: "fast" } : {}),
       };
 
       return Effect.tryPromise({
@@ -1682,21 +1685,20 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           attachments: input.attachments,
           attachmentsDir: serverConfig.attachmentsDir,
         });
+        const requestedEffort = getModelSelectionStringOptionValue(
+          input.modelSelection,
+          "reasoningEffort",
+        );
+        const fastMode =
+          getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
         const managerInput = {
           threadId: input.threadId,
           ...(composedInput !== undefined ? { input: composedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-          ...(input.modelSelection?.provider === "codex"
-            ? { model: input.modelSelection.model }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" &&
-          input.modelSelection.options?.reasoningEffort !== undefined
-            ? { effort: input.modelSelection.options.reasoningEffort }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-            ? { serviceTier: "fast" }
-            : {}),
+          ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+          ...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
+          ...(fastMode ? { serviceTier: "fast" } : {}),
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
@@ -1760,21 +1762,20 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           attachments: input.attachments,
           attachmentsDir: serverConfig.attachmentsDir,
         });
+        const requestedEffort = getModelSelectionStringOptionValue(
+          input.modelSelection,
+          "reasoningEffort",
+        );
+        const fastMode =
+          getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
         const managerInput = {
           threadId: input.threadId,
           ...(composedInput !== undefined ? { input: composedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
-          ...(input.modelSelection?.provider === "codex"
-            ? { model: input.modelSelection.model }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" &&
-          input.modelSelection.options?.reasoningEffort !== undefined
-            ? { effort: input.modelSelection.options.reasoningEffort }
-            : {}),
-          ...(input.modelSelection?.provider === "codex" && input.modelSelection.options?.fastMode
-            ? { serviceTier: "fast" }
-            : {}),
+          ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
+          ...(requestedEffort !== undefined ? { effort: requestedEffort } : {}),
+          ...(fastMode ? { serviceTier: "fast" } : {}),
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
@@ -1932,6 +1933,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
             ...(input.forceReload !== undefined ? { forceReload: input.forceReload } : {}),
           }),
@@ -1955,6 +1957,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
             ...(input.forceRemoteSync !== undefined
               ? { forceRemoteSync: input.forceRemoteSync }
@@ -1981,6 +1984,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           }),
         catch: (cause) =>
@@ -2002,6 +2006,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
               ...(input.homePath ? { homePath: input.homePath } : {}),
               ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
               ...(input.accountId ? { accountId: input.accountId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             },
           }),
         catch: (cause) =>
@@ -2015,7 +2020,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const transcribeVoice: NonNullable<CodexAdapterShape["transcribeVoice"]> = (input) =>
       Effect.tryPromise({
-        try: () => manager.transcribeVoice(input),
+        try: () =>
+          manager.transcribeVoice({
+            ...input,
+            ...(input.providerOptions?.codex ? { codexOptions: input.providerOptions.codex } : {}),
+          }),
         catch: (cause) =>
           new ProviderAdapterRequestError({
             provider: PROVIDER,

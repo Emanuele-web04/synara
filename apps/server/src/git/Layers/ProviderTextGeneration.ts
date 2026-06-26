@@ -1,5 +1,6 @@
 import type { ModelSelection, ProviderKind, ProviderStartOptions } from "@t3tools/contracts";
 import {
+  inferLegacyProviderKindFromModel,
   mergeProviderStartOptions,
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
@@ -8,7 +9,6 @@ import {
 import { Effect, Layer } from "effect";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { parseOpenCodeModelSlug } from "../../provider/opencodeRuntime.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
   ClaudeTextGeneration,
@@ -25,6 +25,31 @@ interface RoutableTextGenerationInput {
   readonly model?: string;
   readonly modelSelection?: ModelSelection;
   readonly providerOptions?: ProviderStartOptions;
+}
+
+function inferTextGenerationProviderFromModel(model: string): ProviderKind {
+  const inferredProvider = inferLegacyProviderKindFromModel(model);
+  if (inferredProvider !== "codex") {
+    return inferredProvider;
+  }
+  return model.includes("/") ? "opencode" : "codex";
+}
+
+function textGenerationModelSelectionForInput(
+  input: RoutableTextGenerationInput,
+  fallback: ModelSelection,
+): ModelSelection {
+  if (input.modelSelection) {
+    return input.modelSelection;
+  }
+  if (input.model?.trim()) {
+    const model = input.model.trim();
+    return {
+      instanceId: inferTextGenerationProviderFromModel(model),
+      model,
+    } as ModelSelection;
+  }
+  return fallback;
 }
 
 const makeProviderTextGeneration = Effect.gen(function* () {
@@ -73,16 +98,6 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     TextGenerationError
   > =>
     Effect.gen(function* () {
-      if (!input.modelSelection) {
-        return {
-          implementation:
-            parseOpenCodeModelSlug(input.model) !== null
-              ? openCodeTextGeneration
-              : codexTextGeneration,
-          input,
-        } as const;
-      }
-
       const settings = yield* serverSettings.getSettings.pipe(
         Effect.mapError(
           (cause) =>
@@ -93,15 +108,18 @@ const makeProviderTextGeneration = Effect.gen(function* () {
             }),
         ),
       );
+      const requestedModelSelection = textGenerationModelSelectionForInput(
+        input,
+        settings.textGenerationModelSelection,
+      );
       const instance = resolveProviderInstance(settings, {
-        provider: input.modelSelection.provider,
-        instanceId: resolveModelSelectionInstanceId(input.modelSelection),
+        instanceId: resolveModelSelectionInstanceId(requestedModelSelection),
       });
       if (!instance) {
         return yield* new TextGenerationError({
           operation,
           detail: `No provider instance registered for id '${resolveModelSelectionInstanceId(
-            input.modelSelection,
+            requestedModelSelection,
           )}'.`,
         });
       }
@@ -114,8 +132,7 @@ const makeProviderTextGeneration = Effect.gen(function* () {
 
       const implementation = yield* implementationForDriver(operation, instance.driver);
       const modelSelection = {
-        ...input.modelSelection,
-        provider: instance.driver,
+        ...requestedModelSelection,
         instanceId: instance.instanceId,
       } as ModelSelection;
       const providerOptions = mergeProviderStartOptions(

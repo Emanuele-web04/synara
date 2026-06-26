@@ -77,6 +77,7 @@ export const ProviderListSkillsInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceReload: Schema.optional(Schema.Boolean),
 });
 export type ProviderListSkillsInput = typeof ProviderListSkillsInput.Type;
@@ -216,6 +217,7 @@ export const ProviderListPluginsInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
   forceRemoteSync: Schema.optional(Schema.Boolean),
   forceReload: Schema.optional(Schema.Boolean),
 });
@@ -240,6 +242,7 @@ export const ProviderReadPluginInput = Schema.Struct({
   homePath: Schema.optional(TrimmedNonEmptyString),
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optional(ProcessEnvRecord),
 });
 export type ProviderReadPluginInput = typeof ProviderReadPluginInput.Type;
 
@@ -269,6 +272,9 @@ export const ProviderListModelsInput = Schema.Struct({
   shadowHomePath: Schema.optional(TrimmedNonEmptyString),
   accountId: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
+  serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
   agentDir: Schema.optional(TrimmedNonEmptyString),
   environment: Schema.optional(ProcessEnvRecord),
   cwd: Schema.optional(TrimmedNonEmptyString),
@@ -318,6 +324,9 @@ export const ProviderListAgentsInput = Schema.Struct({
   instanceId: Schema.optional(ProviderInstanceId),
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   homePath: Schema.optional(TrimmedNonEmptyString),
+  serverUrl: Schema.optional(TrimmedNonEmptyString),
+  serverPassword: Schema.optional(TrimmedNonEmptyString),
+  experimentalWebSockets: Schema.optional(Schema.Boolean),
   environment: Schema.optional(ProcessEnvRecord),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });

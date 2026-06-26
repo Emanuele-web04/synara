@@ -267,7 +267,7 @@ describe("ProfileStatsQuery", () => {
         expect(stats.insights.topReasoning).toBe("high");
         expect(stats.insights.topReasoningPercent).toBeCloseTo(66.7);
         expect(stats.providerModels[0]).toMatchObject({
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
           turnCount: 2,
         });

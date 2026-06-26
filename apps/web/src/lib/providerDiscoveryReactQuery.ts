@@ -46,6 +46,19 @@ const EMPTY_PLUGINS_RESULT: ProviderListPluginsResult = {
   cached: false,
 };
 
+function hashSensitiveQueryValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < trimmed.length; index += 1) {
+    hash ^= trimmed.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `${trimmed.length}:${(hash >>> 0).toString(36)}`;
+}
+
 export const providerDiscoveryQueryKeys = {
   all: ["provider-discovery"] as const,
   composerCapabilities: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
@@ -83,6 +96,9 @@ export const providerDiscoveryQueryKeys = {
     shadowHomePath: string | null,
     accountId: string | null,
     apiEndpoint: string | null,
+    serverUrl: string | null,
+    serverPasswordHash: string | null,
+    experimentalWebSockets: boolean | null,
     agentDir: string | null,
     cwd: string | null,
   ) =>
@@ -96,20 +112,31 @@ export const providerDiscoveryQueryKeys = {
       shadowHomePath,
       accountId,
       apiEndpoint,
+      serverUrl,
+      serverPasswordHash,
+      experimentalWebSockets,
       agentDir,
       cwd,
     ] as const,
   agentsForProvider: (provider: ProviderKind, instanceId: ProviderInstanceId | null) =>
     ["provider-discovery", "agents", provider, instanceId] as const,
+  agentsForProviderPrefix: (provider: ProviderKind) =>
+    ["provider-discovery", "agents", provider] as const,
   agents: (
     provider: ProviderKind,
     instanceId: ProviderInstanceId | null,
     binaryPath: string | null,
+    serverUrl: string | null,
+    serverPasswordHash: string | null,
+    experimentalWebSockets: boolean | null,
     cwd: string | null,
   ) =>
     [
       ...providerDiscoveryQueryKeys.agentsForProvider(provider, instanceId),
       binaryPath,
+      serverUrl,
+      serverPasswordHash,
+      experimentalWebSockets,
       cwd,
     ] as const,
 };
@@ -198,7 +225,7 @@ export function providerCommandsQueryOptions(input: {
   const connectionKey = JSON.stringify({
     binaryPath: input.binaryPath ?? null,
     serverUrl: input.serverUrl ?? null,
-    hasServerPassword: Boolean(input.serverPassword),
+    serverPasswordHash: hashSensitiveQueryValue(input.serverPassword),
     experimentalWebSockets: input.experimentalWebSockets ?? null,
   });
   return queryOptions({
@@ -242,6 +269,9 @@ export function providerModelsQueryOptions(input: {
   shadowHomePath?: string | null;
   accountId?: string | null;
   apiEndpoint?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean | undefined;
   agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
@@ -255,6 +285,9 @@ export function providerModelsQueryOptions(input: {
       input.shadowHomePath ?? null,
       input.accountId ?? null,
       input.apiEndpoint ?? null,
+      input.serverUrl ?? null,
+      hashSensitiveQueryValue(input.serverPassword),
+      input.experimentalWebSockets ?? null,
       input.agentDir ?? null,
       input.cwd ?? null,
     ),
@@ -268,6 +301,11 @@ export function providerModelsQueryOptions(input: {
         ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
         ...(input.accountId ? { accountId: input.accountId } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
@@ -283,6 +321,9 @@ export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
   instanceId?: ProviderInstanceId | null;
   binaryPath?: string | null;
+  serverUrl?: string | null;
+  serverPassword?: string | null;
+  experimentalWebSockets?: boolean | undefined;
   cwd?: string | null;
   enabled?: boolean;
 }) {
@@ -291,6 +332,9 @@ export function providerAgentsQueryOptions(input: {
       input.provider,
       input.instanceId ?? null,
       input.binaryPath ?? null,
+      input.serverUrl ?? null,
+      hashSensitiveQueryValue(input.serverPassword),
+      input.experimentalWebSockets ?? null,
       input.cwd ?? null,
     ),
     queryFn: async () => {
@@ -299,6 +343,11 @@ export function providerAgentsQueryOptions(input: {
         provider: input.provider,
         ...(input.instanceId ? { instanceId: input.instanceId } : {}),
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+        ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+        ...(input.experimentalWebSockets !== undefined
+          ? { experimentalWebSockets: input.experimentalWebSockets }
+          : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },

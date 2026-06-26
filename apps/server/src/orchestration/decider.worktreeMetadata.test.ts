@@ -66,7 +66,7 @@ async function createWorktreeThreadReadModel(now: string) {
         projectId: PROJECT_ID,
         title: "Worktree thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -105,7 +105,7 @@ describe("decider worktree metadata", () => {
           projectId: PROJECT_ID,
           title: "Worktree thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -146,7 +146,7 @@ describe("decider worktree metadata", () => {
           projectId: PROJECT_ID,
           title: "Forked thread",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5-codex",
           },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

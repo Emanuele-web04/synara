@@ -174,10 +174,12 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     operation: TextGenerationOperation,
     sourceHomePath?: string,
     authHomePath?: string,
+    accountId?: string,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
       const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
-      const sourceAuthHome = authHomePath?.trim() || sourceCodexHome;
+      const sourceAuthHome = authHomePath?.trim();
+      const shouldCopyAuth = !accountId?.trim() || Boolean(sourceAuthHome);
       const isolatedHomePath = path.join(
         tempDir,
         `t3code-codex-home-${process.pid}-${randomUUID()}`,
@@ -215,22 +217,24 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           );
       }
 
-      const sourceAuth = yield* fileSystem
-        .readFileString(path.join(sourceAuthHome, "auth.json"))
-        .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (sourceAuth !== null) {
-        yield* fileSystem
-          .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
-          .pipe(
-            Effect.mapError(
-              (cause) =>
-                new TextGenerationError({
-                  operation,
-                  detail: "Failed to copy Codex auth for isolated text generation.",
-                  cause,
-                }),
-            ),
-          );
+      if (shouldCopyAuth) {
+        const sourceAuth = yield* fileSystem
+          .readFileString(path.join(sourceAuthHome || sourceCodexHome, "auth.json"))
+          .pipe(Effect.catch(() => Effect.succeed(null)));
+        if (sourceAuth !== null) {
+          yield* fileSystem
+            .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new TextGenerationError({
+                    operation,
+                    detail: "Failed to copy Codex auth for isolated text generation.",
+                    cause,
+                  }),
+              ),
+            );
+        }
       }
 
       return { homePath: isolatedHomePath };
@@ -307,6 +311,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         operation,
         resolvedCodexHomePath,
         resolvedCodexAuthHomePath,
+        resolvedCodexAccountId,
       );
 
       const runCodexCommand = Effect.gen(function* () {
@@ -689,10 +694,7 @@ function resolveCodexModel(
   model: string | undefined,
   modelSelection: BranchNameGenerationInput["modelSelection"] | undefined,
 ): string | undefined {
-  if (modelSelection?.provider === "codex") {
-    return modelSelection.model;
-  }
-  return model;
+  return modelSelection?.model ?? model;
 }
 
 export const CodexTextGenerationServiceLive = Layer.effect(

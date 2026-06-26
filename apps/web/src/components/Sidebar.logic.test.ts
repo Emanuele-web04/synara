@@ -417,7 +417,7 @@ describe("pin helpers", () => {
       projectId: "project-1" as ProjectId,
       title: id,
       modelSelection: {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
       },
       runtimeMode: DEFAULT_RUNTIME_MODE,
@@ -1238,7 +1238,7 @@ function makeProject(overrides: Partial<Project> = {}): Project {
     localName: null,
     cwd: "/tmp/project",
     defaultModelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.4",
       ...defaultModelSelection,
     },
@@ -1257,7 +1257,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.4",
       ...overrides?.modelSelection,
     },
@@ -1286,7 +1286,7 @@ function makeSidebarThreadSummary(
     projectId: ProjectId.makeUnsafe("project-1"),
     title: "Thread",
     modelSelection: {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.4",
     },
     interactionMode: DEFAULT_INTERACTION_MODE,

@@ -6,6 +6,7 @@ import { Fragment, type ReactNode, createElement, useEffect } from "react";
 import {
   EventId,
   MessageId,
+  type ModelSelection,
   type OrchestrationEvent,
   type ProviderKind,
   ThreadId,
@@ -29,6 +30,7 @@ import {
   setThreadMarkerLabel,
 } from "@t3tools/shared/threadMarkers";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
 import {
@@ -621,11 +623,12 @@ function deepEqualJson(left: unknown, right: unknown): boolean {
   return true;
 }
 
-function normalizeModelSelection<T extends { provider: ProviderKind; model: string }>(
+function normalizeModelSelection<T extends ModelSelection>(
   value: T,
   previous: T | null | undefined,
 ): T {
-  const normalizedModel = normalizeModelSlug(value.model, value.provider) ?? value.model;
+  const provider = inferLegacyProviderKindFromModelSelection(value);
+  const normalizedModel = normalizeModelSlug(value.model, provider) ?? value.model;
   const next = normalizedModel === value.model ? value : { ...value, model: normalizedModel };
   return previous && deepEqualJson(previous, next) ? previous : next;
 }
