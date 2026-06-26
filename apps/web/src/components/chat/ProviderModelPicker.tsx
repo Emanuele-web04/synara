@@ -364,6 +364,22 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     [providerInstancesByProvider],
   );
 
+  const isInstanceSelectable = useCallback(
+    (instance: ProviderModelPickerInstance): boolean => {
+      if (!instance.enabled) {
+        return false;
+      }
+      return !resolveLiveProviderAvailability(
+        findProviderStatusForInstance({
+          providers: props.providers,
+          provider: instance.provider,
+          instanceId: instance.instanceId,
+        }),
+      ).disabled;
+    },
+    [props.providers],
+  );
+
   const getSelectedInstanceIdForProvider = useCallback(
     (provider: ProviderKind): ProviderInstanceId => {
       const instances = getProviderInstances(provider);
@@ -374,10 +390,12 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
         return selectedProviderInstanceId;
       }
       return (
-        instances.find((instance) => instance.isDefault)?.instanceId ?? instances[0]!.instanceId
+        instances.find(isInstanceSelectable)?.instanceId ??
+        instances.find((instance) => instance.isDefault)?.instanceId ??
+        instances[0]!.instanceId
       );
     },
-    [activeProvider, getProviderInstances, selectedProviderInstanceId],
+    [activeProvider, getProviderInstances, isInstanceSelectable, selectedProviderInstanceId],
   );
 
   const getModelOptionsForProviderInstance = useCallback(

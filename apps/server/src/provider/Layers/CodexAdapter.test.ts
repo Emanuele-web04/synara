@@ -35,6 +35,8 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
 
 class FakeCodexManager extends CodexAppServerManager {
+  public sessionSnapshots: ProviderSession[] = [];
+
   public startSessionImpl = vi.fn(
     async (input: CodexAppServerStartSessionInput): Promise<ProviderSession> => {
       const now = new Date().toISOString();
@@ -144,7 +146,7 @@ class FakeCodexManager extends CodexAppServerManager {
   override async stopSession(_threadId: ThreadId): Promise<void> {}
 
   override listSessions(): ProviderSession[] {
-    return [];
+    return this.sessionSnapshots;
   }
 
   override hasSession(_threadId: ThreadId): boolean {
@@ -1085,6 +1087,43 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.threadId, "thread-1");
       assert.equal(firstEvent.value.payload.reason, "Session stopped");
+    }),
+  );
+
+  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-closed-work"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/closed",
+        message: "Work session stopped",
+      } satisfies ProviderEvent);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      lifecycleManager.sessionSnapshots = [];
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
   );
 

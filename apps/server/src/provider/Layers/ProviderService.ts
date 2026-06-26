@@ -1047,11 +1047,17 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               eventType: event.type,
             }).pipe(Effect.as(null));
           }
-          return Effect.succeed(
-            event.providerInstanceId === undefined && bindingInstanceId !== undefined
-              ? { ...event, providerInstanceId: bindingInstanceId }
-              : event,
-          );
+          if (event.providerInstanceId === undefined && bindingInstanceId !== undefined) {
+            if (event.provider === "codex" && bindingInstanceId !== event.provider) {
+              return Effect.logWarning("dropping untagged Codex event for non-default binding", {
+                threadId: event.threadId,
+                bindingInstanceId,
+                eventType: event.type,
+              }).pipe(Effect.as(null));
+            }
+            return Effect.succeed({ ...event, providerInstanceId: bindingInstanceId });
+          }
+          return Effect.succeed(event);
         }),
         Effect.catch((error) =>
           Effect.logWarning("failed to read provider runtime binding for event correlation", {
@@ -2590,6 +2596,24 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         const sourceProviderInstanceId = providerInstanceIdFromBinding(sourceBinding);
+        const requestedProviderInstanceId = input.modelSelection
+          ? resolveModelSelectionInstanceId(input.modelSelection)
+          : undefined;
+        if (
+          requestedProviderInstanceId !== undefined &&
+          requestedProviderInstanceId !== sourceProviderInstanceId
+        ) {
+          yield* Effect.logInfo(
+            "provider native fork skipped because requested instance differs from source binding",
+            {
+              sourceThreadId: input.sourceThreadId,
+              threadId: input.threadId,
+              sourceProviderInstanceId,
+              requestedProviderInstanceId,
+            },
+          );
+          return null;
+        }
         const persistedSourceProviderOptions = readPersistedProviderOptions(
           sourceBinding.runtimePayload,
         );

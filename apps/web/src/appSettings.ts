@@ -626,7 +626,8 @@ export interface ResolvedCodexAccount {
 }
 
 function isValidCodexAccountId(value: string): boolean {
-  return /^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(value);
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= 64;
 }
 
 export function normalizeCodexAccounts(

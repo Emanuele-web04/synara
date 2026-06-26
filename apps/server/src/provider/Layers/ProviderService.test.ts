@@ -510,6 +510,43 @@ const piInteractionRouting = makeProviderServiceLayer(undefined, { includePi: tr
 const adapterConfirmedFreshRouting = makeProviderServiceLayer(undefined, {
   codexDidResumeSession: () => false,
 });
+
+routing.layer("ProviderServiceLive native forks", (it) => {
+  it.effect("skips native fork when requested instance differs from the source binding", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const sourceThreadId = asThreadId("thread-fork-source-default");
+      const targetThreadId = asThreadId("thread-fork-target-work");
+
+      yield* provider.startSession(sourceThreadId, {
+        provider: "codex",
+        providerInstanceId: "codex",
+        threadId: sourceThreadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(typeof provider.forkThread, "function");
+      if (!provider.forkThread) {
+        return;
+      }
+
+      const result = yield* provider.forkThread({
+        sourceThreadId,
+        threadId: targetThreadId,
+        modelSelection: {
+          provider: "codex",
+          instanceId: "codex_work",
+          model: "gpt-5.4",
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(result, null);
+      assert.equal(routing.codex.forkThread.mock.calls.length, 0);
+    }),
+  );
+});
+
 it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-service-"));

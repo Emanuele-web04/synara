@@ -897,13 +897,11 @@ function ProviderInstancesControl(props: {
     next[instanceId] = {
       driver: props.provider,
       displayName: `${providerLabel} ${index}`,
-      enabled: true,
+      enabled: props.provider !== "codex",
       config:
         props.provider === "codex"
           ? {
               binaryPath: props.settings.codexBinaryPath,
-              homePath: props.settings.codexHomePath,
-              shadowHomePath: "",
             }
           : {
               binaryPath: props.settings.claudeBinaryPath,

@@ -1966,7 +1966,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const resolvedCwd = input.cwd ?? ensureIsolatedScratchWorkspace(threadId);
       const session: ProviderSession = {
         provider: "codex",
-        ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
+        ...(input.providerInstanceId
+          ? { providerInstanceId: input.providerInstanceId }
+          : input.modelSelection?.provider === "codex" && input.modelSelection.instanceId
+            ? { providerInstanceId: input.modelSelection.instanceId }
+            : {}),
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model:

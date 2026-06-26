@@ -252,6 +252,58 @@ describe("ProviderModelPicker", () => {
     }
   });
 
+  it("selects an enabled provider instance when switching providers", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: null,
+      providerInstances: [
+        {
+          instanceId: "opencode",
+          provider: "opencode",
+          label: "Default OpenCode",
+          enabled: false,
+          isDefault: true,
+        },
+        {
+          instanceId: "opencode_work",
+          provider: "opencode",
+          label: "Work OpenCode",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        {
+          provider: "opencode",
+          instanceId: "opencode_work",
+          driver: "opencode",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-04-10T10:00:00.000Z",
+        },
+      ],
+      modelOptionsByProviderInstance: {
+        opencode_work: [{ slug: "work/opencode-model", name: "Work OpenCode Model" }],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByText("OpenCode").click();
+      await page.getByRole("menuitemradio", { name: "Work OpenCode Model" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "opencode",
+        "work/opencode-model",
+        "opencode_work",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows models directly when the provider is locked mid-thread", async () => {
     const mounted = await mountPicker({
       provider: "claudeAgent",

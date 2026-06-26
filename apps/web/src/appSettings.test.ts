@@ -9,6 +9,7 @@ import {
   DEFAULT_SERVER_SETTINGS_VIEW,
   ProviderInstanceId,
 } from "@synara/contracts";
+import { codexAccountInstanceId } from "@synara/shared/providerInstances";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -659,6 +660,41 @@ describe("normalizeStoredAppSettings", () => {
       piBinaryPath: "",
     });
     expect(getCustomBinaryPathForProvider(normalized, "opencode")).toBe("");
+  });
+
+  it("keeps server-valid Codex account ids that need slugged instance ids", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        codexAccounts: [
+          {
+            id: "work@example.com",
+            label: "Work Email",
+            homePath: "/Users/you/.codex",
+            shadowHomePath: "/Users/you/.codex-work",
+          },
+        ],
+        selectedCodexAccountId: "work@example.com",
+      }),
+    );
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+    const instanceId = codexAccountInstanceId("work@example.com");
+
+    expect(normalized.codexAccounts).toEqual([
+      {
+        id: "work@example.com",
+        label: "Work Email",
+        homePath: "/Users/you/.codex",
+        shadowHomePath: "/Users/you/.codex-work",
+      },
+    ]);
+    expect(normalized.selectedCodexAccountId).toBe("work@example.com");
+    expect(getProviderInstanceOptions(normalized)).toContainEqual(
+      expect.objectContaining({
+        instanceId,
+        provider: "codex",
+        label: "Work Email",
+      }),
+    );
   });
 });
 
