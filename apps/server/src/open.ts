@@ -11,6 +11,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
 
 import { EDITORS, type EditorId } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
@@ -448,10 +449,12 @@ export const launchDetached = (launch: EditorLaunch) =>
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        child = spawn(launch.command, [...launch.args], {
+        const prepared = prepareWindowsSafeProcess(launch.command, launch.args);
+        child = spawn(prepared.command, prepared.args, {
           detached: true,
           stdio: "ignore",
-          shell: process.platform === "win32",
+          shell: prepared.shell,
+          windowsHide: prepared.windowsHide,
         });
       } catch (error) {
         return resume(

@@ -384,9 +384,7 @@ describe("ReviewBoard performance", () => {
       });
       list!.scrollTop = list!.scrollHeight - list!.clientHeight;
       list!.dispatchEvent(new Event("scroll", { bubbles: true }));
-      await expect
-        .element(page.getByText("Review perf PR 100", { exact: true }))
-        .toBeVisible();
+      await expect.element(page.getByText("Review perf PR 100", { exact: true })).toBeVisible();
     } finally {
       await mounted.cleanup();
     }

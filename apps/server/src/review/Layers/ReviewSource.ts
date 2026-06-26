@@ -1080,7 +1080,11 @@ const makeReviewSource = Effect.gen(function* () {
       const [needsReview, changesRequested, approved, draft] = yield* Effect.all(
         [
           pullRequestStore.getLane({ repositoryId, lane: "needs-review", limit: candidateLimit }),
-          pullRequestStore.getLane({ repositoryId, lane: "changes-requested", limit: candidateLimit }),
+          pullRequestStore.getLane({
+            repositoryId,
+            lane: "changes-requested",
+            limit: candidateLimit,
+          }),
           pullRequestStore.getLane({ repositoryId, lane: "approved", limit: candidateLimit }),
           pullRequestStore.getLane({ repositoryId, lane: "draft", limit: candidateLimit }),
         ],

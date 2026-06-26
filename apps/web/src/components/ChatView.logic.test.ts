@@ -416,6 +416,36 @@ describe("resolveActiveTurnLiveDiffState", () => {
     });
   });
 
+  it("treats an empty active turn diff summary as authoritative over tool-log file hints", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [],
+          },
+        ],
+        workLogEntries: [
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts"],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    });
+  });
+
   it("falls back to in-turn file-edit work before the diff summary lands", () => {
     const activeTurnId = TurnId.makeUnsafe("turn-active");
 
@@ -436,7 +466,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
         ],
       }),
     ).toEqual({
-      turnId: activeTurnId,
+      turnId: null,
       fileCount: 2,
       additions: 0,
       deletions: 0,
@@ -454,7 +484,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
         workLogEntries: [{ turnId: activeTurnId, itemType: "file_change" }],
       }),
     ).toEqual({
-      turnId: activeTurnId,
+      turnId: null,
       fileCount: null,
       additions: 0,
       deletions: 0,

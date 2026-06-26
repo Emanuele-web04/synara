@@ -21,6 +21,7 @@ import { ServerConfig } from "./config";
 
 const HEATMAP_WINDOW_DAYS = 274; // ~9 months, GitHub-style contribution grid.
 const SKILL_RESULT_LIMIT = 12;
+const THREAD_RETENTION_COMMAND_ID_PATTERN = "thread-retention:%";
 const PROVIDER_KINDS = new Set<ProviderKind>([
   "codex",
   "claudeAgent",
@@ -239,29 +240,67 @@ export function aggregateProfileSkillUsageRows(
   const counts = new Map<string, UsageCount>();
 
   for (const row of rows) {
-    const messageUsages = new Map<string, { name: string; kind: UsageKind }>();
-    const addMessageUsage = (kind: UsageKind, rawName: string) => {
+    const messageSkillCounts = new Map<
+      string,
+      { name: string; structuredCount: number; textCount: number }
+    >();
+    const messageAgentUsages = new Map<string, { name: string; kind: UsageKind }>();
+    const addMessageSkillUsage = (rawName: string, source: "structured" | "text") => {
       const name = normalizeUsageName(rawName);
       if (!name) {
         return;
       }
-      const key = usageKey(kind, name);
-      if (!messageUsages.has(key)) {
-        messageUsages.set(key, { name, kind });
+      const key = usageKey("skill", name);
+      const next = messageSkillCounts.get(key) ?? {
+        name,
+        structuredCount: 0,
+        textCount: 0,
+      };
+      if (source === "structured") {
+        next.structuredCount += 1;
+      } else {
+        next.textCount += 1;
+      }
+      messageSkillCounts.set(key, next);
+    };
+    const addMessageAgentUsage = (rawName: string) => {
+      const name = normalizeUsageName(rawName);
+      if (!name) {
+        return;
+      }
+      const key = usageKey("agent", name);
+      if (!messageAgentUsages.has(key)) {
+        messageAgentUsages.set(key, { name, kind: "agent" });
       }
     };
 
     for (const name of parseReferenceNames(row.skillsJson)) {
-      addMessageUsage("skill", name);
+      addMessageSkillUsage(name, "structured");
     }
     for (const name of extractTextSkillNames(row.text)) {
-      addMessageUsage("skill", name);
+      addMessageSkillUsage(name, "text");
     }
     for (const name of parseReferenceNames(row.mentionsJson)) {
-      addMessageUsage("agent", name);
+      addMessageAgentUsage(name);
     }
 
-    for (const usage of messageUsages.values()) {
+    for (const usage of messageSkillCounts.values()) {
+      // Selected skills can appear both as structured refs and visible text.
+      // Count repeated user tokens, but do not double-count the structured echo.
+      const increment = Math.max(usage.structuredCount, usage.textCount);
+      if (increment <= 0) {
+        continue;
+      }
+      const key = usageKey("skill", usage.name);
+      const existing = counts.get(key);
+      if (existing) {
+        existing.runCount += increment;
+      } else {
+        counts.set(key, { name: usage.name, kind: "skill", runCount: increment });
+      }
+    }
+
+    for (const usage of messageAgentUsages.values()) {
       const key = usageKey(usage.kind, usage.name);
       const existing = counts.get(key);
       if (existing) {
@@ -496,6 +535,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       ),
     );
 
+  // Retention hides old threads with `thread.delete` but intentionally keeps
+  // their rows for profile history. Manual deletes and deleted projects stay out.
   // ── SQL helpers ──────────────────────────────────────────────────────
 
   // Activity = days/hours the user actually sent a Synara prompt. One day-hour
@@ -513,7 +554,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
         WHERE m.role = 'user'
           AND m.source = 'native'
-          AND t.deleted_at IS NULL
+          AND (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
           AND p.deleted_at IS NULL
         GROUP BY day, hour
         ORDER BY day ASC, hour ASC
@@ -547,7 +597,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           LEFT JOIN projection_projects p ON p.project_id = th.project_id
           WHERE a.kind = 'context-window.updated'
             AND json_extract(a.payload_json, '$.totalProcessedTokens') IS NOT NULL
-            AND th.deleted_at IS NULL
+            AND (
+              th.deleted_at IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM orchestration_events td
+                WHERE td.event_type = 'thread.deleted'
+                  AND td.stream_id = th.thread_id
+                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+              )
+            )
             AND p.deleted_at IS NULL
         ),
         delta AS (
@@ -577,7 +636,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         SELECT COUNT(*) AS count
         FROM projection_threads t
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
-        WHERE t.deleted_at IS NULL
+        WHERE (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
           AND p.deleted_at IS NULL
       `,
     );
@@ -623,7 +691,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
           LEFT JOIN projection_projects p ON p.project_id = t.project_id
           WHERE e.event_type = 'thread.turn-start-requested'
-            AND t.deleted_at IS NULL
+            AND (
+              t.deleted_at IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM orchestration_events td
+                WHERE td.event_type = 'thread.deleted'
+                  AND td.stream_id = t.thread_id
+                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+              )
+            )
             AND p.deleted_at IS NULL
         )
         SELECT provider, model, reasoning, COUNT(*) AS count
@@ -650,7 +727,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       LEFT JOIN projection_projects p ON p.project_id = t.project_id
       WHERE m.role = 'user'
         AND m.source = 'native'
-        AND t.deleted_at IS NULL
+        AND (
+          t.deleted_at IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM orchestration_events td
+            WHERE td.event_type = 'thread.deleted'
+              AND td.stream_id = t.thread_id
+              AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+          )
+        )
         AND p.deleted_at IS NULL
         AND (
           (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
@@ -676,7 +762,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               JOIN projection_threads t ON t.thread_id = m.thread_id
               LEFT JOIN projection_projects p ON p.project_id = t.project_id
               WHERE m.role = 'user'
-                AND t.deleted_at IS NULL
+                AND (
+                  t.deleted_at IS NULL
+                  OR EXISTS (
+                    SELECT 1
+                    FROM orchestration_events td
+                    WHERE td.event_type = 'thread.deleted'
+                      AND td.stream_id = t.thread_id
+                      AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+                  )
+                )
                 AND p.deleted_at IS NULL
                 AND (
                   m.text GLOB '*$[A-Za-z0-9]*'
@@ -706,7 +801,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         JOIN projection_projects p ON p.project_id = t.project_id
         WHERE m.role = 'user'
           AND m.source = 'native'
-          AND t.deleted_at IS NULL
+          AND (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
           AND p.deleted_at IS NULL
         GROUP BY p.project_id, p.title, p.workspace_root
         ORDER BY

@@ -94,6 +94,21 @@ const FILE_ICON_BY_EXTENSION: Record<string, string> = {
   env: "settings-gear-1",
   txt: "file-text",
   log: "file-text",
+  csv: "file-chart",
+  tsv: "file-chart",
+  rtf: "page-text",
+  doc: "page-text",
+  docx: "page-text",
+  odt: "page-text",
+  xls: "file-chart",
+  xlsx: "file-chart",
+  ods: "file-chart",
+  ppt: "page-text",
+  pptx: "page-text",
+  odp: "page-text",
+  ics: "calendar-days",
+  ifb: "calendar-days",
+  vcs: "calendar-days",
   sh: "cmd",
   bash: "cmd",
   zsh: "cmd",
@@ -189,4 +204,69 @@ export function getFileIconName(pathValue: string): string {
     if (byExt) return byExt;
   }
   return DEFAULT_FILE_ICON;
+}
+
+// MIME type → Central icon name, used as a fallback for attachments whose
+// filename has no recognizable extension (e.g. a download named only by its
+// Content-Type, like a UUID carrying a `text/calendar` body). Mirrors the
+// families covered by the extension map so the two stay visually consistent.
+const FILE_ICON_BY_MIME_TYPE: Record<string, string> = {
+  "application/pdf": "file-pdf",
+  "application/json": "json",
+  "application/xml": "code-brackets",
+  "application/zip": "file-zip",
+  "application/gzip": "file-zip",
+  "application/x-tar": "file-zip",
+  "application/x-7z-compressed": "file-zip",
+  "application/vnd.ms-excel": "file-chart",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "file-chart",
+  "application/vnd.oasis.opendocument.spreadsheet": "file-chart",
+  "application/msword": "page-text",
+  "application/vnd.ms-word": "page-text",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "page-text",
+  "application/vnd.oasis.opendocument.text": "page-text",
+  "application/vnd.ms-powerpoint": "page-text",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": "page-text",
+  "application/vnd.oasis.opendocument.presentation": "page-text",
+  "application/rtf": "page-text",
+  "text/calendar": "calendar-days",
+  "text/csv": "file-chart",
+  "text/tab-separated-values": "file-chart",
+  "text/markdown": "markdown",
+  "text/html": "code-brackets",
+  "text/xml": "code-brackets",
+};
+
+// Attachments default to a neutral document glyph rather than the source-code
+// bracket: an arbitrary upload is far likelier to be a document than code.
+const DEFAULT_ATTACHMENT_ICON = "file-text";
+
+// Resolves the Central icon name for a chat file attachment. Prefers the
+// filename (basename, then extension) like `getFileIconName`, then falls back to
+// the MIME type and finally a generic document glyph — never the bracket glyph,
+// which misreads on non-code uploads.
+export function getAttachmentIconName(attachment: {
+  name: string;
+  mimeType?: string | null | undefined;
+}): string {
+  const basename = basenameOfPath(attachment.name).toLowerCase();
+  const byName = FILE_ICON_BY_BASENAME[basename];
+  if (byName) return byName;
+  for (const candidate of extensionCandidates(basename)) {
+    const byExt = FILE_ICON_BY_EXTENSION[candidate];
+    if (byExt) return byExt;
+  }
+
+  const mimeType = attachment.mimeType?.trim().toLowerCase() ?? "";
+  if (mimeType.length > 0) {
+    const byMime = FILE_ICON_BY_MIME_TYPE[mimeType];
+    if (byMime) return byMime;
+    const topLevelType = mimeType.split("/")[0];
+    if (topLevelType === "image") return "image-alt-text";
+    if (topLevelType === "audio") return "audio";
+    if (topLevelType === "video") return "video";
+    if (topLevelType === "text") return "file-text";
+  }
+
+  return DEFAULT_ATTACHMENT_ICON;
 }

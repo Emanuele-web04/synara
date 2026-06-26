@@ -31,6 +31,7 @@ export interface GitBranches {
   readonly renameBranch: GitCoreShape["renameBranch"];
   readonly publishBranch: GitCoreShape["publishBranch"];
   readonly createBranch: GitCoreShape["createBranch"];
+  readonly deleteBranch: GitCoreShape["deleteBranch"];
   readonly checkoutBranch: GitCoreShape["checkoutBranch"];
   readonly stashAndCheckout: GitCoreShape["stashAndCheckout"];
   readonly listLocalBranchNames: GitCoreShape["listLocalBranchNames"];
@@ -338,6 +339,19 @@ export const makeGitBranches = (deps: GitBranchesDeps): GitBranches => {
       }
     }).pipe(Effect.asVoid);
 
+  const deleteBranch: GitCoreShape["deleteBranch"] = (input) =>
+    Effect.gen(function* () {
+      yield* executeGit(
+        "GitCore.deleteBranch",
+        input.cwd,
+        ["branch", input.force ? "-D" : "-d", "--", input.branch],
+        {
+          timeoutMs: 10_000,
+          fallbackErrorMessage: "git branch delete failed",
+        },
+      );
+    }).pipe(Effect.asVoid);
+
   const resolveCheckoutBranchArgs = (input: {
     cwd: string;
     branch: string;
@@ -552,6 +566,7 @@ export const makeGitBranches = (deps: GitBranchesDeps): GitBranches => {
     renameBranch,
     publishBranch,
     createBranch,
+    deleteBranch,
     checkoutBranch,
     stashAndCheckout,
     listLocalBranchNames,

@@ -15,7 +15,15 @@ function resolveProjectFaviconUrl(cwd: string): string {
   return resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
 }
 
-export function ProjectSidebarIcon({ cwd, expanded }: { cwd: string; expanded: boolean }) {
+export function ProjectSidebarIcon({
+  cwd,
+  expanded,
+  glyphClassName = "size-4",
+}: {
+  cwd: string;
+  expanded: boolean;
+  glyphClassName?: string;
+}) {
   const faviconSrc = resolveProjectFaviconUrl(cwd);
   const [hasFavicon, setHasFavicon] = useState<boolean>(
     () => projectFaviconPresence.get(faviconSrc) === true,
@@ -59,7 +67,7 @@ export function ProjectSidebarIcon({ cwd, expanded }: { cwd: string; expanded: b
 
   return (
     <>
-      <FolderGlyph className="size-4" />
+      <FolderGlyph className={glyphClassName} />
       {hasFavicon ? (
         <img
           src={faviconSrc}

@@ -31,12 +31,12 @@ import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFavi
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
+import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
-const DESKTOP_APP_CORS_ORIGIN = "t3://app";
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
@@ -125,23 +125,6 @@ function toEffectHttpResponse(payload: HttpPayload) {
   });
 }
 
-function normalizeCorsOrigin(rawOrigin: string | ReadonlyArray<string> | undefined): string | null {
-  const value = Array.isArray(rawOrigin) ? rawOrigin[0] : rawOrigin;
-  const trimmed = value?.trim();
-  if (!trimmed || trimmed === "null") {
-    return null;
-  }
-  if (trimmed.replace(/\/+$/, "") === DESKTOP_APP_CORS_ORIGIN) {
-    return DESKTOP_APP_CORS_ORIGIN;
-  }
-  try {
-    const origin = new URL(trimmed).origin;
-    return origin === "null" ? null : origin;
-  } catch {
-    return null;
-  }
-}
-
 function localPreviewCorsHeaders(input: {
   readonly config: ServerConfigShape;
   readonly request: HttpServerRequest.HttpServerRequest;
@@ -150,9 +133,7 @@ function localPreviewCorsHeaders(input: {
   const origin = normalizeCorsOrigin(input.request.headers.origin);
   if (
     !origin ||
-    (origin !== input.url.origin &&
-      origin !== input.config.devUrl?.origin &&
-      origin !== DESKTOP_APP_CORS_ORIGIN)
+    !isTrustedAppOrigin({ origin, requestOrigin: input.url.origin, config: input.config })
   ) {
     return {};
   }
@@ -526,6 +507,8 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        allowAbsoluteLocalPreviewFile: true,
+        previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),
     );
     if (!previewFile) {

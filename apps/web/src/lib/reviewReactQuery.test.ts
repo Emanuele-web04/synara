@@ -296,13 +296,9 @@ describe("applyReviewUpdatedPayload", () => {
 
   it("hydrates active walkthrough queries with generation settings", () => {
     const queryClient = new QueryClient();
-    const settingsKey = reviewQueryKeys.walkthrough(
-      "/repo",
-      "42",
-      "patch-sig-1",
-      "head-sha-1",
-      { textGenerationModel: "openai/gpt-5" },
-    );
+    const settingsKey = reviewQueryKeys.walkthrough("/repo", "42", "patch-sig-1", "head-sha-1", {
+      textGenerationModel: "openai/gpt-5",
+    });
     queryClient.setQueryData(settingsKey, {
       walkthrough: REVIEW_WALKTHROUGH,
       reviewedHeadSha: "head-sha-1",

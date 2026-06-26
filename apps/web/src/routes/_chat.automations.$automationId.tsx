@@ -3,7 +3,14 @@ import {
   type AutomationRun,
   type AutomationUpdateInput,
   type AutomationWorktreeMode,
+  type ModelSelection,
+  type ProviderOptionDescriptor,
 } from "@t3tools/contracts";
+import {
+  getModelCapabilities,
+  getProviderOptionCurrentValue,
+  getProviderOptionDescriptors,
+} from "@t3tools/shared/model";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 
@@ -22,6 +29,7 @@ import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavig
 import { Button } from "~/components/ui/button";
 import { SidebarInset } from "~/components/ui/sidebar";
 import {
+  automationApprovalGaps,
   hasBlockingAutomationDraftWarnings,
   warningIdsForAcknowledgedRisks,
   type AutomationDraftWarning,
@@ -31,33 +39,42 @@ import {
   completionPolicyFromStopWhen,
   stopWhenFromCompletionPolicy,
 } from "~/lib/automationCompletionPolicy";
+import { automationLifecycleState, canPauseAutomation } from "~/lib/automationStatus";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
   useDesktopTopBarWindowControlsGutterClassName,
 } from "~/hooks/useDesktopTopBarGutter";
-import { ChevronDownIcon, PencilIcon, PlayIcon, StopFilledIcon, Trash2 } from "~/lib/icons";
+import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
+import {
+  buildModelSelection,
+  buildNextProviderOptions,
+  buildProviderOptionPatch,
+  type ProviderOptions,
+} from "~/providerModelOptions";
 import { ensureNativeApi } from "~/nativeApi";
 import { useStore } from "~/store";
 import {
   type AutomationFormState,
+  AutomationApprovalBanner,
   AutomationDialog,
   AutomationModelPicker,
   acknowledgedRiskIdsForFormWarnings,
   buildAutomationFormWarnings,
   canCancelAutomationRun,
   datetimeLocalFromIso,
-  formatDateTime,
   formatRelativeTime,
   formFromDefinition,
   isoFromDatetimeLocal,
+  isRowInteractiveEventTarget,
   isTriageRun,
   isFormSubmittable,
+  maxIterationOptions,
   providerOptionsForAutomationEdit,
   providerOptionsForAutomationModelSelection,
-  runStatusVariant,
   runResultSummary,
   runStatusLabel,
+  RunStatusIndicator,
   SCHEDULE_KIND_OPTIONS,
   scheduleFromKind,
   scheduleKindFromSchedule,
@@ -75,6 +92,50 @@ export const Route = createFileRoute("/_chat/automations/$automationId")({
 
 function lastFinishedRun(runs: readonly AutomationRun[]): AutomationRun | null {
   return runs.find((run) => run.finishedAt != null || run.startedAt != null) ?? null;
+}
+
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+// Reference-style absolute timestamp: "Today at 09:00", "Tomorrow at 12:30", "5 May 2026, 09:05".
+function formatRunTimestamp(value: string | null): string {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const time = new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+  const dayDelta = Math.round((startOfDay(date) - startOfDay(new Date())) / 86_400_000);
+  if (dayDelta === 0) return `Today at ${time}`;
+  if (dayDelta === 1) return `Tomorrow at ${time}`;
+  if (dayDelta === -1) return `Yesterday at ${time}`;
+  return new Intl.DateTimeFormat(undefined, {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
+// Presentation for the Status pill: maps the shared lifecycle state to a label and dot color.
+// The state decision lives in ~/lib/automationStatus so this pill and the list never drift.
+function automationStatusDisplay(definition: AutomationDefinition): {
+  readonly label: string;
+  readonly dotClassName: string;
+} {
+  switch (automationLifecycleState(definition)) {
+    case "active":
+      return { label: "Active", dotClassName: "bg-emerald-500" };
+    case "paused":
+      return { label: "Paused", dotClassName: "bg-amber-500" };
+    case "scheduled":
+      return { label: "Scheduled", dotClassName: "bg-sky-500" };
+    case "done":
+      return { label: "Done", dotClassName: "bg-muted-foreground" };
+  }
 }
 
 type SelectOption = { readonly value: string; readonly label: string };
@@ -95,21 +156,13 @@ const INTERVAL_PRESETS: readonly SelectOption[] = [
   { value: "86400", label: "Every 24 hours" },
 ];
 
-const MAX_ITERATION_OPTIONS: readonly SelectOption[] = [
-  { value: "", label: "Unlimited" },
-  { value: "10", label: "10 runs" },
-  { value: "25", label: "25 runs" },
-  { value: "50", label: "50 runs" },
-  { value: "100", label: "100 runs" },
-  { value: "250", label: "250 runs" },
-];
-
 function intervalOptions(current: number): readonly SelectOption[] {
   if (INTERVAL_PRESETS.some((option) => option.value === String(current))) {
     return INTERVAL_PRESETS;
   }
-  const minutes = Math.max(1, Math.round(current / 60));
-  return [{ value: String(current), label: `Every ${minutes} min` }, ...INTERVAL_PRESETS];
+  const label =
+    current >= 60 && current % 60 === 0 ? `Every ${current / 60} min` : `Every ${current} sec`;
+  return [{ value: String(current), label }, ...INTERVAL_PRESETS];
 }
 
 function AutomationDetailView() {
@@ -137,7 +190,9 @@ function AutomationDetailView() {
     markRunReadMutation,
     archiveRunMutation,
     runsByAutomationId,
-  } = useAutomations((threadId) => void navigate({ to: "/$threadId", params: { threadId } }));
+    // Running an automation keeps the user on this info page; the live run surfaces in
+    // "Previous runs" (click a run there to open its thread), matching the reference UX.
+  } = useAutomations();
 
   const definition = data.definitions.find((candidate) => candidate.id === automationId) ?? null;
   const runs = useMemo(
@@ -160,8 +215,8 @@ function AutomationDetailView() {
         >
           <header
             className={cn(
-              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
               CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
               "drag-region",
               desktopTopBarTrafficLightGutterClassName,
               desktopTopBarWindowControlsGutterClassName,
@@ -171,7 +226,7 @@ function AutomationDetailView() {
               className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
             >
               <SidebarHeaderNavigationControls />
-              <h1 className="truncate font-heading text-sm font-semibold">Automations</h1>
+              <h1 className="truncate font-heading text-sm font-medium">Automations</h1>
             </div>
           </header>
           <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -192,12 +247,62 @@ function AutomationDetailView() {
 
   const project = projects.find((candidate) => candidate.id === definition.projectId);
   const targetThread = threads.find((candidate) => candidate.id === definition.targetThreadId);
+  const sourceThread = definition.sourceThreadId
+    ? threads.find((candidate) => candidate.id === definition.sourceThreadId)
+    : null;
   const lastRun = lastFinishedRun(runs);
   const schedule = definition.schedule;
-  const stopWhen = stopWhenFromCompletionPolicy(definition.completionPolicy);
+  const status = automationStatusDisplay(definition);
+  const stopWhen = stopWhenFromCompletionPolicy(definition.completionPolicy ?? { type: "none" });
 
   const patch = (input: Omit<AutomationUpdateInput, "id">) =>
     updateMutation.mutate({ id: definition.id, ...input });
+
+  // One-time risk approval surfaced at the top of the panel when an already-created
+  // automation still needs it (e.g. created via the API). Persists on the automation.
+  const approvalGaps = automationApprovalGaps({
+    schedule: definition.schedule,
+    enabled: definition.enabled,
+    maxIterations: definition.maxIterations,
+    mode: definition.mode,
+    runtimeMode: definition.runtimeMode,
+    worktreeMode: definition.worktreeMode,
+    prompt: definition.prompt,
+    acknowledgedRisks: definition.acknowledgedRisks,
+  });
+  const approveAutomationRisks = () =>
+    // Records consent and any server-required fast-loop cap. Pause/resume stays separate so
+    // approving never silently re-enables an automation the user deliberately paused.
+    updateMutation.mutateAsync({
+      id: definition.id,
+      acknowledgedRisks: approvalGaps.acknowledgedRisks,
+      ...(approvalGaps.maxIterations !== undefined
+        ? { maxIterations: approvalGaps.maxIterations }
+        : {}),
+    });
+  const handleApproveAndRunNow = async () => {
+    try {
+      await approveAutomationRisks();
+    } catch {
+      return; // update failed; the mutation already surfaced the error toast
+    }
+    runNowMutation.mutate(definition);
+  };
+  const approvalBusy = updateMutation.isPending || runNowMutation.isPending;
+
+  // Applying a new model selection (model swap or a capability tweak) refreshes the saved
+  // provider start options the same way the model picker does, then patches both at once.
+  const applyModelSelection = (nextModelSelection: ModelSelection) => {
+    const providerOptions = providerOptionsForAutomationModelSelection(
+      definition,
+      nextModelSelection,
+      providerOptionsForDispatch,
+    );
+    patch({
+      modelSelection: nextModelSelection,
+      ...(providerOptions ? { providerOptions } : {}),
+    });
+  };
 
   const openEditDialog = (overrides: Partial<AutomationFormState> = {}) => {
     const nextForm = {
@@ -266,94 +371,155 @@ function AutomationDetailView() {
     >
       <div
         className={cn(
-          "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
+          "flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden",
           CHAT_BACKGROUND_CLASS_NAME,
         )}
       >
-        <header
-          className={cn(
-            CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
-            CHAT_SURFACE_HEADER_PADDING_X_CLASS,
-            "drag-region",
-            desktopTopBarTrafficLightGutterClassName,
-            desktopTopBarWindowControlsGutterClassName,
-          )}
-        >
-          <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
-            <SidebarHeaderNavigationControls />
-            <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm [-webkit-app-region:no-drag]">
-              <button
-                type="button"
-                onClick={() => void navigate({ to: "/automations" })}
-                className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Automations
-              </button>
-              <span className="shrink-0 text-muted-foreground">/</span>
-              <span className="truncate font-heading font-semibold">{definition.name}</span>
+        {/* Left column: breadcrumb header + the prompt. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <header
+            className={cn(
+              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+              "drag-region",
+              desktopTopBarTrafficLightGutterClassName,
+            )}
+          >
+            <div
+              className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
+            >
+              <SidebarHeaderNavigationControls />
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm [-webkit-app-region:no-drag]">
+                <button
+                  type="button"
+                  onClick={() => void navigate({ to: "/automations" })}
+                  className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+                >
+                  Automations
+                </button>
+                <CentralIcon
+                  name="chevron-right-small"
+                  className="size-3.5 shrink-0 text-muted-foreground"
+                />
+                <span className="truncate font-heading font-medium">{definition.name}</span>
+              </div>
             </div>
-            <div className="flex shrink-0 items-center gap-2 [-webkit-app-region:no-drag]">
-              <Button type="button" size="sm" variant="ghost" onClick={togglePause}>
-                {definition.enabled ? "Pause" : "Resume"}
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Edit"
-                onClick={() => openEditDialog()}
-              >
-                <PencilIcon className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                size="icon-sm"
-                variant="ghost"
-                aria-label="Delete"
-                onClick={() => void deleteDefinition()}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                disabled={runNowMutation.isPending}
-                onClick={() => runNowMutation.mutate(definition)}
-              >
-                <PlayIcon className="size-4" />
-                Run now
-              </Button>
-            </div>
-          </div>
-        </header>
+          </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-5xl flex-col gap-10 px-6 py-8 md:flex-row">
-            <div className="min-w-0 flex-1 space-y-3">
-              <h1 className="font-heading text-xl font-semibold tracking-tight">
+          <main className="min-h-0 flex-1 overflow-y-auto px-6 py-8 sm:px-8">
+            <div className="max-w-3xl space-y-4">
+              <h1 className="font-heading text-2xl font-normal text-foreground">
                 {definition.name}
               </h1>
-              <p className="max-w-2xl whitespace-pre-wrap text-sm leading-relaxed text-foreground/80">
+              <p className="whitespace-pre-wrap text-[0.9375rem] leading-relaxed text-muted-foreground">
                 {definition.prompt}
               </p>
             </div>
+          </main>
+        </div>
 
-            <aside className="flex w-full shrink-0 flex-col gap-6 md:w-72">
+        {/* Right column: action header + details panel. The header carries the shared bottom
+            hairline (horizontal), and the body below carries the vertical seam — so the vertical
+            line starts at the header's bottom edge instead of running up through it. Both use the
+            same --app-surface-divider token and meet cleanly at the corner. */}
+        <div className="flex min-h-0 w-80 shrink-0 flex-col overflow-hidden">
+          <header
+            className={cn(
+              CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+              CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
+              "drag-region",
+              desktopTopBarWindowControlsGutterClassName,
+            )}
+          >
+            <div
+              className={cn(
+                "flex items-center justify-end gap-2 sm:gap-3",
+                CHAT_SURFACE_HEADER_HEIGHT_CLASS,
+              )}
+            >
+              <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+                {canPauseAutomation(definition) ? (
+                  <Button
+                    type="button"
+                    size="icon-sm"
+                    variant="ghost"
+                    aria-label={definition.enabled ? "Pause" : "Resume"}
+                    title={definition.enabled ? "Pause" : "Resume"}
+                    onClick={togglePause}
+                  >
+                    <CentralIcon name={definition.enabled ? "pause" : "play"} className="size-4" />
+                  </Button>
+                ) : null}
+                <Button
+                  type="button"
+                  size="icon-sm"
+                  variant="ghost"
+                  aria-label="Delete"
+                  title="Delete"
+                  onClick={() => void deleteDefinition()}
+                >
+                  <CentralIcon name="trash-can-simple" className="size-4" />
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  className="ml-1.5"
+                  disabled={
+                    runNowMutation.isPending ||
+                    // Stay disabled while an approval update is in flight: the cache merges
+                    // acknowledgedRisks optimistically, so warnings clears before the server
+                    // persists and a run dispatched in that window hits the old definition.
+                    updateMutation.isPending ||
+                    approvalGaps.runBlockingWarnings.length > 0
+                  }
+                  title={
+                    approvalGaps.runBlockingWarnings.length > 0
+                      ? "Approve the automation first"
+                      : undefined
+                  }
+                  onClick={() => runNowMutation.mutate(definition)}
+                >
+                  <CentralIcon name="play" className="size-4" />
+                  Run now
+                </Button>
+              </div>
+            </div>
+          </header>
+
+          <div className="min-h-0 flex-1 overflow-y-auto border-l border-[var(--app-surface-divider)]">
+            <div className="flex flex-col gap-6 px-4 py-8">
+              <AutomationApprovalBanner
+                warnings={approvalGaps.warnings}
+                busy={approvalBusy}
+                // Swallow the rejection here; the mutation's onError already toasts. Without
+                // this, void-ing the rejected promise would surface an unhandled rejection.
+                onApprove={() => void approveAutomationRisks().catch(() => undefined)}
+                onApproveAndRun={() => void handleApproveAndRunNow()}
+              />
               <DetailGroup title="Status">
                 <DetailRow label="Status">
-                  <span className="inline-flex items-center gap-1.5">
-                    <span
-                      className={cn(
-                        "size-2 rounded-full",
-                        definition.enabled ? "bg-emerald-500" : "bg-muted-foreground/40",
-                      )}
-                    />
-                    {definition.enabled ? "Active" : "Paused"}
-                  </span>
+                  <StatusValue>
+                    <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
+                    {status.label}
+                  </StatusValue>
                 </DetailRow>
-                <DetailRow label="Next run">{formatDateTime(definition.nextRunAt)}</DetailRow>
+                <DetailRow label="Next run">
+                  {definition.enabled && definition.nextRunAt ? (
+                    <StatusValue tone="muted">
+                      {formatRunTimestamp(definition.nextRunAt)}
+                    </StatusValue>
+                  ) : (
+                    "—"
+                  )}
+                </DetailRow>
                 <DetailRow label="Last ran">
-                  {lastRun ? formatDateTime(lastRun.finishedAt ?? lastRun.startedAt) : "Never"}
+                  {lastRun ? (
+                    <StatusValue tone="muted">
+                      {formatRunTimestamp(lastRun.finishedAt ?? lastRun.startedAt)}
+                    </StatusValue>
+                  ) : (
+                    "—"
+                  )}
                 </DetailRow>
               </DetailGroup>
 
@@ -361,7 +527,18 @@ function AutomationDetailView() {
                 {definition.mode === "heartbeat" ? (
                   <DetailRow label="Runs in">Thread</DetailRow>
                 ) : (
-                  <EditRow label="Runs in">
+                  <EditRow
+                    label={
+                      <>
+                        Runs in
+                        <CentralIcon
+                          name="info-simple"
+                          className="size-3 text-muted-foreground/60"
+                          aria-label="Where the automation runs: a worktree, a local checkout, or auto"
+                        />
+                      </>
+                    }
+                  >
                     <InlineSelect
                       value={definition.worktreeMode}
                       options={WORKTREE_OPTIONS}
@@ -391,6 +568,26 @@ function AutomationDetailView() {
                     />
                   </EditRow>
                 )}
+                {definition.sourceThreadId ? (
+                  <DetailRow label="Created from">
+                    {sourceThread ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          void navigate({
+                            to: "/$threadId",
+                            params: { threadId: sourceThread.id },
+                          })
+                        }
+                        className="min-w-0 truncate text-right text-foreground transition-colors hover:text-primary"
+                      >
+                        {resolveThreadPickerTitle(sourceThread.title)}
+                      </button>
+                    ) : (
+                      "Thread unavailable"
+                    )}
+                  </DetailRow>
+                ) : null}
                 <EditRow label="Repeats">
                   <InlineSelect
                     value={scheduleKindFromSchedule(schedule)}
@@ -510,19 +707,13 @@ function AutomationDetailView() {
                   <AutomationModelPicker
                     value={definition.modelSelection}
                     projectCwd={project?.cwd ?? null}
-                    onChange={(value) => {
-                      const providerOptions = providerOptionsForAutomationModelSelection(
-                        definition,
-                        value,
-                        providerOptionsForDispatch,
-                      );
-                      patch({
-                        modelSelection: value,
-                        ...(providerOptions ? { providerOptions } : {}),
-                      });
-                    }}
+                    onChange={applyModelSelection}
                   />
                 </EditRow>
+                <ModelOptionRows
+                  modelSelection={definition.modelSelection}
+                  onChange={applyModelSelection}
+                />
                 <DetailRow label="Mode">
                   {definition.mode === "heartbeat" ? "Heartbeat" : "Standalone"}
                 </DetailRow>
@@ -539,31 +730,29 @@ function AutomationDetailView() {
                     />
                   </EditRow>
                 ) : null}
+                <EditRow label="Max iterations">
+                  <InlineSelect
+                    value={definition.maxIterations == null ? "" : String(definition.maxIterations)}
+                    options={maxIterationOptions(definition.maxIterations)}
+                    onChange={(value) =>
+                      patch({ maxIterations: value === "" ? null : Number.parseInt(value, 10) })
+                    }
+                  />
+                </EditRow>
                 {definition.mode === "heartbeat" ? (
-                  <EditRow label="Max iterations">
-                    <InlineSelect
-                      value={
-                        definition.maxIterations == null ? "" : String(definition.maxIterations)
-                      }
-                      options={MAX_ITERATION_OPTIONS}
-                      onChange={(value) =>
-                        patch({ maxIterations: value === "" ? null : Number.parseInt(value, 10) })
-                      }
-                    />
-                  </EditRow>
-                ) : null}
-                {definition.mode === "heartbeat" && targetThread ? (
                   <DetailRow label="Thread">
-                    {resolveThreadPickerTitle(targetThread.title)}
+                    {targetThread
+                      ? resolveThreadPickerTitle(targetThread.title)
+                      : "Thread unavailable"}
                   </DetailRow>
                 ) : null}
               </DetailGroup>
 
               <DetailGroup title="Previous runs">
                 {runs.length === 0 ? (
-                  <div className="px-1 text-xs text-muted-foreground">No runs yet.</div>
+                  <div className="px-1.5 py-1 text-xs text-muted-foreground">No runs yet.</div>
                 ) : (
-                  <div className="flex flex-col gap-1">
+                  <div className="flex flex-col gap-0.5">
                     {runs.map((run) => (
                       <RunRow
                         key={run.id}
@@ -579,9 +768,9 @@ function AutomationDetailView() {
                   </div>
                 )}
               </DetailGroup>
-            </aside>
+            </div>
           </div>
-        </main>
+        </div>
       </div>
 
       {form ? (
@@ -612,11 +801,9 @@ function DetailGroup({
   readonly children: React.ReactNode;
 }) {
   return (
-    <section className="space-y-1.5">
-      <h2 className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-        {title}
-      </h2>
-      <div className="rounded-lg border border-border">{children}</div>
+    <section className="space-y-0.5">
+      <h2 className="px-1.5 pb-1 text-xs font-medium text-muted-foreground/70">{title}</h2>
+      <div className="flex flex-col">{children}</div>
     </section>
   );
 }
@@ -625,14 +812,36 @@ function DetailRow({
   label,
   children,
 }: {
-  readonly label: string;
+  readonly label: React.ReactNode;
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/60 px-3 py-2 text-xs last:border-b-0">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
-      <span className="min-w-0 truncate text-right font-medium text-foreground">{children}</span>
+    <div className="flex items-center justify-between gap-3 rounded-md px-1.5 py-1.5 text-xs">
+      <span className="flex shrink-0 items-center gap-1 text-muted-foreground">{label}</span>
+      <span className="min-w-0 truncate text-right text-foreground">{children}</span>
     </div>
+  );
+}
+
+// Read-only Status group values (Active/Next run/Last ran). The reference renders these as
+// plain right-aligned text — the status as foreground, timestamps muted — with no chip behind
+// them, so the value column stays quiet and flush to the right.
+function StatusValue({
+  tone = "default",
+  children,
+}: {
+  readonly tone?: "default" | "muted";
+  readonly children: React.ReactNode;
+}) {
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5",
+        tone === "muted" ? "text-muted-foreground" : "text-foreground",
+      )}
+    >
+      {children}
+    </span>
   );
 }
 
@@ -640,19 +849,19 @@ function EditRow({
   label,
   children,
 }: {
-  readonly label: string;
+  readonly label: React.ReactNode;
   readonly children: React.ReactNode;
 }) {
   return (
-    <div className="flex items-center justify-between gap-2 border-b border-border/60 py-px pl-3 pr-1.5 text-xs transition-colors last:border-b-0 hover:bg-foreground/[0.03]">
-      <span className="shrink-0 text-muted-foreground">{label}</span>
+    <div className="flex items-center justify-between gap-2 rounded-md py-px pl-1.5 pr-0.5 text-xs transition-colors hover:bg-foreground/[0.04]">
+      <span className="flex shrink-0 items-center gap-1 text-muted-foreground">{label}</span>
       {children}
     </div>
   );
 }
 
 const INLINE_CONTROL_CLASS =
-  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs font-medium text-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
+  "cursor-pointer rounded-md bg-transparent px-2 py-1.5 text-right text-xs text-foreground outline-none transition-colors focus-visible:ring-1 focus-visible:ring-ring";
 
 function InlineSelect({
   value,
@@ -668,7 +877,7 @@ function InlineSelect({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        className={cn(INLINE_CONTROL_CLASS, "max-w-[12rem] appearance-none truncate pr-6")}
+        className={cn(INLINE_CONTROL_CLASS, "max-w-[11rem] appearance-none truncate pr-5")}
       >
         {options.map((option) => (
           <option key={option.value} value={option.value}>
@@ -676,8 +885,95 @@ function InlineSelect({
           </option>
         ))}
       </select>
-      <ChevronDownIcon className="pointer-events-none absolute right-1.5 size-3 text-muted-foreground" />
+      <CentralIcon
+        name="chevron-down-small"
+        className="pointer-events-none absolute right-1 size-3 text-muted-foreground"
+      />
     </div>
+  );
+}
+
+function InlineToggle({
+  value,
+  onChange,
+}: {
+  readonly value: boolean;
+  readonly onChange: (value: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onChange(!value)}
+      className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
+    >
+      {value ? "On" : "Off"}
+    </button>
+  );
+}
+
+/**
+ * Inline edit rows for the selected model's capabilities — reasoning effort, fast mode,
+ * thinking, context window, etc. The knobs are derived from the provider's capability
+ * descriptors, so each provider surfaces exactly the controls it supports (and none when it
+ * supports nothing). Changing a value reuses the same model-selection patch path as the
+ * model picker, keeping provider start options in sync.
+ */
+function ModelOptionRows({
+  modelSelection,
+  onChange,
+}: {
+  readonly modelSelection: ModelSelection;
+  readonly onChange: (next: ModelSelection) => void;
+}) {
+  const { provider, model } = modelSelection;
+  const caps = getModelCapabilities(provider, model);
+  const descriptors = getProviderOptionDescriptors({
+    provider,
+    caps,
+    selections: modelSelection.options as Record<string, unknown> | undefined,
+  });
+  if (descriptors.length === 0) {
+    return null;
+  }
+
+  const setOption = (descriptor: ProviderOptionDescriptor, value: string | boolean) => {
+    const optionPatch = buildProviderOptionPatch(provider, descriptor.id, value);
+    const nextOptions = buildNextProviderOptions(
+      provider,
+      modelSelection.options as ProviderOptions | undefined,
+      optionPatch,
+    );
+    onChange(buildModelSelection(provider, model, nextOptions));
+  };
+
+  return (
+    <>
+      {descriptors.map((descriptor) => {
+        if (descriptor.type === "boolean") {
+          return (
+            <EditRow key={descriptor.id} label={descriptor.label}>
+              <InlineToggle
+                value={getProviderOptionCurrentValue(descriptor) === true}
+                onChange={(checked) => setOption(descriptor, checked)}
+              />
+            </EditRow>
+          );
+        }
+        const current = getProviderOptionCurrentValue(descriptor);
+        return (
+          <EditRow key={descriptor.id} label={descriptor.label}>
+            <InlineSelect
+              value={typeof current === "string" ? current : ""}
+              options={descriptor.options.map((option) => ({
+                value: option.id,
+                label: option.label,
+              }))}
+              onChange={(value) => setOption(descriptor, value)}
+            />
+          </EditRow>
+        );
+      })}
+    </>
   );
 }
 
@@ -754,53 +1050,74 @@ function RunRow({
   readonly onMarkRead: (unread: boolean) => void;
   readonly onArchive: (archived: boolean) => void;
 }) {
-  const variant = runStatusVariant(run.status);
-  const dotClass =
-    variant === "success"
-      ? "text-emerald-500"
-      : variant === "error"
-        ? "text-destructive"
-        : variant === "warning"
-          ? "text-amber-500"
-          : variant === "info"
-            ? "text-blue-500"
-            : "text-muted-foreground/50";
   const active = canCancelAutomationRun(run);
   const archived = run.result?.archivedAt !== null && run.result?.archivedAt !== undefined;
   const triageActionable = run.result !== null || isTriageRun(run);
   const unread = run.result ? run.result.unread : triageActionable;
-  const worktreeLabel =
-    run.permissionSnapshot.worktreeMode === "worktree"
-      ? "Worktree kept"
-      : run.permissionSnapshot.worktreeMode === "auto"
-        ? "Auto worktree"
-        : null;
+  const openable = run.threadId != null;
+  const open = () => {
+    if (run.threadId) {
+      onOpen(run.threadId as NonNullable<AutomationRun["threadId"]>);
+    }
+  };
   return (
-    <div className="flex items-center gap-2 rounded-md px-1 py-1.5 text-xs">
-      <span className={cn("shrink-0", dotClass)}>
-        <span className="block size-2 rounded-full bg-current" />
-      </span>
+    // The whole row opens its thread (the run's chat history); inline actions stop
+    // propagation so they don't also navigate.
+    <div
+      role={openable ? "button" : undefined}
+      tabIndex={openable ? 0 : undefined}
+      onClick={openable ? open : undefined}
+      onKeyDown={
+        openable
+          ? (event) => {
+              if (isRowInteractiveEventTarget(event.target, event.currentTarget)) {
+                return;
+              }
+              if (event.key === "Enter" || event.key === " ") {
+                event.preventDefault();
+                open();
+              }
+            }
+          : undefined
+      }
+      className={cn(
+        "group flex items-center gap-2 rounded-md px-1.5 py-1.5 text-xs transition-colors",
+        openable ? "cursor-pointer hover:bg-foreground/[0.03]" : undefined,
+      )}
+    >
+      <RunStatusIndicator status={run.status} />
       <div className="min-w-0 flex-1 truncate">
-        <span className="font-medium text-foreground">{runStatusLabel(run.status)}</span>
-        <span className="text-muted-foreground"> • {run.trigger.type}</span>
-        <span className="text-muted-foreground"> • {runResultSummary(run)}</span>
+        <span className="text-foreground/90">{runStatusLabel(run.status)}</span>
+        <span className="text-muted-foreground"> · {runResultSummary(run)}</span>
       </div>
-      {worktreeLabel ? (
-        <span
-          className="shrink-0 text-muted-foreground"
-          title="Archiving keeps generated worktrees and branches."
-        >
-          {worktreeLabel}
-        </span>
-      ) : null}
-      {run.threadId ? (
-        <button
-          type="button"
-          onClick={() => onOpen(run.threadId as NonNullable<AutomationRun["threadId"]>)}
-          className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-        >
-          Open
-        </button>
+      {triageActionable ? (
+        <div className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onMarkRead(!unread);
+            }}
+            className="text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {unread ? "Read" : "Unread"}
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              onArchive(!archived);
+            }}
+            title={
+              run.permissionSnapshot.worktreeMode === "local"
+                ? undefined
+                : "Archiving does not remove generated worktrees or branches."
+            }
+            className="text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {archived ? "Unarchive" : "Archive"}
+          </button>
+        </div>
       ) : null}
       {active ? (
         <Button
@@ -808,35 +1125,15 @@ function RunRow({
           size="icon-chip"
           variant="ghost"
           aria-label="Cancel run"
-          onClick={onCancel}
+          onClick={(event) => {
+            event.stopPropagation();
+            onCancel();
+          }}
         >
-          <StopFilledIcon className="size-3.5" />
+          <CentralIcon name="stop" className="size-3.5" />
         </Button>
       ) : null}
-      {triageActionable ? (
-        <>
-          <button
-            type="button"
-            onClick={() => onMarkRead(!unread)}
-            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {unread ? "Read" : "Unread"}
-          </button>
-          <button
-            type="button"
-            onClick={() => onArchive(!archived)}
-            title={
-              run.permissionSnapshot.worktreeMode === "local"
-                ? undefined
-                : "Archiving does not remove generated worktrees or branches."
-            }
-            className="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
-          >
-            {archived ? "Unarchive" : "Archive"}
-          </button>
-        </>
-      ) : null}
-      <span className="shrink-0 text-muted-foreground">
+      <span className="shrink-0 tabular-nums text-muted-foreground">
         {formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
       </span>
     </div>

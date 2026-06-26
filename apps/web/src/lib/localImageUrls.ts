@@ -54,10 +54,17 @@ export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
   readonly download?: boolean;
+  // Accept an explicit `undefined` (not just absent) so callers can forward an
+  // optional `previewGrant: string | null | undefined` straight through under
+  // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
+  readonly grant?: string | null | undefined;
 }): string {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
     params.set("cwd", input.cwd);
+  }
+  if (input.grant) {
+    params.set("grant", input.grant);
   }
   if (input.download) {
     params.set("download", "1");

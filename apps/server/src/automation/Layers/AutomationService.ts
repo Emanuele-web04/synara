@@ -4,6 +4,7 @@ import {
   AutomationId,
   AutomationRunId,
   CommandId,
+  DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
   MessageId,
   ThreadId,
@@ -49,6 +50,11 @@ import {
 const AUTOMATION_ERROR_MAX_CHARS = 4_000;
 const FAST_INTERVAL_ACKNOWLEDGED_MINIMUM_SECONDS = 1;
 const AUTOMATION_COMPLETION_EVALUATION_WORKERS = 2;
+const AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY = 100;
+// Hard ceiling on a single AI stop-evaluation. With only a couple of evaluation
+// workers, a hung provider call would otherwise pin a worker indefinitely and
+// starve stop checks for every other heartbeat automation.
+const AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS = 30_000;
 
 interface AutomationCompletionEvaluationJob {
   readonly definition: AutomationDefinition;
@@ -110,6 +116,26 @@ function errorMessage(cause: unknown): string {
   return redactSecrets(raw).slice(0, AUTOMATION_ERROR_MAX_CHARS);
 }
 
+// Recovery/reconcile failures arrive multiply wrapped: toServiceError ->
+// AutomationServiceError whose `.cause` is often a PersistenceSqlError whose own `.cause`
+// holds the real driver failure ("database is locked", a constraint, ...). Each layer's
+// own `message` is a generic wrapper string, so walk down the `.cause` chain to the root
+// and log that, otherwise the warning is unactionable. Bounded to avoid a cyclic cause.
+function recoveryErrorMessage(error: unknown): string {
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (current == null || typeof current !== "object" || !("cause" in current)) {
+      break;
+    }
+    const cause = (current as { readonly cause?: unknown }).cause;
+    if (cause == null) {
+      break;
+    }
+    current = cause;
+  }
+  return errorMessage(current);
+}
+
 function resultSummary(value: string | null | undefined, fallback?: string): string | null {
   return automationRunResultSummary(value, fallback);
 }
@@ -123,9 +149,7 @@ function isSameAiCompletionPolicy(
   left: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
   right: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
 ): boolean {
-  return (
-    left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold
-  );
+  return left.stopWhen === right.stopWhen && left.confidenceThreshold === right.confidenceThreshold;
 }
 
 function isSameCompletionPolicy(
@@ -141,15 +165,34 @@ function isSameCompletionPolicy(
   return right.type === "ai-evaluated" && isSameAiCompletionPolicy(left, right);
 }
 
+const DEFAULT_COMPLETION_POLICY = { type: "none" } as const satisfies AutomationCompletionPolicy;
+
+function completionPolicyForDefinition(
+  definition: AutomationDefinition,
+): AutomationCompletionPolicy {
+  return definition.completionPolicy ?? DEFAULT_COMPLETION_POLICY;
+}
+
+function completionPolicyVersionForDefinition(definition: AutomationDefinition): number {
+  return definition.completionPolicyVersion ?? 1;
+}
+
+function completionPolicyUpdatedAtForDefinition(definition: AutomationDefinition): string {
+  return definition.completionPolicyUpdatedAt ?? definition.createdAt;
+}
+
 function runUsesCurrentCompletionPolicy(
   run: AutomationRun,
   definition: AutomationDefinition,
 ): boolean {
   if (run.permissionSnapshot.completionPolicyVersion !== undefined) {
-    return run.permissionSnapshot.completionPolicyVersion === definition.completionPolicyVersion;
+    return (
+      run.permissionSnapshot.completionPolicyVersion ===
+      completionPolicyVersionForDefinition(definition)
+    );
   }
   const runPolicyAnchorMs = Date.parse(run.startedAt ?? run.createdAt);
-  const policyUpdatedAtMs = Date.parse(definition.completionPolicyUpdatedAt);
+  const policyUpdatedAtMs = Date.parse(completionPolicyUpdatedAtForDefinition(definition));
   return (
     Number.isFinite(runPolicyAnchorMs) &&
     Number.isFinite(policyUpdatedAtMs) &&
@@ -222,7 +265,7 @@ function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
     provider: definition.modelSelection.provider,
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
-    completionPolicyVersion: definition.completionPolicyVersion,
+    completionPolicyVersion: completionPolicyVersionForDefinition(definition),
     runtimeMode: definition.runtimeMode,
     interactionMode: definition.interactionMode,
     worktreeMode: definition.worktreeMode,
@@ -256,6 +299,11 @@ function effectiveMinimumIntervalSeconds(input: {
   return input.minimumIntervalSeconds;
 }
 
+// Single source of truth for the runtime risks an automation must acknowledge before it can
+// run. Enforced uniformly at create, update, and run (dispatchRun) so an automation can never
+// reach a run unacknowledged. The `local` worktree check applies to every mode: a heartbeat
+// reuses its target thread, but that thread can itself sit on the local checkout, so continuing
+// it still runs the provider against the active project root.
 function riskAcknowledgementError(input: {
   readonly runtimeMode: AutomationDefinition["runtimeMode"];
   readonly worktreeMode: AutomationDefinition["worktreeMode"];
@@ -267,6 +315,36 @@ function riskAcknowledgementError(input: {
   }
   if (input.worktreeMode === "local" && !acknowledgedRisks.has("local-checkout")) {
     return "Automation local checkout mode requires an explicit acknowledgement.";
+  }
+  return null;
+}
+
+// Single source of truth for the fast-interval policy: a sub-minute schedule needs the
+// `fast-interval` acknowledgement AND a bounded iteration cap, treated as a pair so an
+// acknowledged loop can't run unbounded. Shared by validateSchedulePolicy (create/update) and
+// the dispatch gate (the run-path backstop). May throw if the schedule has an invalid cron or
+// timezone, so callers must wrap it (Effect.try) to surface a typed error.
+function fastIntervalPolicyError(input: {
+  readonly schedule: AutomationDefinition["schedule"];
+  readonly enabled: boolean;
+  readonly maxIterations: AutomationDefinition["maxIterations"];
+  readonly acknowledgedRisks: readonly string[];
+  readonly now: string;
+}): string | null {
+  const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+  if (spacingSeconds === null || spacingSeconds >= DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS) {
+    return null;
+  }
+  if (!input.acknowledgedRisks.includes("fast-interval")) {
+    return `Automation schedule must run at least ${DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS} seconds apart.`;
+  }
+  const exceedsFastIterationCap =
+    input.maxIterations === null ||
+    input.maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS;
+  // Pausing a legacy fast loop must always remain possible; enforce the hard cap only for
+  // definitions that will continue running.
+  if (input.enabled && exceedsFastIterationCap) {
+    return `Fast interval automations must set max iterations to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
   }
   return null;
 }
@@ -325,14 +403,20 @@ function mergeDefinitionUpdate(
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null));
   const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
+  const currentCompletionPolicy = completionPolicyForDefinition(current);
   const completionPolicy =
     mode === "standalone"
       ? { type: "none" as const }
-      : (input.completionPolicy ?? current.completionPolicy);
+      : (input.completionPolicy ?? currentCompletionPolicy);
   const completionPolicyChanged = !isSameCompletionPolicy(
-    current.completionPolicy,
+    currentCompletionPolicy,
     completionPolicy,
   );
+  // Run caps apply to both standalone and heartbeat definitions; chat parsing uses
+  // them for bounded requests like "every 15 seconds for 3 times".
+  const maxIterations = hasOwn(input, "maxIterations")
+    ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
+    : current.maxIterations;
   const nextDefinition: AutomationDefinition = {
     ...current,
     projectId: input.projectId ?? current.projectId,
@@ -352,18 +436,15 @@ function mergeDefinitionUpdate(
     targetThreadId: hasOwn(input, "targetThreadId")
       ? ((input.targetThreadId as AutomationDefinition["targetThreadId"] | undefined) ?? null)
       : current.targetThreadId,
-    maxIterations:
-      mode === "standalone"
-        ? null
-        : hasOwn(input, "maxIterations")
-          ? ((input.maxIterations as AutomationDefinition["maxIterations"] | undefined) ?? null)
-          : current.maxIterations,
+    maxIterations,
     stopOnError: input.stopOnError ?? current.stopOnError,
     completionPolicy,
     completionPolicyVersion: completionPolicyChanged
-      ? current.completionPolicyVersion + 1
-      : current.completionPolicyVersion,
-    completionPolicyUpdatedAt: completionPolicyChanged ? now : current.completionPolicyUpdatedAt,
+      ? completionPolicyVersionForDefinition(current) + 1
+      : completionPolicyVersionForDefinition(current),
+    completionPolicyUpdatedAt: completionPolicyChanged
+      ? now
+      : completionPolicyUpdatedAtForDefinition(current),
     minimumIntervalSeconds: input.minimumIntervalSeconds ?? current.minimumIntervalSeconds,
     maxRuntimeSeconds: hasOwn(input, "maxRuntimeSeconds")
       ? ((input.maxRuntimeSeconds as AutomationDefinition["maxRuntimeSeconds"] | undefined) ?? null)
@@ -424,12 +505,72 @@ export const AutomationServiceLive = Layer.effect(
     // Unbounded so we never silently drop run/definition updates under a burst, matching
     // the rest of the server's PubSub usage.
     const events = yield* PubSub.unbounded<AutomationStreamEvent>();
-    // Stop-condition AI calls can be slow; a dedicated queue keeps reconciliation responsive.
-    const completionEvaluationQueue = yield* Queue.unbounded<AutomationCompletionEvaluationJob>();
+    // Stop-condition AI calls can be slow; cap queued+active jobs and let DB
+    // reconciliation rediscover excess pending rows when worker capacity frees up.
+    const completionEvaluationQueue = yield* Queue.bounded<AutomationCompletionEvaluationJob>(
+      AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY,
+    );
     const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
       PubSub.publish(events, event).pipe(Effect.asVoid);
+
+    const cleanupUnattachedWorktree = (input: {
+      readonly definition: AutomationDefinition;
+      readonly run: AutomationRun;
+      readonly project: OrchestrationProjectShell;
+      readonly environment: ThreadEnvironment;
+      readonly reason: string;
+    }) => {
+      const path = input.environment.associatedWorktreePath;
+      if (input.environment.envMode !== "worktree" || !path) {
+        return Effect.void;
+      }
+      const expectedBranch = makeAutomationBranchName(input.definition, input.run.id);
+      // Only delete the branch minted for this not-yet-owned automation worktree.
+      const branch =
+        input.environment.associatedWorktreeBranch === expectedBranch ? expectedBranch : null;
+      const removeWorktree = git
+        .removeWorktree({
+          cwd: input.project.workspaceRoot,
+          path,
+          force: true,
+        })
+        .pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("automation unattached worktree cleanup failed", {
+              automationId: input.definition.id,
+              runId: input.run.id,
+              path,
+              reason: input.reason,
+              error: errorMessage(error),
+            }),
+          ),
+          Effect.asVoid,
+        );
+      const deleteBranch = branch
+        ? git
+            .deleteBranch({
+              cwd: input.project.workspaceRoot,
+              branch,
+              force: true,
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("automation unattached branch cleanup failed", {
+                  automationId: input.definition.id,
+                  runId: input.run.id,
+                  branch,
+                  reason: input.reason,
+                  error: errorMessage(error),
+                }),
+              ),
+              Effect.asVoid,
+            )
+        : Effect.void;
+
+      return removeWorktree.pipe(Effect.flatMap(() => deleteBranch));
+    };
 
     const requireDefinition = (id: AutomationId) =>
       automationRepository.getDefinitionById({ id }).pipe(
@@ -511,6 +652,7 @@ export const AutomationServiceLive = Layer.effect(
     const validateSchedulePolicy = (input: {
       readonly schedule: AutomationDefinition["schedule"];
       readonly enabled: boolean;
+      readonly maxIterations: AutomationDefinition["maxIterations"];
       readonly minimumIntervalSeconds: number;
       readonly acknowledgedRisks: readonly string[];
       readonly now: string;
@@ -518,6 +660,10 @@ export const AutomationServiceLive = Layer.effect(
       Effect.try({
         try: () => {
           const spacingSeconds = computeAutomationScheduleSpacingSeconds(input.schedule, input.now);
+          const fastIntervalError = fastIntervalPolicyError(input);
+          if (fastIntervalError) {
+            throw new Error(fastIntervalError);
+          }
           const minimumIntervalSeconds = effectiveMinimumIntervalSeconds(input);
           if (spacingSeconds !== null && spacingSeconds < minimumIntervalSeconds) {
             throw new Error(
@@ -561,6 +707,26 @@ export const AutomationServiceLive = Layer.effect(
           )
         : Effect.void;
     };
+
+    // Run-path backstop for the fast-interval policy. validateSchedulePolicy enforces this at
+    // create/update; this guards the run path it never covers. Effect.try converts a throwing
+    // schedule (invalid cron/timezone in a persisted row) into a typed error so the dispatch
+    // failure path records the run as failed instead of dying on a defect.
+    const validateFastIntervalPolicy = (input: {
+      readonly schedule: AutomationDefinition["schedule"];
+      readonly enabled: boolean;
+      readonly maxIterations: AutomationDefinition["maxIterations"];
+      readonly acknowledgedRisks: readonly string[];
+      readonly now: string;
+    }) =>
+      Effect.try({
+        try: () => fastIntervalPolicyError(input),
+        catch: (cause) => new AutomationServiceError({ message: errorMessage(cause), cause }),
+      }).pipe(
+        Effect.flatMap((message) =>
+          message ? Effect.fail(new AutomationServiceError({ message })) : Effect.void,
+        ),
+      );
 
     const resolveThreadEnvironment = (
       definition: AutomationDefinition,
@@ -698,6 +864,25 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
 
+        // Enforce the gate at dispatch, not just create/update, so an enabled automation that
+        // reached a run unacknowledged (e.g. inserted via the API/DB without consent) cannot run
+        // on schedule or via Run now. Reuses the same validators as create/update so the backstop
+        // stays consistent with them. Fails before the run is marked started; the catch at the end
+        // of dispatchRun records it as a clean failed run, and the scheduler has already advanced
+        // past this occurrence.
+        yield* validateRiskAcknowledgements({
+          runtimeMode: definition.runtimeMode,
+          worktreeMode: definition.worktreeMode,
+          acknowledgedRisks: definition.acknowledgedRisks,
+        });
+        yield* validateFastIntervalPolicy({
+          schedule: definition.schedule,
+          enabled: definition.enabled,
+          maxIterations: definition.maxIterations,
+          acknowledgedRisks: definition.acknowledgedRisks,
+          now,
+        });
+
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
           latest.status === "running"
             ? Effect.succeed(latest)
@@ -808,6 +993,16 @@ export const AutomationServiceLive = Layer.effect(
         );
         yield* requireRunStillDispatching(
           "Automation run was cancelled before creating the automation thread.",
+        ).pipe(
+          Effect.catch((error) =>
+            cleanupUnattachedWorktree({
+              definition,
+              run,
+              project,
+              environment,
+              reason: "cancelled-before-thread-create",
+            }).pipe(Effect.flatMap(() => Effect.fail(error))),
+          ),
         );
 
         yield* orchestrationEngine
@@ -828,7 +1023,18 @@ export const AutomationServiceLive = Layer.effect(
             associatedWorktreeRef: environment.associatedWorktreeRef,
             createdAt: now,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to create automation thread.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to create automation thread.")),
+            Effect.catch((error) =>
+              cleanupUnattachedWorktree({
+                definition,
+                run,
+                project,
+                environment,
+                reason: "thread-create-failed",
+              }).pipe(Effect.flatMap(() => Effect.fail(error))),
+            ),
+          );
 
         yield* requireRunStillDispatching(
           "Automation run was cancelled before starting the automation turn.",
@@ -1032,7 +1238,7 @@ export const AutomationServiceLive = Layer.effect(
         const latestRun = yield* latestRunForCompletionResult(input.run);
         const updatedAt = isoNow();
         const updated = yield* automationRepository
-          .markRunResult({
+          .markRunCompletionResult({
             id: latestRun.id,
             result: automationCompletionRunResult({
               baseResult: latestRun.result,
@@ -1072,12 +1278,16 @@ export const AutomationServiceLive = Layer.effect(
     const shouldUseStopPolicyForDefinition = (
       definition: AutomationDefinition,
       policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>,
-    ): boolean =>
-      definition.mode === "heartbeat" &&
-      definition.enabled &&
-      definition.archivedAt === null &&
-      definition.completionPolicy.type === "ai-evaluated" &&
-      isSameAiCompletionPolicy(definition.completionPolicy, policy);
+    ): boolean => {
+      const currentPolicy = completionPolicyForDefinition(definition);
+      return (
+        definition.mode === "heartbeat" &&
+        definition.enabled &&
+        definition.archivedAt === null &&
+        currentPolicy.type === "ai-evaluated" &&
+        isSameAiCompletionPolicy(currentPolicy, policy)
+      );
+    };
 
     const loadCurrentStopDefinition = (
       definition: AutomationDefinition,
@@ -1136,10 +1346,9 @@ export const AutomationServiceLive = Layer.effect(
           run,
           thread,
         });
-        const textGenerationInput = yield* resolveAutomationCompletionTextGenerationInput(
-          definition,
-        );
-        const evaluationRaw = yield* textGeneration
+        const textGenerationInput =
+          yield* resolveAutomationCompletionTextGenerationInput(definition);
+        const evaluationOption = yield* textGeneration
           .evaluateAutomationCompletion({
             cwd: project.workspaceRoot,
             automationName: definition.name,
@@ -1150,7 +1359,37 @@ export const AutomationServiceLive = Layer.effect(
             threadContext: runThreadContext || "(no run-scoped thread context)",
             ...textGenerationInput,
           })
-          .pipe(Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")));
+          .pipe(
+            Effect.mapError(toServiceError("Failed to evaluate automation stop condition.")),
+            Effect.timeoutOption(AUTOMATION_COMPLETION_EVALUATION_TIMEOUT_MS),
+          );
+        if (Option.isNone(evaluationOption)) {
+          // Timed out. Reload the definition first: if the automation was edited, disabled,
+          // archived, or its policy changed while the provider call hung, record the same
+          // stale-check result the success path uses rather than surfacing a misleading live
+          // "Stop check timed out." warning for a policy the user already changed. Either way
+          // keep the heartbeat alive without retrying (a retry would risk another stuck worker).
+          const reason = normalizeAutomationCompletionReason("Stop check timed out.");
+          const timedOut = failedAutomationCompletionEvaluation(reason);
+          const stillCurrent = Option.isSome(yield* loadCurrentStopDefinition(definition, policy));
+          if (stillCurrent) {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: timedOut,
+              matched: false,
+              summary: reason,
+              severity: "warning",
+            });
+          } else {
+            yield* recordCompletionEvaluation({
+              run,
+              evaluation: staleStopCheckEvaluation(timedOut),
+              matched: false,
+            });
+          }
+          return false;
+        }
+        const evaluationRaw = evaluationOption.value;
         const rawEvaluation = {
           stopMatched: evaluationRaw.stopMatched,
           confidence: Math.max(0, Math.min(1, evaluationRaw.confidence)),
@@ -1227,16 +1466,30 @@ export const AutomationServiceLive = Layer.effect(
     const enqueueCompletionEvaluationJob = (job: AutomationCompletionEvaluationJob) =>
       Effect.sync(() => {
         if (queuedCompletionEvaluationRunIds.has(job.run.id)) {
-          return false;
+          return "duplicate" as const;
+        }
+        if (
+          queuedCompletionEvaluationRunIds.size >= AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY
+        ) {
+          return "full" as const;
         }
         queuedCompletionEvaluationRunIds.add(job.run.id);
-        return true;
+        return "queued" as const;
       }).pipe(
-        Effect.flatMap((shouldEnqueue) =>
-          shouldEnqueue
-            ? Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid)
-            : Effect.void,
-        ),
+        Effect.flatMap((state) => {
+          switch (state) {
+            case "duplicate":
+              return Effect.void;
+            case "full":
+              return Effect.logWarning("automation completion evaluation queue at capacity", {
+                automationId: job.definition.id,
+                runId: job.run.id,
+                capacity: AUTOMATION_COMPLETION_EVALUATION_QUEUE_CAPACITY,
+              });
+            case "queued":
+              return Queue.offer(completionEvaluationQueue, job).pipe(Effect.asVoid);
+          }
+        }),
       );
 
     const enqueueCompletionEvaluationForRun = (run: AutomationRun) => {
@@ -1250,10 +1503,11 @@ export const AutomationServiceLive = Layer.effect(
           Option.match(definitionOption, {
             onNone: () => Effect.void,
             onSome: (definition) => {
-              if (definition.completionPolicy.type !== "ai-evaluated") {
+              const policy = completionPolicyForDefinition(definition);
+              if (policy.type !== "ai-evaluated") {
                 return Effect.void;
               }
-              if (!shouldUseStopPolicyForDefinition(definition, definition.completionPolicy)) {
+              if (!shouldUseStopPolicyForDefinition(definition, policy)) {
                 return Effect.void;
               }
               if (!runUsesCurrentCompletionPolicy(run, definition)) {
@@ -1262,7 +1516,7 @@ export const AutomationServiceLive = Layer.effect(
               return enqueueCompletionEvaluationJob({
                 definition,
                 run,
-                policy: definition.completionPolicy,
+                policy,
               });
             },
           }),
@@ -1296,7 +1550,18 @@ export const AutomationServiceLive = Layer.effect(
       );
 
     const completionEvaluationWorker = Effect.forever(
-      Queue.take(completionEvaluationQueue).pipe(Effect.flatMap(processCompletionEvaluationJob)),
+      Queue.take(completionEvaluationQueue).pipe(
+        Effect.flatMap(processCompletionEvaluationJob),
+        Effect.flatMap(() =>
+          enqueuePendingCompletionEvaluations().pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("automation pending stop evaluations could not be requeued", {
+                error: errorMessage(error),
+              }),
+            ),
+          ),
+        ),
+      ),
     );
 
     yield* Effect.forEach(
@@ -1327,16 +1592,17 @@ export const AutomationServiceLive = Layer.effect(
               const reachedMax =
                 definition.maxIterations !== null &&
                 definition.iterationCount >= definition.maxIterations;
+              const completionPolicy = completionPolicyForDefinition(definition);
               const enqueueAiStop =
                 !reachedMax &&
                 status === "succeeded" &&
                 definition.mode === "heartbeat" &&
-                definition.completionPolicy.type === "ai-evaluated" &&
+                completionPolicy.type === "ai-evaluated" &&
                 runUsesCurrentCompletionPolicy(run, definition)
                   ? enqueueCompletionEvaluationJob({
                       definition,
                       run,
-                      policy: definition.completionPolicy,
+                      policy: completionPolicy,
                     })
                   : Effect.void;
               return enqueueAiStop.pipe(
@@ -1410,7 +1676,11 @@ export const AutomationServiceLive = Layer.effect(
             run.status === "waiting-for-approval" &&
             run.threadId &&
             run.messageId &&
-            run.turnStartCommandId
+            run.turnStartCommandId &&
+            // Only resume *our* run: if a later, foreign turn now owns the thread's
+            // pending input, flipping back to running would resurrect a run that no
+            // longer owns the turn (mirrors the entry guard above).
+            runTurnOwnsPendingInput(run, shell, turn)
           ) {
             const running = yield* automationRepository
               .markRunStarted({
@@ -1528,7 +1798,16 @@ export const AutomationServiceLive = Layer.effect(
         Effect.flatMap((runs) =>
           Effect.forEach(
             runs,
-            (run) => reconcileActiveRun(run, isoNow()).pipe(Effect.catch(() => Effect.void)),
+            (run) =>
+              reconcileActiveRun(run, isoNow()).pipe(
+                Effect.catch((error) =>
+                  Effect.logWarning("automation active-run reconcile failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: recoveryErrorMessage(error),
+                  }),
+                ),
+              ),
             { concurrency: 1 },
           ),
         ),
@@ -1550,7 +1829,13 @@ export const AutomationServiceLive = Layer.effect(
                 return interruptRunForRecovery(run, now).pipe(
                   Effect.mapError(toServiceError("Failed to recover automation run.")),
                   Effect.asVoid,
-                  Effect.catch(() => Effect.void),
+                  Effect.catch((error) =>
+                    Effect.logWarning("automation orphaned-run recovery failed", {
+                      automationId: run.automationId,
+                      runId: run.id,
+                      error: recoveryErrorMessage(error),
+                    }),
+                  ),
                 );
               }
               return projectionSnapshotQuery.getThreadShellById(threadId).pipe(
@@ -1574,7 +1859,13 @@ export const AutomationServiceLive = Layer.effect(
                         ),
                       ),
                 ),
-                Effect.catch(() => Effect.void),
+                Effect.catch((error) =>
+                  Effect.logWarning("automation pending-run recovery failed", {
+                    automationId: run.automationId,
+                    runId: run.id,
+                    error: recoveryErrorMessage(error),
+                  }),
+                ),
               );
             },
             { concurrency: 1 },
@@ -1592,9 +1883,11 @@ export const AutomationServiceLive = Layer.effect(
     const create: AutomationServiceShape["create"] = (input) =>
       Effect.gen(function* () {
         const now = isoNow();
+        yield* requireProject(input.projectId);
         yield* validateSchedulePolicy({
           schedule: input.schedule,
           enabled: input.enabled ?? true,
+          maxIterations: input.maxIterations ?? null,
           minimumIntervalSeconds:
             input.minimumIntervalSeconds ?? DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
           acknowledgedRisks: input.acknowledgedRisks ?? [],
@@ -1629,9 +1922,11 @@ export const AutomationServiceLive = Layer.effect(
         const now = isoNow();
         const current = yield* requireDefinition(input.id);
         const updated = mergeDefinitionUpdate(current, input, now);
+        yield* requireProject(updated.projectId);
         yield* validateSchedulePolicy({
           schedule: updated.schedule,
           enabled: updated.enabled,
+          maxIterations: updated.maxIterations,
           minimumIntervalSeconds: updated.minimumIntervalSeconds,
           acknowledgedRisks: updated.acknowledgedRisks,
           now,
@@ -1723,16 +2018,61 @@ export const AutomationServiceLive = Layer.effect(
         const pendingCompletionEvaluations = yield* automationRepository
           .countPendingCompletionEvaluationsForThread({ threadId })
           .pipe(
-            Effect.mapError(
-              toServiceError("Failed to count pending automation stop evaluations."),
-            ),
+            Effect.mapError(toServiceError("Failed to count pending automation stop evaluations.")),
           );
         return { activeRuns, pendingCompletionEvaluations };
+      });
+
+    const restartExhaustedBoundedDefinition = (definition: AutomationDefinition, now: string) =>
+      Effect.gen(function* () {
+        if (
+          definition.maxIterations === null ||
+          definition.iterationCount < definition.maxIterations
+        ) {
+          return definition;
+        }
+        const computedNextRunAt =
+          definition.schedule.type === "manual"
+            ? null
+            : computeNextAutomationRunAtAfter(definition.schedule, now, now);
+        // Manual reruns should not revive legacy definitions that cannot pass today's
+        // active-schedule policy, such as oversized sub-minute loops.
+        let canBecomeEnabled = false;
+        if (definition.schedule.type === "manual" || computedNextRunAt !== null) {
+          canBecomeEnabled = yield* validateSchedulePolicy({
+            schedule: definition.schedule,
+            enabled: true,
+            maxIterations: definition.maxIterations,
+            minimumIntervalSeconds: definition.minimumIntervalSeconds,
+            acknowledgedRisks: definition.acknowledgedRisks,
+            now,
+          }).pipe(
+            Effect.as(true),
+            Effect.catch(() => Effect.succeed(false)),
+          );
+        }
+        const enabled = canBecomeEnabled;
+        const nextRunAt = enabled ? computedNextRunAt : null;
+        const restarted = {
+          ...definition,
+          enabled,
+          iterationCount: 0,
+          nextRunAt,
+          updatedAt: now,
+        };
+        return yield* automationRepository
+          .restartDefinitionLoop({ id: definition.id, enabled, nextRunAt, updatedAt: now })
+          .pipe(
+            Effect.mapError(toServiceError("Failed to restart automation loop.")),
+            Effect.as(restarted),
+            Effect.tap((definition) => publish({ type: "definition-upserted", definition })),
+          );
       });
 
     const runNow: AutomationServiceShape["runNow"] = (input) =>
       Effect.gen(function* () {
         const definition = yield* requireDefinition(input.automationId);
+        const now = isoNow();
         // Heartbeat automations continue a single shared thread, so a manual run must not
         // race a scheduled (or earlier manual) run that is still in flight. Standalone
         // automations spawn independent threads, so concurrent manual runs are fine.
@@ -1760,8 +2100,13 @@ export const AutomationServiceLive = Layer.effect(
             );
           }
         }
-        const now = isoNow();
-        const { run, inserted } = yield* createPendingRun(definition, { type: "manual" }, now, now);
+        const runnableDefinition = yield* restartExhaustedBoundedDefinition(definition, now);
+        const { run, inserted } = yield* createPendingRun(
+          runnableDefinition,
+          { type: "manual" },
+          now,
+          now,
+        );
         if (!inserted) {
           return yield* Effect.fail(
             new AutomationServiceError({
@@ -1770,9 +2115,9 @@ export const AutomationServiceLive = Layer.effect(
           );
         }
         yield* automationRepository
-          .incrementDefinitionIterationCount({ id: definition.id, now })
+          .incrementDefinitionIterationCount({ id: runnableDefinition.id, now })
           .pipe(Effect.mapError(toServiceError("Failed to update automation iteration count.")));
-        return yield* dispatchRun(definition, run, now);
+        return yield* dispatchRun(runnableDefinition, run, now);
       });
 
     const cancelRun: AutomationServiceShape["cancelRun"] = (input) =>
@@ -1942,6 +2287,9 @@ export const AutomationServiceLive = Layer.effect(
           })
           .pipe(Effect.mapError(toServiceError("Failed to acquire automation scheduler lease.")));
         if (!acquired) {
+          // Another instance holds the scheduler lease. Expected under multi-instance;
+          // logged at debug so lease contention is observable without log noise.
+          yield* Effect.logDebug("automation scheduler lease not acquired", { ownerId });
           return [];
         }
 

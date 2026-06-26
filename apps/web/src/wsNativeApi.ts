@@ -519,6 +519,8 @@ export function createWsNativeApi(): NativeApi {
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      createLocalFilePreviewGrant: (input) =>
+        transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
       runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
@@ -631,7 +633,6 @@ export function createWsNativeApi(): NativeApi {
       moveProjectCard: (input) => transport.request(WS_METHODS.reviewMoveProjectCard, input),
       onUpdated: (callback) => {
         reviewUpdatedListeners.add(callback);
-        void transport.request(WS_METHODS.subscribeReviewUpdates, {});
         return () => {
           reviewUpdatedListeners.delete(callback);
         };

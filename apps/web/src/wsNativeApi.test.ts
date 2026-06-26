@@ -477,6 +477,33 @@ describe("wsNativeApi", () => {
     expect(onAutomationEvent).toHaveBeenCalledWith(event);
   });
 
+  it("forwards review update stream events through the review listener", async () => {
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onReviewUpdated = vi.fn();
+    const unsubscribe = api.review.onUpdated(onReviewUpdated);
+    const event = {
+      _tag: "boardLanes",
+      cwd: "/repo",
+      repositoryId: "repo-1",
+      fetchedAt: 1,
+    } as const;
+
+    emitPush(WS_CHANNELS.reviewUpdated, event);
+    unsubscribe();
+    emitPush(WS_CHANNELS.reviewUpdated, {
+      _tag: "boardLanes",
+      cwd: "/repo",
+      repositoryId: "repo-1",
+      fetchedAt: 2,
+    });
+
+    expect(requestMock).not.toHaveBeenCalledWith(WS_METHODS.subscribeReviewUpdates, {});
+    expect(onReviewUpdated).toHaveBeenCalledTimes(1);
+    expect(onReviewUpdated).toHaveBeenCalledWith(event);
+  });
+
   it("wraps orchestration dispatch commands in the command envelope", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -546,6 +573,59 @@ describe("wsNativeApi", () => {
       cwd: "/tmp/project",
       relativePath: "plan.md",
       contents: "# Plan\n",
+    });
+  });
+
+  it("forwards workspace file reads to the websocket project method", async () => {
+    requestMock.mockResolvedValue({
+      relativePath: "src/app.ts",
+      contents: "export {};\n",
+      truncated: false,
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.readFile({
+      cwd: "/tmp/project",
+      relativePath: "src/app.ts",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsReadFile, {
+      cwd: "/tmp/project",
+      relativePath: "src/app.ts",
+    });
+  });
+
+  it("forwards local preview grant creation to the websocket project method", async () => {
+    requestMock.mockResolvedValue({
+      grant: "grant-token",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.createLocalFilePreviewGrant({
+      path: "/Users/tester/Downloads/shot.png",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsCreateLocalFilePreviewGrant, {
+      path: "/Users/tester/Downloads/shot.png",
+    });
+  });
+
+  it("forwards project script discovery to the websocket project method", async () => {
+    requestMock.mockResolvedValue({ targets: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.discoverScripts({
+      cwd: "/tmp/project",
+      depth: 2,
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsDiscoverScripts, {
+      cwd: "/tmp/project",
+      depth: 2,
     });
   });
 

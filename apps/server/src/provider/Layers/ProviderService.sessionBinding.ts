@@ -12,19 +12,23 @@ import { ThreadId, type ProviderRuntimeEvent, type ProviderSession } from "@t3to
 import { Cause, Effect, Option } from "effect";
 
 import {
+  type ProviderRuntimeBinding,
   type ProviderSessionDirectoryShape,
   type ProviderSessionDirectoryWriteError,
 } from "../Services/ProviderSessionDirectory.ts";
+import { type ProviderAdapterRegistryShape } from "../Services/ProviderAdapterRegistry.ts";
 import {
   runtimeLastErrorForEvent,
   runtimePayloadRecord,
   runtimeStatusForEvent,
+  shouldRefreshResumeCursorForEvent,
   toRuntimePayloadFromSession,
   toRuntimeStatus,
 } from "./ProviderService.helpers.ts";
 
 export interface SessionBindingDeps {
   readonly directory: ProviderSessionDirectoryShape;
+  readonly registry: ProviderAdapterRegistryShape;
 }
 
 export interface SessionBindingWriters {
@@ -52,7 +56,7 @@ export interface SessionBindingWriters {
 }
 
 export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBindingWriters => {
-  const { directory } = deps;
+  const { directory, registry } = deps;
 
   const upsertSessionBinding: SessionBindingWriters["upsertSessionBinding"] = (
     session,
@@ -106,12 +110,38 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
       ),
     );
 
+  const refreshResumeCursorFromActiveSession = (
+    event: ProviderRuntimeEvent,
+    binding: ProviderRuntimeBinding,
+  ): Effect.Effect<unknown | null | undefined> => {
+    if (!shouldRefreshResumeCursorForEvent(event)) {
+      return Effect.succeed(binding.resumeCursor);
+    }
+
+    return Effect.gen(function* () {
+      const adapter = yield* registry.getByProvider(binding.provider);
+      const sessions = yield* adapter.listSessions();
+      const activeSession = sessions.find((session) => session.threadId === event.threadId);
+      return activeSession?.resumeCursor ?? binding.resumeCursor;
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("provider.session.resume_cursor_refresh_failed", {
+          threadId: event.threadId,
+          provider: binding.provider,
+          eventType: event.type,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(binding.resumeCursor)),
+      ),
+    );
+  };
+
   const updateSessionBindingFromRuntimeEvent: SessionBindingWriters["updateSessionBindingFromRuntimeEvent"] =
     (event) => {
       switch (event.type) {
         case "session.started":
         case "session.state.changed":
         case "thread.started":
+        case "thread.state.changed":
         case "turn.started":
         case "turn.completed":
         case "turn.aborted":
@@ -128,29 +158,39 @@ export const makeSessionBindingWriters = (deps: SessionBindingDeps): SessionBind
           return;
         }
 
+        const currentPayload = runtimePayloadRecord(binding.runtimePayload);
+        const currentActiveTurnId = currentPayload.activeTurnId ?? null;
         const activeTurnId =
           event.type === "turn.started"
             ? (event.turnId ?? null)
-            : event.type === "turn.completed" ||
-                event.type === "turn.aborted" ||
-                event.type === "session.exited" ||
-                event.type === "runtime.error" ||
-                (event.type === "session.state.changed" &&
-                  (event.payload.state === "ready" ||
-                    event.payload.state === "stopped" ||
-                    event.payload.state === "error"))
-              ? null
-              : (runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null);
+            : event.type === "thread.state.changed" && event.payload.state === "compacted"
+              ? (event.turnId ?? currentActiveTurnId)
+              : event.type === "turn.completed" ||
+                  event.type === "turn.aborted" ||
+                  (event.type === "thread.state.changed" &&
+                    (event.payload.state === "archived" ||
+                      event.payload.state === "closed" ||
+                      event.payload.state === "error")) ||
+                  event.type === "session.exited" ||
+                  event.type === "runtime.error" ||
+                  (event.type === "session.state.changed" &&
+                    (event.payload.state === "ready" ||
+                      event.payload.state === "stopped" ||
+                      event.payload.state === "error"))
+                ? null
+                : currentActiveTurnId;
         const lastError = runtimeLastErrorForEvent(event);
+        const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
 
         yield* directory.upsert({
           threadId: event.threadId,
           provider: binding.provider,
           ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
           ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: runtimeStatusForEvent(event),
-          ...(binding.resumeCursor !== undefined ? { resumeCursor: binding.resumeCursor } : {}),
+          status: runtimeStatusForEvent(event, activeTurnId),
+          ...(resumeCursor !== undefined ? { resumeCursor } : {}),
           runtimePayload: {
+            ...currentPayload,
             activeTurnId,
             lastRuntimeEvent: event.type,
             lastRuntimeEventAt: event.createdAt,

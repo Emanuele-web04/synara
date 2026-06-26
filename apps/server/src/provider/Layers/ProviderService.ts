@@ -30,7 +30,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
-import { Effect, Equal, Layer, Option, PubSub, Stream } from "effect";
+import { Effect, Equal, Exit, Layer, Option, PubSub, Stream } from "effect";
 
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
@@ -46,6 +46,7 @@ import {
   readPersistedCwd,
   readPersistedModelSelection,
   readPersistedProviderOptions,
+  runtimePayloadRecord,
   toValidationError,
 } from "./ProviderService.helpers.ts";
 import { makeSessionBindingWriters } from "./ProviderService.sessionBinding.ts";
@@ -54,6 +55,7 @@ import { AnalyticsService } from "../../telemetry/Services/AnalyticsService.ts";
 export interface ProviderServiceLiveOptions {
   readonly canonicalEventLogPath?: string;
   readonly canonicalEventLogger?: EventNdjsonLogger;
+  readonly runtimeIdleStopMs?: number;
 }
 
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
@@ -71,9 +73,31 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const directory = yield* ProviderSessionDirectory;
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
-    let stopIdleRuntimeSession: ((threadId: ThreadId) => void) | null = null;
+    const runtimeIdleGenerations = new Map<ThreadId, symbol>();
+    const runtimeIdleStopsInFlight = new Map<ThreadId, Promise<void>>();
+    const runtimeIdleStopMs = Math.max(
+      0,
+      options?.runtimeIdleStopMs ?? PROVIDER_RUNTIME_IDLE_STOP_MS,
+    );
+    let stopIdleRuntimeSession: ((threadId: ThreadId, generation: symbol) => void) | null = null;
+
+    const invalidateRuntimeIdleGeneration = (threadId: ThreadId): symbol => {
+      const generation = Symbol(String(threadId));
+      runtimeIdleGenerations.set(threadId, generation);
+      return generation;
+    };
+
+    const isRuntimeIdleGenerationCurrent = (threadId: ThreadId, generation: symbol): boolean =>
+      runtimeIdleGenerations.get(threadId) === generation;
+
+    const retireRuntimeIdleGeneration = (threadId: ThreadId, generation?: symbol): void => {
+      if (generation === undefined || isRuntimeIdleGenerationCurrent(threadId, generation)) {
+        runtimeIdleGenerations.delete(threadId);
+      }
+    };
 
     const clearRuntimeIdleTimer = (threadId: ThreadId) => {
+      invalidateRuntimeIdleGeneration(threadId);
       const timer = runtimeIdleTimers.get(threadId);
       if (!timer) {
         return;
@@ -84,17 +108,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
 
     const scheduleRuntimeIdleStop = (threadId: ThreadId) => {
       clearRuntimeIdleTimer(threadId);
-      if (PROVIDER_RUNTIME_IDLE_STOP_MS <= 0) {
+      if (runtimeIdleStopMs <= 0) {
+        retireRuntimeIdleGeneration(threadId);
         return;
       }
 
+      const generation = invalidateRuntimeIdleGeneration(threadId);
       const timer = setTimeout(() => {
         runtimeIdleTimers.delete(threadId);
-        stopIdleRuntimeSession?.(threadId);
-      }, PROVIDER_RUNTIME_IDLE_STOP_MS);
+        stopIdleRuntimeSession?.(threadId, generation);
+      }, runtimeIdleStopMs);
       timer.unref();
       runtimeIdleTimers.set(threadId, timer);
     };
+
+    const waitForRuntimeIdleStop = (threadId: ThreadId): Effect.Effect<void> =>
+      Effect.promise(() => runtimeIdleStopsInFlight.get(threadId) ?? Promise.resolve());
+
+    const runIdleSensitiveProviderWork = <A, E, R>(
+      threadId: ThreadId,
+      effect: Effect.Effect<A, E, R>,
+      options?: { readonly scheduleIdleStopOnSuccess?: boolean },
+    ): Effect.Effect<A, E, R> =>
+      Effect.suspend(() => {
+        const existingIdleStop = runtimeIdleStopsInFlight.get(threadId);
+        const displacedIdleStop = existingIdleStop !== undefined || runtimeIdleTimers.has(threadId);
+        const waitForExistingIdleStop =
+          existingIdleStop !== undefined ? Effect.promise(() => existingIdleStop) : Effect.void;
+        return waitForExistingIdleStop.pipe(
+          Effect.tap(() => Effect.sync(() => clearRuntimeIdleTimer(threadId))),
+          Effect.flatMap(() => waitForRuntimeIdleStop(threadId)),
+          Effect.flatMap(() => effect),
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? options?.scheduleIdleStopOnSuccess === true
+                ? Effect.sync(() => scheduleRuntimeIdleStop(threadId))
+                : Effect.void
+              : displacedIdleStop
+                ? Effect.sync(() => scheduleRuntimeIdleStop(threadId))
+                : Effect.sync(() => retireRuntimeIdleGeneration(threadId)),
+          ),
+        );
+      });
 
     const reconcileRuntimeIdleTimer = (event: ProviderRuntimeEvent) => {
       switch (event.type) {
@@ -107,8 +162,18 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         case "turn.aborted":
           scheduleRuntimeIdleStop(event.threadId);
           return;
+        case "thread.state.changed":
+          if (
+            event.payload.state === "compacted" ||
+            event.payload.state === "archived" ||
+            event.payload.state === "closed"
+          ) {
+            scheduleRuntimeIdleStop(event.threadId);
+          }
+          return;
         case "session.exited":
           clearRuntimeIdleTimer(event.threadId);
+          retireRuntimeIdleGeneration(event.threadId);
           return;
       }
     };
@@ -127,15 +192,26 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       upsertStoppedSessionBinding,
       markPersistedThreadStopped,
       updateSessionBindingFromRuntimeEvent,
-    } = makeSessionBindingWriters({ directory });
+    } = makeSessionBindingWriters({ directory, registry });
 
     const providers = yield* registry.listProviders();
     const adapters = yield* Effect.forEach(providers, (provider) =>
       registry.getByProvider(provider),
     );
     const processRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-      Effect.sync(() => reconcileRuntimeIdleTimer(event)).pipe(
+      Effect.sync(() => {
+        if (event.type === "turn.started") {
+          reconcileRuntimeIdleTimer(event);
+        }
+      }).pipe(
         Effect.andThen(updateSessionBindingFromRuntimeEvent(event)),
+        Effect.andThen(
+          Effect.sync(() => {
+            if (event.type !== "turn.started") {
+              reconcileRuntimeIdleTimer(event);
+            }
+          }),
+        ),
         Effect.andThen(publishRuntimeEvent(event)),
       );
 
@@ -458,32 +534,39 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             "Either input text or at least one attachment is required",
           );
         }
-        const routed = yield* resolveRoutableSession({
-          threadId: input.threadId,
-          operation: "ProviderService.sendTurn",
-          allowRecovery: true,
-        });
-        const turn = yield* routed.adapter.sendTurn(input);
-        yield* directory.upsert({
-          threadId: input.threadId,
-          provider: routed.adapter.provider,
-          status: "running",
-          ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-          runtimePayload: {
-            ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-            activeTurnId: turn.turnId,
-            lastRuntimeEvent: "provider.sendTurn",
-            lastRuntimeEventAt: new Date().toISOString(),
-          },
-        });
-        yield* analytics.record("provider.turn.sent", {
-          provider: routed.adapter.provider,
-          model: input.modelSelection?.model,
-          interactionMode: input.interactionMode,
-          attachmentCount: input.attachments.length,
-          hasInput: typeof input.input === "string" && input.input.trim().length > 0,
-        });
-        return turn;
+        return yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.sendTurn",
+              allowRecovery: true,
+            });
+            const turn = yield* routed.adapter.sendTurn(input);
+            yield* directory.upsert({
+              threadId: input.threadId,
+              provider: routed.adapter.provider,
+              status: "running",
+              ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+              runtimePayload: {
+                ...(input.modelSelection !== undefined
+                  ? { modelSelection: input.modelSelection }
+                  : {}),
+                activeTurnId: turn.turnId,
+                lastRuntimeEvent: "provider.sendTurn",
+                lastRuntimeEventAt: new Date().toISOString(),
+              },
+            });
+            yield* analytics.record("provider.turn.sent", {
+              provider: routed.adapter.provider,
+              model: input.modelSelection?.model,
+              interactionMode: input.interactionMode,
+              attachmentCount: input.attachments.length,
+              hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+            });
+            return turn;
+          }),
+        );
       });
 
     const steerTurn: ProviderServiceShape["steerTurn"] = (rawInput) =>
@@ -678,6 +761,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           schema: ProviderStopSessionInput,
           payload: rawInput,
         });
+        yield* waitForRuntimeIdleStop(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
         const routed = yield* resolveRoutableSession({
           threadId: input.threadId,
@@ -687,31 +771,48 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
+        yield* waitForRuntimeIdleStop(input.threadId);
         yield* directory.remove(input.threadId);
+        retireRuntimeIdleGeneration(input.threadId);
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,
         });
       });
 
-    const stopRuntimeSession: NonNullable<ProviderServiceShape["stopRuntimeSession"]> = (
-      rawInput,
-    ) =>
+    const stopRuntimeSessionInternal = (
+      rawInput: Parameters<NonNullable<ProviderServiceShape["stopRuntimeSession"]>>[0],
+      expectedIdleGeneration?: symbol,
+    ): ReturnType<NonNullable<ProviderServiceShape["stopRuntimeSession"]>> =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
           operation: "ProviderService.stopRuntimeSession",
           schema: ProviderStopSessionInput,
           payload: rawInput,
         });
-        clearRuntimeIdleTimer(input.threadId);
+        const isExpectedIdleStopCurrent = () =>
+          expectedIdleGeneration === undefined ||
+          isRuntimeIdleGenerationCurrent(input.threadId, expectedIdleGeneration);
+        if (expectedIdleGeneration === undefined) {
+          yield* waitForRuntimeIdleStop(input.threadId);
+          clearRuntimeIdleTimer(input.threadId);
+        } else if (!isExpectedIdleStopCurrent()) {
+          return;
+        }
         const bindingOption = yield* directory.getBinding(input.threadId);
         const binding = Option.getOrUndefined(bindingOption);
-        if (!binding) {
+        if (!binding || !isExpectedIdleStopCurrent()) {
           return;
         }
         const adapter = yield* registry.getByProvider(binding.provider);
         const hasActiveSession = yield* adapter.hasSession(input.threadId);
+        if (!isExpectedIdleStopCurrent()) {
+          return;
+        }
         if (hasActiveSession) {
           yield* adapter.stopSession(input.threadId);
+        }
+        if (!isExpectedIdleStopCurrent()) {
+          return;
         }
         yield* directory.upsert({
           threadId: input.threadId,
@@ -734,36 +835,60 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* analytics.record("provider.session.runtime_stopped", {
           provider: binding.provider,
         });
+        retireRuntimeIdleGeneration(input.threadId, expectedIdleGeneration);
       });
 
-    stopIdleRuntimeSession = (threadId) => {
-      void Effect.runPromise(
-        Effect.gen(function* () {
-          const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
-          if (!binding) {
-            return;
-          }
+    const stopRuntimeSession: NonNullable<ProviderServiceShape["stopRuntimeSession"]> = (
+      rawInput,
+    ) => stopRuntimeSessionInternal(rawInput);
 
-          const adapter = yield* registry.getByProvider(binding.provider);
-          const sessions = yield* adapter.listSessions();
-          const session = sessions.find((entry) => entry.threadId === threadId);
-          if (!session || session.status !== "ready" || session.activeTurnId !== undefined) {
-            return;
-          }
-          if (session.resumeCursor === undefined) {
-            return;
-          }
+    stopIdleRuntimeSession = (threadId, generation) => {
+      const stopEffect = Effect.gen(function* () {
+        const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+        if (!binding) {
+          retireRuntimeIdleGeneration(threadId, generation);
+          return;
+        }
 
-          yield* stopRuntimeSession({ threadId });
-        }).pipe(
-          Effect.catchCause((cause) =>
-            Effect.logWarning("provider.session.idle_stop_failed", {
-              threadId,
-              cause,
-            }),
-          ),
+        const adapter = yield* registry.getByProvider(binding.provider);
+        const sessions = yield* adapter.listSessions();
+        const session = sessions.find((entry) => entry.threadId === threadId);
+        const bindingRuntimePayload = runtimePayloadRecord(binding.runtimePayload);
+        const isIdleReadySession =
+          session?.status === "ready" ||
+          (session?.status === "running" &&
+            session.activeTurnId === undefined &&
+            binding.status === "stopped" &&
+            (bindingRuntimePayload.lastRuntimeEvent === "thread.state.changed" ||
+              bindingRuntimePayload.lastRuntimeEvent === "provider.compactThread"));
+        if (!session || !isIdleReadySession || session.activeTurnId !== undefined) {
+          retireRuntimeIdleGeneration(threadId, generation);
+          return;
+        }
+        if (session.resumeCursor === undefined && binding.resumeCursor === undefined) {
+          retireRuntimeIdleGeneration(threadId, generation);
+          return;
+        }
+        if (!isRuntimeIdleGenerationCurrent(threadId, generation)) {
+          return;
+        }
+
+        yield* stopRuntimeSessionInternal({ threadId }, generation);
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider.session.idle_stop_failed", {
+            threadId,
+            cause,
+          }),
         ),
       );
+      const stopPromise = Effect.runPromise(stopEffect);
+      runtimeIdleStopsInFlight.set(threadId, stopPromise);
+      void stopPromise.finally(() => {
+        if (runtimeIdleStopsInFlight.get(threadId) === stopPromise) {
+          runtimeIdleStopsInFlight.delete(threadId);
+        }
+      });
     };
 
     const clearSessionResumeCursor: NonNullable<
@@ -775,6 +900,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           schema: ProviderStopSessionInput,
           payload: rawInput,
         });
+        yield* waitForRuntimeIdleStop(input.threadId);
         clearRuntimeIdleTimer(input.threadId);
         const bindingOption = yield* directory.getBinding(input.threadId);
         const binding = Option.getOrUndefined(bindingOption);
@@ -786,6 +912,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (hasActiveSession) {
           yield* adapter.stopSession(input.threadId);
         }
+        yield* waitForRuntimeIdleStop(input.threadId);
         yield* directory.upsert({
           threadId: input.threadId,
           provider: binding.provider,
@@ -798,6 +925,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         yield* analytics.record("provider.session.resume_cursor_cleared", {
           provider: binding.provider,
         });
+        retireRuntimeIdleGeneration(input.threadId);
       });
 
     const listSessions: ProviderServiceShape["listSessions"] = () =>
@@ -860,16 +988,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         if (input.numTurns === 0) {
           return;
         }
-        const routed = yield* resolveRoutableSession({
-          threadId: input.threadId,
-          operation: "ProviderService.rollbackConversation",
-          allowRecovery: true,
-        });
-        yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
-        yield* analytics.record("provider.conversation.rolled_back", {
-          provider: routed.adapter.provider,
-          turns: input.numTurns,
-        });
+        yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.rollbackConversation",
+              allowRecovery: true,
+            });
+            yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
+            yield* analytics.record("provider.conversation.rolled_back", {
+              provider: routed.adapter.provider,
+              turns: input.numTurns,
+            });
+          }),
+          { scheduleIdleStopOnSuccess: true },
+        );
       });
 
     const compactThread: ProviderServiceShape["compactThread"] = (rawInput) =>
@@ -879,21 +1013,44 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           schema: ProviderCompactThreadInput,
           payload: rawInput,
         });
-        const routed = yield* resolveRoutableSession({
-          threadId: input.threadId,
-          operation: "ProviderService.compactThread",
-          allowRecovery: true,
-        });
-        if (!routed.adapter.compactThread) {
-          return yield* toValidationError(
-            "ProviderService.compactThread",
-            `Context compaction is unavailable for provider '${routed.adapter.provider}'.`,
-          );
-        }
-        yield* routed.adapter.compactThread(routed.threadId);
-        yield* analytics.record("provider.thread.compacted", {
-          provider: routed.adapter.provider,
-        });
+        yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.compactThread",
+              allowRecovery: true,
+            });
+            if (!routed.adapter.compactThread) {
+              return yield* toValidationError(
+                "ProviderService.compactThread",
+                `Context compaction is unavailable for provider '${routed.adapter.provider}'.`,
+              );
+            }
+            yield* routed.adapter.compactThread(routed.threadId);
+            const binding = Option.getOrUndefined(yield* directory.getBinding(routed.threadId));
+            if (binding) {
+              yield* directory.upsert({
+                threadId: routed.threadId,
+                provider: binding.provider,
+                ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+                ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+                status: "stopped",
+                resumeCursor: binding.resumeCursor,
+                runtimePayload: {
+                  ...runtimePayloadRecord(binding.runtimePayload),
+                  activeTurnId: null,
+                  lastRuntimeEvent: "provider.compactThread",
+                  lastRuntimeEventAt: new Date().toISOString(),
+                },
+              });
+            }
+            yield* analytics.record("provider.thread.compacted", {
+              provider: routed.adapter.provider,
+            });
+          }),
+          { scheduleIdleStopOnSuccess: true },
+        );
       });
 
     const runStopAll = () =>
@@ -924,6 +1081,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           clearTimeout(timer);
         }
         runtimeIdleTimers.clear();
+        runtimeIdleGenerations.clear();
+        runtimeIdleStopsInFlight.clear();
         stopIdleRuntimeSession = null;
       }).pipe(
         Effect.andThen(runStopAll()),

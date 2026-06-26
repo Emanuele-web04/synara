@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 import {
   formatCodexCliUpgradeMessage,
@@ -25,14 +26,20 @@ export function assertSupportedCodexCliVersion(input: {
     return;
   }
 
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const env = buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {});
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: buildCodexProcessEnv(input.homePath ? { homePath: input.homePath } : {}),
+    env,
+  });
+  const result = spawnSync(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: prepared.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    ...(prepared.windowsHide ? { windowsHide: prepared.windowsHide } : {}),
   });
 
   if (result.error) {

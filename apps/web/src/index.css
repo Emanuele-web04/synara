@@ -459,17 +459,17 @@
   --destructive: oklch(0.585 0.17 27);
   --border: oklch(0.905 0.007 60);
   --input: oklch(0.885 0.007 60);
-  --ring: oklch(0.70 0.05 45);
-  --destructive-foreground: oklch(0.50 0.13 27);
+  --ring: oklch(0.7 0.05 45);
+  --destructive-foreground: oklch(0.5 0.13 27);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --info: var(--color-text-accent, oklch(0.60 0.16 250));
-  --info-foreground: var(--color-text-accent, oklch(0.50 0.13 250));
+  --info: var(--color-text-accent, oklch(0.6 0.16 250));
+  --info-foreground: var(--color-text-accent, oklch(0.5 0.13 250));
   --success: oklch(0.62 0.16 150);
-  --success-foreground: oklch(0.50 0.13 150);
+  --success-foreground: oklch(0.5 0.13 150);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -482,7 +482,7 @@
   --color-background-button-secondary-hover: var(--secondary);
   --color-background-elevated-secondary: var(--secondary);
   --warning: oklch(0.74 0.15 75);
-  --warning-foreground: oklch(0.50 0.13 75);
+  --warning-foreground: oklch(0.5 0.13 75);
   --claude: #d97757;
 
   @variant dark {
@@ -502,7 +502,7 @@
     --muted-foreground: oklch(0.65 0.006 60);
     --accent: oklch(0.255 0.006 60);
     --accent-foreground: oklch(0.94 0.004 60);
-    --destructive: oklch(0.70 0.14 27);
+    --destructive: oklch(0.7 0.14 27);
     --border: oklch(0.295 0.007 60);
     --input: oklch(0.315 0.007 60);
     --ring: oklch(0.62 0.06 45);
@@ -512,9 +512,9 @@
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --info: var(--color-text-accent, oklch(0.70 0.14 250));
+    --info: var(--color-text-accent, oklch(0.7 0.14 250));
     --info-foreground: var(--color-text-accent, oklch(0.78 0.13 250));
-    --success: oklch(0.70 0.14 150);
+    --success: oklch(0.7 0.14 150);
     --success-foreground: oklch(0.78 0.13 150);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
@@ -531,13 +531,16 @@
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
     --warning: oklch(0.78 0.13 75);
-    --warning-foreground: oklch(0.86 0.10 75);
+    --warning-foreground: oklch(0.86 0.1 75);
   }
 }
 
 body {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.015em;
+  /* Neutral tracking: let the system UI font (SF Pro on macOS via the
+     -apple-system fallback) use its own optical metrics instead of a squeezed
+     web-style negative tracking, so text reads native rather than "designed". */
+  letter-spacing: normal;
   margin: 0;
   padding: 0;
   min-height: 100vh;
@@ -546,7 +549,7 @@ body {
 /* Reuse the OS UI stack on chat surfaces that should feel native and utilitarian. */
 .font-system-ui {
   font-family: var(--font-ui-family);
-  letter-spacing: -0.015em;
+  letter-spacing: normal;
 }
 
 /* Keep transcript-only code surfaces on the chat-specific coding font stack. */
@@ -1540,6 +1543,53 @@ label:has(> select#reasoning-effort) select {
   }
   100% {
     background-position: -100% 0;
+  }
+}
+
+/* Lightweight text shimmer for the "Working for …" status line.
+   CSS-only: clips an animated gradient to the glyphs so there is no JS timer
+   or React re-render driving the effect. Edges use currentColor (the muted
+   text color set via Tailwind) so non-highlighted text matches the original
+   exactly, and a brighter band sweeps across once per cycle. */
+.working-shimmer {
+  background-image: linear-gradient(
+    100deg,
+    currentColor 0%,
+    currentColor 46%,
+    color-mix(in srgb, currentColor, white 62%) 50%,
+    currentColor 54%,
+    currentColor 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: working-shimmer 3.3s linear infinite;
+}
+
+/* Slow, delicate sweep across the whole word over the first ~85% of the cycle
+   (~2.8s), then a short ~0.5s pause before it repeats. The start/end positions
+   (108% / -8%) park the band exactly at the word's left/right edges, so the
+   visible sweep spans every glyph with no off-screen dead time and the loop
+   restart is invisible. Two segments keep the sweep speed and the pause
+   independently tunable. */
+@keyframes working-shimmer {
+  0% {
+    background-position: 108% 0;
+  }
+  85% {
+    background-position: -8% 0;
+  }
+  100% {
+    background-position: -8% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .working-shimmer {
+    animation: none;
+    background-image: none;
+    -webkit-text-fill-color: currentColor;
   }
 }
 

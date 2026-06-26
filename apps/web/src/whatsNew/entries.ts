@@ -22,6 +22,146 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.1",
+    date: "Jun 26",
+    features: [
+      {
+        id: "tool-call-details",
+        title: "Tool calls are easier to inspect",
+        description:
+          "Transcript tool calls now expose clearer detail dialogs for shell commands, patches, file changes, and tool output, so review-heavy chats are easier to audit.",
+        details:
+          "Synara now formats tool command transcripts, normalizes patch/change output, labels more tool kinds consistently, preserves structured work metadata through the timeline, and adds focused coverage for tool-call labels and formatting.",
+      },
+      {
+        id: "transcript-flow",
+        title: "Long chats stay calmer while work is running",
+        description:
+          "Transcript grouping and scroll behavior were refined so live assistant text, collapsed work rows, sidechat panes, and tool-only activity behave more predictably.",
+        details:
+          "This release tightens message timeline derivation, keeps real assistant text separate from tool/work rows, improves collapsed-turn signatures, preserves assistant selection actions, and adds focused tests for timeline rows and ChatView state.",
+      },
+      {
+        id: "multi-pane-navigation",
+        title: "Multi-pane work is quicker to navigate",
+        description:
+          "Recent views, split chats, pinned threads, hover cards, and project sidebar actions received a round of smaller navigation polish.",
+        details:
+          "Recent view switching, sidebar hover-card anchors, thread/project hover content, pin toggles, chat header actions, project shortcut targets, and split/sidechat affordances now share more predictable state and keyboard routing.",
+      },
+      {
+        id: "keybindings",
+        title: "Keyboard shortcuts got stricter",
+        description:
+          "Shortcut defaults and migrations are now safer, with better handling for chat creation, terminal actions, navigation, and stale keybinding rows.",
+        details:
+          "Server and web keybinding logic now validates persisted bindings more carefully, avoids carrying conflicting defaults forward, improves new-chat/new-terminal command resolution, and has expanded regression coverage.",
+      },
+      {
+        id: "provider-runtime-reliability",
+        title: "Providers recover from more edge cases",
+        description:
+          "Codex, Gemini, Grok, Cursor, OpenCode, and provider health paths are sturdier around runtime events, discovery, process cleanup, and idle sessions.",
+        details:
+          "Provider runtime ingestion now handles more canonical event shapes, Gemini ACP probing is more defensive, provider service behavior has broader coverage, idle runtime cleanup was tightened, process runner handling is safer, and Codex review/compaction progress is easier to reconcile.",
+      },
+      {
+        id: "automation-approval-safety",
+        title: "Automation setup asks for the right approval",
+        description:
+          "Automation creation and updates now separate setup prompts, update-only flows, approval fallbacks, and risk acknowledgement more carefully.",
+        details:
+          "This release hardens conversational automation setup, preserves update-only approval paths, restores the approval fallback, strips carried setup filler from prompts, and keeps the risk acknowledgement gate attached to dispatch.",
+      },
+      {
+        id: "desktop-update-hardening",
+        title: "Desktop updates and startup are quieter",
+        description:
+          "The desktop shell now suppresses noisy Node warnings in more places and hardens electron-updater command handling on Windows.",
+        details:
+          "Desktop startup applies safer warning handling, voice transcription edge cases were tightened, and electron updater command construction now has dedicated security coverage around Windows process spawning.",
+      },
+      {
+        id: "icons-and-ui-polish",
+        title: "The interface has more useful visual signals",
+        description:
+          "Provider icons, central icon assets, model pickers, composer controls, automation banners, Kanban cards, preview cards, and tooltips were cleaned up in small but visible ways.",
+        details:
+          "Synara now ships a curated central-icons set, improves provider/model picker presentation, refines composer picker and automation banners, adds better project/thread hover details, and keeps repeated UI surfaces closer to the same visual language.",
+      },
+    ],
+  },
+  {
+    version: "0.3.0",
+    date: "Jun 24",
+    features: [
+      {
+        id: "automations-workspace",
+        title: "Automations are a real workspace surface",
+        description:
+          "Synara now has first-class Automations for scheduled agent work, with sidebar navigation, list/detail pages, run history, triage actions, and inline editing.",
+        details:
+          "This release wires automation contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar badges, Current/Paused views, detail routes, editable fields, previous-run history, and result triage so scheduled work lives inside the same thread/provider/worktree pipeline as normal chat work.",
+      },
+      {
+        id: "heartbeat-stop-clauses",
+        title: "Heartbeat automations can stop when the goal is met",
+        description:
+          "Heartbeat automations can store an AI-evaluated stop clause, evaluate it after successful runs, and disable themselves with a recorded reason when the condition is satisfied.",
+        details:
+          "Completion policies now support natural-language stop conditions, dedicated background evaluation, visible completion results, timeout handling, stale-result guards, legacy-row defaults, and archive/read preservation so a stop check cannot silently undo user triage state.",
+      },
+      {
+        id: "automation-composer-scheduling",
+        title: "Automation creation understands natural prompts",
+        description:
+          "The composer can turn automation-style prompts into scheduled drafts, including intervals, daily/weekly timing, cron-like schedules, heartbeat targets, and review dialogs.",
+        details:
+          "Automation intent parsing now covers explicit and generated prompts, English and Italian stop/schedule phrasing, bounded fast-loop safety, draft review, source-thread handling, restored plan source metadata, inline editing from composer text, and stricter confirmation for LLM-generated automations.",
+      },
+      {
+        id: "automation-reliability",
+        title: "Scheduled runs are harder to lose or corrupt",
+        description:
+          "Automation scheduling, recovery, and run reconciliation were hardened so crashes, duplicate wakes, approval waits, stale cache updates, and cleanup failures are handled more predictably.",
+        details:
+          "The automation service now has occurrence dedupe, scheduler leases, crash replay, failed-run rollback, startup recovery, bounded completion-evaluation queues, recovery/lease observability, approval ownership re-checks, standalone worktree cleanup, equal-timestamp cache merging, and DST/long-downtime schedule coverage.",
+      },
+      {
+        id: "file-attachments-and-previews",
+        title: "Files attach, preview, and download more reliably",
+        description:
+          "Chat now supports generic file attachments alongside images, with better chips/cards, safer upload normalization, worktree-aware previews, and in-app local image downloads.",
+        details:
+          "File attachments now flow through contracts, upload storage, composer paste/drop, provider prompts, Kanban dispatch, recap/bootstrap surfaces, optimistic timeline rendering, caps/rollback, attachment-bearing plan follow-ups, explicit unsupported-file rejection, worktree-backed file preview roots, and blob-based download handling that keeps failed local image downloads inside Synara.",
+      },
+      {
+        id: "provider-model-scoping",
+        title: "Providers and models stay scoped to the right project",
+        description:
+          "OpenCode and Claude startup paths are more careful about cwd, model discovery, config scope, and sticky plan mode so new threads inherit less accidental state.",
+        details:
+          "OpenCode model discovery can fall back to `opencode models --verbose`, managed OpenCode/Kilo paths run in the request/session cwd, warm server reuse is scoped, file config is no longer replaced with synthetic empty config, OpenCode resume preserves cwd, and fresh Claude threads avoid inheriting plan mode from the previous active thread.",
+      },
+      {
+        id: "chat-panels-and-thread-state",
+        title: "Chats and side panels stay in sync",
+        description:
+          "Deleted chats disappear immediately, the Environment panel behaves better in constrained layouts, automation cards show up in the transcript, and file previews avoid extra full-thread subscriptions.",
+        details:
+          "Client projections now use delete tombstones and responsive archived bulk-delete updates, environment-panel open/close preferences survive chat switches, constrained/floating layouts stay calmer by default, thread automation summaries appear in the environment panel, created automation cards render in chat, and file preview routing avoids unnecessary full thread subscriptions.",
+      },
+      {
+        id: "profile-skill-counts",
+        title: "Profile skill counts reflect more real work",
+        description:
+          "Profile stats now count repeated `/skill` and `$skill` usage more accurately, including retained history that should still contribute to your local activity picture.",
+        details:
+          "Skill aggregation now includes retention-hidden threads while still excluding manually deleted data, counts repeated slash/dollar skill tokens inside one prompt, avoids double-counting structured references, and has regression coverage for retained threads and repeated skill invocation.",
+      },
+    ],
+  },
+  {
     version: "0.2.41",
     date: "Jun 17",
     features: [

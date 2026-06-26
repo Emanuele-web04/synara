@@ -24,18 +24,14 @@ import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
-import {
-  ComposerPickerMenuPopup,
-  ComposerPickerMenuSubPopup,
-  ComposerPickerTooltipPopup,
-} from "./ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
   COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
   COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -612,7 +608,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
             <span className="sr-only">{selectedModelLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
+            <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -620,7 +616,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </ComposerPickerTooltipPopup>
+            </TooltipPopup>
           ) : null}
         </Tooltip>
       ) : (

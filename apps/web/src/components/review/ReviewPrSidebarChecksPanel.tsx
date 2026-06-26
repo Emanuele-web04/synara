@@ -187,18 +187,13 @@ export function CheckRow(props: {
   const content = (
     <>
       <span className="inline-flex w-5 shrink-0 items-center justify-center self-stretch">
-        <CheckStateIcon
-          state={props.check.state}
-          className={isInspector ? "size-3.5" : "size-4"}
-        />
+        <CheckStateIcon state={props.check.state} className={isInspector ? "size-3.5" : "size-4"} />
       </span>
       <div className="min-w-0 self-center">
         <div
           className={cn(
             "grid min-w-0 items-baseline gap-2",
-            isInspector
-              ? "grid-cols-[minmax(0,1fr)_5.75rem]"
-              : "grid-cols-[minmax(0,1fr)_5.5rem]",
+            isInspector ? "grid-cols-[minmax(0,1fr)_5.75rem]" : "grid-cols-[minmax(0,1fr)_5.5rem]",
           )}
         >
           <p

@@ -1,3 +1,8 @@
+// FILE: path.ts
+// Purpose: Shared path classification and workspace-relative conversion helpers.
+// Layer: Cross-package utility
+// Exports: absolute-path predicates plus safe workspace relative path helpers
+
 export function isWindowsDrivePath(value: string): boolean {
   return /^[a-zA-Z]:([/\\]|$)/.test(value);
 }
@@ -8,6 +13,15 @@ export function isUncPath(value: string): boolean {
 
 export function isWindowsAbsolutePath(value: string): boolean {
   return isUncPath(value) || isWindowsDrivePath(value);
+}
+
+export function isLocalAbsolutePath(
+  value: string,
+  options: { readonly allowWindowsPaths?: boolean } = {},
+): boolean {
+  return (
+    value.startsWith("/") || ((options.allowWindowsPaths ?? true) && isWindowsAbsolutePath(value))
+  );
 }
 
 export function isExplicitRelativePath(value: string): boolean {

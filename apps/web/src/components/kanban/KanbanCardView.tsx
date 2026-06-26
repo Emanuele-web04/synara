@@ -15,7 +15,7 @@ import {
   GitPullRequestIcon,
   LoaderIcon,
   PaperclipIcon,
-  PinIcon,
+  PinFilledIcon,
   TerminalIcon,
   WorktreeIcon,
 } from "~/lib/icons";
@@ -48,7 +48,7 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   if (card.isTerminal) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
-        <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" aria-hidden />
+        <TerminalIcon className="size-3 shrink-0" aria-hidden />
         Terminal
       </span>
     );
@@ -160,7 +160,7 @@ function KanbanCardViewComponent({
         </span>
         {card.thread?.isPinned ? (
           <span title="Pinned" className="flex shrink-0 items-center pt-0.5">
-            <PinIcon className="size-3 text-muted-foreground/60" aria-hidden />
+            <PinFilledIcon className="size-3 text-muted-foreground/60" aria-hidden />
           </span>
         ) : null}
       </span>

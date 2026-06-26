@@ -22,8 +22,12 @@ export interface ChatAutomationIntent {
   readonly prompt: string;
   readonly schedule: AutomationSchedule;
   readonly cadenceLabel: string;
+  readonly maxIterations: number | null;
   readonly completionPolicy: AutomationCompletionPolicy;
+  readonly executionScope: ChatAutomationExecutionScope;
 }
+
+export type ChatAutomationExecutionScope = "thread" | "standalone" | "worktree";
 
 export interface ResolvedChatAutomationIntent {
   readonly intent: ChatAutomationIntent;
@@ -40,10 +44,41 @@ interface ParsedSchedule {
   readonly cadenceLabel: string;
 }
 
+interface ParsedIterationLimit {
+  readonly maxIterations: number;
+  readonly textWithoutIterationLimit: string;
+}
+
+interface ParsedExecutionScope {
+  readonly executionScope: ChatAutomationExecutionScope;
+  readonly textWithoutExecutionScope: string;
+}
+
 const DEFAULT_DAILY_TIME = "09:00";
 const GENERATED_INTENT_CONFIDENCE_THRESHOLD = 0.75;
+const PROMPT_ENRICHMENT_MAX_WORDS = 10;
+const PROMPT_ENRICHMENT_MAX_LENGTH = 80;
 const MAX_NAME_LENGTH = 120;
 const CRON_FIELD_PATTERN = "[*/0-9,-]+";
+const PLAIN_INVOCATION_QUESTION_PREFIX_PATTERN =
+  /^(?:what|why|how|who|when|where|which|can|could|would|should|do|does|did|is|are|am|will|qual|quale|quali|cosa|come|perche|dove|quando|chi|posso|puoi|potresti|dovrei)\b/;
+const PLAIN_INVOCATION_POLITE_REQUEST_PATTERN =
+  /^(?:(?:can|could|would|will|should)\s+you(?:\s+please)?|(?:puoi|potresti)(?:\s+per favore)?)\s+/i;
+const PLAIN_INVOCATION_ACTION_PREFIX_PATTERN =
+  /^(?:check|verify|monitor|watch|remind(?:\s+me)?|notify(?:\s+me)?|alert(?:\s+me)?|tell\s+me|controlla|verifica|monitora|avvisami|ricordami)\b/i;
+const PLAIN_INVOCATION_POLITE_ACTION_PREFIX_PATTERN =
+  /^(?:check|verify|monitor|watch|say|remind(?:\s+me)?|notify(?:\s+me)?|alert(?:\s+me)?|tell\s+me|controlla|verifica|monitora|avvisami|ricordami)\b/i;
+const PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN = new RegExp(
+  [
+    "^(?:please\\s+)?(?:",
+    "(?:make|create|set up|setup|add|start|build)\\s+(?:an?\\s+)?automation\\b",
+    "|schedule\\s+(?:an?\\s+)?(?:automation|task|job|check|monitor)\\b",
+    "|(?:crea|creare|aggiungi|imposta|fai)\\s+(?:un[' ]?)?",
+    "(?:automazione|task|controllo|monitoraggio)\\b",
+    ")",
+  ].join(""),
+  "i",
+);
 
 const WEEKDAY_BY_TOKEN: Record<string, number> = {
   sunday: 0,
@@ -84,8 +119,17 @@ const WEEKDAY_STRIP_PATTERN = [
 ].join("|");
 
 const TIME_PATTERN = "((?:[01]?\\d|2[0-3])(?::[0-5]\\d)?\\s*(?:am|pm)?)";
-const INTERVAL_PATTERN =
-  "(\\d{1,4})\\s*(seconds|second|secs|sec|secondi|secondo|minutes|minute|mins|minuti|minuto|min|hours|hour|hrs|hr|ore|ora|days|day|giorni|giorno|s|m|h|d|g)";
+const INTERVAL_UNIT_PATTERN =
+  "(?:seconds|second|secs|sec|secondi|secondo|minutes|minute|mins|minuti|minuto|min|hours|hour|hrs|hr|ore|ora|days|day|giorni|giorno|s|m|h|d|g)";
+const BARE_INTERVAL_UNIT_PATTERN =
+  "(?:seconds|second|secs|sec|secondi|secondo|minutes|minute|mins|minuti|minuto|min|hours|hour|hrs|hr|ore|ora|s|m|h)";
+const INTERVAL_PATTERN = `(\\d{1,4})\\s*(${INTERVAL_UNIT_PATTERN})`;
+const BARE_INTERVAL_LEADING_REMAINDER_PATTERN =
+  "(?=$|\\s*(?:,|and\\b|to\\b|then\\b)|\\s+(?:check|verify|monitor|watch|remind|notify|alert|tell|controlla|verifica|monitora|avvisami|ricordami)\\b)";
+const BARE_INTERVAL_LEADING_ACTION_PATTERN = new RegExp(
+  `^(?:every|each|ogni)\\s+${BARE_INTERVAL_UNIT_PATTERN}\\b\\s+(?:check|verify|monitor|watch|remind|notify|alert|tell|controlla|verifica|monitora|avvisami|ricordami)\\b`,
+  "i",
+);
 
 function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -96,6 +140,146 @@ function normalizeSearchText(value: string): string {
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase();
+}
+
+// Plain composer text is intentionally conservative so questions keep reaching the model.
+function isLikelyPlainAutomationQuestion(value: string): boolean {
+  const text = normalizeInlineText(value);
+  if (!text) {
+    return false;
+  }
+  if (/[?？]\s*$/.test(text)) {
+    return true;
+  }
+  return PLAIN_INVOCATION_QUESTION_PREFIX_PATTERN.test(normalizeSearchText(text));
+}
+
+function isLikelyAutomationQuestionCandidate(value: string): boolean {
+  if (isLikelyPlainAutomationQuestion(value)) {
+    return true;
+  }
+  return /^tell me\s+(?:what|why|how|who|when|where|which|qual|quale|quali|cosa|come|perche|dove|quando|chi)\b/.test(
+    normalizeSearchText(value),
+  );
+}
+
+// Allows natural requests like "could you remind me every day" without reopening broad questions.
+function stripPlainAutomationPoliteRequest(value: string): string | null {
+  const normalized = normalizeInlineText(value);
+  const match = PLAIN_INVOCATION_POLITE_REQUEST_PATTERN.exec(normalized);
+  if (!match) {
+    return null;
+  }
+  return normalizeInlineText(normalized.slice(match[0].length))
+    .replace(/[?？]+$/g, "")
+    .replace(/^(?:to|di|che)\s+/i, "");
+}
+
+function wordCount(value: string): number {
+  return normalizeInlineText(value).split(/\s+/).filter(Boolean).length;
+}
+
+// Bare composer text must start like an automation task, not just contain a schedule phrase.
+function isLikelyPlainAutomationAction(value: string, politeRequest: boolean): boolean {
+  const pattern = politeRequest
+    ? PLAIN_INVOCATION_POLITE_ACTION_PREFIX_PATTERN
+    : PLAIN_INVOCATION_ACTION_PREFIX_PATTERN;
+  const normalized = normalizeInlineText(value);
+  return (
+    pattern.test(normalized) ||
+    PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(normalized) ||
+    BARE_INTERVAL_LEADING_ACTION_PATTERN.test(normalized)
+  );
+}
+
+// Clear creation phrasing may need AI fallback even when local schedule parsing is incomplete.
+export function extractPlainChatAutomationCreationInvocation(value: string): string | null {
+  const normalizedInvocation = normalizeInlineText(value);
+  if (!normalizedInvocation) {
+    return null;
+  }
+  const politeInvocation = stripPlainAutomationPoliteRequest(normalizedInvocation);
+  const candidate = politeInvocation ?? normalizedInvocation;
+  const candidateIsQuestion =
+    politeInvocation === null
+      ? isLikelyAutomationQuestionCandidate(normalizedInvocation)
+      : isLikelyAutomationQuestionCandidate(candidate);
+  if (candidateIsQuestion) {
+    return null;
+  }
+  return PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(candidate) ? candidate : null;
+}
+
+// Keeps a clarification carry-forward parseable as an automation across turns. Explicit
+// /automation markers and cadence-only remainders lose their trigger once stripped, so we
+// re-seed a canonical creation scaffold when none survives; the parser strips it back out.
+export function ensureAutomationConversationScaffold(message: string): string {
+  const normalized = normalizeInlineText(message);
+  if (!normalized) {
+    return "create an automation";
+  }
+  if (PLAIN_INVOCATION_AUTOMATION_CREATION_PREFIX_PATTERN.test(normalized)) {
+    return normalized;
+  }
+  return `create an automation ${normalized}`;
+}
+
+function removeMatchedText(value: string, match: RegExpExecArray): string {
+  return normalizeInlineText(
+    `${value.slice(0, match.index)} ${value.slice(match.index + match[0].length)}`,
+  )
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .replace(/^(?:and|then|to|e|poi|che|di|per)\s+/i, "");
+}
+
+// Composer automations are thread-bound by default; these phrases intentionally opt out.
+function extractExecutionScope(value: string): ParsedExecutionScope | null {
+  const patterns: ReadonlyArray<{
+    readonly executionScope: ChatAutomationExecutionScope;
+    readonly pattern: RegExp;
+  }> = [
+    {
+      executionScope: "worktree",
+      pattern: /\b(?:in|on|with|using|su|con)\s+(?:a\s+|un\s+)?(?:new\s+|nuovo\s+)?worktree\b/i,
+    },
+    { executionScope: "worktree", pattern: /\b(?:new|nuovo)\s+worktree\b/i },
+    {
+      executionScope: "standalone",
+      pattern:
+        /\b(?:run|create|make|start|save|crea|fai|avvia)\s+(?:it\s+)?(?:as\s+)?(?:a\s+|un\s+)?standalone(?:\s+automation)?\b/i,
+    },
+    { executionScope: "standalone", pattern: /\bstandalone(?:\s+automation)?\b/i },
+    { executionScope: "standalone", pattern: /\bseparate\s+(?:run|automation|task)\b/i },
+    {
+      executionScope: "standalone",
+      pattern: /\b(?:as|in|into|inside|within)\s+(?:a\s+)?(?:new|separate)\s+run\b/i,
+    },
+    {
+      executionScope: "standalone",
+      pattern: /\bfor\s+(?:every|each|all)\s+(?:new\s+)?chats?\b/i,
+    },
+    {
+      executionScope: "standalone",
+      pattern: /\b(?:per|in)\s+ogni\s+(?:nuova\s+)?chat\b/i,
+    },
+  ];
+
+  for (const { executionScope, pattern } of patterns) {
+    const match = pattern.exec(value);
+    if (!match) {
+      continue;
+    }
+    return {
+      executionScope,
+      textWithoutExecutionScope: removeMatchedText(value, match),
+    };
+  }
+
+  return null;
+}
+
+export function detectChatAutomationExecutionScope(value: string): ChatAutomationExecutionScope {
+  return extractExecutionScope(value)?.executionScope ?? "thread";
 }
 
 interface ParsedStopClause {
@@ -115,7 +299,10 @@ function extractStopClause(value: string): ParsedStopClause | null {
   ];
   for (const pattern of patterns) {
     const match = pattern.exec(value);
-    const stopWhen = match?.[1]?.trim().replace(/[.!?]+$/g, "").trim();
+    const stopWhen = match?.[1]
+      ?.trim()
+      .replace(/[.!?]+$/g, "")
+      .trim();
     if (!match || !stopWhen) {
       continue;
     }
@@ -127,6 +314,31 @@ function extractStopClause(value: string): ParsedStopClause | null {
     return {
       stopWhen,
       textWithoutStopClause,
+    };
+  }
+  return null;
+}
+
+// Pulls bounded-loop language out of the saved prompt so the scheduler can stop itself.
+function extractIterationLimit(value: string): ParsedIterationLimit | null {
+  const patterns: readonly RegExp[] = [
+    /\bfor\s+(\d{1,4})\s+(?:times?|runs?|iterations?|turns?)(?:\s+(?:in\s+)?total)?\b/i,
+    /\b(?:a\s+)?total\s+of\s+(\d{1,4})\s+(?:times?|runs?|iterations?|turns?)\b/i,
+    /\b(\d{1,4})\s+(?:times?|runs?|iterations?|turns?)\s+(?:(?:in\s+)?total|overall)\b/i,
+    /\bper\s+(\d{1,4})\s+(?:volte|iterazioni|run|giri)(?:\s+in\s+totale)?\b/i,
+    /\b(?:per\s+)?un\s+totale\s+di\s+(\d{1,4})\s+(?:volte|iterazioni|run|giri)\b/i,
+    /\b(\d{1,4})\s+(?:volte|iterazioni|run|giri)\s+in\s+totale\b/i,
+  ];
+  for (const pattern of patterns) {
+    const match = pattern.exec(value);
+    const amount = Number.parseInt(match?.[1] ?? "", 10);
+    if (!match || !Number.isFinite(amount) || amount <= 0) {
+      continue;
+    }
+    const textWithoutIterationLimit = removeMatchedText(value, match).replace(/(?:,\s*)$/g, "");
+    return {
+      maxIterations: amount,
+      textWithoutIterationLimit,
     };
   }
   return null;
@@ -246,12 +458,27 @@ function parseIntervalSchedule(searchText: string): ParsedSchedule | null {
   const match =
     searchText.match(new RegExp(`\\b(?:every|each)\\s+${INTERVAL_PATTERN}\\b`)) ??
     searchText.match(new RegExp(`\\bogni\\s+${INTERVAL_PATTERN}\\b`));
-  if (!match) {
+  const bareMatch =
+    match == null
+      ? (searchText.match(
+          new RegExp(
+            `^(?:every|each)\\s+(${BARE_INTERVAL_UNIT_PATTERN})\\b${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
+          ),
+        ) ??
+        searchText.match(new RegExp(`\\b(?:every|each)\\s+(${BARE_INTERVAL_UNIT_PATTERN})$`)) ??
+        searchText.match(
+          new RegExp(
+            `^ogni\\s+(${BARE_INTERVAL_UNIT_PATTERN})\\b${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
+          ),
+        ) ??
+        searchText.match(new RegExp(`\\bogni\\s+(${BARE_INTERVAL_UNIT_PATTERN})$`)))
+      : null;
+  if (!match && !bareMatch) {
     return null;
   }
 
-  const amount = Number.parseInt(match[1] ?? "", 10);
-  const unit = match[2] ?? "m";
+  const amount = match ? Number.parseInt(match[1] ?? "", 10) : 1;
+  const unit = match?.[2] ?? bareMatch?.[1] ?? "m";
   if (!Number.isFinite(amount) || amount <= 0) {
     return null;
   }
@@ -453,37 +680,56 @@ function stripAutomationScaffold(value: string): string {
   let cleaned = normalizeInlineText(value);
   cleaned = cleaned
     .replace(
-      /^(?:please\s+)?(?:make|create|set up|setup|add|start|build)\s+(?:an?\s+)?automation\s*(?:where|that|to|which)?\s*/i,
+      /^(?:please\s+)?(?:make|create|set up|setup|add|start|build)\s+(?:an?\s+)?automation\s*(?:for\s+(?:me|myself)\b\s*)?(?:where|that|to|which)?\s*/i,
       "",
     )
     .replace(
-      /^(?:please\s+)?(?:crea|creare|aggiungi|imposta|fai)\s+(?:un[' ]?)?(?:automazione|task|controllo|monitoraggio)\s*(?:che|per|dove)?\s*/i,
+      /^(?:please\s+)?(?:crea|creare|aggiungi|imposta|fai)\s+(?:un[' ]?)?(?:automazione|task|controllo|monitoraggio)\s*(?:per\s+(?:me|noi)\b\s*)?(?:che|per|dove)?\s*/i,
       "",
     )
     .replace(
-      /^(?:please\s+)?schedule\s+(?:an?\s+)?(?:automation|task|job|check|monitor|reminder)\s*(?:to|that)?\s*/i,
+      /^(?:please\s+)?schedule\s+(?:an?\s+)?(?:automation|task|job|check|monitor|reminder)\s*(?:for\s+(?:me|myself)\b\s*)?(?:to|that)?\s*/i,
       "",
     )
     .replace(/^(?:please\s+)?automate\s+(?:this|that|it)?\s*/i, "")
-    .replace(/^(?:where|that|to|che|per|dove)\s+/i, "");
+    .replace(/^(?:where|that|to|for|che|per|dove)\s+/i, "");
 
   cleaned = cleaned
     .replace(
       new RegExp(
-        `\\b(?:you\\s+)?wake\\s+up\\s+every\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
+        `\\b(?:you\\s+)?wake\\s+up\\s+(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
         "i",
       ),
       "",
     )
     .replace(
       new RegExp(
-        `\\b(?:you\\s+)?run\\s+(?:it|this)?\\s*every\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
+        `\\b(?:you\\s+)?run\\s+(?:it|this)?\\s*(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`,
         "i",
       ),
       "",
     )
-    .replace(new RegExp(`\\bevery\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`, "i"), "")
+    .replace(
+      new RegExp(`\\b(?:every|each)\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`, "i"),
+      "",
+    )
+    .replace(
+      new RegExp(
+        `^(?:every|each)\\s+${BARE_INTERVAL_UNIT_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
+        "i",
+      ),
+      "",
+    )
+    .replace(new RegExp(`\\b(?:every|each)\\s+${BARE_INTERVAL_UNIT_PATTERN}$`, "i"), "")
     .replace(new RegExp(`\\bogni\\s+${INTERVAL_PATTERN}\\b\\s*(?:e|poi|per|,)?\\s*`, "i"), "")
+    .replace(
+      new RegExp(
+        `^ogni\\s+${BARE_INTERVAL_UNIT_PATTERN}\\b\\s*(?:e|poi|per|,)?\\s*${BARE_INTERVAL_LEADING_REMAINDER_PATTERN}`,
+        "i",
+      ),
+      "",
+    )
+    .replace(new RegExp(`\\bogni\\s+${BARE_INTERVAL_UNIT_PATTERN}$`, "i"), "")
     .replace(new RegExp(`\\bin\\s+${INTERVAL_PATTERN}\\b\\s*(?:and|to|then|,)?\\s*`, "i"), "")
     .replace(
       new RegExp(`\\b(?:tra|fra)\\s+${INTERVAL_PATTERN}\\b\\s*(?:e|poi|per|,)?\\s*`, "i"),
@@ -589,13 +835,18 @@ export function parseChatAutomationInvocation(
     return null;
   }
 
-  const searchText = normalizeSearchText(normalizedInvocation);
+  const executionScope = extractExecutionScope(normalizedInvocation);
+  const scopedInvocation = executionScope?.textWithoutExecutionScope ?? normalizedInvocation;
+  const searchText = normalizeSearchText(scopedInvocation);
   const parsedSchedule = parseSchedule(searchText, options.nowIso ?? new Date().toISOString());
   if (!parsedSchedule) {
     return null;
   }
 
-  const prompt = stripAutomationScaffold(normalizedInvocation);
+  const iterationLimit = extractIterationLimit(scopedInvocation);
+  const prompt = stripAutomationScaffold(
+    iterationLimit?.textWithoutIterationLimit ?? scopedInvocation,
+  );
   if (!prompt) {
     return null;
   }
@@ -611,8 +862,34 @@ export function parseChatAutomationInvocation(
     prompt: taskPrompt,
     schedule: parsedSchedule.schedule,
     cadenceLabel: parsedSchedule.cadenceLabel,
+    maxIterations: iterationLimit?.maxIterations ?? null,
     completionPolicy: completionPolicyFromStopWhen(stopClause?.stopWhen ?? ""),
+    executionScope: executionScope?.executionScope ?? "thread",
   };
+}
+
+// Parses unmarked composer text only when it looks like an instruction, not a question.
+export function parsePlainChatAutomationInvocation(
+  invocation: string,
+  options: { readonly nowIso?: string } = {},
+): ChatAutomationIntent | null {
+  const normalizedInvocation = normalizeInlineText(invocation);
+  if (!normalizedInvocation) {
+    return null;
+  }
+  const politeInvocation = stripPlainAutomationPoliteRequest(normalizedInvocation);
+  const candidate = politeInvocation ?? normalizedInvocation;
+  if (!isLikelyPlainAutomationAction(candidate, politeInvocation !== null)) {
+    return null;
+  }
+  const candidateIsQuestion =
+    politeInvocation === null
+      ? isLikelyAutomationQuestionCandidate(normalizedInvocation)
+      : isLikelyAutomationQuestionCandidate(candidate);
+  if (candidateIsQuestion) {
+    return null;
+  }
+  return parseChatAutomationInvocation(candidate, options);
 }
 
 // Parses only explicit scheduled intents so regular automation questions keep going to the model.
@@ -627,8 +904,75 @@ export function parseChatAutomationIntent(
   return parseChatAutomationInvocation(invocation, options);
 }
 
+export function shouldGenerateAutomationIntent(input: {
+  readonly deterministicIntent: ChatAutomationIntent | null;
+  readonly automationMessage: string;
+}): boolean {
+  const message = normalizeInlineText(input.automationMessage);
+  if (!message) {
+    return false;
+  }
+  if (!input.deterministicIntent) {
+    return true;
+  }
+  const prompt = normalizeInlineText(input.deterministicIntent.prompt);
+  return (
+    prompt.length > 0 &&
+    (prompt.length <= PROMPT_ENRICHMENT_MAX_LENGTH ||
+      wordCount(prompt) <= PROMPT_ENRICHMENT_MAX_WORDS)
+  );
+}
+
+function stripGeneratedPromptScaffolding(value: string): string {
+  const withoutExecutionScope = extractExecutionScope(value)?.textWithoutExecutionScope ?? value;
+  const withoutIterationLimit =
+    extractIterationLimit(withoutExecutionScope)?.textWithoutIterationLimit ??
+    withoutExecutionScope;
+  const withoutSchedule = stripAutomationScaffold(withoutIterationLimit);
+  const stopClause = extractStopClause(withoutSchedule);
+  return normalizeInlineText(
+    stopClause?.textWithoutStopClause
+      ? stripAutomationScaffold(stopClause.textWithoutStopClause)
+      : withoutSchedule,
+  );
+}
+
+// Prefer the model's structured run cap, but recover old/generated prompt scaffolding too.
+function maxIterationsFromGeneratedIntent(
+  generatedIntent: ServerGenerateAutomationIntentResult,
+): number | null {
+  return (
+    generatedIntent.maxIterations ??
+    (generatedIntent.taskPrompt
+      ? (extractIterationLimit(generatedIntent.taskPrompt)?.maxIterations ?? null)
+      : null)
+  );
+}
+
+function generatedAutomationPromptEnrichment(
+  generatedIntent: ServerGenerateAutomationIntentResult | null,
+): Pick<ChatAutomationIntent, "name" | "prompt" | "maxIterations"> | null {
+  if (
+    generatedIntent?.isAutomation !== true ||
+    generatedIntent.taskPrompt === null ||
+    generatedIntent.confidence < GENERATED_INTENT_CONFIDENCE_THRESHOLD
+  ) {
+    return null;
+  }
+  const prompt = stripGeneratedPromptScaffolding(generatedIntent.taskPrompt);
+  if (!prompt) {
+    return null;
+  }
+  return {
+    name: generatedIntent.name ?? deriveAutomationIntentName(prompt),
+    prompt,
+    maxIterations: maxIterationsFromGeneratedIntent(generatedIntent),
+  };
+}
+
 function generatedAutomationIntentToChatIntent(
   generatedIntent: ServerGenerateAutomationIntentResult | null,
+  executionScope: ChatAutomationExecutionScope,
 ): ChatAutomationIntent | null {
   if (generatedIntent?.isAutomation !== true || generatedIntent.taskPrompt === null) {
     return null;
@@ -642,38 +986,90 @@ function generatedAutomationIntentToChatIntent(
   }
 
   const schedule = generatedIntent.schedule ?? { type: "manual" as const };
+  const prompt = stripGeneratedPromptScaffolding(generatedIntent.taskPrompt);
+  if (!prompt) {
+    return null;
+  }
+  const resolvedExecutionScope = executionScopeForGeneratedMode(
+    generatedIntent.mode,
+    executionScope,
+  );
   return {
-    name: generatedIntent.name ?? deriveAutomationIntentName(generatedIntent.taskPrompt),
-    prompt: generatedIntent.taskPrompt,
+    name: generatedIntent.name ?? deriveAutomationIntentName(prompt),
+    prompt,
     schedule,
     cadenceLabel: formatAutomationIntentCadence(schedule),
+    maxIterations: maxIterationsFromGeneratedIntent(generatedIntent),
     completionPolicy: generatedIntent.completionPolicy ?? { type: "none" },
+    executionScope: resolvedExecutionScope,
   };
+}
+
+// Generated mode can recover standalone phrasing the deterministic regexes do not know.
+function executionScopeForGeneratedMode(
+  mode: AutomationMode | null,
+  fallback: ChatAutomationExecutionScope,
+): ChatAutomationExecutionScope {
+  if (mode === "heartbeat") {
+    return "thread";
+  }
+  if (mode === "standalone") {
+    return fallback === "worktree" ? "worktree" : "standalone";
+  }
+  return fallback;
 }
 
 export function resolveChatAutomationIntent(input: {
   readonly deterministicIntent: ChatAutomationIntent | null;
   readonly generatedIntent: ServerGenerateAutomationIntentResult | null;
-  readonly isServerThread: boolean;
+  readonly defaultMode: AutomationMode;
+  readonly executionScope: ChatAutomationExecutionScope;
 }): ResolvedChatAutomationIntent | null {
-  const defaultMode: AutomationMode = input.isServerThread ? "heartbeat" : "standalone";
   if (input.deterministicIntent) {
-    const mode = modeForCompletionPolicy(defaultMode, input.deterministicIntent.completionPolicy);
+    const resolvedExecutionScope =
+      input.deterministicIntent.executionScope === "thread"
+        ? executionScopeForGeneratedMode(input.generatedIntent?.mode ?? null, input.executionScope)
+        : input.deterministicIntent.executionScope;
+    const requestedMode = resolvedExecutionScope === "thread" ? input.defaultMode : "standalone";
+    const mode = modeForCompletionPolicy(requestedMode, input.deterministicIntent.completionPolicy);
+    const enrichment = generatedAutomationPromptEnrichment(input.generatedIntent);
+    const enrichmentNeedsConfirmation =
+      enrichment !== null && (input.generatedIntent?.needsConfirmation ?? false);
+    const deterministicIntent =
+      resolvedExecutionScope === input.deterministicIntent.executionScope
+        ? input.deterministicIntent
+        : { ...input.deterministicIntent, executionScope: resolvedExecutionScope };
+    const intent = enrichment
+      ? {
+          ...deterministicIntent,
+          name: enrichment.name,
+          prompt: enrichment.prompt,
+          maxIterations: enrichment.maxIterations ?? deterministicIntent.maxIterations,
+        }
+      : deterministicIntent;
     return {
-      intent: input.deterministicIntent,
+      intent,
       mode,
       source: "deterministic",
-      requiresReview: requiresCompletionPolicyReview(
-        defaultMode,
-        input.deterministicIntent.completionPolicy,
-      ),
-      generatedConfidence: null,
-      generatedNeedsConfirmation: false,
-      reason: null,
+      requiresReview:
+        // Any LLM-influenced draft requires human review before creating: when the prompt
+        // is terse the generator rewrites name/prompt/maxIterations even though the schedule
+        // parsed deterministically (enrichment !== null), so the confirmation must not be
+        // skipped. Purely local parses keep their finer gating, including the deliberate
+        // bounded-fast-loop auto-submit (which skips generation, so enrichment stays null).
+        enrichment !== null ||
+        resolvedExecutionScope !== "thread" ||
+        requiresCompletionPolicyReview(requestedMode, input.deterministicIntent.completionPolicy),
+      generatedConfidence: enrichment ? (input.generatedIntent?.confidence ?? null) : null,
+      generatedNeedsConfirmation: enrichmentNeedsConfirmation,
+      reason: enrichmentNeedsConfirmation ? (input.generatedIntent?.reason ?? null) : null,
     };
   }
 
-  const generatedIntent = generatedAutomationIntentToChatIntent(input.generatedIntent);
+  const generatedIntent = generatedAutomationIntentToChatIntent(
+    input.generatedIntent,
+    input.executionScope,
+  );
   if (!generatedIntent) {
     return null;
   }
@@ -682,18 +1078,20 @@ export function resolveChatAutomationIntent(input: {
   const fastRecurringInterval =
     generatedSchedule?.type === "interval" && generatedSchedule.everySeconds < 60;
 
-  const requestedMode = input.isServerThread
-    ? (input.generatedIntent?.mode ?? "heartbeat")
-    : "standalone";
+  const requestedMode =
+    generatedIntent.executionScope === "thread" ? input.defaultMode : "standalone";
   const mode = modeForCompletionPolicy(requestedMode, generatedIntent.completionPolicy);
   return {
     intent: generatedIntent,
     mode,
     source: "generated",
-    requiresReview: requiresCompletionPolicyReview(
-      requestedMode,
-      generatedIntent.completionPolicy,
-    ),
+    // Generated (LLM-interpreted) intents always require a human confirmation step: a
+    // misread message must never silently create a recurring background automation, no
+    // matter how confident the model is. Deterministic explicit intents keep their
+    // finer-grained gating above, including the intentional bounded-fast-loop
+    // auto-submit, which never reaches this branch because generation is skipped for it
+    // in resolveComposerAutomationRequest.
+    requiresReview: true,
     generatedConfidence: input.generatedIntent?.confidence ?? null,
     generatedNeedsConfirmation:
       (input.generatedIntent?.needsConfirmation ?? false) || fastRecurringInterval,

@@ -269,6 +269,9 @@ export interface SidebarThreadSummary {
   envMode?: ThreadEnvironmentMode | undefined;
   branch: string | null;
   worktreePath: string | null;
+  associatedWorktreePath?: string | null;
+  associatedWorktreeBranch?: string | null;
+  associatedWorktreeRef?: string | null;
   session: ThreadSession | null;
   createdAt: string;
   archivedAt?: string | null;

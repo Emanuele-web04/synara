@@ -111,6 +111,25 @@ describe("deriveReadableToolTitle", () => {
       }),
     ).toBe("Codex Apps: Github Fetch Pr");
   });
+
+  it("formats structured MCP server/tool payloads into readable tool names", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "MCP tool call",
+        fallbackLabel: "MCP tool call",
+        itemType: "mcp_tool_call",
+        payload: {
+          data: {
+            item: {
+              type: "mcpToolCall",
+              server: "computer-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+    ).toBe("Computer Use: Get App State");
+  });
 });
 
 describe("deriveReadableCommandDisplay", () => {
@@ -155,6 +174,47 @@ describe("deriveReadableCommandDisplay", () => {
       verb: "Read",
       target: "pages/overview.tsx",
       fullCommand: `zsh -lc "cd '/tmp/my app' && sed -n '1,260p' src/pages/overview.tsx"`,
+    });
+  });
+
+  it("does not discard real chained commands after a shell wrapper", () => {
+    expect(
+      deriveReadableCommandDisplay(
+        `/bin/zsh -lc 'rm -f /tmp/test.log && bun run --cwd apps/server test'`,
+      ),
+    ).toEqual({
+      verb: "Removed",
+      target: "/tmp/test.log",
+      fullCommand: `/bin/zsh -lc 'rm -f /tmp/test.log && bun run --cwd apps/server test'`,
+    });
+  });
+
+  it("removes env and timeout wrappers from inline command summaries", () => {
+    expect(
+      deriveReadableCommandDisplay(
+        "env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 timeout 180s bun run dev",
+        true,
+      ),
+    ).toEqual({
+      verb: "Running",
+      target: "bun run dev",
+      fullCommand: "env -u T3CODE_AUTH_TOKEN T3CODE_PORT_OFFSET=3158 timeout 180s bun run dev",
+    });
+  });
+
+  it("summarizes inline script commands without leaking the script body", () => {
+    expect(
+      deriveReadableCommandDisplay(`node -e "const fs = require('fs'); console.log(fs.cwd)"`, true),
+    ).toEqual({
+      verb: "Running",
+      target: "node script",
+      fullCommand: `node -e "const fs = require('fs'); console.log(fs.cwd)"`,
+    });
+
+    expect(deriveReadableCommandDisplay("python3 - <<'PY'\nprint('hi')\nPY", true)).toEqual({
+      verb: "Running",
+      target: "python script",
+      fullCommand: "python3 - <<'PY'\nprint('hi')\nPY",
     });
   });
 

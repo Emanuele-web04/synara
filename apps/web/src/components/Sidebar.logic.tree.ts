@@ -20,6 +20,7 @@ export type SidebarProjectEntry = {
 };
 
 export type SidebarDerivedProjectData = {
+  allProjectThreadCount: number;
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
@@ -409,6 +410,7 @@ export function deriveSidebarProjectData(input: {
             ];
 
       byProjectId.set(project.id, {
+        allProjectThreadCount: allProjectThreads.length,
         projectThreads,
         orderedProjectThreadIds,
         visibleEntries,
@@ -448,6 +450,7 @@ export function deriveSidebarProjectData(input: {
     });
 
     byProjectId.set(project.id, {
+      allProjectThreadCount: allProjectThreads.length,
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,

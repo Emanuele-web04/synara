@@ -7,7 +7,7 @@
  *   toValidationError, decodeInputOrValidationError, toRuntimeStatus,
  *   toRuntimePayloadFromSession, readPersistedModelSelection,
  *   readPersistedProviderOptions, readPersistedCwd, runtimePayloadRecord,
- *   runtimeStatusForEvent, runtimeLastErrorForEvent.
+ *   runtimeStatusForEvent, runtimeLastErrorForEvent, shouldRefreshResumeCursorForEvent.
  *
  * @module ProviderServiceHelpers
  */
@@ -148,16 +148,27 @@ export function runtimePayloadRecord(value: unknown): Record<string, unknown> {
 
 export function runtimeStatusForEvent(
   event: ProviderRuntimeEvent,
-): "ready" | "running" | "stopped" | "error" {
+  activeTurnId?: unknown,
+): "running" | "stopped" | "error" {
   switch (event.type) {
     case "session.state.changed":
       switch (event.payload.state) {
-        case "ready":
-          return "ready";
         case "stopped":
           return "stopped";
         case "error":
           return "error";
+        default:
+          return "running";
+      }
+    case "thread.state.changed":
+      switch (event.payload.state) {
+        case "error":
+          return "error";
+        case "archived":
+        case "closed":
+          return "stopped";
+        case "compacted":
+          return event.turnId === undefined && activeTurnId == null ? "stopped" : "running";
         default:
           return "running";
       }
@@ -174,12 +185,25 @@ export function runtimeStatusForEvent(
   }
 }
 
+export function shouldRefreshResumeCursorForEvent(event: ProviderRuntimeEvent): boolean {
+  return (
+    event.type === "thread.started" ||
+    (event.type === "thread.state.changed" &&
+      event.payload.state === "compacted" &&
+      event.turnId === undefined) ||
+    event.type === "turn.completed" ||
+    event.type === "turn.aborted"
+  );
+}
+
 export function runtimeLastErrorForEvent(event: ProviderRuntimeEvent): string | null | undefined {
   switch (event.type) {
     case "runtime.error":
       return event.payload.message;
     case "session.state.changed":
       return event.payload.state === "error" ? (event.payload.reason ?? "Session error") : null;
+    case "thread.state.changed":
+      return event.payload.state === "error" ? "Thread error" : null;
     case "turn.started":
     case "turn.completed":
     case "turn.aborted":
