@@ -64,6 +64,7 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
+import { fileRowClassName, fileRowIndentStyle } from "./chat/fileRowStyles";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";
 import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { DiffStat } from "./chat/DiffStatLabel";
@@ -314,14 +315,8 @@ const ExplorerRow = forwardRef<
       {...rest}
       ref={ref}
       type="button"
-      className={cn(
-        "flex h-7 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md pr-2 text-left text-[12px] transition-colors",
-        selected
-          ? "bg-[var(--color-background-button-secondary)] text-foreground"
-          : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
-        className,
-      )}
-      style={{ paddingLeft: `${0.5 + depth * 0.75}rem` }}
+      className={fileRowClassName(selected, cn("h-7 pr-2", className))}
+      style={fileRowIndentStyle(depth)}
       title={entry.path}
       draggable
       onDragStart={handleDragStart}
@@ -350,7 +345,7 @@ function ExplorerLoadingRows(props: { depth: number }) {
   return (
     <div
       className="space-y-1.5 py-1.5 pr-2"
-      style={{ paddingLeft: `${0.5 + props.depth * 0.75}rem` }}
+      style={fileRowIndentStyle(props.depth)}
       role="status"
       aria-label="Loading directory..."
     >
@@ -468,12 +463,7 @@ function DiffFileRow(props: {
   return (
     <button
       type="button"
-      className={cn(
-        "flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors",
-        props.selected
-          ? "bg-[var(--color-background-button-secondary)] text-foreground"
-          : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
-      )}
+      className={fileRowClassName(props.selected, "h-8 px-2")}
       title={filePath}
       draggable
       onDragStart={(event) => {
@@ -664,12 +654,7 @@ function WorkspaceSearchResultRow(props: {
   return (
     <button
       type="button"
-      className={cn(
-        "flex h-8 w-full min-w-0 cursor-pointer items-center gap-1.5 rounded-md px-2 text-left text-[12px] transition-colors",
-        props.selected
-          ? "bg-[var(--color-background-button-secondary)] text-foreground"
-          : "text-foreground/78 hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
-      )}
+      className={fileRowClassName(props.selected, "h-8 px-2")}
       title={entry.path}
       draggable
       onDragStart={(event) => {
