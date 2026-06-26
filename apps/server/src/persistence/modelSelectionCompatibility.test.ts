@@ -4,6 +4,7 @@
 // Depends on: modelSelectionCompatibility.
 
 import { assert, it } from "@effect/vitest";
+import { DEFAULT_SERVER_SETTINGS } from "@synara/contracts";
 
 import { normalizePersistedModelSelection } from "./modelSelectionCompatibility.ts";
 
@@ -94,6 +95,7 @@ it("infers Pi from persisted instance labels", () => {
     }),
     {
       provider: "pi",
+      instanceId: "local-pi-runtime-instance",
       model: "openai/gpt-5.5",
     },
   );

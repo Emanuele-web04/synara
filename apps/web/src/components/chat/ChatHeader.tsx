@@ -67,6 +67,7 @@ import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
 import { SurfacePanelToggle, type SurfacePanelToggleState } from "./chatHeaderControls";
+import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -102,7 +103,7 @@ interface ChatHeaderProps {
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
-  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
+  handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
   // Coordinator threads pass false — a hand-off copy would read as a second
   // coordinator, so the action itself is hidden rather than disabled.
   showHandoffAction?: boolean;
@@ -153,7 +154,7 @@ interface ChatHeaderProps {
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
   onRegisterCommitAndPushTrigger?: (trigger: (() => void) | null) => void;
-  onCreateHandoff: (targetProvider: ProviderKind) => void;
+  onCreateHandoff: (target: ThreadHandoffTarget) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
   onCloseThreadPane?: () => void;
@@ -530,7 +531,7 @@ export function ChatHeader({
   handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
-  handoffActionTargetProviders,
+  handoffActionTargets,
   showHandoffAction: showHandoffActionProp,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
@@ -821,7 +822,7 @@ export function ChatHeader({
                         tone="outline"
                         className={compact ? "gap-1" : "gap-1.5"}
                         aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        disabled={handoffDisabled || handoffActionTargets.length === 0}
                       />
                     }
                   >
@@ -833,11 +834,11 @@ export function ChatHeader({
               <TooltipPopup side="bottom">{handoffActionLabel}</TooltipPopup>
             </Tooltip>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-48 min-w-48">
-              {handoffActionTargetProviders.map((provider) => (
-                <MenuItem key={provider} onClick={() => onCreateHandoff(provider)}>
+              {handoffActionTargets.map((target) => (
+                <MenuItem key={target.instanceId} onClick={() => onCreateHandoff(target)}>
                   {/* opacity-100 opts brand icons out of the option row's 80% icon dim. */}
-                  {renderProviderIcon(provider, "size-3.5 shrink-0 opacity-100")}
-                  <span>Handoff to {PROVIDER_DISPLAY_NAMES[provider]}</span>
+                  {renderProviderIcon(target.provider, "size-3.5 shrink-0 opacity-100")}
+                  <span>Handoff to {target.label}</span>
                 </MenuItem>
               ))}
             </ComposerPickerMenuPopup>

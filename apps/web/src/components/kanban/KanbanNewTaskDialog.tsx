@@ -158,7 +158,7 @@ export function KanbanNewTaskDialog({
     clearComposerAssistantSelections,
     clearComposerFileComments,
     removeComposerTerminalContext,
-  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider });
+  } = useKanbanTaskScratchDraft({ defaultProvider: settings.defaultProvider, settings });
   const promptRef = useRef(prompt);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const providerOptionsForDispatch = useMemo(
@@ -205,6 +205,7 @@ export function KanbanNewTaskDialog({
   );
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
@@ -348,7 +349,8 @@ export function KanbanNewTaskDialog({
     if (selectedModel !== null) {
       return;
     }
-    const firstOption = modelOptionsByProvider[selectedProvider][0];
+    const firstOption = (modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+      modelOptionsByProvider[selectedProvider])[0];
     if (firstOption) {
       useComposerDraftStore.getState().setModelSelection(
         scratchThreadId,
@@ -615,6 +617,7 @@ export function KanbanNewTaskDialog({
                     lockedProvider={null}
                     providers={providerStatuses}
                     modelOptionsByProvider={modelOptionsByProvider}
+                    modelOptionsByProviderInstance={modelOptionsByProviderInstance}
                     loadingModelProviders={loadingModelProviders}
                     discoveryErrorsByProvider={discoveryErrorsByProvider}
                     hiddenProviders={settings.hiddenProviders}
@@ -640,6 +643,7 @@ export function KanbanNewTaskDialog({
                     onPromptChange={setPrompt}
                     open={isTraitsPickerOpen}
                     onOpenChange={setIsTraitsPickerOpen}
+                    selectedProviderInstanceId={selectedProviderInstanceId}
                   />
                 </div>
               </div>

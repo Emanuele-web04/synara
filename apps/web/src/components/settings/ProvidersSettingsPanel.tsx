@@ -1119,7 +1119,10 @@ function ProviderToolRow(props: {
   settings: AppSettings;
   defaults: AppSettings;
   hiddenProviderSet: ReadonlySet<ProviderKind>;
-  serverSettings: Pick<ServerSettings, "providers" | "enableProviderUpdateChecks"> | null;
+  serverSettings: Pick<
+    ServerSettings,
+    "providers" | "providerInstances" | "enableProviderUpdateChecks"
+  > | null;
   providerStatus: ServerProviderStatus | undefined;
   updatingProviders: ReadonlySet<ProviderKind>;
   onOpenChange: (open: boolean) => void;

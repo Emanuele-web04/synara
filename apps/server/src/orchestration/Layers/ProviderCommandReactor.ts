@@ -92,6 +92,7 @@ import {
   ProviderServiceError,
   ProviderValidationError,
 } from "../../provider/Errors.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
   PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
@@ -117,7 +118,6 @@ import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
-import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { isServerGroupsEnabled } from "../../projectAgent/groupsBetaGate.ts";
 import { ProjectAgentService } from "../../projectAgent/Services/ProjectAgentService.ts";
 import { ProjectAgentRepository } from "../../persistence/Services/ProjectAgentRepository.ts";
@@ -1806,6 +1806,28 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
+    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredProviderInstanceId =
+      desiredModelSelection.instanceId ?? desiredModelSelection.provider;
+    const settings = yield* serverSettings.getSettings;
+    const desiredProviderInstance = resolveProviderInstance(settings, {
+      instanceId: desiredProviderInstanceId,
+    });
+    const desiredProvider = desiredProviderInstance?.driver ?? desiredModelSelection.provider;
+    const desiredRoutedModelSelection =
+      desiredProviderInstance && desiredProvider !== desiredModelSelection.provider
+        ? ({
+            provider: desiredProvider,
+            instanceId: desiredProviderInstance.instanceId,
+            model: desiredModelSelection.model,
+          } as ModelSelection)
+        : desiredProviderInstance
+          ? ({
+              ...desiredModelSelection,
+              provider: desiredProvider,
+              instanceId: desiredProviderInstance.instanceId,
+            } as ModelSelection)
+          : desiredModelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
         .listSessions()
@@ -1821,7 +1843,7 @@ const make = Effect.gen(function* () {
       currentProvider !== undefined &&
       ((thread.latestTurn === null &&
         requestedModelSelection !== undefined &&
-        requestedModelSelection.provider !== currentProvider) ||
+        desiredProvider !== currentProvider) ||
         thread.modelSelection.provider !== currentProvider)
         ? yield* resolveActiveSession(threadId)
         : undefined;
@@ -1853,17 +1875,17 @@ const make = Effect.gen(function* () {
       boundProvider !== undefined &&
       boundProvider !== thread.modelSelection.provider &&
       (requestedModelSelection === undefined ||
-        requestedModelSelection.provider === thread.modelSelection.provider);
+        desiredProvider === thread.modelSelection.provider);
     if (
       boundProvider !== undefined &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== boundProvider &&
-      requestedModelSelection.provider !== thread.modelSelection.provider
+      desiredProvider !== boundProvider &&
+      desiredProvider !== thread.modelSelection.provider
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: boundProvider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${boundProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue: `Thread '${threadId}' is bound to provider '${boundProvider}' and cannot switch to '${desiredProvider}'.`,
       });
     }
     // A provider rebind cannot resume the old provider's history natively —
@@ -1876,33 +1898,39 @@ const make = Effect.gen(function* () {
       !suppressContextBootstrapOnNextStartThreadIds.has(threadId);
     const preferredProvider: ProviderKind = providerRebindRequested
       ? thread.modelSelection.provider
-      : (boundProvider ??
-        requestedModelSelection?.provider ??
-        currentProvider ??
-        thread.modelSelection.provider);
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const desiredProviderInstanceId =
-      desiredModelSelection.instanceId ?? desiredModelSelection.provider;
-    const settings = yield* serverSettings.getSettings;
-    if (!settings.providers[preferredProvider].enabled) {
+      : (boundProvider ?? desiredProvider);
+    const currentProviderInstanceId =
+      thread.session?.providerInstanceId ??
+      thread.modelSelection.instanceId ??
+      thread.modelSelection.provider;
+    const requestedProviderInstanceChanged =
+      requestedModelSelection !== undefined &&
+      desiredProviderInstanceId !== currentProviderInstanceId;
+    if (thread.session !== null && requestedProviderInstanceChanged && !providerRebindRequested) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        // A Beta-only provider can never be re-enabled on this build, so the
-        // re-enable hint only makes sense for an ordinary settings disable.
-        issue: isServerBetaFeatureEnabled(preferredProvider)
-          ? `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`
-          : providerDisabledSettingsMessage(preferredProvider),
+        issue: `Thread '${threadId}' is bound to provider instance '${currentProviderInstanceId}' and cannot switch to '${desiredProviderInstanceId}'.`,
       });
     }
-    const resolvedInstance = resolveProviderInstance(settings, {
-      provider: preferredProvider,
-      instanceId: desiredProviderInstanceId,
-    });
+    if (desiredProviderInstance && !desiredProviderInstance.enabled) {
+      return yield* new ProviderAdapterValidationError({
+        provider: preferredProvider,
+        operation: "thread.turn.start",
+        issue:
+          desiredProviderInstance.instanceId === desiredProviderInstance.driver
+            ? // A Beta-only provider can never be re-enabled on this build, so the
+              // re-enable hint only makes sense for an ordinary settings disable.
+              isServerBetaFeatureEnabled(preferredProvider)
+              ? `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`
+              : providerDisabledSettingsMessage(preferredProvider)
+            : `Provider instance '${desiredProviderInstance.displayName}' is disabled in Settings > Providers. Re-enable it to continue this thread.`,
+      });
+    }
     const resolvedProviderOptions = mergeProviderStartOptions(
       providerStartOptionsFromServerSettings(settings),
-      resolvedInstance?.driver === preferredProvider
-        ? providerStartOptionsFromInstance(resolvedInstance)
+      desiredProviderInstance?.driver === preferredProvider
+        ? providerStartOptionsFromInstance(desiredProviderInstance)
         : undefined,
     );
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
@@ -1942,7 +1970,7 @@ const make = Effect.gen(function* () {
       threadId,
       providerInstanceId: desiredProviderInstanceId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-      modelSelection: desiredModelSelection,
+      modelSelection: desiredRoutedModelSelection,
       providerOptions: resolvedProviderOptions,
       ...(options?.enableComputerControl !== undefined
         ? { enableComputerControl: options.enableComputerControl }
@@ -2031,16 +2059,12 @@ const make = Effect.gen(function* () {
       const providerChanged =
         providerRebindRequested ||
         activeSessionBeforeEnsure?.provider !== preferredProvider ||
-        (requestedModelSelection !== undefined &&
-          requestedModelSelection.provider !== boundProvider);
-      const currentProviderInstanceId =
-        activeSession?.providerInstanceId ??
-        thread.session?.providerInstanceId ??
-        thread.modelSelection.instanceId ??
-        thread.modelSelection.provider;
+        (requestedModelSelection !== undefined && desiredProvider !== boundProvider);
+      const currentActiveProviderInstanceId =
+        activeSession?.providerInstanceId ?? currentProviderInstanceId;
       const providerInstanceChanged =
         requestedModelSelection !== undefined &&
-        desiredProviderInstanceId !== currentProviderInstanceId;
+        desiredProviderInstanceId !== currentActiveProviderInstanceId;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -2082,7 +2106,7 @@ const make = Effect.gen(function* () {
         requestedComputerControl !== previousComputerControl;
       const previousProviderOptions = threadProviderOptions.get(threadId);
       const providerOptionsChanged = shouldRestartForProviderOptionsChange({
-        requestedProvider: desiredModelSelection.provider,
+        requestedProvider: desiredRoutedModelSelection.provider,
         previousProviderOptions,
         requestedProviderOptions: resolvedProviderOptions,
       });
@@ -2159,7 +2183,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange ||
         runtimeModeChanged ||
         shouldDropResumeCursorForProviderOptionsChange({
-          requestedProvider: desiredModelSelection.provider,
+          requestedProvider: desiredRoutedModelSelection.provider,
           providerOptionsChanged,
           previousProviderOptions,
           requestedProviderOptions: resolvedProviderOptions,
@@ -2170,7 +2194,7 @@ const make = Effect.gen(function* () {
         threadId,
         existingSessionThreadId,
         currentProvider,
-        desiredProvider: desiredModelSelection.provider,
+        desiredProvider: desiredRoutedModelSelection.provider,
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode,
         runtimeModeChanged,

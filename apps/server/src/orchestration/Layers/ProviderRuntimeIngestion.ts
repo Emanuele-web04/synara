@@ -2026,7 +2026,7 @@ const make = Effect.gen(function* () {
               ? identity.model === parentThread.modelSelection.model
                 ? parentThread.modelSelection
                 : {
-                    provider: parentThread.modelSelection.provider,
+                    ...parentThread.modelSelection,
                     model: identity.model,
                   }
               : undefined;

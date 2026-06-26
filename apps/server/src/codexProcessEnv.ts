@@ -689,7 +689,7 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
         continue;
       }
-      if (accountSegment && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
+      if (accountSegment && shadowHomePath && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);

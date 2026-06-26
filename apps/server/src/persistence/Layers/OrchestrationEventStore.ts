@@ -21,6 +21,7 @@ import {
   toPersistenceSqlOrDecodeError,
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
@@ -139,6 +140,7 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   ) {
     payloadWithNormalizedModelSelection().defaultModelSelection = normalizePersistedModelSelection(
       originalPayload.defaultModelSelection,
+      settings,
     );
   }
 
@@ -148,6 +150,7 @@ function normalizeLegacyEventRow(row: ParsedPersistedEventRow): ParsedPersistedE
   ) {
     payloadWithNormalizedModelSelection().modelSelection = normalizePersistedModelSelection(
       originalPayload.modelSelection,
+      settings,
     );
   }
 
@@ -398,6 +401,12 @@ export const buildReadEventRowsFromSequenceQuery = (
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const maybeServerSettings = yield* Effect.serviceOption(ServerSettingsService);
+  const readSettingsForModelSelectionDecode = Option.match(maybeServerSettings, {
+    onNone: () => Effect.succeed(undefined as ServerSettings | undefined),
+    onSome: (serverSettings) =>
+      serverSettings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
+  });
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,

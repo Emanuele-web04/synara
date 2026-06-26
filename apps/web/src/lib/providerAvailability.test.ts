@@ -5,6 +5,7 @@ import {
   findProviderStatus,
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
+  providerUnavailableReason,
   resolveAvailableProviderPreference,
   resolveProviderSendAvailability,
   resolveProviderSendAvailabilityWithRefresh,
@@ -181,9 +182,22 @@ describe("isProviderUsable", () => {
     expect(
       isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "unauthenticated" }),
     ).toBe(false);
-    expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
-      true,
-    );
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "warning",
+        authStatus: "authenticated",
+      }),
+    ).toBe(false);
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "ready",
+        authStatus: "authenticated",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -299,6 +313,20 @@ describe("resolveProviderSendAvailabilityWithRefresh", () => {
   });
 });
 
+describe("providerUnavailableReason", () => {
+  it("uses provider instance display names when available", () => {
+    expect(
+      providerUnavailableReason({
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        displayName: "Claude Work",
+        authStatus: "unauthenticated",
+      }),
+    ).toBe("Claude Work is not authenticated yet.");
+  });
+});
+
 describe("findProviderStatus", () => {
   it("selects the exact provider instance when multiple instances share a provider", () => {
     const statuses: ServerProviderStatus[] = [
@@ -330,6 +358,32 @@ describe("findProviderStatus", () => {
     ).toMatchObject({
       usable: false,
       unavailableReason: "Work account is disabled.",
+    });
+  });
+
+  it("does not fall back to the default provider status when an explicit instance is missing", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toBeNull();
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Provider status is still loading.",
     });
   });
 });

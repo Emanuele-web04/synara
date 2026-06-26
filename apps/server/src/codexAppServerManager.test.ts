@@ -1501,18 +1501,18 @@ describe("buildCodexProcessEnv", () => {
   });
 
   it("does not link shared private auth files into account overlays without a shadow home", async () => {
-    const sharedHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-shared-"));
+    const accountHome = mkdtempSync(path.join(os.tmpdir(), "synara-codex-account-"));
     const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "synara-runtime-home-"));
     try {
-      const sharedSessionsDir = path.join(sharedHome, "sessions");
-      mkdirSync(sharedSessionsDir, { recursive: true });
-      writeFileSync(path.join(sharedHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
-      writeFileSync(path.join(sharedHome, "auth.json"), '{"source":"shared"}', "utf8");
-      writeFileSync(path.join(sharedHome, "models_cache.json"), '{"models":["shared"]}', "utf8");
+      const accountSessionsDir = path.join(accountHome, "sessions");
+      mkdirSync(accountSessionsDir, { recursive: true });
+      writeFileSync(path.join(accountHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(accountHome, "auth.json"), '{"source":"account"}', "utf8");
+      writeFileSync(path.join(accountHome, "models_cache.json"), '{"models":["account"]}', "utf8");
 
       const env = await buildCodexProcessEnv({
         env: { SYNARA_HOME: runtimeHome },
-        homePath: sharedHome,
+        homePath: accountHome,
         accountId: "work",
         platform: "darwin",
       });
@@ -1523,11 +1523,16 @@ describe("buildCodexProcessEnv", () => {
       }
       expect(codexHome).toContain(path.join("codex-home-overlay", "accounts"));
       expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(sharedSessionsDir);
-      expect(existsSync(path.join(codexHome, "auth.json"))).toBe(false);
-      expect(existsSync(path.join(codexHome, "models_cache.json"))).toBe(false);
+      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(accountSessionsDir);
+      expect(readlinkSync(path.join(codexHome, "auth.json"))).toBe(
+        path.join(accountHome, "auth.json"),
+      );
+      expect(readlinkSync(path.join(codexHome, "models_cache.json"))).toBe(
+        path.join(accountHome, "models_cache.json"),
+      );
+      expect(readFileSync(path.join(codexHome, "auth.json"), "utf8")).toContain("account");
     } finally {
-      rmSync(sharedHome, { recursive: true, force: true });
+      rmSync(accountHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
@@ -3205,14 +3210,14 @@ describe("thread checkpoint control", () => {
         "getOrCreateDiscoverySession",
       )
       .mockResolvedValue(context);
-    const providerOptions = { codex: { binaryPath: "/custom/codex", homePath: "/custom/archive" } };
+    const codexOptions = { binaryPath: "/custom/codex", homePath: "/custom/archive" };
     sendRequest.mockResolvedValue({ thread: { id: "external", turns: [] } });
     await manager.readExternalThread({
       externalThreadId: "external",
       cwd: "/repo",
-      providerOptions,
+      codexOptions,
     });
-    expect(discovery).toHaveBeenCalledWith("/repo", providerOptions.codex);
+    expect(discovery).toHaveBeenCalledWith("/repo", codexOptions);
   });
   it("does not spawn a fork runtime after import cancellation during version discovery", async () => {
     const { manager, sendRequest } = createThreadControlHarness();

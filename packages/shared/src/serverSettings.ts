@@ -3,10 +3,19 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   type ModelSelection,
   type ProviderStartOptions,
+  type ProviderKind,
   type ServerSettings,
   type ServerSettingsPatch,
 } from "@synara/contracts";
 import { deepMerge, type DeepPartial } from "./Struct";
+import { deriveProviderInstances } from "./providerInstances";
+
+function defaultModelForProvider(provider: ProviderKind): string | undefined {
+  // OMP resolves its model through role config, so a provider switch keeps the
+  // current model rather than inventing a default.
+  if (provider === "omp") return undefined;
+  return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
+}
 
 function shouldReplaceTextGenerationModelSelection(
   patch: ServerSettingsPatch["textGenerationModelSelection"] | undefined,
@@ -22,26 +31,35 @@ export function applyServerSettingsPatch(
   patch: ServerSettingsPatch,
 ): ServerSettings {
   const selectionPatch = patch.textGenerationModelSelection;
-  const next = deepMerge(current, patch as DeepPartial<ServerSettings>);
+  const merged = deepMerge(current, patch as DeepPartial<ServerSettings>);
+  const next: ServerSettings =
+    patch.providerInstances !== undefined
+      ? { ...merged, providerInstances: patch.providerInstances }
+      : merged;
   if (!selectionPatch) {
     return next;
   }
 
-  const provider = selectionPatch.provider ?? current.textGenerationModelSelection.provider;
-  const instanceId =
+  const patchedInstanceId =
     selectionPatch.instanceId ??
     (selectionPatch.provider &&
     selectionPatch.provider !== current.textGenerationModelSelection.provider
       ? selectionPatch.provider
       : current.textGenerationModelSelection.instanceId);
+  const patchedInstance =
+    patchedInstanceId !== undefined
+      ? deriveProviderInstances(next).find((instance) => instance.instanceId === patchedInstanceId)
+      : undefined;
+  const provider =
+    patchedInstance?.driver ??
+    selectionPatch.provider ??
+    current.textGenerationModelSelection.provider;
+  const instanceId = patchedInstance?.instanceId ?? patchedInstanceId;
+  const providerChanged = provider !== current.textGenerationModelSelection.provider;
   const model =
     selectionPatch.model ??
-    (selectionPatch.provider &&
-    selectionPatch.provider !== "pi" &&
-    selectionPatch.provider !== "omp" &&
-    selectionPatch.provider !== current.textGenerationModelSelection.provider
-      ? DEFAULT_MODEL_BY_PROVIDER[selectionPatch.provider]
-      : current.textGenerationModelSelection.model);
+    (providerChanged ? defaultModelForProvider(provider) : undefined) ??
+    current.textGenerationModelSelection.model;
   const options = shouldReplaceTextGenerationModelSelection(selectionPatch)
     ? selectionPatch.options
     : (selectionPatch.options ?? current.textGenerationModelSelection.options);

@@ -15,6 +15,11 @@ import {
   type ThreadId,
 } from "@synara/contracts";
 import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
+import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
 } from "@synara/shared/threadWorkspace";
@@ -111,7 +116,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
     readonly externalId: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const claudeSessionInfo = yield* Effect.tryPromise({
       try: async () => {
         const { getSessionInfo } = await loadClaudeAgentSdk();
@@ -150,6 +157,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
     readonly prefetchedSnapshot?: ProviderThreadSnapshot | null;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
     const readExternalThread = adapter.readExternalThread;
@@ -161,6 +169,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : yield* readExternalThread!({
             externalThreadId: input.externalId,
             ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
+            ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           }).pipe(Effect.catch(() => Effect.succeed(null)));
     const externalCwd = snapshot?.cwd?.trim();
     if (!externalCwd) return null;
@@ -265,8 +274,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly cwd: string | undefined;
     readonly externalId: string;
     readonly importedAt: string;
+    readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const sessionMessages = yield* Effect.tryPromise({
       try: async () => {
         const { getSessionMessages } = await loadClaudeAgentSdk();
@@ -399,6 +410,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : [],
     });
     const externalId = body.externalId.trim();
+    const providerOptions = yield* resolveThreadProviderOptions({
+      modelSelection: thread.modelSelection,
+    });
 
     // OMP sessions are file-backed JSONL transcripts. Read the session file
     // once up front: it supplies the transcript, the stored cwd for env
@@ -417,6 +431,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
               .readExternalThread({
                 externalThreadId: externalId,
                 ...(cwd ? { cwd } : {}),
+                ...(providerOptions ? { providerOptions } : {}),
               })
               .pipe(
                 Effect.mapError((cause) =>
@@ -440,6 +455,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       ompLastUsedModel !== undefined
         ? {
             provider: "omp",
+            ...(thread.modelSelection.instanceId
+              ? { instanceId: thread.modelSelection.instanceId }
+              : {}),
             model: ompLastUsedModel.model as ModelSlug,
             ...(ompThinkingLevel ? { options: { thinkingLevel: ompThinkingLevel } } : {}),
           }
@@ -459,6 +477,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
             ...(thread.modelSelection.provider === "omp"
               ? { prefetchedSnapshot: ompImportSnapshot }
               : {}),
+            ...(providerOptions ? { providerOptions } : {}),
           })
         : null;
 
@@ -484,6 +503,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
+        ...(providerOptions ? { providerOptions } : {}),
       });
     }
 
@@ -555,6 +575,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         threadId: thread.id,
         status: mapProviderSessionStatusToOrchestrationStatus(session.status),
         providerName: session.provider,
+        providerInstanceId: session.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.runtimeMode,
         activeTurnId: null,
         lastError: session.lastError ?? null,

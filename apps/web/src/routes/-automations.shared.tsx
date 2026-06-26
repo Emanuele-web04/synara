@@ -20,7 +20,11 @@ import { automationRequiresTargetThread } from "@synara/shared/automationMode";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { getProviderInstanceOptions, useAppSettings } from "~/appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "~/appSettings";
 import type { Thread } from "~/types";
 import {
   ComposerPickerMenuPopup,
@@ -867,7 +871,10 @@ export function AutomationModelPicker({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
-  const selectedProviderInstanceId = value.instanceId ?? value.provider;
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
+    [settings, value.instanceId, value.provider],
+  );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [value.provider]: value.model }),
     [value.model, value.provider],
@@ -879,6 +886,7 @@ export function AutomationModelPicker({
   });
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
@@ -920,6 +928,7 @@ export function AutomationModelPicker({
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}

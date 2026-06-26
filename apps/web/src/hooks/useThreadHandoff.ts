@@ -3,9 +3,8 @@
 // Layer: Web hook
 // Exports: useThreadHandoff
 
-import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { type ProviderKind } from "@synara/contracts";
+import { type ProviderInstanceId, type ProviderKind } from "@synara/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
 import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
@@ -13,12 +12,10 @@ import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
   canCreateThreadHandoff,
-  isEligibleHandoffTargetProvider,
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
 import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
-import { serverSettingsQueryOptions } from "../lib/serverReactQuery";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -30,11 +27,11 @@ export function useThreadHandoff() {
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
-  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
 
   const createThreadHandoff = async (
     thread: Thread,
     targetProvider: ProviderKind,
+    targetProviderInstanceId?: ProviderInstanceId,
   ): Promise<Thread["id"]> => {
     const api = readNativeApi();
     if (!api) {
@@ -49,19 +46,24 @@ export function useThreadHandoff() {
     if (!canCreateThreadHandoff({ thread })) {
       throw new Error("This thread cannot be handed off yet.");
     }
+    const sourceProviderInstanceId =
+      thread.session?.providerInstanceId ??
+      thread.modelSelection.instanceId ??
+      thread.modelSelection.provider;
+    const targetInstanceId = targetProviderInstanceId ?? targetProvider;
+    if (
+      targetProvider === thread.modelSelection.provider &&
+      targetInstanceId === sourceProviderInstanceId
+    ) {
+      throw new Error("This handoff target is not available for the current thread.");
+    }
     const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: targetProvider,
+      ...(targetProviderInstanceId ? { instanceId: targetProviderInstanceId } : {}),
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
-    if (
-      !isEligibleHandoffTargetProvider({
-        sourceProvider: thread.modelSelection.provider,
-        targetProvider,
-        targetProviderEnabled: serverSettingsQuery.data?.providers[targetProvider].enabled,
-        targetProviderStatus: targetAvailability.status,
-      })
-    ) {
+    if (!targetAvailability.usable) {
       throw new Error(
         targetAvailability.usable
           ? "This handoff target is not available for the current thread."
@@ -86,6 +88,7 @@ export function useThreadHandoff() {
       modelSelection: resolveThreadHandoffModelSelection({
         sourceThread: thread,
         targetProvider,
+        targetProviderInstanceId,
         projectDefaultModelSelection: project.defaultModelSelection,
         stickyModelSelectionByProvider,
       }),

@@ -55,7 +55,7 @@ type ProviderUpdateFilterInput = {
   readonly providers: ReadonlyArray<ServerProviderStatus>;
   readonly hiddenProviders?: ReadonlyArray<ProviderKind>;
   readonly serverSettings?:
-    | Pick<ServerSettings, "providers" | "enableProviderUpdateChecks">
+    | Pick<ServerSettings, "providers" | "providerInstances" | "enableProviderUpdateChecks">
     | null
     | undefined;
   readonly oneClickOnly?: boolean;
@@ -66,7 +66,7 @@ type ProviderUpdateVisibilityInput = {
   readonly hiddenProviders?: ReadonlyArray<ProviderKind>;
   readonly hiddenProviderSet?: ReadonlySet<ProviderKind>;
   readonly serverSettings?:
-    | Pick<ServerSettings, "providers" | "enableProviderUpdateChecks">
+    | Pick<ServerSettings, "providers" | "providerInstances" | "enableProviderUpdateChecks">
     | null
     | undefined;
   readonly oneClickOnly?: boolean;
@@ -99,13 +99,23 @@ export function shouldPromptProviderUpdate(provider: ServerProviderStatus): bool
 }
 
 function isProviderEnabled(
-  provider: ProviderKind,
-  serverSettings: Pick<ServerSettings, "providers"> | null | undefined,
+  provider: ServerProviderStatus,
+  serverSettings: Pick<ServerSettings, "providers" | "providerInstances"> | null | undefined,
 ): boolean {
   if (!serverSettings) {
     return false;
   }
-  return serverSettings.providers[provider]?.enabled !== false;
+  const instanceId = provider.instanceId ?? provider.provider;
+  const instance = serverSettings.providerInstances[instanceId];
+  if (instance) {
+    const config = instance.config;
+    const configEnabled =
+      config && typeof config === "object" && !Array.isArray(config)
+        ? (config as Record<string, unknown>).enabled
+        : undefined;
+    return instance.enabled !== false && configEnabled !== false;
+  }
+  return serverSettings.providers[provider.provider]?.enabled !== false;
 }
 
 // Central visibility gate used by both global toasts and Settings update rows.
@@ -118,7 +128,7 @@ export function shouldShowProviderUpdateStatus(input: ProviderUpdateVisibilityIn
     advisory.status !== "behind_latest" ||
     advisory.latestVersion === null ||
     hiddenProviderSet.has(input.provider.provider) ||
-    !isProviderEnabled(input.provider.provider, input.serverSettings)
+    !isProviderEnabled(input.provider, input.serverSettings)
   ) {
     return false;
   }
@@ -158,7 +168,10 @@ export function providerUpdateNotificationKey(
 ): string | null {
   const parts = providers
     .map((provider) =>
-      [provider.provider, provider.versionAdvisory?.latestVersion ?? "unknown"].join(":"),
+      [
+        provider.instanceId ?? provider.provider,
+        provider.versionAdvisory?.latestVersion ?? "unknown",
+      ].join(":"),
     )
     .toSorted();
 

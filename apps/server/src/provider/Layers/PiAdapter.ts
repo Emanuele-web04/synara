@@ -218,6 +218,7 @@ export interface PiBashProcessSupervisor {
 
 export interface PiBashProcessSupervisorOptions {
   readonly getShellConfig: (shellPath?: string) => PiShellConfig;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly spawnProcess?: (
     command: string,
     args: ReadonlyArray<string>,
@@ -279,7 +280,10 @@ export function makePiBashProcessSupervisor(
           cwd,
           env: buildProviderChildEnvironment({
             provider: "pi",
-            baseEnv: execution.env ?? process.env,
+            baseEnv: {
+              ...(execution.env ?? process.env),
+              ...(options.environment ?? {}),
+            },
           }),
           stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
         },
@@ -2750,6 +2754,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const piSdk = yield* loadPiSdk("session/start");
         const processSupervisor = makePiBashProcessSupervisor({
           getShellConfig: () => piSdk.getShellConfig(),
+          ...(input.providerOptions?.pi?.environment
+            ? { environment: input.providerOptions.pi.environment }
+            : {}),
           ...(options?.spawnProcess ? { spawnProcess: options.spawnProcess } : {}),
           ...(options?.teardownProcessTree
             ? { teardownProcessTree: options.teardownProcessTree }
@@ -2876,6 +2883,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const resumeCursor = getSessionFile(runtime.session);
         const session: ProviderSession = {
           provider: PROVIDER,
+          ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
           status: "ready",
           runtimeMode: input.runtimeMode,
           cwd,

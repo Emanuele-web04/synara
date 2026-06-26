@@ -82,6 +82,7 @@ import {
   PICKER_PANEL_PLAIN_SEARCH_INPUT_CLASS_NAME,
 } from "./pickerPanelStyles";
 import {
+  type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderInstanceLabel,
   resolveProviderModelLabel,
@@ -108,6 +109,7 @@ type ComposerModelPickerProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
   selectedProviderInstanceId?: ProviderInstanceId;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   // Narrow-composer degradation: drop the model name (provider icon stays)
   // and/or the effort/status label; both remain available to assistive tech.
   hideModelLabel?: boolean;
@@ -248,6 +250,8 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
   const selectedInstanceLabel = resolveProviderInstanceLabel({
     provider: activeProvider,
@@ -276,27 +280,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     props.providers,
   );
 
-  const rows =
-    tab === STARRED_TAB
-      ? buildStarredTabRows({
-          starredModels: usableStarredModels,
-          modelOptionsByProvider: props.modelOptionsByProvider,
-          query: normalizedQuery,
-          current: {
-            provider: activeProvider,
-            model: props.model,
-            ...resolveStarredTraits(currentTraitSelection),
-          },
-          effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
-        })
-      : buildProviderTabRows({
-          provider: tab,
-          options: props.modelOptionsByProvider[tab],
-          query: normalizedQuery,
-          selectedModel: tab === activeProvider ? props.model : null,
-        });
-  const starredModelSlots = new Set(starredModels.map(starredModelSlotKey));
-
   const instancesFor = (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
     (props.providerInstances ?? []).filter((instance) => instance.provider === provider);
   const selectedInstanceIdFor = (provider: ProviderKind): ProviderInstanceId => {
@@ -314,6 +297,31 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
       provider
     );
   };
+
+  const modelOptionsFor = (provider: ProviderKind): ReadonlyArray<ProviderModelOption> =>
+    props.modelOptionsByProviderInstance?.[selectedInstanceIdFor(provider)] ??
+    props.modelOptionsByProvider[provider];
+
+  const rows =
+    tab === STARRED_TAB
+      ? buildStarredTabRows({
+          starredModels: usableStarredModels,
+          modelOptionsByProvider: props.modelOptionsByProvider,
+          query: normalizedQuery,
+          current: {
+            provider: activeProvider,
+            model: props.model,
+            ...resolveStarredTraits(currentTraitSelection),
+          },
+          effortLevelsFor: (provider, model) => traitSelectionFor(provider, model).effortLevels,
+        })
+      : buildProviderTabRows({
+          provider: tab,
+          options: modelOptionsFor(tab),
+          query: normalizedQuery,
+          selectedModel: tab === activeProvider ? props.model : null,
+        });
+  const starredModelSlots = new Set(starredModels.map(starredModelSlotKey));
 
   // Commit a row: `patch` carries the traits to apply on top of the provider's options.
   // `keepOpen` leaves the panel up so the footer slider can tune the model just picked.
@@ -525,7 +533,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
                       const model =
                         tab === activeProvider
                           ? props.model
-                          : props.modelOptionsByProvider[tab][0]?.slug;
+                          : modelOptionsFor(tab)[0]?.slug;
                       if (!model) return;
                       props.onProviderModelChange(tab, model, { instanceId: value });
                       setMenuOpen(false);
@@ -595,6 +603,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
           </div>
           <ComposerModelPickerTraitRows
             provider={props.provider}
+            providerInstanceId={props.selectedProviderInstanceId}
             threadId={threadId}
             model={props.model}
             runtimeModel={props.runtimeModel}
