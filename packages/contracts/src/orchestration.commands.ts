@@ -50,6 +50,7 @@ import {
   OrchestrationThreadActivity,
   OrchestrationThreadPullRequest,
   PinnedMessageLabel,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectScript,
   ProviderApprovalDecision,
@@ -69,6 +70,14 @@ import {
   TurnDispatchMode,
   UploadChatAttachment,
 } from "./orchestration.core";
+
+const ThreadTurnStartAttachments = Schema.Array(ChatAttachment).check(
+  Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+);
+
+const ClientThreadTurnStartAttachments = Schema.Array(UploadChatAttachment).check(
+  Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+);
 
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),
@@ -355,7 +364,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(ChatAttachment),
+    attachments: ThreadTurnStartAttachments,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
     source: Schema.optional(OrchestrationMessageSource),
@@ -383,7 +392,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(UploadChatAttachment),
+    attachments: ClientThreadTurnStartAttachments,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
     source: Schema.optional(OrchestrationMessageSource),
