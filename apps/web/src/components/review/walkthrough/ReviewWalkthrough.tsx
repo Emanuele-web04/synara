@@ -1,5 +1,6 @@
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import type {
+  ModelSelection,
   ReviewChangedFile,
   ReviewSourceRef,
   ReviewTargetKey,
@@ -12,7 +13,7 @@ import type { ReactElement } from "react";
 import { reviewGenerateWalkthroughQueryOptions } from "~/lib/reviewReactQuery";
 import { getRenderablePatch, resolveFileDiffPath } from "~/lib/diffRendering";
 import { useTheme } from "~/hooks/useTheme";
-import { useAppSettings } from "~/appSettings";
+import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import { DiffWorkerPoolProvider } from "../../DiffWorkerPoolProvider";
 import { useReviewViewedFiles } from "../reviewViewedFiles";
 import { ReviewCommentThread } from "../ReviewCommentThread";
@@ -75,6 +76,17 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
   const [collapsedFilePaths, setCollapsedFilePaths] = useState<ReadonlySet<string>>(
     () => new Set(),
   );
+  const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const modelSelection = useMemo<ModelSelection | undefined>(
+    () =>
+      settings.textGenerationModel && settings.textGenerationProvider
+        ? {
+            provider: settings.textGenerationProvider,
+            model: settings.textGenerationModel,
+          }
+        : undefined,
+    [settings.textGenerationModel, settings.textGenerationProvider],
+  );
 
   const walkthroughQuery = useQuery(
     reviewGenerateWalkthroughQueryOptions({
@@ -83,6 +95,12 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
       source: props.source,
       patchSignature: props.patchSignature,
       ...(props.expectedHeadSha !== null ? { expectedHeadSha: props.expectedHeadSha } : {}),
+      ...(providerOptions ? { providerOptions } : {}),
+      ...(modelSelection ? { modelSelection } : {}),
+      ...(settings.textGenerationModel
+        ? { textGenerationModel: settings.textGenerationModel }
+        : {}),
+      ...(settings.codexHomePath ? { codexHomePath: settings.codexHomePath } : {}),
     }),
   );
 

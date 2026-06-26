@@ -52,11 +52,16 @@ export function PullRequestList(props: {
   } | null>(null);
   const serverFilters = useMemo(() => toReviewServerListFilters(activeFilters), [activeFilters]);
   const serverSort = sortId === "updated" ? undefined : sortId;
+  const hasRefinement = activeFilters.length > 0 || search.trim().length > 0;
   const listScopeKey = useMemo(
     () => JSON.stringify([props.cwd, serverSearch.trim(), serverFilters, serverSort]),
     [props.cwd, serverSearch, serverFilters, serverSort],
   );
   const resultLimit = resultLimitState?.scopeKey === listScopeKey ? resultLimitState.limit : null;
+  const facetBaseQuery = useQuery({
+    ...reviewListPullRequestsQueryOptions({ cwd: props.cwd }),
+    enabled: props.cwd !== null && hasRefinement,
+  });
   const pullRequestsQuery = useQuery({
     ...reviewListPullRequestsQueryOptions({
       cwd: props.cwd,
@@ -70,13 +75,14 @@ export function PullRequestList(props: {
   const clientSearch = search.trim() === serverSearch.trim() ? "" : search;
 
   const allPullRequests = pullRequestsQuery.data?.pullRequests ?? EMPTY_PULL_REQUESTS;
-  const facetItems = useMemo(() => {
-    const basePullRequests =
-      queryClient.getQueryData<ReviewListPullRequestsResult>(
-        reviewQueryKeys.pullRequests({ cwd: props.cwd }),
-      )?.pullRequests ?? [];
-    return uniqueReviewPullRequests([...basePullRequests, ...allPullRequests]);
-  }, [queryClient, props.cwd, allPullRequests]);
+  const facetItems = useMemo(
+    () =>
+      uniqueReviewPullRequests([
+        ...(facetBaseQuery.data?.pullRequests ?? EMPTY_PULL_REQUESTS),
+        ...allPullRequests,
+      ]),
+    [facetBaseQuery.data?.pullRequests, allPullRequests],
+  );
   const filterOptionsByFieldId = useMemo(
     () => buildReviewPullFilterOptions(facetItems),
     [facetItems],
@@ -129,7 +135,6 @@ export function PullRequestList(props: {
     });
   };
 
-  const hasRefinement = activeFilters.length > 0 || search.trim().length > 0;
   const clearRefinement = useCallback(() => {
     setActiveFilters([]);
     setSearch("");

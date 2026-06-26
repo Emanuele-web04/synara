@@ -7,12 +7,14 @@ import type {
   ReviewPullRequestSurfaceInput,
   ReviewPullRequestSurfaceResult,
   ReviewSourceRef,
+  ReviewWalkthrough,
 } from "@t3tools/contracts";
 
 import {
   applyReviewPullRequestSurfacePayload,
   applyReviewUpdatedPayload,
   buildReviewListPullRequestsRequest,
+  reviewGenerateWalkthroughQueryOptions,
   reviewQueryKeys,
   reviewSourceKey,
 } from "./reviewReactQuery";
@@ -52,6 +54,37 @@ const REVIEW_CHANGESET = {
   patch: "diff --git a/a.ts b/a.ts\n",
   files: [],
 } satisfies ReviewChangesetResult;
+const REVIEW_WALKTHROUGH = {
+  prologue: {
+    motivation: "Make the walkthrough durable.",
+    outcome: "Reviewers can return without regenerating it.",
+    keyChanges: [
+      {
+        summary: "Cache generated walkthrough",
+        description: "Store the generated walkthrough result under the current patch signature.",
+      },
+    ],
+    focusAreas: [],
+    complexity: { level: "low", reasoning: "Single generated artifact." },
+  },
+  chapters: [
+    {
+      id: "chapter-cache",
+      title: "Cache walkthrough output",
+      summary: "Persist generated walkthrough data.",
+      intent: "Avoid rerunning the generation flow after navigation.",
+      anchor: "review cache",
+      risk: "minor",
+      hunkRefs: [{ filePath: "apps/server/src/review/Layers/ReviewSource.ts", oldStart: 1 }],
+      files: ["apps/server/src/review/Layers/ReviewSource.ts"],
+      status: "active",
+    },
+  ],
+  reviewedHeadSha: "head-sha-1",
+  patchSignature: "patch-sig-1",
+  patchSource: "github",
+  generatedAt: "2026-06-16T00:00:00.000Z",
+} satisfies ReviewWalkthrough;
 
 describe("reviewQueryKeys.pullRequests", () => {
   it("normalizes equivalent server-side filter values into the same cache key", () => {
@@ -233,6 +266,105 @@ describe("applyReviewUpdatedPayload", () => {
 
     expect(queryClient.getQueryState(laneKey)?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(listKey)?.isInvalidated).toBe(true);
+  });
+
+  it("hydrates walkthrough updates with the query result shape", () => {
+    const queryClient = new QueryClient();
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestWalkthrough",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: REVIEW_WALKTHROUGH,
+      fetchedAt: 123,
+    });
+
+    expect(
+      queryClient.getQueryData(
+        reviewQueryKeys.walkthrough("/repo", "42", "patch-sig-1", "head-sha-1"),
+      ),
+    ).toEqual({
+      walkthrough: REVIEW_WALKTHROUGH,
+      reviewedHeadSha: "head-sha-1",
+      patchSignature: "patch-sig-1",
+      patchSource: "github",
+      headMoved: false,
+      patchChanged: false,
+    });
+  });
+
+  it("hydrates active walkthrough queries with generation settings", () => {
+    const queryClient = new QueryClient();
+    const settingsKey = reviewQueryKeys.walkthrough(
+      "/repo",
+      "42",
+      "patch-sig-1",
+      "head-sha-1",
+      { textGenerationModel: "openai/gpt-5" },
+    );
+    queryClient.setQueryData(settingsKey, {
+      walkthrough: REVIEW_WALKTHROUGH,
+      reviewedHeadSha: "head-sha-1",
+      patchSignature: "patch-sig-1",
+      patchSource: "github",
+      headMoved: false,
+      patchChanged: false,
+    });
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestWalkthrough",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: REVIEW_WALKTHROUGH,
+      fetchedAt: 123,
+    });
+
+    expect(queryClient.getQueryData(settingsKey)).toEqual({
+      walkthrough: REVIEW_WALKTHROUGH,
+      reviewedHeadSha: "head-sha-1",
+      patchSignature: "patch-sig-1",
+      patchSource: "github",
+      headMoved: false,
+      patchChanged: false,
+    });
+  });
+});
+
+describe("reviewGenerateWalkthroughQueryOptions", () => {
+  it("keeps generated walkthroughs in memory long enough for review tab switching", () => {
+    const options = reviewGenerateWalkthroughQueryOptions({
+      cwd: "/repo",
+      reference: "42",
+      source: REVIEW_SOURCE,
+      patchSignature: "patch-sig-1",
+      expectedHeadSha: "head-sha-1",
+    });
+
+    expect(options.staleTime).toBe(Infinity);
+    expect(options.gcTime).toBe(60 * 60_000);
+  });
+
+  it("keys walkthrough results by generation settings", () => {
+    const baseOptions = reviewGenerateWalkthroughQueryOptions({
+      cwd: "/repo",
+      reference: "42",
+      source: REVIEW_SOURCE,
+      patchSignature: "patch-sig-1",
+      expectedHeadSha: "head-sha-1",
+      textGenerationModel: "gpt-5.4-mini",
+    });
+    const changedOptions = reviewGenerateWalkthroughQueryOptions({
+      cwd: "/repo",
+      reference: "42",
+      source: REVIEW_SOURCE,
+      patchSignature: "patch-sig-1",
+      expectedHeadSha: "head-sha-1",
+      textGenerationModel: "openai/gpt-5",
+    });
+
+    expect(changedOptions.queryKey).not.toEqual(baseOptions.queryKey);
   });
 });
 

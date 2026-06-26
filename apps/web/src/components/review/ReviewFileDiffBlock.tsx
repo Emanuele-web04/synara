@@ -65,7 +65,7 @@ export const ReviewFileDiffBlock = memo(function ReviewFileDiffBlockView(
         overflow: props.overflow ?? "scroll",
         theme: resolveDiffThemeName(props.theme),
         themeType: props.theme,
-        unsafeCSS: buildDiffPanelUnsafeCSS(props.theme),
+        unsafeCSS: buildDiffPanelUnsafeCSS(props.theme, { stickyHeaders: false }),
         enableGutterUtility: props.commentsEnabled ?? true,
         onGutterUtilityClick: handleGutterUtilityClick,
         ...(props.collapsed !== undefined ? { collapsed: props.collapsed } : {}),

@@ -5,11 +5,13 @@ import type {
   ReviewPullRequestOverview,
   ReviewPullRequestSummary,
   ReviewUpdatedPayload,
+  ReviewWalkthrough,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, Stream } from "effect";
 import { expect } from "vitest";
 
 import { GitHubCliError } from "../../git/Errors.ts";
+import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
 import {
   GitHubCli,
@@ -170,6 +172,14 @@ interface RecordedCacheWrite {
   readonly tokenIdentity: string;
 }
 
+interface RecordedWalkthroughWrite {
+  readonly repositoryId: string;
+  readonly reference: string;
+  readonly patchSignature: string;
+  readonly tokenIdentity: string;
+  readonly data: ReviewWalkthrough;
+}
+
 interface RecordedSyncCall {
   readonly cwd: string;
   readonly repositoryId: string;
@@ -217,6 +227,68 @@ function ghPr(
     labels: [],
     assignees: [],
     ...overrides,
+  };
+}
+
+function reviewOverview(): ReviewPullRequestOverview & GitHubReviewPullRequestOverview {
+  return {
+    detail: {
+      number: 42,
+      title: "Persist walkthrough output",
+      url: "https://github.com/acme/demo/pull/42",
+      state: "open",
+      isDraft: false,
+      author: "alice",
+      authorAvatarUrl: "https://avatars.example/alice.png",
+      baseBranch: "main",
+      headBranch: "feature/walkthrough-cache",
+      body: "Make walkthroughs durable.",
+      createdAt: "2026-06-16T00:00:00.000Z",
+      updatedAt: "2026-06-16T00:00:00.000Z",
+      additions: 1,
+      deletions: 0,
+      changedFiles: 1,
+      commitsCount: 1,
+      reviewDecision: null,
+      mergeable: "MERGEABLE",
+      checksStatus: "passing",
+      milestone: null,
+      labels: [],
+      assignees: [],
+      reviewers: [],
+    },
+    commits: [],
+    checks: [],
+  };
+}
+
+function generatedWalkthrough(): ReviewWalkthrough {
+  return {
+    prologue: {
+      motivation: "Make review walkthroughs durable.",
+      outcome: "Generated output is available after reload.",
+      keyChanges: [
+        {
+          summary: "Persist walkthrough output",
+          description: "The review surface can reuse generated guidance.",
+        },
+      ],
+      focusAreas: [],
+      complexity: { level: "low", reasoning: "Single cache write." },
+    },
+    chapters: [
+      {
+        id: "chapter-persistence",
+        title: "Persist the walkthrough",
+        summary: "Store the generated walkthrough in SQLite.",
+        intent: "Avoid regenerating the same PR walkthrough.",
+        anchor: "server review cache",
+        risk: "minor",
+        hunkRefs: [{ filePath: "src/walkthrough.ts", oldStart: 1 }],
+        files: ["src/walkthrough.ts"],
+        status: "active",
+      },
+    ],
   };
 }
 
@@ -692,6 +764,217 @@ function makeSurfaceLayer(
   };
 }
 
+function makeWalkthroughLayer(
+  options: {
+    readonly cachedWalkthrough?: ReviewWalkthrough;
+    readonly failWalkthroughWrite?: boolean;
+  } = {},
+) {
+  const patch = [
+    "diff --git a/src/walkthrough.ts b/src/walkthrough.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/walkthrough.ts",
+    "+++ b/src/walkthrough.ts",
+    "@@ -1,1 +1,2 @@",
+    " export const stable = true;",
+    "+export const persisted = true;",
+    "",
+  ].join("\n");
+  const overview = reviewOverview();
+  const generated = generatedWalkthrough();
+  const recorded = {
+    walkthroughReads: [] as Array<{
+      repositoryId: string;
+      reference: string;
+      patchSignature: string;
+      tokenIdentity: string;
+    }>,
+    walkthroughWrites: [] as RecordedWalkthroughWrite[],
+    generatedInputs: [] as Array<{ patch: string; prTitle?: string; prBody?: string }>,
+    published: [] as ReviewUpdatedPayload[],
+  };
+
+  const gitHubCli: GitHubCliShape = {
+    getAuthenticatedUser: () =>
+      Effect.succeed({
+        login: "tyler",
+        avatarUrl: "https://avatar.test",
+      }),
+    getReviewPullRequestOverview: () => Effect.succeed(overview),
+    getPullRequestDiff: () => Effect.succeed(patch),
+    getPullRequestHeadSha: () => Effect.succeed("head-sha-1"),
+    execute: () => unexpected("GitHubCli.execute"),
+    listRepositoryPullRequests: () => unexpected("GitHubCli.listRepositoryPullRequests"),
+    listOpenPullRequests: () => unexpected("GitHubCli.listOpenPullRequests"),
+    getPullRequest: () => unexpected("GitHubCli.getPullRequest"),
+    getReviewPullRequestHeader: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected header" })),
+    getReviewConversation: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected conversation" })),
+    getReviewTimeline: () =>
+      Effect.fail(new GitHubCliError({ operation: "test", detail: "unexpected timeline" })),
+    submitPullRequestReview: () => unexpected("GitHubCli.submitPullRequestReview"),
+    createPullRequestReviewWithComments: () =>
+      unexpected("GitHubCli.createPullRequestReviewWithComments"),
+    getPullRequestThreads: () => unexpected("GitHubCli.getPullRequestThreads"),
+    setPullRequestThreadResolution: () => unexpected("GitHubCli.setPullRequestThreadResolution"),
+    addPullRequestThreadReply: () => unexpected("GitHubCli.addPullRequestThreadReply"),
+    updatePullRequestThreadComment: () => unexpected("GitHubCli.updatePullRequestThreadComment"),
+    deletePullRequestThreadComment: () => unexpected("GitHubCli.deletePullRequestThreadComment"),
+    getRepositoryCloneUrls: () => unexpected("GitHubCli.getRepositoryCloneUrls"),
+    createPullRequest: () => unexpected("GitHubCli.createPullRequest"),
+    getDefaultBranch: () => unexpected("GitHubCli.getDefaultBranch"),
+    checkoutPullRequest: () => unexpected("GitHubCli.checkoutPullRequest"),
+    projectScopeAvailable: () => unexpected("GitHubCli.projectScopeAvailable"),
+    listProjects: () => unexpected("GitHubCli.listProjects"),
+    getProjectBoard: () => unexpected("GitHubCli.getProjectBoard"),
+    moveProjectCard: () => unexpected("GitHubCli.moveProjectCard"),
+    getRepositoryOwner: () => unexpected("GitHubCli.getRepositoryOwner"),
+  };
+
+  const gitCore: GitCoreShape = {
+    execute: () =>
+      Effect.succeed({
+        code: 0,
+        stdout: "/repo\n",
+        stderr: "",
+      }),
+    status: () => unexpectedEffect("GitCore.status"),
+    statusDetails: () => unexpectedEffect("GitCore.statusDetails"),
+    readWorkingTreePatch: () => unexpectedEffect("GitCore.readWorkingTreePatch"),
+    readUnstagedPatch: () => unexpectedEffect("GitCore.readUnstagedPatch"),
+    readStagedPatch: () => unexpectedEffect("GitCore.readStagedPatch"),
+    readBranchPatch: () => unexpectedEffect("GitCore.readBranchPatch"),
+    prepareCommitContext: () => unexpectedEffect("GitCore.prepareCommitContext"),
+    commit: () => unexpectedEffect("GitCore.commit"),
+    pushCurrentBranch: () => unexpectedEffect("GitCore.pushCurrentBranch"),
+    readRangeContext: () => unexpectedEffect("GitCore.readRangeContext"),
+    readRangeDiff: () => unexpectedEffect("GitCore.readRangeDiff"),
+    readConfigValue: () => unexpectedEffect("GitCore.readConfigValue"),
+    listBranches: () => unexpectedEffect("GitCore.listBranches"),
+    pullCurrentBranch: () => unexpectedEffect("GitCore.pullCurrentBranch"),
+    createWorktree: () => unexpectedEffect("GitCore.createWorktree"),
+    createDetachedWorktree: () => unexpectedEffect("GitCore.createDetachedWorktree"),
+    fetchPullRequestBranch: () => unexpectedEffect("GitCore.fetchPullRequestBranch"),
+    ensureRemote: () => unexpectedEffect("GitCore.ensureRemote"),
+    fetchRemoteBranch: () => unexpectedEffect("GitCore.fetchRemoteBranch"),
+    setBranchUpstream: () => unexpectedEffect("GitCore.setBranchUpstream"),
+    removeWorktree: () => unexpectedEffect("GitCore.removeWorktree"),
+    renameBranch: () => unexpectedEffect("GitCore.renameBranch"),
+    createBranch: () => unexpectedEffect("GitCore.createBranch"),
+    publishBranch: () => unexpectedEffect("GitCore.publishBranch"),
+    checkoutBranch: () => unexpectedEffect("GitCore.checkoutBranch"),
+    stashAndCheckout: () => unexpectedEffect("GitCore.stashAndCheckout"),
+    stashDrop: () => unexpectedEffect("GitCore.stashDrop"),
+    stashInfo: () => unexpectedEffect("GitCore.stashInfo"),
+    removeIndexLock: () => unexpectedEffect("GitCore.removeIndexLock"),
+    initRepo: () => unexpectedEffect("GitCore.initRepo"),
+    listLocalBranchNames: () => unexpectedEffect("GitCore.listLocalBranchNames"),
+    stageFiles: () => unexpectedEffect("GitCore.stageFiles"),
+    unstageFiles: () => unexpectedEffect("GitCore.unstageFiles"),
+  };
+
+  const cacheStore: ReviewCacheStoreShape = {
+    getPullRequestList: () => unexpected("ReviewCacheStore.getPullRequestList"),
+    upsertPullRequestList: () => unexpected("ReviewCacheStore.upsertPullRequestList"),
+    getPullRequestOverview: () => Effect.succeed(Option.none()),
+    upsertPullRequestOverview: () => Effect.void,
+    getPullRequestConversation: () => unexpected("ReviewCacheStore.getPullRequestConversation"),
+    upsertPullRequestConversation: () =>
+      unexpected("ReviewCacheStore.upsertPullRequestConversation"),
+    getPullRequestChangeset: () => Effect.succeed(Option.none()),
+    upsertPullRequestChangeset: () => Effect.void,
+    getPullRequestWalkthrough: (input) =>
+      Effect.sync(() => {
+        recorded.walkthroughReads.push(input);
+        return options.cachedWalkthrough === undefined
+          ? Option.none<ReviewWalkthrough>()
+          : Option.some(options.cachedWalkthrough);
+      }),
+    upsertPullRequestWalkthrough: (input) => {
+      if (options.failWalkthroughWrite === true) {
+        return Effect.fail(
+          new PersistenceSqlError({
+            operation: "ReviewCacheStore.upsertPullRequestWalkthrough:test",
+            detail: "sqlite locked",
+          }),
+        );
+      }
+      return Effect.sync(() => {
+        recorded.walkthroughWrites.push(input);
+      });
+    },
+  };
+
+  const gitManager: GitManagerShape = {
+    status: () => unexpectedEffect("GitManager.status"),
+    readWorkingTreeDiff: () => unexpectedEffect("GitManager.readWorkingTreeDiff"),
+    summarizeDiff: () => unexpectedEffect("GitManager.summarizeDiff"),
+    resolvePullRequest: () =>
+      Effect.succeed({
+        pullRequest: {
+          number: 42,
+          title: overview.detail.title,
+          url: overview.detail.url,
+          baseBranch: overview.detail.baseBranch,
+          headBranch: overview.detail.headBranch,
+          state: "open",
+        },
+      }),
+    preparePullRequestThread: () => unexpectedEffect("GitManager.preparePullRequestThread"),
+    handoffThread: () => unexpectedEffect("GitManager.handoffThread"),
+    runStackedAction: () => unexpectedEffect("GitManager.runStackedAction"),
+  };
+
+  const textGeneration: TextGenerationShape = {
+    generateCommitMessage: () => unexpectedEffect("TextGeneration.generateCommitMessage"),
+    generatePrContent: () => unexpectedEffect("TextGeneration.generatePrContent"),
+    generateDiffSummary: () => unexpectedEffect("TextGeneration.generateDiffSummary"),
+    generateReviewFindings: () => unexpectedEffect("TextGeneration.generateReviewFindings"),
+    generateWalkthrough: (input) =>
+      Effect.sync(() => {
+        recorded.generatedInputs.push({
+          patch: input.patch,
+          ...(input.prTitle !== undefined ? { prTitle: input.prTitle } : {}),
+          ...(input.prBody !== undefined ? { prBody: input.prBody } : {}),
+        });
+        return {
+          prologue: generated.prologue,
+          chapters: generated.chapters,
+        };
+      }),
+    generateBranchName: () => unexpectedEffect("TextGeneration.generateBranchName"),
+    generateThreadTitle: () => unexpectedEffect("TextGeneration.generateThreadTitle"),
+    generateThreadRecap: () => unexpectedEffect("TextGeneration.generateThreadRecap"),
+    generateAutomationIntent: () => unexpectedEffect("TextGeneration.generateAutomationIntent"),
+    evaluateAutomationCompletion: () =>
+      unexpectedEffect("TextGeneration.evaluateAutomationCompletion"),
+  };
+
+  const depsLayer = Layer.mergeAll(
+    Layer.succeed(GitHubCli, gitHubCli),
+    Layer.succeed(GitCore, gitCore),
+    Layer.succeed(GitManager, gitManager),
+    Layer.succeed(TextGeneration, textGeneration),
+    Layer.succeed(ReviewCacheStore, cacheStore),
+    Layer.succeed(ReviewPullRequestStore, fakePullRequestStore([])),
+    Layer.succeed(ReviewSync, fakeReviewSync),
+    Layer.succeed(ReviewUpdateBus, {
+      publish: (payload: ReviewUpdatedPayload) => {
+        recorded.published.push(payload);
+        return Effect.void;
+      },
+      stream: Stream.empty,
+    }),
+  );
+
+  return {
+    layer: ReviewSourceLive.pipe(Layer.provide(depsLayer)),
+    patch,
+    recorded,
+  };
+}
+
 it.effect("memoizes repository and auth preflight across repeated list requests", () => {
   const { layer, recorded } = makeLayer({
     pullRequests: [],
@@ -791,6 +1074,140 @@ it.effect("bypasses overview cache entries without reviewer avatars", () => {
       "https://avatars.example/global-approvers.png",
     );
     expect(recorded.started).toEqual(["overview"]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("saves generated walkthrough output to the review cache", () => {
+  const { layer, patch, recorded } = makeWalkthroughLayer();
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.generateWalkthrough({
+      cwd: "/repo",
+      source: { _tag: "pullRequest", reference: "42" },
+    });
+
+    expect(recorded.generatedInputs).toEqual([
+      {
+        patch,
+        prTitle: "Persist walkthrough output",
+        prBody: "Make walkthroughs durable.",
+      },
+    ]);
+    expect(recorded.walkthroughReads).toEqual([
+      {
+        repositoryId: "816fc349d3faebf8",
+        reference: "42",
+        patchSignature: result.patchSignature,
+        tokenIdentity: "gh-user-v2:tyler",
+      },
+    ]);
+    expect(recorded.walkthroughWrites).toHaveLength(1);
+    expect(recorded.walkthroughWrites[0]).toMatchObject({
+      repositoryId: "816fc349d3faebf8",
+      reference: "42",
+      patchSignature: result.patchSignature,
+      tokenIdentity: "gh-user-v2:tyler",
+      data: result.walkthrough,
+    });
+    expect(recorded.published).toHaveLength(1);
+    expect(recorded.published[0]).toMatchObject({
+      _tag: "pullRequestWalkthrough",
+      repositoryId: "816fc349d3faebf8",
+      reference: "42",
+      data: result.walkthrough,
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keys walkthrough cache entries by resolved pull request number", () => {
+  const { layer, recorded } = makeWalkthroughLayer();
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.generateWalkthrough({
+      cwd: "/repo",
+      source: { _tag: "pullRequest", reference: "https://github.com/acme/demo/pull/42" },
+    });
+
+    expect(recorded.walkthroughReads[0]).toMatchObject({
+      reference: "42",
+      patchSignature: result.patchSignature,
+    });
+    expect(recorded.walkthroughWrites[0]).toMatchObject({
+      reference: "42",
+      patchSignature: result.patchSignature,
+    });
+    expect(recorded.published[0]).toMatchObject({
+      reference: "42",
+    });
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("separates walkthrough cache entries by explicit generation settings", () => {
+  const { layer, recorded } = makeWalkthroughLayer();
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.generateWalkthrough({
+      cwd: "/repo",
+      source: { _tag: "pullRequest", reference: "42" },
+      codexHomePath: "/custom/codex-home",
+    });
+
+    expect(recorded.walkthroughReads[0]?.patchSignature).toMatch(
+      new RegExp(`^${result.patchSignature}:generation:`),
+    );
+    expect(recorded.walkthroughWrites[0]?.patchSignature).toBe(
+      recorded.walkthroughReads[0]?.patchSignature,
+    );
+    expect(result.walkthrough.patchSignature).toBe(result.patchSignature);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("loads cached walkthrough output without regenerating", () => {
+  const cachedWalkthrough = {
+    ...generatedWalkthrough(),
+    reviewedHeadSha: "old-head-sha",
+    patchSignature: "cached-signature",
+    patchSource: "localFallback" as const,
+    generatedAt: "2026-06-16T00:00:00.000Z",
+  } satisfies ReviewWalkthrough;
+  const { layer, recorded } = makeWalkthroughLayer({ cachedWalkthrough });
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.generateWalkthrough({
+      cwd: "/repo",
+      source: { _tag: "pullRequest", reference: "42" },
+    });
+
+    expect(result.walkthrough).toEqual({
+      ...cachedWalkthrough,
+      reviewedHeadSha: "head-sha-1",
+      patchSignature: result.patchSignature,
+      patchSource: "github",
+    });
+    expect(recorded.generatedInputs).toEqual([]);
+    expect(recorded.walkthroughWrites).toEqual([]);
+    expect(recorded.published).toEqual([]);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("returns generated walkthrough output when persistence fails", () => {
+  const { layer, recorded } = makeWalkthroughLayer({ failWalkthroughWrite: true });
+
+  return Effect.gen(function* () {
+    const reviewSource = yield* ReviewSource;
+    const result = yield* reviewSource.generateWalkthrough({
+      cwd: "/repo",
+      source: { _tag: "pullRequest", reference: "42" },
+    });
+
+    expect(result.walkthrough.prologue.motivation).toBe("Make review walkthroughs durable.");
+    expect(recorded.generatedInputs).toHaveLength(1);
+    expect(recorded.walkthroughWrites).toEqual([]);
+    expect(recorded.published).toHaveLength(1);
   }).pipe(Effect.provide(layer));
 });
 
@@ -929,6 +1346,16 @@ it.effect("loads default board lanes from the local mirror, newest first per lan
     expect(laneNumbers(result, "changes-requested")).toEqual([2]);
     expect(laneNumbers(result, "approved")).toEqual([3]);
     expect(laneNumbers(result, "draft")).toEqual([4]);
+    expect(result["needs-review"].meta).toEqual({
+      requestedLimit: 1,
+      resultLimit: 1,
+      candidateLimit: 2,
+      candidateCount: 2,
+      candidateLimitReached: true,
+      matchedCount: 2,
+      returnedCount: 1,
+      bounded: true,
+    });
   });
 });
 

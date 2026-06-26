@@ -18,16 +18,25 @@ export function resolveDiffThemeName(theme: "light" | "dark"): DiffThemeName {
   return theme === "dark" ? DIFF_THEME_NAMES.dark : DIFF_THEME_NAMES.light;
 }
 
-// The `unsafeCSS` payload is identical per theme and only ever has two values,
-// so cache it instead of rebuilding the (large) template string per file/render.
-const diffPanelUnsafeCssCache = new Map<"light" | "dark", string>();
+// Cache by theme and header behavior instead of rebuilding the large template
+// string per file/render.
+const diffPanelUnsafeCssCache = new Map<string, string>();
+
+export interface DiffPanelUnsafeCSSOptions {
+  stickyHeaders?: boolean;
+}
 
 // Themed CSS injected into the @pierre/diffs shadow markup so the diff viewer
 // adopts the app's chat code font and themed addition/deletion backgrounds.
 // Shared by every diff surface (turn diffs, repo diffs, the git pane) so they
 // render consistently — previously the git pane omitted this entirely.
-export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
-  const cached = diffPanelUnsafeCssCache.get(theme);
+export function buildDiffPanelUnsafeCSS(
+  theme: "light" | "dark",
+  options?: DiffPanelUnsafeCSSOptions,
+): string {
+  const stickyHeaders = options?.stickyHeaders ?? true;
+  const cacheKey = `${theme}:${stickyHeaders ? "sticky" : "static"}` as const;
+  const cached = diffPanelUnsafeCssCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -90,9 +99,9 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 }
 
 [data-diffs-header] {
-  position: sticky !important;
-  top: 0;
-  z-index: 4;
+  position: ${stickyHeaders ? "sticky" : "relative"} !important;
+  top: ${stickyHeaders ? "0" : "auto"};
+  z-index: ${stickyHeaders ? "4" : "1"};
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-bottom: 1px solid var(--border) !important;
   cursor: pointer;
@@ -110,7 +119,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   color: color-mix(in srgb, var(--foreground) 78%, var(--muted-foreground)) !important;
 }
 `;
-  diffPanelUnsafeCssCache.set(theme, css);
+  diffPanelUnsafeCssCache.set(cacheKey, css);
   return css;
 }
 

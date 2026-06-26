@@ -13,6 +13,8 @@ import { render } from "vitest-browser-react";
 
 import { ReviewBoard } from "./ReviewBoard";
 
+const BOARD_LANE_LIMIT = 50;
+
 const navigateMock = vi.hoisted(() => vi.fn());
 const nativeApiMock = vi.hoisted(() => ({
   getViewer: vi.fn(async () => ({ login: "tyler" })),
@@ -151,10 +153,26 @@ function boardLanesResult(result: ReviewListPullRequestsResult): ReviewBoardLane
   }
   const laneResult = (
     pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
-  ): ReviewListPullRequestsResult => ({
-    pullRequests,
-    ...(result.meta ? { meta: { ...result.meta, returnedCount: pullRequests.length } } : {}),
-  });
+  ): ReviewListPullRequestsResult => {
+    const candidatePullRequests = pullRequests.slice(0, BOARD_LANE_LIMIT + 1);
+    const returnedPullRequests = candidatePullRequests.slice(0, BOARD_LANE_LIMIT);
+    if (candidatePullRequests.length < BOARD_LANE_LIMIT + 1) {
+      return { pullRequests: returnedPullRequests };
+    }
+    return {
+      pullRequests: returnedPullRequests,
+      meta: {
+        requestedLimit: BOARD_LANE_LIMIT,
+        resultLimit: BOARD_LANE_LIMIT,
+        candidateLimit: BOARD_LANE_LIMIT + 1,
+        candidateCount: candidatePullRequests.length,
+        candidateLimitReached: true,
+        matchedCount: candidatePullRequests.length,
+        returnedCount: returnedPullRequests.length,
+        bounded: true,
+      },
+    };
+  };
   return {
     "needs-review": laneResult(lanes["needs-review"]),
     "changes-requested": laneResult(lanes["changes-requested"]),
@@ -184,7 +202,7 @@ describe("ReviewBoard performance", () => {
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo", limit: 50 });
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(0);
       expect(document.querySelectorAll('[role="listitem"]').length).toBeLessThanOrEqual(
         Math.ceil(pullRequests.length / 10),
@@ -275,7 +293,21 @@ describe("ReviewBoard performance", () => {
   });
 
   it("loads a larger review window when a board column scrolls near the bottom", async () => {
-    const firstWindow = makePullRequests(50);
+    const firstWindow = [
+      ...makePullRequests(51),
+      makePullRequest(500, {
+        title: "Approved lane stays visible",
+        reviewDecision: "APPROVED",
+      }),
+      makePullRequest(501, {
+        title: "Changes requested lane stays visible",
+        reviewDecision: "CHANGES_REQUESTED",
+      }),
+      makePullRequest(502, {
+        title: "Draft lane stays visible",
+        isDraft: true,
+      }),
+    ];
     const nextWindow: { resolve: ((value: ReviewListPullRequestsResult) => void) | null } = {
       resolve: null,
     };
@@ -294,6 +326,15 @@ describe("ReviewBoard performance", () => {
 
     try {
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
+      await expect
+        .element(page.getByText("Approved lane stays visible", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByText("Changes requested lane stays visible", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByText("Draft lane stays visible", { exact: true }))
+        .toBeVisible();
       nativeApiMock.listPullRequests.mockImplementationOnce(
         () =>
           new Promise<ReviewListPullRequestsResult>((resolve) => {
@@ -318,6 +359,15 @@ describe("ReviewBoard performance", () => {
       });
       expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
       expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(1);
+      await expect
+        .element(page.getByText("Approved lane stays visible", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByText("Changes requested lane stays visible", { exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByText("Draft lane stays visible", { exact: true }))
+        .toBeVisible();
 
       nextWindow.resolve?.({
         pullRequests: makePullRequests(100),
@@ -332,6 +382,11 @@ describe("ReviewBoard performance", () => {
           bounded: true,
         },
       });
+      list!.scrollTop = list!.scrollHeight - list!.clientHeight;
+      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
+      await expect
+        .element(page.getByText("Review perf PR 100", { exact: true }))
+        .toBeVisible();
     } finally {
       await mounted.cleanup();
     }

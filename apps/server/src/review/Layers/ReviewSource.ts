@@ -7,6 +7,7 @@ import {
   type ReviewChangesetResult,
   type ReviewConversationResult,
   type ReviewFinding,
+  type ReviewGenerateWalkthroughInput,
   type ReviewListPullRequestsInput,
   type ReviewListPullRequestsResult,
   type ReviewLoadBoardLanesInput,
@@ -399,10 +400,68 @@ function patchSignature(patch: string): string {
   return createHash("sha256").update(patch).digest("hex").slice(0, 16);
 }
 
+function stableJson(value: unknown): string {
+  if (value === undefined) {
+    return "null";
+  }
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableJson(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+    .join(",")}}`;
+}
+
 function ensureChangesetPatchSignature(changeset: ReviewChangesetResult): ReviewChangesetResult {
   return changeset.patchSignature
     ? changeset
     : { ...changeset, patchSignature: patchSignature(changeset.patch) };
+}
+
+function walkthroughCachePatchSignature(
+  currentPatchSignature: string,
+  input: ReviewGenerateWalkthroughInput,
+): string {
+  const generationOptions = {
+    ...(input.codexHomePath !== undefined ? { codexHomePath: input.codexHomePath } : {}),
+    ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+    ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
+    ...(input.textGenerationModel !== undefined
+      ? { textGenerationModel: input.textGenerationModel }
+      : {}),
+  };
+  if (Object.keys(generationOptions).length === 0) {
+    return currentPatchSignature;
+  }
+  return `${currentPatchSignature}:generation:${createHash("sha256")
+    .update(stableJson(generationOptions))
+    .digest("hex")
+    .slice(0, 16)}`;
+}
+
+function walkthroughWithCurrentMetadata(input: {
+  readonly walkthrough: ReviewWalkthrough;
+  readonly patchSignature: string;
+  readonly patchSource: ReviewPatchSource;
+  readonly headSha?: string;
+}): ReviewWalkthrough {
+  const {
+    reviewedHeadSha: _reviewedHeadSha,
+    patchSignature: _patchSignature,
+    patchSource: _patchSource,
+    ...walkthrough
+  } = input.walkthrough;
+  return {
+    ...walkthrough,
+    ...(input.headSha ? { reviewedHeadSha: input.headSha } : {}),
+    patchSignature: input.patchSignature,
+    patchSource: input.patchSource,
+  };
 }
 
 function findingId(input: {
@@ -1015,20 +1074,42 @@ const makeReviewSource = Effect.gen(function* () {
         input.limit !== undefined
           ? normalizedResultListLimit(input.limit)
           : REVIEW_BOARD_LANE_LIMIT;
+      const candidateLimit = mirrorListCandidateLimit(limit);
       const [needsReview, changesRequested, approved, draft] = yield* Effect.all(
         [
-          pullRequestStore.getLane({ repositoryId, lane: "needs-review", limit }),
-          pullRequestStore.getLane({ repositoryId, lane: "changes-requested", limit }),
-          pullRequestStore.getLane({ repositoryId, lane: "approved", limit }),
-          pullRequestStore.getLane({ repositoryId, lane: "draft", limit }),
+          pullRequestStore.getLane({ repositoryId, lane: "needs-review", limit: candidateLimit }),
+          pullRequestStore.getLane({ repositoryId, lane: "changes-requested", limit: candidateLimit }),
+          pullRequestStore.getLane({ repositoryId, lane: "approved", limit: candidateLimit }),
+          pullRequestStore.getLane({ repositoryId, lane: "draft", limit: candidateLimit }),
         ],
         { concurrency: "unbounded" },
       );
+      const laneResult = (
+        pullRequests: ReadonlyArray<ReviewPullRequestSummary>,
+      ): ReviewListPullRequestsResult => {
+        const returnedPullRequests = pullRequests.slice(0, limit);
+        if (pullRequests.length < candidateLimit) {
+          return { pullRequests: returnedPullRequests };
+        }
+        return {
+          pullRequests: returnedPullRequests,
+          meta: {
+            ...(input.limit !== undefined ? { requestedLimit: input.limit } : {}),
+            resultLimit: limit,
+            candidateLimit,
+            candidateCount: pullRequests.length,
+            candidateLimitReached: pullRequests.length >= candidateLimit,
+            matchedCount: pullRequests.length,
+            returnedCount: returnedPullRequests.length,
+            bounded: true,
+          },
+        };
+      };
       return {
-        "needs-review": { pullRequests: needsReview },
-        "changes-requested": { pullRequests: changesRequested },
-        approved: { pullRequests: approved },
-        draft: { pullRequests: draft },
+        "needs-review": laneResult(needsReview),
+        "changes-requested": laneResult(changesRequested),
+        approved: laneResult(approved),
+        draft: laneResult(draft),
       } satisfies ReviewBoardLanesResult;
     }).pipe(
       Effect.mapError((error) =>
@@ -1757,22 +1838,35 @@ const makeReviewSource = Effect.gen(function* () {
         }
 
         const repositoryId = reference !== undefined ? yield* resolveRepositoryId(input.cwd) : null;
+        const cacheReference =
+          reference !== undefined ? String(changeset.pullRequest?.number ?? reference) : undefined;
+        const cachePatchSignature = walkthroughCachePatchSignature(currentPatchSignature, input);
         const walkthroughTokenIdentity =
           repositoryId !== null && reference !== undefined
             ? yield* readCacheTokenIdentity(input.cwd)
             : null;
-        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
+        if (
+          repositoryId !== null &&
+          cacheReference !== undefined &&
+          walkthroughTokenIdentity !== null
+        ) {
           const cached = yield* cacheStore
             .getPullRequestWalkthrough({
               repositoryId,
-              reference,
-              patchSignature: currentPatchSignature,
+              reference: cacheReference,
+              patchSignature: cachePatchSignature,
               tokenIdentity: walkthroughTokenIdentity,
             })
             .pipe(Effect.catch(() => Effect.succeed(Option.none())));
           if (Option.isSome(cached)) {
-            return {
+            const walkthrough = walkthroughWithCurrentMetadata({
               walkthrough: cached.value,
+              patchSignature: currentPatchSignature,
+              patchSource: currentPatchSource,
+              ...(changeset.headSha ? { headSha: changeset.headSha } : {}),
+            });
+            return {
+              walkthrough,
               ...(changeset.headSha ? { reviewedHeadSha: changeset.headSha } : {}),
               patchSignature: currentPatchSignature,
               patchSource: currentPatchSource,
@@ -1826,23 +1920,27 @@ const makeReviewSource = Effect.gen(function* () {
           generatedAt,
         };
 
-        if (repositoryId !== null && reference !== undefined && walkthroughTokenIdentity !== null) {
+        if (
+          repositoryId !== null &&
+          cacheReference !== undefined &&
+          walkthroughTokenIdentity !== null
+        ) {
           const fetchedAt = yield* cacheWriteClock;
           yield* cacheStore
             .upsertPullRequestWalkthrough({
               repositoryId,
-              reference,
-              patchSignature: currentPatchSignature,
+              reference: cacheReference,
+              patchSignature: cachePatchSignature,
               tokenIdentity: walkthroughTokenIdentity,
               data: walkthrough,
               fetchedAt,
             })
-            .pipe(Effect.ignore);
+            .pipe(Effect.catchAll(() => Effect.void));
           yield* reviewUpdateBus.publish({
             _tag: "pullRequestWalkthrough",
             cwd: input.cwd,
             repositoryId,
-            reference,
+            reference: cacheReference,
             data: walkthrough,
             fetchedAt,
           });
