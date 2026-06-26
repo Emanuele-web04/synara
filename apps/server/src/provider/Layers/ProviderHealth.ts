@@ -55,6 +55,7 @@ import {
   MINIMUM_CODEX_AUTO_REVIEW_CLI_VERSION,
   parseCodexCliVersion,
 } from "../codexCliVersion";
+import { buildClaudeInstanceProcessEnv } from "../claudeEnvironment";
 import { ServerConfig } from "../../config";
 import {
   buildProviderChildEnvironment,
@@ -898,8 +899,8 @@ function makeClaudeProbeEnv(
   homePath?: string,
   environment?: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
-  const env = { ...process.env, ...(environment ?? {}) };
-  return buildClaudeProcessEnv(homePath ? { env, homeDir: homePath } : { env });
+  const normalizedHomePath = nonEmptyTrimmed(homePath);
+  return buildClaudeInstanceProcessEnv(normalizedHomePath, environment);
 }
 
 export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
