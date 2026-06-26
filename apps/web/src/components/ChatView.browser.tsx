@@ -3948,11 +3948,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       expect(transcriptPane!.getBoundingClientRect().bottom).toBeGreaterThan(
         taskListCard!.getBoundingClientRect().top + 1,
       );
-      // Active plan activity shares the queued-follow-up rail: 11/12 composer width,
-      // centered, with the composer retaining its own rounded top corners.
+      // Active plan activity shares the queued-follow-up rail: full composer-input width,
+      // centered, with the composer retaining its own rounded top corners. Full width keeps
+      // the overlapped transcript from peeking past the panel in side gutters.
       const taskRect = taskListCard!.getBoundingClientRect();
       const composerRect = composerShell!.getBoundingClientRect();
-      expect(Math.abs(taskRect.width - (composerRect.width * 11) / 12)).toBeLessThanOrEqual(2);
+      expect(Math.abs(taskRect.width - composerRect.width)).toBeLessThanOrEqual(2);
       expect(
         Math.abs(taskRect.left + taskRect.width / 2 - (composerRect.left + composerRect.width / 2)),
       ).toBeLessThanOrEqual(1);

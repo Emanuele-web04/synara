@@ -107,14 +107,17 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_M
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
- * Frame for rows stacked above the composer (queued steer/queue rows, active task
- * list). Keeps stacked activity on the same width as the composer input so wide
- * screens do not make plan/task rows drift wider than the field they belong to.
+ * Frame for rows stacked above the composer (queued steer/queue rows, live file
+ * changes, active task list). Spans the full composer-input width: the stack overlaps
+ * the scrolling transcript (`-mt-5`), so a narrower panel would expose the transcript's
+ * last line in the side gutters where the transcript's overflow clips it — reading as
+ * "cut" beside the block. Matching the input width keeps each panel a clean, full-bleed
+ * surface over the column.
  *
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
  */
-export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "mx-auto -mb-px w-11/12 min-w-0";
+export const COMPOSER_STACKED_HEADER_FRAME_CLASS_NAME = "-mb-px w-full min-w-0";
 
 /** Opaque base behind the composer shell: the composer overlaps the scrolling
  *  transcript (`-mt-5`), so without a solid backing the frosted surface would let

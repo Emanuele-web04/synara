@@ -2287,9 +2287,13 @@ export default function ChatView({
   const planSidebarLabel = sidebarProposedPlan ? "Plan details" : "Tasks";
   const planSidebarToggleLabel = planSidebarOpen ? `Hide ${planSidebarLabel}` : planSidebarLabel;
   const planSidebarToggleTitle = `${planSidebarOpen ? "Hide" : "Show"} ${planSidebarLabel.toLowerCase()} sidebar`;
-  const [activeTaskListCardHeight, setActiveTaskListCardHeight] = useState(0);
-  const activeTaskListCardRef = useRef<HTMLDivElement | null>(null);
-  const previousActiveTaskListCardHeightRef = useRef(0);
+  // Measured height of the whole stack of panels rendered above the composer input
+  // (live file changes, active task list, queued follow-ups). The composer overlaps the
+  // scrolling transcript, so the transcript reserves matching bottom space to keep its
+  // last rows clear of this chrome instead of letting them slide underneath and clip.
+  const [composerStackedChromeHeight, setComposerStackedChromeHeight] = useState(0);
+  const composerStackedChromeObserverRef = useRef<ResizeObserver | null>(null);
+  const previousComposerStackedChromeHeightRef = useRef(0);
   const activeTaskList = useMemo((): ActiveTaskListState | null => {
     if (showDebugTaskBanner) {
       return {
@@ -2323,20 +2327,20 @@ export default function ChatView({
         : deriveActiveBackgroundTasksState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, latestTurnSettled, threadActivities],
   );
-  useLayoutEffect(() => {
-    if (!activeTaskList || planSidebarOpen) {
-      setActiveTaskListCardHeight(0);
-      return;
-    }
-
-    const element = activeTaskListCardRef.current;
+  // Callback ref on the stacked-panel wrapper: re-attaches a single ResizeObserver when
+  // the composer mounts/unmounts, and the observer catches every panel appearing,
+  // resizing, or collapsing. Measuring the wrapper (rather than each panel) keeps one
+  // source of truth as panels are added or removed.
+  const measureComposerStackedChrome = useCallback((element: HTMLDivElement | null) => {
+    composerStackedChromeObserverRef.current?.disconnect();
+    composerStackedChromeObserverRef.current = null;
     if (!element) {
-      setActiveTaskListCardHeight(0);
+      setComposerStackedChromeHeight(0);
       return;
     }
 
     const updateHeight = () => {
-      setActiveTaskListCardHeight(Math.ceil(element.getBoundingClientRect().height));
+      setComposerStackedChromeHeight(Math.ceil(element.getBoundingClientRect().height));
     };
 
     updateHeight();
@@ -2344,12 +2348,12 @@ export default function ChatView({
       return;
     }
 
-    const resizeObserver = new ResizeObserver(updateHeight);
-    resizeObserver.observe(element);
-    return () => {
-      resizeObserver.disconnect();
-    };
-  }, [activeTaskList, activeTaskListCompact, planSidebarOpen]);
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(element);
+    composerStackedChromeObserverRef.current = observer;
+    // React invokes this callback ref with null on unmount (and re-attaches if the node
+    // changes), so the disconnect at the top of this function is the single teardown path.
+  }, []);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -4569,14 +4573,14 @@ export default function ChatView({
     autoFollowThreadIdRef.current = null;
   }, []);
   useLayoutEffect(() => {
-    const previousHeight = previousActiveTaskListCardHeightRef.current;
-    previousActiveTaskListCardHeightRef.current = activeTaskListCardHeight;
+    const previousHeight = previousComposerStackedChromeHeightRef.current;
+    previousComposerStackedChromeHeightRef.current = composerStackedChromeHeight;
 
-    if (previousHeight <= 0 || activeTaskListCardHeight <= 0 || planSidebarOpen) {
+    if (previousHeight <= 0 || composerStackedChromeHeight <= 0) {
       return;
     }
 
-    const delta = activeTaskListCardHeight - previousHeight;
+    const delta = composerStackedChromeHeight - previousHeight;
     if (delta <= 0.5) {
       return;
     }
@@ -4591,7 +4595,7 @@ export default function ChatView({
 
     programmaticScrollUntilRef.current = performance.now() + 200;
     scrollContainer.scrollTop += delta;
-  }, [activeTaskListCardHeight, planSidebarOpen]);
+  }, [composerStackedChromeHeight]);
   const transcriptMessageCount = useMemo(
     () => timelineEntries.filter((entry) => entry.kind === "message").length,
     [timelineEntries],
@@ -9375,7 +9379,6 @@ export default function ChatView({
     activeTaskList && showComposerActiveTaskListCard ? (
       <ComposerActiveTaskListCard
         activeTaskList={activeTaskList}
-        cardRef={activeTaskListCardRef}
         backgroundTaskCount={activeBackgroundTasks?.activeCount ?? 0}
         compact={activeTaskListCompact}
         onCompactChange={setActiveTaskListCompact}
@@ -9395,22 +9398,30 @@ export default function ChatView({
           data-chat-pane-scope={paneScopeId}
         >
           <ComposerColumnFrame>
-            {showComposerLiveChangesHeader ? (
-              <ComposerLiveChangesHeader
-                fileCount={activeTurnLiveDiffState.fileCount}
-                additions={activeTurnLiveDiffState.additions}
-                deletions={activeTurnLiveDiffState.deletions}
-                onReview={activeTurnLiveDiffState.turnId ? onReviewComposerLiveChanges : undefined}
+            {/* Single measured wrapper around every panel stacked above the composer input.
+                Its height drives the transcript bottom inset and scroll compensation so the
+                last rows stay clear of this chrome (see measureComposerStackedChrome). A bare
+                div keeps the panels' -mb-px seam onto the input shell via margin collapse. */}
+            <div ref={measureComposerStackedChrome}>
+              {showComposerLiveChangesHeader ? (
+                <ComposerLiveChangesHeader
+                  fileCount={activeTurnLiveDiffState.fileCount}
+                  additions={activeTurnLiveDiffState.additions}
+                  deletions={activeTurnLiveDiffState.deletions}
+                  onReview={
+                    activeTurnLiveDiffState.turnId ? onReviewComposerLiveChanges : undefined
+                  }
+                />
+              ) : null}
+              {renderActiveTaskListCard(showComposerLiveChangesHeader)}
+              <ComposerQueuedHeader
+                queuedTurns={queuedComposerTurns}
+                onSteer={onSteerQueuedComposerTurn}
+                onRemove={removeQueuedComposerTurn}
+                onEdit={onEditQueuedComposerTurn}
+                attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
-            ) : null}
-            {renderActiveTaskListCard(showComposerLiveChangesHeader)}
-            <ComposerQueuedHeader
-              queuedTurns={queuedComposerTurns}
-              onSteer={onSteerQueuedComposerTurn}
-              onRemove={removeQueuedComposerTurn}
-              onEdit={onEditQueuedComposerTurn}
-              attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
-            />
+            </div>
             <div
               className={cn(
                 COMPOSER_INPUT_SHELL_CLASS_NAME,
@@ -10157,9 +10168,7 @@ export default function ChatView({
                     scrollButtonVisible={showScrollToBottom}
                     onScrollToBottom={onScrollToBottom}
                     bottomContentInsetPx={
-                      activeTaskList && !planSidebarOpen && activeTaskListCardHeight > 0
-                        ? activeTaskListCardHeight + 8
-                        : undefined
+                      composerStackedChromeHeight > 0 ? composerStackedChromeHeight + 8 : undefined
                     }
                     contentInsetRightPx={
                       environmentAppliesContentInset

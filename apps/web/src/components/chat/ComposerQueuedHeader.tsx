@@ -1,8 +1,8 @@
 // FILE: ComposerQueuedHeader.tsx
 // Purpose: Queued follow-up rows shown as a panel that merges into the top of the
 // composer input (each with Steer / Delete / Edit actions). Rounded only on top with
-// a flat, borderless bottom that fuses flush onto the composer; sits at 11/12 of the
-// composer width while the composer below keeps its own full rounding.
+// a flat, borderless bottom that fuses flush onto the composer; spans the full composer
+// width while the composer below keeps its own full rounding.
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
