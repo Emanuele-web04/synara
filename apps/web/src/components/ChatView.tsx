@@ -99,7 +99,7 @@ import {
   isProviderUsable,
   normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
-  resolveProviderSendAvailability,
+  resolveProviderSendAvailabilityWithRefresh,
 } from "~/lib/providerAvailability";
 import {
   loadConfirmedCustomBinaryPaths,
@@ -1188,6 +1188,7 @@ export default function ChatView({
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
   const attachmentPreviewHandoffTimeoutByMessageIdRef = useRef<Record<string, number>>({});
   const sendInFlightRef = useRef(false);
+  const sendPreflightInFlightRef = useRef(false);
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const activatedThreadIdRef = useRef<ThreadId | null>(null);
@@ -3240,7 +3241,7 @@ export default function ChatView({
     () => findProviderStatus(providerStatuses, "codex"),
     [providerStatuses],
   );
-  const refreshVoiceStatus = useRefreshProviderStatusesNow();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
     [voiceRecordingDurationMs],
@@ -5696,7 +5697,7 @@ export default function ChatView({
           : "The voice note could not be transcribed.";
       const authExpired = isVoiceAuthExpiredMessage(description);
       if (authExpired) {
-        refreshVoiceStatus();
+        void refreshProviderStatuses();
       }
       toastManager.add({
         type: "error",
@@ -5708,7 +5709,9 @@ export default function ChatView({
           ? {
               actionProps: {
                 children: "Refresh status",
-                onClick: refreshVoiceStatus,
+                onClick: () => {
+                  void refreshProviderStatuses();
+                },
               },
             }
           : {}),
@@ -5725,7 +5728,7 @@ export default function ChatView({
     appendVoiceTranscriptToComposer,
     cancelVoiceRecording,
     isVoiceRecording,
-    refreshVoiceStatus,
+    refreshProviderStatuses,
     selectedProvider,
     stopVoiceRecording,
     threadId,
@@ -5917,17 +5920,6 @@ export default function ChatView({
       }
 
       try {
-        const targetAvailability = resolveProviderSendAvailability({
-          provider: targetProvider,
-          statuses: providerStatuses,
-        });
-        if (!targetAvailability.usable) {
-          toastManager.add({
-            type: "error",
-            title: targetAvailability.unavailableReason,
-          });
-          return;
-        }
         await createThreadHandoff(activeThread, targetProvider);
       } catch (error) {
         toastManager.add({
@@ -5940,7 +5932,7 @@ export default function ChatView({
         });
       }
     },
-    [activeThread, createThreadHandoff, handoffDisabled, providerStatuses],
+    [activeThread, createThreadHandoff, handoffDisabled],
   );
 
   const clearComposerInput = useCallback(
@@ -6471,6 +6463,7 @@ export default function ChatView({
       isSendBusy ||
       isConnecting ||
       isVoiceTranscribing ||
+      sendPreflightInFlightRef.current ||
       sendInFlightRef.current
     ) {
       return false;
@@ -6587,6 +6580,7 @@ export default function ChatView({
       } else {
         if (hasLiveTurn && dispatchMode === "queue") {
           clearComposerInput(activeThread.id);
+          scheduleComposerFocus();
           enqueueQueuedComposerTurn(activeThread.id, {
             id: randomUUID(),
             kind: "plan-follow-up",
@@ -6604,6 +6598,7 @@ export default function ChatView({
           return true;
         }
         clearComposerInput(activeThread.id);
+        scheduleComposerFocus();
         return onSubmitPlanFollowUp({
           text: followUp.text,
           interactionMode: followUp.interactionMode,
@@ -6785,10 +6780,18 @@ export default function ChatView({
         setPendingAutomationConversation(null);
       }
     }
-    const sendProviderAvailability = resolveProviderSendAvailability({
-      provider: selectedModelSelectionForSend.provider,
-      statuses: providerStatuses,
-    });
+    sendPreflightInFlightRef.current = true;
+    const sendProviderAvailability = await (async () => {
+      try {
+        return await resolveProviderSendAvailabilityWithRefresh({
+          provider: selectedModelSelectionForSend.provider,
+          statuses: providerStatuses,
+          refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+        });
+      } finally {
+        sendPreflightInFlightRef.current = false;
+      }
+    })();
     if (!sendProviderAvailability.usable) {
       toastManager.add({
         type: "error",
@@ -6842,6 +6845,7 @@ export default function ChatView({
 
     if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
       clearComposerInput(activeThread.id);
+      scheduleComposerFocus();
       const queuedImagesForPersistence = await Promise.all(
         composerImagesForSend.map(async (image) => {
           try {
@@ -7142,6 +7146,9 @@ export default function ChatView({
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
+      // A clicked submit button steals focus; return it after the controlled
+      // draft reset so rapid follow-up typing lands in the composer.
+      scheduleComposerFocus();
     }
 
     let createdServerThreadForLocalDraft = false;

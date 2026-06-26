@@ -1763,6 +1763,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         async () => {
           expect(document.body.textContent).toContain(prompt);
+          expect(document.activeElement).toBe(await waitForComposerEditor());
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);

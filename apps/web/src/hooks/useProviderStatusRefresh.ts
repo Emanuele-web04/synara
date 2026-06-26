@@ -5,37 +5,57 @@
 // Exports: useProviderStatusRefresh, useRefreshProviderStatusesNow
 
 import { useCallback, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import type { ServerConfig } from "@t3tools/contracts";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
+import type { ServerConfig, ServerProviderStatus } from "@t3tools/contracts";
 import { toastManager } from "../components/ui/toast";
 import { readNativeApi } from "../nativeApi";
 import { serverQueryKeys } from "../lib/serverReactQuery";
+
+export type RefreshProviderStatusesOptions = {
+  readonly silent?: boolean;
+};
+
+export type RefreshProviderStatusesNow = (
+  options?: RefreshProviderStatusesOptions,
+) => Promise<readonly ServerProviderStatus[] | null>;
+
+function writeProviderStatusesToConfigCache(
+  queryClient: QueryClient,
+  providers: readonly ServerProviderStatus[],
+) {
+  queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
+    current ? { ...current, providers } : current,
+  );
+}
 
 /**
  * Imperative one-shot provider-status refresh: re-checks providers on the server
  * and folds the result into the cached server config. Surfaces failures as a toast.
  */
-export function useRefreshProviderStatusesNow(): () => void {
+export function useRefreshProviderStatusesNow(): RefreshProviderStatusesNow {
   const queryClient = useQueryClient();
-  return useCallback(() => {
-    const api = readNativeApi();
-    if (!api) return;
-    void api.server
-      .refreshProviders()
-      .then((result) => {
-        queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
-          current ? { ...current, providers: result.providers } : current,
-        );
-      })
-      .catch((error) => {
-        toastManager.add({
-          type: "error",
-          title: "Unable to refresh provider status",
-          description:
-            error instanceof Error ? error.message : "Unknown error refreshing provider status.",
-        });
-      });
-  }, [queryClient]);
+  return useCallback(
+    async (options?: RefreshProviderStatusesOptions) => {
+      const api = readNativeApi();
+      if (!api) return null;
+      try {
+        const result = await api.server.refreshProviders();
+        writeProviderStatusesToConfigCache(queryClient, result.providers);
+        return result.providers;
+      } catch (error) {
+        if (!options?.silent) {
+          toastManager.add({
+            type: "error",
+            title: "Unable to refresh provider status",
+            description:
+              error instanceof Error ? error.message : "Unknown error refreshing provider status.",
+          });
+        }
+        return null;
+      }
+    },
+    [queryClient],
+  );
 }
 
 type ProviderStatusRefreshOptions = {
@@ -80,9 +100,7 @@ export function useProviderStatusRefresh(options: ProviderStatusRefreshOptions):
           if (disposed) {
             return;
           }
-          queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (current) =>
-            current ? { ...current, providers: result.providers } : current,
-          );
+          writeProviderStatusesToConfigCache(queryClient, result.providers);
         })
         .catch(() => undefined);
     };

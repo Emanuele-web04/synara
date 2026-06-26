@@ -25,7 +25,8 @@ import {
 } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { dispatchKanbanDraftCard } from "../../lib/kanbanDispatch";
 import { KanbanCardView } from "./KanbanCardView";
 import { KanbanColumn, parseKanbanColumnDropId } from "./KanbanColumn";
@@ -63,6 +64,7 @@ export function KanbanProjectBoardView({
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
   // A completed drag still emits a click on the source card; swallow exactly that one
@@ -95,9 +97,10 @@ export function KanbanProjectBoardView({
   const handleDispatchDrop = useCallback(
     async (card: KanbanCard) => {
       const targetProvider = card.provider ?? settings.defaultProvider;
-      const sendAvailability = resolveProviderSendAvailability({
+      const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: targetProvider,
         statuses: providerStatuses,
+        refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       });
       if (!sendAvailability.usable) {
         toastManager.add({
@@ -156,6 +159,7 @@ export function KanbanProjectBoardView({
       onOpenCard,
       providerOptionsForDispatch,
       providerStatuses,
+      refreshProviderStatuses,
       settings.defaultProvider,
     ],
   );
