@@ -228,6 +228,8 @@ export function useChatTurnFollowUps({
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
         provider: modelSelectionForPlanDispatch.provider,
+        providerInstanceId:
+          modelSelectionForPlanDispatch.instanceId ?? modelSelectionForPlanDispatch.provider,
         providerOptions: providerOptionsForPlanDispatch,
       });
       await api.orchestration.dispatchCommand({
@@ -516,6 +518,7 @@ export function useChatTurnFollowUps({
         rememberCustomBinaryPathForDispatch({
           threadId: nextThreadId,
           provider: selectedModelSelection.provider,
+          providerInstanceId: selectedModelSelection.instanceId ?? selectedModelSelection.provider,
           providerOptions: providerOptionsForDispatch,
         });
         return api.orchestration.dispatchCommand({

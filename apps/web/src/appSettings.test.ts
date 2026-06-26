@@ -26,6 +26,7 @@ import {
   getAppModelOptions,
   getCodexProviderDiscoveryOptions,
   getCustomBinaryPathForProvider,
+  getCustomBinaryPathForProviderInstance,
   getDefaultNativeFontSmoothing,
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
@@ -34,9 +35,11 @@ import {
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
   getProviderInstanceOptions,
+  getUnsupportedProviderInstanceOptions,
   getServerDisabledProviders,
   isGitTextGenerationSettingsDirty,
   getProviderStartOptions,
+  mergeProviderInstanceConfigPatch,
   MODEL_PROVIDER_SETTINGS,
   normalizeChatFontSizePx,
   normalizeCustomModelSlugs,
@@ -1065,6 +1068,71 @@ describe("getProviderInstanceOptions", () => {
     expect(accountOption?.instanceId.length).toBeLessThanOrEqual(64);
     expect(Schema.is(ProviderInstanceId)(accountOption?.instanceId)).toBe(true);
   });
+
+  it("keeps unsupported instances visible for missing-driver affordances", () => {
+    expect(
+      getUnsupportedProviderInstanceOptions({
+        providerInstances: {
+          fork_work: {
+            driver: "customFork",
+            displayName: "Fork Work",
+            enabled: true,
+          },
+        },
+      }),
+    ).toEqual([
+      {
+        instanceId: "fork_work",
+        driver: "customFork",
+        label: "Fork Work",
+        enabled: true,
+        isDefault: false,
+        supported: false,
+      },
+    ]);
+  });
+});
+
+describe("provider instance configuration", () => {
+  it("does not leak a provider-wide binary path into a custom instance", () => {
+    expect(
+      getCustomBinaryPathForProviderInstance(
+        {
+          claudeBinaryPath: "/legacy/bin/claude",
+          claudeHomePath: "",
+          codexAccounts: [],
+          codexBinaryPath: "",
+          codexHomePath: "",
+          selectedCodexAccountId: "default",
+          cursorBinaryPath: "",
+          cursorApiEndpoint: "",
+          devinBinaryPath: "",
+          antigravityBinaryPath: "",
+          grokBinaryPath: "",
+          droidBinaryPath: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerUrl: "",
+          piBinaryPath: "",
+          piAgentDir: "",
+          providerInstances: {
+            claude_work: { driver: "claudeAgent", enabled: true, config: {} },
+          },
+        },
+        "claudeAgent",
+        "claude_work",
+      ),
+    ).toBe("");
+  });
+
+  it("drops a stale redaction marker when replacing a secret", () => {
+    expect(
+      mergeProviderInstanceConfigPatch(
+        { serverPassword: "", serverPasswordRedacted: true },
+        { serverPassword: "new-secret" },
+      ),
+    ).toEqual({ serverPassword: "new-secret" });
+  });
 });
 
 describe("resolveSelectableProviderInstanceId", () => {
@@ -1146,7 +1214,11 @@ describe("provider-indexed custom model settings", () => {
   it("stores default-instance custom models in the provider instance map", () => {
     expect(
       patchCustomModelsForProviderInstance(
-        { providerInstances: {} },
+        {
+          codexAccounts: [],
+          codexHomePath: "",
+          providerInstances: {},
+        },
         { instanceId: "claudeAgent", provider: "claudeAgent", isDefault: true },
         ["claude/default-instance"],
       ),

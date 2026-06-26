@@ -882,6 +882,7 @@ export function AutomationModelPicker({
   });
   const {
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,

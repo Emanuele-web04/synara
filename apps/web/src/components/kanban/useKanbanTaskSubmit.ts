@@ -19,6 +19,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
+import type { ProviderInstanceOption } from "~/appSettings";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
@@ -44,6 +45,9 @@ interface UseKanbanTaskSubmitInput {
   readonly defaultProvider: ProviderKind;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
+  readonly providerInstances: ReadonlyArray<
+    Pick<ProviderInstanceOption, "instanceId" | "provider">
+  >;
   readonly providerStatuses: readonly ServerProviderStatus[];
   readonly isPreparingImages: boolean;
   readonly waitForPendingImages: () => Promise<void>;
@@ -68,6 +72,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     isPreparingImages,
     waitForPendingImages,
@@ -145,7 +150,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: modelSelection.provider,
-      instanceId: modelSelection.instanceId,
+      instanceId: modelSelection.instanceId ?? selectedProviderInstanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
@@ -164,6 +169,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
+      providerInstances,
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {

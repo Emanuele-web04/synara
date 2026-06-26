@@ -50,6 +50,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       assertSome(resolvedBinding, {
         threadId: initialThreadId,
         provider: "codex",
+        providerInstanceId: "codex",
       });
       if (Option.isSome(resolvedBinding)) {
         assert.equal(resolvedBinding.value.threadId, initialThreadId);
@@ -204,6 +205,64 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("materializes the default provider instance for legacy runtime rows", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.makeUnsafe("thread-legacy-runtime-null-instance");
+
+      yield* runtimeRepository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: null,
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: new Date().toISOString(),
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.equal(runtime.value.providerInstanceId, null);
+      }
+
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(binding), true);
+      if (Option.isSome(binding)) {
+        assert.equal(binding.value.provider, "codex");
+        assert.equal(binding.value.providerInstanceId, "codex");
+      }
+    }));
+
+  it("materializes a custom driver id as the default instance for legacy runtime rows", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.makeUnsafe("thread-custom-driver-null-instance");
+
+      yield* runtimeRepository.upsert({
+        threadId,
+        providerName: "customFork",
+        providerInstanceId: null,
+        adapterKey: "customFork",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: new Date().toISOString(),
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isSome(binding), true);
+      if (Option.isSome(binding)) {
+        assert.equal(binding.value.provider, "customFork");
+        assert.equal(binding.value.providerInstanceId, "customFork");
+      }
+    }));
+
   it("rehydrates persisted mappings across layer restart", () =>
     Effect.gen(function* () {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-provider-directory-"));
@@ -231,6 +290,7 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assertSome(resolvedBinding, {
           threadId,
           provider: "codex",
+          providerInstanceId: "codex",
         });
         if (Option.isSome(resolvedBinding)) {
           assert.equal(resolvedBinding.value.threadId, threadId);
@@ -274,25 +334,38 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
         assertSome(resolvedBinding, {
           threadId,
           provider: "opencode",
+          providerInstanceId: "opencode",
         });
       }).pipe(Effect.provide(directoryLayer));
 
       fs.rmSync(tempDir, { recursive: true, force: true });
     }));
 
-  it("skips legacy bindings with unknown provider names when listing all bindings", () =>
+  it("keeps custom driver names and skips invalid provider driver names when listing bindings", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
 
-      const legacyThreadId = ThreadId.makeUnsafe("thread-legacy-provider");
+      const invalidThreadId = ThreadId.makeUnsafe("thread-invalid-provider");
+      const customThreadId = ThreadId.makeUnsafe("thread-custom-driver");
       const codexThreadId = ThreadId.makeUnsafe("thread-known-provider");
 
       yield* runtimeRepository.upsert({
-        threadId: legacyThreadId,
-        providerName: "kilo",
-        providerInstanceId: "kilo",
-        adapterKey: "kilo",
+        threadId: invalidThreadId,
+        providerName: "bad provider",
+        providerInstanceId: "bad_provider",
+        adapterKey: "bad provider",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: new Date().toISOString(),
+        resumeCursor: null,
+        runtimePayload: null,
+      });
+      yield* runtimeRepository.upsert({
+        threadId: customThreadId,
+        providerName: "customFork",
+        providerInstanceId: null,
+        adapterKey: "customFork",
         runtimeMode: "full-access",
         status: "running",
         lifecycleGeneration: "legacy-test-kilo",
@@ -309,8 +382,11 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       const bindings = yield* directory.listBindings();
       assert.deepEqual(
         bindings.map((binding) => binding.threadId),
-        [codexThreadId],
+        [customThreadId, codexThreadId],
       );
+      const customBinding = bindings.find((binding) => binding.threadId === customThreadId);
+      assert.equal(customBinding?.provider, "customFork");
+      assert.equal(customBinding?.providerInstanceId, "customFork");
     }));
 
   it("treats a binding with an unknown provider name as no binding", () =>

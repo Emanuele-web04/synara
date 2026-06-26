@@ -294,6 +294,7 @@ export function KanbanNewTaskDialog({
     defaultProvider: settings.defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     isPreparingImages,
     waitForPendingImages,

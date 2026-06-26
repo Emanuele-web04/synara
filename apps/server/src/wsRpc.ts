@@ -54,6 +54,7 @@ import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
+  mergeProviderStartOptions,
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
@@ -1437,7 +1438,7 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitSummarizeDiff]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
-              if (input.providerOptions || !input.textGenerationModelSelection) {
+              if (!input.textGenerationModelSelection) {
                 return yield* gitManager.summarizeDiff(input);
               }
               const settings = yield* serverSettings.getSettings;
@@ -1445,11 +1446,13 @@ const makeWsRpcHandlersLayer = () =>
                 provider: input.textGenerationModelSelection.provider,
                 instanceId: resolveModelSelectionInstanceId(input.textGenerationModelSelection),
               });
+              const providerOptions = mergeProviderStartOptions(
+                input.providerOptions,
+                instance ? providerStartOptionsFromInstance(instance) : undefined,
+              );
               return yield* gitManager.summarizeDiff({
                 ...input,
-                ...(instance
-                  ? { providerOptions: providerStartOptionsFromInstance(instance) }
-                  : {}),
+                ...(providerOptions ? { providerOptions } : {}),
               });
             }),
             "Failed to summarize diff",
@@ -1880,9 +1883,10 @@ const makeWsRpcHandlersLayer = () =>
                 provider: modelSelection.provider,
                 instanceId: resolveModelSelectionInstanceId(modelSelection),
               });
-              const providerOptions =
-                input.providerOptions ??
-                (fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined);
+              const providerOptions = mergeProviderStartOptions(
+                input.providerOptions,
+                fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined,
+              );
               return yield* textGeneration.generateThreadRecap({
                 cwd: input.cwd,
                 newMaterial: input.newMaterial,
@@ -1906,9 +1910,10 @@ const makeWsRpcHandlersLayer = () =>
                 provider: modelSelection.provider,
                 instanceId: resolveModelSelectionInstanceId(modelSelection),
               });
-              const providerOptions =
-                input.providerOptions ??
-                (fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined);
+              const providerOptions = mergeProviderStartOptions(
+                input.providerOptions,
+                fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined,
+              );
               return yield* textGeneration.generateAutomationIntent({
                 cwd: input.cwd,
                 message: input.message,

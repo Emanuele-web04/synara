@@ -11,18 +11,19 @@
 import * as OS from "node:os";
 import type {
   ProviderInstanceId,
-  ProviderKind,
   ServerSettings,
   ServerProviderAuthStatus,
   ServerProviderStatus,
   ServerProviderStatusState,
   ServerProviderUpdateState,
 } from "@synara/contracts";
-import { ServerProviderUpdateError } from "@synara/contracts";
+import { ProviderKind, ServerProviderUpdateError } from "@synara/contracts";
 import { parseCodexConfigModelProvider } from "@synara/shared/codexConfig";
 import {
   deriveProviderInstances,
+  deriveUnsupportedProviderInstances,
   type ResolvedProviderInstance,
+  type UnsupportedProviderInstance,
 } from "@synara/shared/providerInstances";
 import { decodeJsonResult } from "@synara/shared/schemaJson";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
@@ -2208,6 +2209,27 @@ function makeUncheckedProviderInstanceStatus(
   } satisfies ServerProviderStatus;
 }
 
+function makeUnsupportedProviderInstanceStatus(
+  instance: UnsupportedProviderInstance,
+  checkedAt: string,
+): ServerProviderStatus {
+  const unavailableReason = `Provider driver '${instance.driver}' is not supported by this Synara build.`;
+  return {
+    provider: instance.driver,
+    instanceId: instance.instanceId,
+    driver: instance.driver,
+    displayName: instance.displayName,
+    enabled: false,
+    status: "error",
+    available: false,
+    availability: "unavailable",
+    unavailableReason,
+    authStatus: "unknown",
+    checkedAt,
+    message: unavailableReason,
+  } satisfies ServerProviderStatus;
+}
+
 function mergeProviderStatusUpdates(
   previousStatuses: ReadonlyArray<ServerProviderStatus>,
   updatedStatuses: ReadonlyArray<ServerProviderStatus>,
@@ -2254,7 +2276,11 @@ export function projectProviderStatusesForSettings(
   const statusByInstance = new Map(
     statuses.map((status) => [providerStatusInstanceKey(status), status] as const),
   );
-  const statusByProvider = new Map(statuses.map((status) => [status.provider, status] as const));
+  const legacyStatusByProvider = new Map(
+    statuses
+      .filter((status) => status.instanceId === undefined)
+      .map((status) => [status.driver ?? status.provider, status] as const),
+  );
   const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
   for (const instance of deriveProviderInstances(settings)) {
     const entries = instancesByProvider.get(instance.driver) ?? [];
@@ -2279,7 +2305,7 @@ export function projectProviderStatusesForSettings(
               raw: { driver: provider },
             },
           ];
-    const defaultStatus = statusByInstance.get(provider) ?? statusByProvider.get(provider);
+    const defaultStatus = statusByInstance.get(provider) ?? legacyStatusByProvider.get(provider);
 
     if (instances.every((instance) => !instance.enabled)) {
       const disabledStatus = makeDisabledProviderStatus(
@@ -2341,6 +2367,10 @@ export function projectProviderStatusesForSettings(
     }
   }
 
+  for (const instance of deriveUnsupportedProviderInstances(settings)) {
+    projected.push(makeUnsupportedProviderInstanceStatus(instance, checkedAt));
+  }
+
   return orderProviderStatuses(projected);
 }
 
@@ -2364,13 +2394,15 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
       const cachePathForProviderTarget = (input: {
-        readonly provider: ProviderKind;
+        readonly provider: ServerProviderStatus["provider"];
         readonly instanceId?: ProviderInstanceId | undefined;
       }) =>
         resolveProviderStatusCachePath({
           stateDir: serverConfig.stateDir,
           provider: input.provider,
-          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.instanceId && input.instanceId !== input.provider
+            ? { instanceId: input.instanceId }
+            : {}),
         });
 
       const initialSettings = yield* serverSettings.ready.pipe(
@@ -2602,9 +2634,13 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
 
         const enriched = yield* Effect.forEach(
           statuses,
-          (status) =>
-            getProviderMaintenanceCapabilities({
-              provider: status.provider,
+          (status) => {
+            const provider = status.driver ?? status.provider;
+            if (!Schema.is(ProviderKind)(provider)) {
+              return Effect.succeed(status);
+            }
+            return getProviderMaintenanceCapabilities({
+              provider,
               instanceId: providerStatusInstanceKey(status),
             }).pipe(
               Effect.flatMap((capabilities) =>
@@ -2624,7 +2660,8 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   },
                 }),
               ),
-            ),
+            );
+          },
           { concurrency: "unbounded" },
         );
         return yield* Effect.forEach(enriched, applyVolatileProviderState, {
@@ -2874,7 +2911,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       }
 
       yield* serverSettings.streamChanges.pipe(
-        Stream.runForEach(() => publishProjectedStatuses().pipe(Effect.asVoid)),
+        Stream.runForEach(() => ensureRefreshFiber().pipe(Effect.flatMap(Fiber.join), Effect.asVoid)),
         Effect.forkIn(refreshScope),
       );
 
@@ -3100,7 +3137,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
           const providers = yield* refreshNow.pipe(Effect.mapError(toUpdateError));
           const refreshed = providers.find(
             (status) =>
-              status.provider === provider &&
+              (status.driver ?? status.provider) === provider &&
               providerStatusInstanceKey(status) === providerStatusKey(target),
           );
           const refreshedAdvisory = refreshed?.versionAdvisory;

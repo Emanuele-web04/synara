@@ -37,7 +37,10 @@ import {
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { isMacNavigatorPlatform } from "~/lib/utils";
-import { AVAILABLE_PROVIDER_OPTIONS } from "../chat/ProviderModelPicker";
+import type {
+  ProviderModelOptionsByProviderInstance,
+  ProviderModelPickerInstance,
+} from "../chat/ProviderModelPicker";
 import type { ProviderModelOption } from "../../providerModelOptions";
 
 type ComposerPluginSuggestion = {
@@ -60,6 +63,8 @@ interface UseKanbanTaskComposerDiscoveryInput {
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  readonly modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
+  readonly providerInstances: ReadonlyArray<ProviderModelPickerInstance>;
   readonly selectedRuntimeAgents: readonly ProviderAgentDescriptor[];
   readonly selectedProjectCwd: string | null;
   readonly serverCwd: string | null;
@@ -83,6 +88,8 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     selectedProvider,
     selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,
@@ -194,8 +201,13 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     providerCommandsQuery.data?.commands ?? EMPTY_PROVIDER_NATIVE_COMMANDS;
   const providerSkills = providerSkillsQuery.data?.skills ?? EMPTY_PROVIDER_SKILLS;
   const searchableModelOptions = buildSearchableModelOptions({
-    providerOptions: AVAILABLE_PROVIDER_OPTIONS,
+    providerOptions: providerInstances.map((instance) => ({
+      value: instance.provider,
+      label: instance.label,
+      instanceId: instance.instanceId,
+    })),
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     providerOrder,
     hiddenProviders,
     protectedProviders: [selectedProvider],

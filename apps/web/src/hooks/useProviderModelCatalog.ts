@@ -167,10 +167,10 @@ export function useProviderModelCatalog(input: {
   );
   const selectedInstanceQueryOption = (
     provider: ProviderKind,
-  ): { readonly instanceId?: ProviderInstanceId } => {
+  ): { readonly instanceId: ProviderInstanceId } => {
     const instanceId =
       selectedProvider === provider ? selectedProviderInstanceId?.trim() : undefined;
-    return instanceId ? { instanceId } : {};
+    return { instanceId: instanceId || provider };
   };
   const prefetchProviderSet = useMemo(
     () =>
@@ -321,7 +321,13 @@ export function useProviderModelCatalog(input: {
     providerAgentsQueryOptions({
       provider: "opencode",
       ...selectedInstanceQueryOption("opencode"),
-      binaryPath: settings.openCodeBinaryPath || null,
+      binaryPath: readProviderOptionString(
+        getProviderStartOptions(
+          settings,
+          selectedInstanceQueryOption("opencode").instanceId,
+        )?.opencode,
+        "binaryPath",
+      ),
       cwd: discoveryCwd,
       enabled: openCodeModelDiscoveryEnabled,
     }),

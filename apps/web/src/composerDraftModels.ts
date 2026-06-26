@@ -4,6 +4,7 @@
 
 import {
   GROK_REASONING_EFFORT_OPTIONS,
+  ProviderInstanceId,
   ProviderKind,
   type ClaudeCodeEffort,
   type CodexReasoningEffort,
@@ -14,7 +15,6 @@ import {
   type ModelSelection,
   type ModelSlug,
   type PiThinkingLevel,
-  type ProviderInstanceId,
   type ProviderModelOptions,
 } from "@synara/contracts";
 import * as Schema from "effect/Schema";
@@ -46,6 +46,7 @@ export const COMPOSER_PROVIDER_KINDS = [
 ] as const satisfies readonly ProviderKind[];
 
 const isProviderKind = Schema.is(ProviderKind);
+const isProviderInstanceId = Schema.is(ProviderInstanceId);
 
 const GROK_REASONING_EFFORT_SET = new Set<string>(GROK_REASONING_EFFORT_OPTIONS);
 
@@ -161,9 +162,9 @@ function trimStringOrUndefined(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | undefined {
+export function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | undefined {
   const trimmed = trimStringOrUndefined(value);
-  return trimmed === undefined ? undefined : (trimmed as ProviderInstanceId);
+  return trimmed !== undefined && isProviderInstanceId(trimmed) ? trimmed : undefined;
 }
 
 export function providerInstanceModelSelectionKey(
@@ -854,38 +855,80 @@ export function resolvePreferredComposerModelSelection(input: {
   threadModelSelection: ModelSelection | null | undefined;
   projectModelSelection: ModelSelection | null | undefined;
   defaultProvider?: ProviderKind | null | undefined;
+  resolveProviderForInstanceId?: (
+    instanceId: ProviderInstanceId,
+  ) => ProviderKind | null | undefined;
 }): ModelSelection {
   // The draft's selection is the user's most recently used target: a fresh draft
   // is seeded from the sticky (last-used) state, so this precedence is what
   // makes a new chat reopen with the model and options used last time. Project
   // and global defaults only apply when nothing has been used yet.
-  const draftProviderWithSelection =
-    Object.values(input.draft?.modelSelectionByProvider ?? {})[0]?.provider ?? null;
+  const activeInstanceId = input.draft?.activeProvider ?? null;
+  const activeDraftSelection = activeInstanceId
+    ? input.draft?.modelSelectionByProvider[activeInstanceId]
+    : undefined;
+  const firstDraftSelection =
+    activeDraftSelection ?? Object.values(input.draft?.modelSelectionByProvider ?? {})[0] ?? null;
+  const draftProviderWithSelection = firstDraftSelection?.provider ?? null;
+  const activeInstanceProvider = activeInstanceId
+    ? (activeDraftSelection?.provider ??
+      input.resolveProviderForInstanceId?.(activeInstanceId) ??
+      normalizeProviderKind(activeInstanceId))
+    : null;
   const preferredProvider =
-    input.draft?.activeProvider ??
+    activeInstanceProvider ??
     draftProviderWithSelection ??
     input.threadModelSelection?.provider ??
     input.projectModelSelection?.provider ??
     input.defaultProvider ??
     "codex";
 
+  const preferredPersistedSelection =
+    input.threadModelSelection?.provider === preferredProvider
+      ? input.threadModelSelection
+      : input.projectModelSelection?.provider === preferredProvider
+        ? input.projectModelSelection
+        : null;
+  const preferredInstanceId = providerInstanceModelSelectionKey(
+    preferredProvider,
+    activeInstanceProvider === preferredProvider
+      ? activeInstanceId
+      : (firstDraftSelection?.instanceId ?? preferredPersistedSelection?.instanceId),
+  );
   const persistedSelection =
-    (input.threadModelSelection?.provider === preferredProvider
+    (modelSelectionMatchesProviderInstance(
+      input.threadModelSelection,
+      preferredProvider,
+      preferredInstanceId,
+    )
       ? input.threadModelSelection
       : null) ??
-    (input.projectModelSelection?.provider === preferredProvider
+    (modelSelectionMatchesProviderInstance(
+      input.projectModelSelection,
+      preferredProvider,
+      preferredInstanceId,
+    )
       ? input.projectModelSelection
       : null);
-  const draftSelection =
-    Object.values(input.draft?.modelSelectionByProvider ?? {}).find(
-      (selection) => selection?.provider === preferredProvider,
-    ) ?? null;
+  const draftSelection = readModelSelectionForProviderInstance(
+    input.draft?.modelSelectionByProvider,
+    preferredProvider,
+    preferredInstanceId,
+  );
+
+  const fallbackProvider = preferredProvider === "pi" ? "codex" : preferredProvider;
+  const fallbackInstanceId =
+    fallbackProvider === preferredProvider ? preferredInstanceId : fallbackProvider;
 
   return (
     draftSelection ??
-    persistedSelection ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
-      model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
-    }
+    persistedSelection ??
+    makeModelSelection(
+      fallbackProvider,
+      getDefaultModel(fallbackProvider),
+      undefined,
+      undefined,
+      fallbackInstanceId,
+    )
   );
 }

@@ -510,13 +510,13 @@ export const createComposerDraftStoreState =
           [modelSelectionStorageKey(normalized)]: normalized,
         };
         if (Equal.equals(state.stickyModelSelectionByProvider, nextMap)) {
-          return state.stickyActiveProvider === normalized.provider
+          return state.stickyActiveProvider === modelSelectionStorageKey(normalized)
             ? state
-            : { stickyActiveProvider: normalized.provider };
+            : { stickyActiveProvider: modelSelectionStorageKey(normalized) };
         }
         return {
           stickyModelSelectionByProvider: nextMap,
-          stickyActiveProvider: normalized.provider,
+          stickyActiveProvider: modelSelectionStorageKey(normalized),
         };
       });
     },
@@ -816,7 +816,9 @@ export const createComposerDraftStoreState =
           const current = nextMap[selectionKey];
           nextMap[selectionKey] = reconcileProviderScopedModelSelection(normalized, current);
         }
-        const nextActiveProvider = normalized?.provider ?? base.activeProvider;
+        const nextActiveProvider = normalized
+          ? modelSelectionStorageKey(normalized)
+          : base.activeProvider;
         if (
           Equal.equals(base.modelSelectionByProvider, nextMap) &&
           base.activeProvider === nextActiveProvider
@@ -994,7 +996,7 @@ export const createComposerDraftStoreState =
               { instanceId: stickyBase.instanceId },
             );
           }
-          nextStickyActiveProvider = base.activeProvider ?? normalizedProvider;
+          nextStickyActiveProvider = base.activeProvider ?? selectionKey;
         }
 
         if (

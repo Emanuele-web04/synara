@@ -284,7 +284,7 @@ export function useKanbanTaskComposerEditor(input: UseKanbanTaskComposerEditorIn
       return;
     }
     if (item.type === "model") {
-      handleProviderModelChange(item.provider, item.model);
+      handleProviderModelChange(item.provider, item.model, item.instanceId);
       applyComposerTriggerReplacement({ snapshot, trigger, base: "" });
       return;
     }

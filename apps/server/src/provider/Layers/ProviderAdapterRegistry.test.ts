@@ -1,4 +1,9 @@
-import type { ProviderKind } from "@synara/contracts";
+import {
+  ThreadId,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ProviderSession,
+} from "@synara/contracts";
 import { expect } from "vitest";
 import { it, assert, vi } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
@@ -18,6 +23,9 @@ import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts"
 import { ProviderAdapterRegistryLive } from "./ProviderAdapterRegistry.ts";
 import { ProviderUnsupportedError } from "../Errors.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ServerSettingsService } from "../../serverSettings.ts";
+
+const asProviderInstanceId = (value: string): ProviderInstanceId => value as ProviderInstanceId;
 
 const fakeCodexAdapter: CodexAdapterShape = {
   provider: "codex",
@@ -190,6 +198,15 @@ const registryLayer = (codexAdapter = fakeCodexAdapter) =>
         Layer.succeed(DroidAdapter, fakeDroidAdapter),
         Layer.succeed(OpenCodeAdapter, fakeOpenCodeAdapter),
         Layer.succeed(PiAdapter, fakePiAdapter),
+        ServerSettingsService.layerTest({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Codex Work",
+              config: { homePath: "/tmp/codex-work" },
+            },
+          },
+        }),
       ),
     ),
     NodeServices.layer,
@@ -240,6 +257,59 @@ layer("ProviderAdapterRegistryLive", (it) => {
       const registry = yield* ProviderAdapterRegistry;
       const adapter = yield* registry.getByProvider("unknown" as ProviderKind).pipe(Effect.result);
       assertFailure(adapter, new ProviderUnsupportedError({ provider: "unknown" }));
+    }),
+  );
+
+  it.effect("resolves a settings-backed provider instance facade", () =>
+    Effect.gen(function* () {
+      const registry = yield* ProviderAdapterRegistry;
+      assert.ok(registry.getByInstance);
+      assert.ok(registry.listInstances);
+      const instanceAdapter = yield* registry.getByInstance(asProviderInstanceId("codex_work"));
+
+      assert.equal(instanceAdapter.provider, "codex");
+      assert.notEqual(instanceAdapter, fakeCodexAdapter);
+      assert.ok((yield* registry.listInstances()).includes(asProviderInstanceId("codex_work")));
+    }),
+  );
+
+  it.effect("stamps and filters sessions through the provider instance facade", () =>
+    Effect.gen(function* () {
+      const workInstanceId = asProviderInstanceId("codex_work");
+      const defaultThreadId = ThreadId.makeUnsafe("thread-default");
+      const workThreadId = ThreadId.makeUnsafe("thread-work");
+      const now = new Date().toISOString();
+      const sessions: ProviderSession[] = [
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: defaultThreadId,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          providerInstanceId: workInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: workThreadId,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      vi.mocked(fakeCodexAdapter.listSessions).mockReturnValue(Effect.succeed(sessions));
+
+      const registry = yield* ProviderAdapterRegistry;
+      assert.ok(registry.getByInstance);
+      const instanceAdapter = yield* registry.getByInstance(workInstanceId);
+      const instanceSessions = yield* instanceAdapter.listSessions();
+
+      assert.deepEqual(
+        instanceSessions.map((session) => session.threadId),
+        [workThreadId],
+      );
+      assert.equal(instanceSessions[0]?.providerInstanceId, workInstanceId);
     }),
   );
 });

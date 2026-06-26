@@ -1213,6 +1213,7 @@ export default function ChatView({
     providerModelDiscoveryCwd,
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
@@ -3389,7 +3390,9 @@ export default function ChatView({
     handleModelPickerOpenChange,
     scheduleComposerFocus,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     onProviderModelSelect,
     handleTraitsPickerOpenChange,
@@ -4087,6 +4090,7 @@ export default function ChatView({
         lockedProvider={lockedProvider}
         providers={providerStatuses}
         modelOptionsByProvider={modelOptionsByProvider}
+        modelOptionsByProviderInstance={modelOptionsByProviderInstance}
         loadingModelProviders={loadingModelProviders}
         discoveryErrorsByProvider={discoveryErrorsByProvider}
         hiddenProviders={settings.hiddenProviders}
@@ -4128,6 +4132,7 @@ export default function ChatView({
       lockedProvider={lockedProvider}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}

@@ -341,6 +341,38 @@ describe("ServerSettingsService", () => {
     });
   });
 
+  it("maps legacy provider-only text generation patches to the provider default instance", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        yield* service.updateSettings({
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              enabled: true,
+              config: { homePath: "/tmp/codex-work" },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "codex_work",
+            model: "custom-work-model",
+          },
+        });
+        return yield* service.updateSettings({
+          textGenerationModelSelection: {
+            provider: "codex",
+            model: "gpt-5.4",
+          },
+        });
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+
+    expect(settings.textGenerationModelSelection).toMatchObject({
+      instanceId: "codex",
+      model: "gpt-5.4",
+    });
+  });
+
   it("falls back from disabled text generation instances to another enabled instance", async () => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
@@ -577,5 +609,42 @@ describe("ServerSettingsService", () => {
         serverPasswordRedacted: true,
       },
     );
+  });
+
+  it("persists sensitive provider-instance config values in the secret store", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* service.start;
+
+        const updated = yield* service.updateSettings({
+          providerInstances: {
+            opencode_work: {
+              driver: "opencode",
+              enabled: true,
+              config: {
+                serverUrl: "http://127.0.0.1:4096",
+                serverPassword: "opencode-secret",
+              },
+            },
+          },
+        });
+        const raw = yield* fs.readFileString(settingsPath);
+        return { updated, parsed: JSON.parse(raw) as any, raw };
+      }),
+    );
+
+    expect(result.raw).not.toContain("opencode-secret");
+    expect(result.updated.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "opencode-secret",
+    });
+    expect(result.parsed.providerInstances.opencode_work.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "",
+      serverPasswordRedacted: true,
+    });
   });
 });

@@ -1,9 +1,9 @@
-import { type ProjectId, ThreadId } from "@synara/contracts";
+import { type ProjectId, type ProviderInstanceId, ThreadId } from "@synara/contracts";
 import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { startTransition } from "react";
-import { useAppSettings } from "../appSettings";
+import { startTransition, useMemo } from "react";
+import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import {
@@ -56,6 +56,9 @@ export interface NewThreadNavigationOptions {
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings, serverSettings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
+    providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverCwd = serverConfigQuery.data?.cwd ?? null;
@@ -202,10 +205,15 @@ export function useHandleNewThread() {
       }
 
       const draft = useComposerDraftStore.getState().draftsByThreadId[threadId] ?? null;
-      const stickyProvider = draft?.activeProvider ?? null;
+      const stickyProviderInstanceId = draft?.activeProvider ?? null;
+      const stickyProvider = stickyProviderInstanceId
+        ? resolveProviderForInstanceId(stickyProviderInstanceId)
+        : null;
       if (
         !stickyProvider ||
-        isProviderUsable(findProviderStatus(providerStatuses, stickyProvider))
+        isProviderUsable(
+          findProviderStatus(providerStatuses, stickyProvider, stickyProviderInstanceId),
+        )
       ) {
         return;
       }
@@ -232,6 +240,7 @@ export function useHandleNewThread() {
           threadModelSelection: null,
           projectModelSelection: projectDefaultModelSelection,
           defaultProvider: fallbackProvider,
+          resolveProviderForInstanceId,
         }),
       );
     };
@@ -252,6 +261,7 @@ export function useHandleNewThread() {
         options: creationOptions,
         projectDefaultModelSelection,
         projectId,
+        resolveProviderForInstanceId,
       });
     // Terminal-first threads need a real orchestration thread immediately so
     // the sidebar can render them as durable rows instead of draft-only routes.

@@ -195,7 +195,7 @@ export interface ComposerThreadDraftState {
   queuedTurns: QueuedComposerTurn[];
   restoredSourceProposedPlan?: RestoredComposerSourceProposedPlan | null;
   modelSelectionByProvider: ModelSelectionByProviderInstance;
-  activeProvider: ProviderKind | null;
+  activeProvider: ProviderInstanceId | null;
   runtimeMode: RuntimeMode | null;
   interactionMode: ProviderInteractionMode | null;
 }
@@ -251,7 +251,7 @@ export interface ComposerDraftStoreState {
   draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
   projectDraftThreadIdByProjectId: Record<string, ThreadId>;
   stickyModelSelectionByProvider: ModelSelectionByProviderInstance;
-  stickyActiveProvider: ProviderKind | null;
+  stickyActiveProvider: ProviderInstanceId | null;
   getDraftThreadByProjectId: (
     projectId: ProjectId,
     entryPoint?: ThreadPrimarySurface,

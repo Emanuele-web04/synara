@@ -1,4 +1,9 @@
-import { ProviderInstanceId, ProviderKind, type ThreadId } from "@synara/contracts";
+import {
+  ProviderDriverKind,
+  ProviderInstanceId,
+  defaultInstanceIdForDriver,
+  type ThreadId,
+} from "@synara/contracts";
 import { Effect, Layer, Option, Schema } from "effect";
 
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
@@ -18,17 +23,17 @@ function toPersistenceError(operation: string) {
     });
 }
 
-function decodeProviderKind(
+function decodeProviderDriverKind(
   providerName: string,
   operation: string,
-): Effect.Effect<ProviderKind, ProviderSessionDirectoryPersistenceError> {
-  if (Schema.is(ProviderKind)(providerName)) {
+): Effect.Effect<ProviderDriverKind, ProviderSessionDirectoryPersistenceError> {
+  if (Schema.is(ProviderDriverKind)(providerName)) {
     return Effect.succeed(providerName);
   }
   return Effect.fail(
     new ProviderSessionDirectoryPersistenceError({
       operation,
-      detail: `Unknown persisted provider '${providerName}'.`,
+      detail: `Invalid persisted provider driver '${providerName}'.`,
     }),
   );
 }
@@ -51,7 +56,7 @@ function mergeRuntimePayload(
 }
 
 function readProviderInstanceId(
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
   runtimePayload: unknown | null | undefined,
 ): ProviderInstanceId {
   if (!isRecord(runtimePayload)) {
@@ -67,7 +72,7 @@ function readProviderInstanceId(
   if (isRecord(rawModelSelection) && Schema.is(ProviderInstanceId)(rawModelSelection.instanceId)) {
     return rawModelSelection.instanceId;
   }
-  return provider;
+  return defaultInstanceIdForDriver(provider);
 }
 
 const makeProviderSessionDirectory = Effect.gen(function* () {
@@ -80,7 +85,10 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
         Option.match(runtime, {
           onNone: () => Effect.succeed(Option.none<ProviderRuntimeBinding>()),
           onSome: (value) =>
-            decodeProviderKind(value.providerName, "ProviderSessionDirectory.getBinding").pipe(
+            decodeProviderDriverKind(
+              value.providerName,
+              "ProviderSessionDirectory.getBinding",
+            ).pipe(
               Effect.map((provider) =>
                 Option.some({
                   threadId: value.threadId,
@@ -198,7 +206,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       Effect.mapError(toPersistenceError("ProviderSessionDirectory.listBindings:list")),
       Effect.flatMap(
         Effect.forEach((row) =>
-          decodeProviderKind(row.providerName, "ProviderSessionDirectory.listBindings").pipe(
+          decodeProviderDriverKind(row.providerName, "ProviderSessionDirectory.listBindings").pipe(
             Effect.map((provider) =>
               Option.some({
                 threadId: row.threadId,
@@ -215,7 +223,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
               }),
             ),
             Effect.catchTag("ProviderSessionDirectoryPersistenceError", (error) =>
-              Effect.logDebug("provider session directory skipped unknown persisted provider", {
+              Effect.logDebug("provider session directory skipped invalid persisted provider driver", {
                 threadId: row.threadId,
                 providerName: row.providerName,
                 detail: error.detail,

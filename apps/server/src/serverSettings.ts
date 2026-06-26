@@ -88,6 +88,10 @@ function providerEnvironmentSecretName(input: {
   return `provider-env-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.name, "utf8").toString("base64url")}`;
 }
 
+function providerConfigSecretName(input: { readonly instanceId: string; readonly key: string }) {
+  return `provider-config-${Buffer.from(input.instanceId, "utf8").toString("base64url")}-${Buffer.from(input.key, "utf8").toString("base64url")}`;
+}
+
 function migrateSettings(settings: ServerSettings, migrationVersion: number): ServerSettings {
   const selection = settings.textGenerationModelSelection;
   if (
@@ -575,30 +579,55 @@ const makeServerSettings = Effect.gen(function* () {
         ...settings.providerInstances,
       };
       for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
-        if (!instance.environment) continue;
-        const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
-          if (!variable.sensitive || variable.valueRedacted !== true) {
-            environment.push(variable);
-            continue;
-          }
-          const secret = yield* secretStore
-            .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
-            .pipe(
-              Effect.mapError((cause) =>
-                secretStoreError(
-                  `failed to read secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
-                  cause,
+        let materializedInstance = instance;
+        if (instance.environment) {
+          const environment: ProviderInstanceEnvironmentVariable[] = [];
+          for (const variable of instance.environment) {
+            if (!variable.sensitive || variable.valueRedacted !== true) {
+              environment.push(variable);
+              continue;
+            }
+            const secret = yield* secretStore
+              .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
+              .pipe(
+                Effect.mapError((cause) =>
+                  secretStoreError(
+                    `failed to read secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                    cause,
+                  ),
                 ),
-              ),
-            );
-          const { valueRedacted: _valueRedacted, ...materialized } = variable;
-          environment.push({
-            ...materialized,
-            value: secret ? providerEnvironmentTextDecoder.decode(secret) : "",
-          });
+              );
+            const { valueRedacted: _valueRedacted, ...materialized } = variable;
+            environment.push({
+              ...materialized,
+              value: secret ? providerEnvironmentTextDecoder.decode(secret) : "",
+            });
+          }
+          materializedInstance = { ...materializedInstance, environment };
         }
-        providerInstances[instanceId] = { ...instance, environment };
+
+        if (isRecord(instance.config)) {
+          const config: Record<string, unknown> = { ...instance.config };
+          let changed = false;
+          for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+            if (config[`${key}Redacted`] !== true) continue;
+            const secret = yield* secretStore
+              .get(providerConfigSecretName({ instanceId, key }))
+              .pipe(
+                Effect.mapError((cause) =>
+                  secretStoreError(
+                    `failed to read secret for provider instance '${instanceId}' config '${key}'`,
+                    cause,
+                  ),
+                ),
+              );
+            config[key] = secret ? providerEnvironmentTextDecoder.decode(secret) : "";
+            delete config[`${key}Redacted`];
+            changed = true;
+          }
+          if (changed) materializedInstance = { ...materializedInstance, config };
+        }
+        providerInstances[instanceId] = materializedInstance;
       }
       return {
         ...settings,
@@ -614,42 +643,19 @@ const makeServerSettings = Effect.gen(function* () {
       const providerInstances: Record<string, ProviderInstanceConfig> = {
         ...next.providerInstances,
       };
-      const nextSecretKeys = new Set<string>();
+      const nextEnvironmentSecretKeys = new Set<string>();
+      const nextConfigSecretKeys = new Set<string>();
 
       for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
-        if (!instance.environment) continue;
-        const environment: ProviderInstanceEnvironmentVariable[] = [];
-        for (const variable of instance.environment) {
-          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (!variable.sensitive) {
-            yield* secretStore.remove(secretName).pipe(
-              Effect.mapError((cause) =>
-                secretStoreError(
-                  `failed to remove secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
-                  cause,
-                ),
-              ),
-            );
-            environment.push(redactProviderEnvironmentVariable(variable));
-            continue;
-          }
-
-          nextSecretKeys.add(secretName);
-          if (variable.valueRedacted !== true) {
-            const value = variable.value ?? "";
-            if (value.length > 0) {
-              yield* secretStore
-                .set(secretName, providerEnvironmentTextEncoder.encode(value))
-                .pipe(
-                  Effect.mapError((cause) =>
-                    secretStoreError(
-                      `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
-                      cause,
-                    ),
-                  ),
-                );
-              environment.push({ ...variable, value: "", valueRedacted: true });
-            } else {
+        let persistedInstance = instance;
+        if (instance.environment) {
+          const environment: ProviderInstanceEnvironmentVariable[] = [];
+          for (const variable of instance.environment) {
+            const secretName = providerEnvironmentSecretName({
+              instanceId,
+              name: variable.name,
+            });
+            if (!variable.sensitive) {
               yield* secretStore.remove(secretName).pipe(
                 Effect.mapError((cause) =>
                   secretStoreError(
@@ -658,21 +664,85 @@ const makeServerSettings = Effect.gen(function* () {
                   ),
                 ),
               );
-              const { valueRedacted: _valueRedacted, ...withoutRedaction } = variable;
-              environment.push(withoutRedaction);
+              environment.push(redactProviderEnvironmentVariable(variable));
+              continue;
             }
-            continue;
+
+            nextEnvironmentSecretKeys.add(secretName);
+            if (variable.valueRedacted !== true) {
+              const value = variable.value ?? "";
+              if (value.length > 0) {
+                yield* secretStore
+                  .set(secretName, providerEnvironmentTextEncoder.encode(value))
+                  .pipe(
+                    Effect.mapError((cause) =>
+                      secretStoreError(
+                        `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                        cause,
+                      ),
+                    ),
+                  );
+                environment.push({ ...variable, value: "", valueRedacted: true });
+              } else {
+                yield* secretStore.remove(secretName).pipe(
+                  Effect.mapError((cause) =>
+                    secretStoreError(
+                      `failed to remove secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                      cause,
+                    ),
+                  ),
+                );
+                const { valueRedacted: _valueRedacted, ...withoutRedaction } = variable;
+                environment.push(withoutRedaction);
+              }
+              continue;
+            }
+            environment.push(redactProviderEnvironmentVariable(variable));
           }
-          environment.push(redactProviderEnvironmentVariable(variable));
+          persistedInstance = { ...persistedInstance, environment };
         }
-        providerInstances[instanceId] = { ...instance, environment };
+
+        if (isRecord(instance.config)) {
+          const config: Record<string, unknown> = { ...instance.config };
+          let changed = false;
+          for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+            const secretName = providerConfigSecretName({ instanceId, key });
+            const value = instance.config[key];
+            if (typeof value !== "string" || value.length === 0) {
+              yield* secretStore.remove(secretName).pipe(
+                Effect.mapError((cause) =>
+                  secretStoreError(
+                    `failed to remove secret for provider instance '${instanceId}' config '${key}'`,
+                    cause,
+                  ),
+                ),
+              );
+              delete config[`${key}Redacted`];
+              continue;
+            }
+            nextConfigSecretKeys.add(secretName);
+            yield* secretStore.set(secretName, providerEnvironmentTextEncoder.encode(value)).pipe(
+              Effect.mapError((cause) =>
+                secretStoreError(
+                  `failed to write secret for provider instance '${instanceId}' config '${key}'`,
+                  cause,
+                ),
+              ),
+            );
+            config[key] = "";
+            config[`${key}Redacted`] = true;
+            changed = true;
+          }
+          if (changed) persistedInstance = { ...persistedInstance, config };
+        }
+        providerInstances[instanceId] = persistedInstance;
       }
 
       for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
         for (const variable of instance.environment ?? []) {
           if (!variable.sensitive) continue;
           const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (nextSecretKeys.has(secretName)) continue;
+          if (nextEnvironmentSecretKeys.has(secretName)) continue;
           yield* secretStore.remove(secretName).pipe(
             Effect.mapError((cause) =>
               secretStoreError(
@@ -681,6 +751,20 @@ const makeServerSettings = Effect.gen(function* () {
               ),
             ),
           );
+        }
+        if (isRecord(instance.config)) {
+          for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+            const secretName = providerConfigSecretName({ instanceId, key });
+            if (nextConfigSecretKeys.has(secretName)) continue;
+            yield* secretStore.remove(secretName).pipe(
+              Effect.mapError((cause) =>
+                secretStoreError(
+                  `failed to remove stale secret for provider instance '${instanceId}' config '${key}'`,
+                  cause,
+                ),
+              ),
+            );
+          }
         }
       }
 

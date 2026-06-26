@@ -574,6 +574,8 @@ export function useChatTurnExecution({
         rememberCustomBinaryPathForDispatch({
           threadId: threadIdForSend,
           provider: selectedModelSelectionForSend.provider,
+          providerInstanceId:
+            selectedModelSelectionForSend.instanceId ?? selectedModelSelectionForSend.provider,
           providerOptions: providerOptionsForDispatchForSend,
         });
         await stagedTurnAttachments.runWithDispatch((turnAttachments) =>

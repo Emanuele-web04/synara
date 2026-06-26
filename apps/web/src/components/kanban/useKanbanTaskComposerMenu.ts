@@ -33,6 +33,10 @@ import {
 } from "~/composer-logic";
 import type { TerminalContextDraft } from "~/lib/terminalContext";
 import type { ProviderModelOption } from "../../providerModelOptions";
+import type {
+  ProviderModelOptionsByProviderInstance,
+  ProviderModelPickerInstance,
+} from "../chat/ProviderModelPicker";
 import { useKanbanTaskComposerDiscovery } from "./useKanbanTaskComposerDiscovery";
 import { useKanbanTaskComposerEditor } from "./useKanbanTaskComposerEditor";
 
@@ -52,6 +56,8 @@ interface UseKanbanTaskComposerMenuInput {
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  readonly modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
+  readonly providerInstances: ReadonlyArray<ProviderModelPickerInstance>;
   readonly selectedRuntimeAgents: readonly ProviderAgentDescriptor[];
   readonly selectedProjectCwd: string | null;
   readonly serverCwd: string | null;
@@ -83,6 +89,8 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     selectedProvider,
     selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,
@@ -120,6 +128,8 @@ export function useKanbanTaskComposerMenu(input: UseKanbanTaskComposerMenuInput)
     selectedProvider,
     selectedProviderInstanceId,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    providerInstances,
     selectedRuntimeAgents,
     selectedProjectCwd,
     serverCwd,

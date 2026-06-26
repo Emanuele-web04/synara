@@ -1,4 +1,5 @@
 import {
+  type ProviderInstanceId,
   type ProviderKind,
   type ProviderStartOptions,
   type ServerProviderStatus,
@@ -7,18 +8,24 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   normalizeCustomBinaryPath,
   normalizeProviderStatusForLocalConfig,
+  providerStatusInstanceKey,
 } from "~/lib/providerAvailability";
 import type { AppSettings } from "../../appSettings";
-import { getCustomBinaryPathForProvider } from "../../appSettings";
+import { getCustomBinaryPathForProviderInstance } from "../../appSettings";
 import {
   loadConfirmedCustomBinaryPaths,
   saveConfirmedCustomBinaryPaths,
 } from "../../confirmedCustomBinaryPathStore";
 import { type Thread } from "../../types";
 import { shouldConsumePendingCustomBinaryConfirmation } from "../ChatView.logic";
+import { isProviderKind } from "../../providerOrdering";
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
-function getThreadProviderCustomBinaryPathKey(threadId: Thread["id"], provider: ProviderKind) {
-  return `${threadId}:${provider}`;
+function getThreadProviderCustomBinaryPathKey(
+  threadId: Thread["id"],
+  provider: ProviderKind,
+  instanceId?: ProviderInstanceId | null | undefined,
+) {
+  return `${threadId}:${instanceId ?? provider}`;
 }
 
 function getConfirmedCustomBinarySessionKey(
@@ -32,7 +39,11 @@ function getConfirmedCustomBinarySessionKey(
   if (session.status !== "ready" && session.status !== "running") {
     return null;
   }
-  return getThreadProviderCustomBinaryPathKey(thread.id, provider);
+  return getThreadProviderCustomBinaryPathKey(
+    thread.id,
+    provider,
+    session.providerInstanceId ?? provider,
+  );
 }
 
 function getProviderStartOptionsCustomBinaryPath(
@@ -71,9 +82,8 @@ export function useChatProviderStatus({
   settings,
   configuredProviderStatuses,
 }: ChatProviderStatusInput) {
-  const [confirmedCustomBinaryPathsByProvider, setConfirmedCustomBinaryPathsByProvider] = useState<
-    Partial<Record<ProviderKind, string>>
-  >(loadConfirmedCustomBinaryPaths);
+  const [confirmedCustomBinaryPathsByProviderInstance, setConfirmedCustomBinaryPathsByProviderInstance] =
+    useState<Partial<Record<ProviderInstanceId, string>>>(loadConfirmedCustomBinaryPaths);
   const confirmedCustomBinarySessionKeysRef = useRef<Set<string>>(new Set());
   const pendingCustomBinaryPathsByThreadProviderRef = useRef<Map<string, string>>(new Map());
 
@@ -81,9 +91,14 @@ export function useChatProviderStatus({
     (input: {
       threadId: Thread["id"];
       provider: ProviderKind;
+      providerInstanceId: ProviderInstanceId;
       providerOptions: ProviderStartOptions | undefined;
     }) => {
-      const pendingKey = getThreadProviderCustomBinaryPathKey(input.threadId, input.provider);
+      const pendingKey = getThreadProviderCustomBinaryPathKey(
+        input.threadId,
+        input.provider,
+        input.providerInstanceId,
+      );
       const customBinaryPath = getProviderStartOptionsCustomBinaryPath(
         input.providerOptions,
         input.provider,
@@ -98,14 +113,15 @@ export function useChatProviderStatus({
   );
   useEffect(() => {
     const provider = activeThread?.session?.provider;
-    if (!activeThread || !provider) {
+    const providerInstanceId = activeThread?.session?.providerInstanceId ?? provider;
+    if (!activeThread || !provider || !providerInstanceId) {
       return;
     }
 
     const sessionKey = getConfirmedCustomBinarySessionKey(activeThread, provider);
     if (!sessionKey) {
       confirmedCustomBinarySessionKeysRef.current.delete(
-        getThreadProviderCustomBinaryPathKey(activeThread.id, provider),
+        getThreadProviderCustomBinaryPathKey(activeThread.id, provider, providerInstanceId),
       );
       return;
     }
@@ -126,40 +142,51 @@ export function useChatProviderStatus({
       return;
     }
 
-    setConfirmedCustomBinaryPathsByProvider((existing) =>
-      existing[provider] === customBinaryPath
+    setConfirmedCustomBinaryPathsByProviderInstance((existing) =>
+      existing[providerInstanceId] === customBinaryPath
         ? existing
         : {
             ...existing,
-            [provider]: customBinaryPath,
+            [providerInstanceId]: customBinaryPath,
           },
     );
   }, [
     activeThread,
     activeThread?.id,
     activeThread?.session?.provider,
+    activeThread?.session?.providerInstanceId,
     activeThread?.session?.status,
   ]);
   // Persist confirmations so a custom binary path that already started a session
   // stays trusted across restarts, instead of re-showing the availability warning.
   useEffect(() => {
-    saveConfirmedCustomBinaryPaths(confirmedCustomBinaryPathsByProvider);
-  }, [confirmedCustomBinaryPathsByProvider]);
+    saveConfirmedCustomBinaryPaths(confirmedCustomBinaryPathsByProviderInstance);
+  }, [confirmedCustomBinaryPathsByProviderInstance]);
   const providerStatuses = useMemo(
     () =>
       (configuredProviderStatuses ?? EMPTY_PROVIDER_STATUSES)
         .map((status) => {
-          const customBinaryPath = getCustomBinaryPathForProvider(settings, status.provider);
+          const provider = status.driver ?? status.provider;
+          if (!isProviderKind(provider)) {
+            return status;
+          }
+          const providerInstanceId = providerStatusInstanceKey(status);
+          const customBinaryPath = getCustomBinaryPathForProviderInstance(
+            settings,
+            provider,
+            providerInstanceId,
+          );
           return normalizeProviderStatusForLocalConfig({
-            provider: status.provider,
+            provider,
             status,
             customBinaryPath,
-            confirmedCustomBinaryPath: confirmedCustomBinaryPathsByProvider[status.provider],
-            disabled: settings.disabledProviders.includes(status.provider),
+            confirmedCustomBinaryPath:
+              confirmedCustomBinaryPathsByProviderInstance[providerInstanceId],
+            disabled: settings.disabledProviders.includes(provider),
           });
         })
         .flatMap((status) => (status ? [status] : [])),
-    [confirmedCustomBinaryPathsByProvider, configuredProviderStatuses, settings],
+    [confirmedCustomBinaryPathsByProviderInstance, configuredProviderStatuses, settings],
   );
   return { rememberCustomBinaryPathForDispatch, providerStatuses };
 }

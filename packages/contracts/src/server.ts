@@ -48,13 +48,15 @@ export const ServerProviderAuthStatus = Schema.Literals([
 export type ServerProviderAuthStatus = typeof ServerProviderAuthStatus.Type;
 
 export const ServerProviderStatus = Schema.Struct({
-  provider: ProviderKind,
+  provider: ProviderDriverKind,
   instanceId: Schema.optional(ProviderInstanceId),
   driver: Schema.optional(ProviderDriverKind),
   displayName: Schema.optional(TrimmedNonEmptyString),
   enabled: Schema.optional(Schema.Boolean),
   status: ServerProviderStatusState,
   available: Schema.Boolean,
+  availability: Schema.optional(Schema.Literals(["available", "unavailable"])),
+  unavailableReason: Schema.optional(TrimmedNonEmptyString),
   authStatus: ServerProviderAuthStatus,
   authType: Schema.optional(TrimmedNonEmptyString),
   authLabel: Schema.optional(TrimmedNonEmptyString),

@@ -189,6 +189,8 @@ const disabledProviderHealthLayer = ProviderHealthLive.pipe(
 
 const cachedReadyCodexStatus = {
   provider: "codex" as const,
+  instanceId: "codex" as const,
+  driver: "codex" as const,
   status: "ready" as const,
   available: true,
   authStatus: "authenticated" as const,
@@ -570,6 +572,35 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(workCodex?.authLabel, undefined);
     });
 
+    it("projects unsupported provider instances as unavailable shadows", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [cachedReadyCodexStatus],
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            fork_work: {
+              driver: "customFork",
+              displayName: "Fork Work",
+              enabled: true,
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+
+      const unsupported = statuses.find((status) => status.instanceId === "fork_work");
+      assert.strictEqual(unsupported?.provider, "customFork");
+      assert.strictEqual(unsupported?.driver, "customFork");
+      assert.strictEqual(unsupported?.displayName, "Fork Work");
+      assert.strictEqual(unsupported?.enabled, false);
+      assert.strictEqual(unsupported?.available, false);
+      assert.strictEqual(unsupported?.availability, "unavailable");
+      assert.strictEqual(
+        unsupported?.unavailableReason,
+        "Provider driver 'customFork' is not supported by this Synara build.",
+      );
+    });
+
     it.effect("does not expose cached ready statuses for disabled providers", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
@@ -798,6 +829,29 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(error.provider, "opencode");
         assert.strictEqual(error.reason, "Provider is disabled in Synara settings.");
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+
+    it.effect("rejects one-click updates for missing explicit provider instances", () =>
+      Effect.gen(function* () {
+        const providerHealth = yield* ProviderHealth;
+        const error = yield* Effect.flip(
+          providerHealth.updateProvider({ provider: "codex", instanceId: "codex_missing" }),
+        );
+
+        assert.ok(error instanceof ServerProviderUpdateError);
+        assert.strictEqual(error.provider, "codex");
+        assert.strictEqual(error.instanceId, "codex_missing");
+        assert.strictEqual(error.reason, "Provider instance is not configured.");
+      }).pipe(
+        Effect.provide(
+          ProviderHealthLive.pipe(
+            Layer.provideMerge(ServerSettingsService.layerTest()),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "provider-health-missing-" }),
+            ),
+          ),
+        ),
+      ),
     );
   });
 

@@ -4,6 +4,10 @@ import {
   type ProviderKind,
   type ServerProviderStatus,
 } from "@synara/contracts";
+import { isProviderKind } from "../providerOrdering";
+
+const CUSTOM_BINARY_CONFIRMATION_SUFFIX =
+  "Availability will be confirmed when you start a session.";
 
 export interface ProviderSendAvailability {
   readonly provider: ProviderKind;
@@ -59,6 +63,8 @@ export function normalizeProviderStatusForLocalConfig(input: {
   const {
     supportsAutoRuntimeMode: _staleAutoSupport,
     autoRuntimeModeBinaryPath: _staleAutoBinaryPath,
+    availability: _staleAvailability,
+    unavailableReason: _staleUnavailableReason,
     ...statusWithoutStaleAutoCapability
   } = status;
 
@@ -68,30 +74,28 @@ export function normalizeProviderStatusForLocalConfig(input: {
 
   if (normalizeCustomBinaryPath(input.confirmedCustomBinaryPath) === customBinaryPath) {
     // Only the exact path used by a successful session can suppress the warning.
+    const { message: _message, ...confirmedStatus } = statusWithoutStaleAutoCapability;
     return {
-      ...(status.instanceId !== undefined ? { instanceId: status.instanceId } : {}),
-      ...(status.driver !== undefined ? { driver: status.driver } : {}),
-      ...(status.displayName !== undefined ? { displayName: status.displayName } : {}),
-      ...(status.enabled !== undefined ? { enabled: status.enabled } : {}),
-      provider: status.provider,
+      ...confirmedStatus,
       available: true,
+      ...(_staleAvailability !== undefined ? { availability: "available" as const } : {}),
       status: "ready",
-      authStatus: status.authStatus,
-      checkedAt: status.checkedAt,
-      ...(status.authType ? { authType: status.authType } : {}),
-      ...(status.authLabel ? { authLabel: status.authLabel } : {}),
-      ...(status.voiceTranscriptionAvailable !== undefined
-        ? { voiceTranscriptionAvailable: status.voiceTranscriptionAvailable }
-        : {}),
     };
   }
 
   return {
     ...statusWithoutStaleAutoCapability,
     available: true,
+    ...(_staleAvailability !== undefined ? { availability: "available" as const } : {}),
     status: "warning",
-    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. Availability will be confirmed when you start a session.`,
+    message: `${PROVIDER_DISPLAY_NAMES[input.provider]} uses a custom local binary path in this app. ${CUSTOM_BINARY_CONFIRMATION_SUFFIX}`,
   };
+}
+
+export function providerStatusInstanceKey(
+  status: Pick<ServerProviderStatus, "provider" | "instanceId">,
+): ProviderInstanceId {
+  return status.instanceId ?? status.provider;
 }
 
 export function isProviderUsable(status: ServerProviderStatus | null | undefined): boolean {
@@ -99,15 +103,27 @@ export function isProviderUsable(status: ServerProviderStatus | null | undefined
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  return status.available && status.status === "ready" && status.authStatus !== "unauthenticated";
+  if (!status.available || status.authStatus === "unauthenticated") {
+    return false;
+  }
+  if (status.status === "ready") {
+    return true;
+  }
+  return (
+    status.status === "warning" &&
+    typeof status.message === "string" &&
+    status.message.endsWith(CUSTOM_BINARY_CONFIRMATION_SUFFIX)
+  );
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {
   if (!status) {
     return "Provider status is still loading.";
   }
-  const providerLabel =
-    status.displayName?.trim() || PROVIDER_DISPLAY_NAMES[status.provider] || status.provider;
+  const providerLabelFallback = isProviderKind(status.provider)
+    ? PROVIDER_DISPLAY_NAMES[status.provider]
+    : status.provider;
+  const providerLabel = status.displayName?.trim() || providerLabelFallback || status.provider;
   if (status.authStatus === "unauthenticated") {
     return `${providerLabel} is not authenticated yet.`;
   }
@@ -126,11 +142,12 @@ export function findProviderStatus(
     return (
       statuses.find(
         (status) =>
-          status.provider === provider && (status.instanceId ?? status.provider) === instanceId,
+          (status.driver ?? status.provider) === provider &&
+          (status.instanceId ?? status.provider) === instanceId,
       ) ?? null
     );
   }
-  return statuses.find((status) => status.provider === provider) ?? null;
+  return statuses.find((status) => (status.driver ?? status.provider) === provider) ?? null;
 }
 
 export function resolveAvailableProviderPreference(input: {
@@ -150,25 +167,34 @@ export function resolveAvailableProviderPreference(input: {
 
   const hiddenProviders = new Set(input.hiddenProviders ?? []);
   const providerOrder = input.providerOrder ?? [];
+  const providerForStatus = (status: ServerProviderStatus): ProviderKind | null => {
+    const driver = status.driver ?? status.provider;
+    return isProviderKind(driver) ? driver : null;
+  };
   const orderedStatuses = input.statuses.toSorted((left, right) => {
-    const leftIndex = providerOrder.indexOf(left.provider);
-    const rightIndex = providerOrder.indexOf(right.provider);
+    const leftProvider = providerForStatus(left);
+    const rightProvider = providerForStatus(right);
+    const leftIndex = leftProvider ? providerOrder.indexOf(leftProvider) : -1;
+    const rightIndex = rightProvider ? providerOrder.indexOf(rightProvider) : -1;
     const normalizedLeft = leftIndex >= 0 ? leftIndex : Number.MAX_SAFE_INTEGER;
     const normalizedRight = rightIndex >= 0 ? rightIndex : Number.MAX_SAFE_INTEGER;
     return normalizedLeft - normalizedRight;
   });
   const visibleInstalled = orderedStatuses.filter(
-    (status) => status.available && !hiddenProviders.has(status.provider),
+    (status) => {
+      const provider = providerForStatus(status);
+      return status.available && provider !== null && !hiddenProviders.has(provider);
+    },
   );
   const installed =
     visibleInstalled.length > 0
       ? visibleInstalled
-      : orderedStatuses.filter((status) => status.available);
+      : orderedStatuses.filter((status) => status.available && providerForStatus(status) !== null);
 
+  const preferredInstalled =
+    installed.find((status) => status.authStatus !== "unauthenticated") ?? installed[0];
   return (
-    installed.find((status) => status.authStatus !== "unauthenticated")?.provider ??
-    installed[0]?.provider ??
-    input.preferredProvider
+    (preferredInstalled ? providerForStatus(preferredInstalled) : null) ?? input.preferredProvider
   );
 }
 

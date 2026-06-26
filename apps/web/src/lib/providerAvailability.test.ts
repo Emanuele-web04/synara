@@ -108,6 +108,33 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("preserves provider instance metadata when a confirmed custom path becomes ready", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "claudeAgent",
+        status: {
+          ...BASE_STATUS,
+          provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claude_work",
+          displayName: "Claude Work",
+          message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/custom/bin/claude",
+        confirmedCustomBinaryPath: "/custom/bin/claude",
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claude_work",
+      displayName: "Claude Work",
+      authStatus: "unknown",
+      available: true,
+      checkedAt: BASE_STATUS.checkedAt,
+      status: "ready",
+    });
+  });
+
   it("keeps warning when a different custom path was confirmed", () => {
     expect(
       normalizeProviderStatusForLocalConfig({
@@ -219,6 +246,22 @@ describe("isProviderUsable", () => {
         authStatus: "authenticated",
       }),
     ).toBe(true);
+  });
+
+  it("allows the local custom-binary confirmation fallback to start a session", () => {
+    const normalized = normalizeProviderStatusForLocalConfig({
+      provider: "grok",
+      status: BASE_STATUS,
+      customBinaryPath: "/opt/homebrew/bin/grok",
+    });
+
+    expect(normalized?.status).toBe("warning");
+    expect(isProviderUsable(normalized)).toBe(true);
+    expect(
+      resolveProviderSendAvailability({ provider: "grok", statuses: [normalized!] }),
+    ).toMatchObject({
+      usable: true,
+    });
   });
 });
 

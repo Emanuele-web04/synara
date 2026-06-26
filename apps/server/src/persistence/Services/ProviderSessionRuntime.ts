@@ -20,7 +20,7 @@ import type { ProviderSessionRuntimeRepositoryError } from "../Errors.ts";
 export const ProviderSessionRuntime = Schema.Struct({
   threadId: ThreadId,
   providerName: Schema.String,
-  providerInstanceId: ProviderInstanceId,
+  providerInstanceId: Schema.NullOr(ProviderInstanceId),
   adapterKey: Schema.String,
   runtimeMode: RuntimeMode,
   status: ProviderSessionRuntimeStatus,
