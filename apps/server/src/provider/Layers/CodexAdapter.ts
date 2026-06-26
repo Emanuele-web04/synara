@@ -20,6 +20,7 @@ import {
   type ProviderSendTurnInput,
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
+  type ProviderSession,
   type ServerVoiceTranscriptionResult,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
@@ -856,6 +857,7 @@ function runtimeEventBase(
     ...(event.parentTurnId ? { parentTurnId: event.parentTurnId } : {}),
     ...(event.itemId ? { itemId: asRuntimeItemId(event.itemId) } : {}),
     ...(event.requestId ? { requestId: asRuntimeRequestId(event.requestId) } : {}),
+    ...(event.providerInstanceId ? { providerInstanceId: event.providerInstanceId } : {}),
     ...(refs ? { providerRefs: refs } : {}),
     raw: {
       source: eventRawSource(event),
@@ -2479,6 +2481,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }
             yield* nativeEventLogger.write(event, event.threadId);
           });
+        const stampEventWithLiveSession = (event: ProviderEvent): ProviderEvent => {
+          const session = manager
+            .listSessions()
+            .find((entry: ProviderSession) => entry.threadId === event.threadId);
+          return event.providerInstanceId === undefined && session?.providerInstanceId
+            ? { ...event, providerInstanceId: session.providerInstanceId }
+            : event;
+        };
 
         const ingress = yield* makeBoundedCallbackIngress<CodexRuntimeIngressItem, never, never>(
           (item) =>
@@ -2513,8 +2523,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           },
         );
         const listener = (event: ProviderEvent) => {
+          const stampedEvent = stampEventWithLiveSession(event);
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(event, event.threadId),
+            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
@@ -2523,14 +2534,14 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             .filter(
               (runtimeEvent) =>
                 runtimeEvent.type !== "event.unmapped" ||
-                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(event.method) &&
-                  shouldSurfaceUnmappedEvent(event)),
+                (!DIAGNOSTIC_ONLY_CODEX_METHODS.has(stampedEvent.method) &&
+                  shouldSurfaceUnmappedEvent(stampedEvent)),
             )
             .map(compactProviderRuntimeEventForIngress);
           const runtimeEvents = sizedRuntimeEvents.map((item) => item.event);
-          trackTurnWatchdogActivity(event.threadId, runtimeEvents);
+          trackTurnWatchdogActivity(stampedEvent.threadId, runtimeEvents);
           const nativeEvent = compactCodexNativeEventForIngress(
-            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(event) : event,
+            hasUnmappedEvent ? sanitizeUnmappedProviderEvent(stampedEvent) : stampedEvent,
           );
           const result = ingress.offer({
             nativeEvent: nativeEvent.event,
@@ -2543,8 +2554,8 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             // The runtime reconciler remains the final recovery fence.
             void Effect.runPromise(
               Effect.logError("Codex callback ingress exhausted terminal reserve", {
-                threadId: event.threadId,
-                method: event.method,
+                threadId: stampedEvent.threadId,
+                method: stampedEvent.method,
                 status: ingress.status(),
               }),
             );
