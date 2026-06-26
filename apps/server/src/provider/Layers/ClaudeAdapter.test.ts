@@ -44,6 +44,7 @@ import {
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import {
   buildEmbeddedClaudeSystemPromptAppend,
+  claudeHomeEnvironment,
   makeClaudeAdapterLive as makeClaudeAdapterLiveBase,
   type ClaudeAdapterLiveOptions,
   type ClaudeOwnedProcess,
@@ -742,6 +743,17 @@ describe("ClaudeAdapterLive", () => {
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
     );
+  });
+
+  it("sets Windows profile variables for configured Claude homes", () => {
+    assert.deepEqual(claudeHomeEnvironment("C:\\Users\\work\\.claude-work", "win32"), {
+      HOME: "C:\\Users\\work\\.claude-work",
+      USERPROFILE: "C:\\Users\\work\\.claude-work",
+      APPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Local",
+      HOMEDRIVE: "C:",
+      HOMEPATH: "\\Users\\work\\.claude-work",
+    });
   });
 
   it.effect("returns validation error for non-claude provider on startSession", () => {
