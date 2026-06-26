@@ -17,6 +17,7 @@ import {
   DiffIcon,
   EllipsisIcon,
   FolderIcon,
+  FolderOpenIcon,
   GitBranchIcon,
   GitCommitIcon,
   ListChecksIcon,
@@ -86,6 +87,7 @@ interface DiffPanelToolbarProps {
   timestampFormat: TimestampFormat;
   renderableFiles: ReadonlyArray<FileDiffMetadata>;
   selectedFilePath: string | null;
+  fileTreeOpen: boolean;
   resolvedTheme: "light" | "dark";
   diffRenderMode: DiffRenderMode;
   diffWordWrap: boolean;
@@ -98,6 +100,7 @@ interface DiffPanelToolbarProps {
   onSelectLastTurn: () => void;
   onSelectTurn: (turnId: TurnId | null) => void;
   onSelectFile: (filePath: string) => void;
+  onToggleFileTree: () => void;
   onDiffRenderModeChange: (mode: DiffRenderMode) => void;
   onDiffWordWrapChange: (enabled: boolean) => void;
   onDiffIgnoreWhitespaceChange: (enabled: boolean) => void;
@@ -394,6 +397,26 @@ export const DiffPanelToolbar = memo(function DiffPanelToolbar(props: DiffPanelT
             resolvedTheme={props.resolvedTheme}
             onSelectFile={props.onSelectFile}
           />
+
+          <IconButton
+            variant="ghost"
+            size="icon-xs"
+            className={cn(
+              DIFF_PANEL_TOOLBAR_ICON_BUTTON_CLASS_NAME,
+              props.fileTreeOpen &&
+                "bg-[var(--color-background-button-secondary)] text-foreground hover:text-foreground",
+            )}
+            aria-pressed={props.fileTreeOpen}
+            label={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
+            title={props.fileTreeOpen ? "Hide file tree" : "Show file tree"}
+            onClick={props.onToggleFileTree}
+          >
+            {props.fileTreeOpen ? (
+              <FolderOpenIcon className="size-3.5" />
+            ) : (
+              <FolderIcon className="size-3.5" />
+            )}
+          </IconButton>
         </div>
 
         <DiffPanelToolbarDivider />
