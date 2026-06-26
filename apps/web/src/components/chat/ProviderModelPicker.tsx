@@ -87,6 +87,13 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
     };
   }
 
+  if (provider.status !== "ready") {
+    return {
+      disabled: true,
+      label: provider.status === "warning" ? "Check" : "Unavailable",
+    };
+  }
+
   return {
     disabled: false,
     label: null,
@@ -134,6 +141,10 @@ export interface ProviderModelPickerInstance {
   readonly isDefault: boolean;
 }
 
+export type ProviderModelOptionsByProviderInstance = Partial<
+  Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption>>
+>;
+
 function defaultProviderInstance(provider: ProviderKind): ProviderModelPickerInstance {
   return {
     instanceId: provider,
@@ -149,17 +160,22 @@ function findProviderStatusForInstance(input: {
   provider: ProviderKind;
   instanceId: ProviderInstanceId;
 }): ServerProviderStatus | undefined {
+  return input.providers?.find(
+    (entry) =>
+      entry.provider === input.provider &&
+      (entry.instanceId ?? entry.provider) === input.instanceId,
+  );
+}
+
+function resolveModelOptionsForProviderInstance(input: {
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance | undefined;
+}): ReadonlyArray<ProviderModelOption> {
   return (
-    input.providers?.find(
-      (entry) =>
-        entry.provider === input.provider &&
-        (entry.instanceId ?? entry.provider) === input.instanceId,
-    ) ??
-    input.providers?.find(
-      (entry) =>
-        entry.provider === input.provider &&
-        (entry.instanceId === undefined || entry.instanceId === entry.provider),
-    )
+    input.modelOptionsByProviderInstance?.[input.instanceId] ??
+    input.modelOptionsByProvider[input.provider]
   );
 }
 
@@ -221,6 +237,7 @@ type ProviderModelMenuItemsProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
@@ -338,6 +355,17 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     [activeProvider, getProviderInstances, selectedProviderInstanceId],
   );
 
+  const getModelOptionsForProviderInstance = useCallback(
+    (provider: ProviderKind, instanceId: ProviderInstanceId): ReadonlyArray<ProviderModelOption> =>
+      resolveModelOptionsForProviderInstance({
+        provider,
+        instanceId,
+        modelOptionsByProvider: props.modelOptionsByProvider,
+        modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+      }),
+    [props.modelOptionsByProvider, props.modelOptionsByProviderInstance],
+  );
+
   const resolveInstanceAvailability = useCallback(
     (instance: ProviderModelPickerInstance): { disabled: boolean; label: string | null } => {
       if (!instance.enabled) {
@@ -374,11 +402,8 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   ) => {
     if (props.disabled) return;
     if (!value) return;
-    const resolvedModel = resolveSelectableModel(
-      provider,
-      value,
-      props.modelOptionsByProvider[provider],
-    );
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
+    const resolvedModel = resolveSelectableModel(provider, value, providerOptions);
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel, instanceId);
     onAfterSelection?.();
@@ -386,15 +411,14 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
 
   const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
     if (props.disabled || !instanceId) return;
-    const model =
-      activeProvider === provider
-        ? props.model
-        : (props.modelOptionsByProvider[provider][0]?.slug ?? "");
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
+    const model = activeProvider === provider ? props.model : (providerOptions[0]?.slug ?? "");
     if (!model) return;
-    const resolvedModel = resolveSelectableModel(
+    const resolvedModel = resolveSelectableModel(provider, model, providerOptions);
+    props.onProviderModelChange(
       provider,
-      model,
-      props.modelOptionsByProvider[provider],
+      resolvedModel ?? providerOptions[0]?.slug ?? model,
+      instanceId,
     );
     if (!resolvedModel) return;
     props.onProviderModelChange(provider, resolvedModel, instanceId);
@@ -466,7 +490,10 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
       );
     }
 
-    const providerOptions = props.modelOptionsByProvider[provider];
+    const providerOptions = getModelOptionsForProviderInstance(
+      provider,
+      getSelectedInstanceIdForProvider(provider),
+    );
     const shouldShowSearch =
       (provider === "opencode" ||
         provider === "cursor" ||
@@ -633,12 +660,20 @@ export function resolveProviderModelLabel(input: {
   lockedProvider: ProviderKind | null;
   model: ModelSlug;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | undefined;
 }): string {
   const activeProvider = input.lockedProvider ?? input.provider;
+  const activeInstanceId = input.selectedProviderInstanceId ?? activeProvider;
   return resolveSelectedModelLabel({
     provider: activeProvider,
     model: input.model,
-    options: input.modelOptionsByProvider[activeProvider],
+    options: resolveModelOptionsForProviderInstance({
+      provider: activeProvider,
+      instanceId: activeInstanceId,
+      modelOptionsByProvider: input.modelOptionsByProvider,
+      modelOptionsByProviderInstance: input.modelOptionsByProviderInstance,
+    }),
   });
 }
 
@@ -674,6 +709,7 @@ type ProviderModelPickerProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
@@ -707,6 +743,8 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     lockedProvider: props.lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
   const selectedInstanceLabel = resolveProviderInstanceLabel({
     provider: activeProvider,
@@ -809,6 +847,9 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
           lockedProvider={props.lockedProvider}
           {...(props.providers ? { providers: props.providers } : {})}
           modelOptionsByProvider={props.modelOptionsByProvider}
+          {...(props.modelOptionsByProviderInstance
+            ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+            : {})}
           {...(props.loadingModelProviders
             ? { loadingModelProviders: props.loadingModelProviders }
             : {})}

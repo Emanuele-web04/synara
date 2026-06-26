@@ -23,6 +23,10 @@ const KEY: ProviderModelDiscoveryCacheKey = {
   accountId: null,
   apiEndpoint: null,
   agentDir: null,
+  serverUrl: null,
+  serverPasswordKey: null,
+  experimentalWebSockets: false,
+  environmentKey: null,
   cwd: "/repo/a",
 };
 

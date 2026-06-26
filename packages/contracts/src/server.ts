@@ -448,6 +448,7 @@ export type ServerRefreshProvidersResult = typeof ServerRefreshProvidersResult.T
 
 export const ServerProviderUpdateInput = Schema.Struct({
   provider: ProviderKind,
+  instanceId: Schema.optional(ProviderInstanceId),
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 
@@ -455,11 +456,13 @@ export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerPro
   "ServerProviderUpdateError",
   {
     provider: ProviderKind,
+    instanceId: Schema.optional(ProviderInstanceId),
     reason: TrimmedNonEmptyString,
   },
 ) {
   override get message(): string {
-    return `Provider update failed for ${this.provider}: ${this.reason}`;
+    const target = this.instanceId ? `${this.provider}/${this.instanceId}` : this.provider;
+    return `Provider update failed for ${target}: ${this.reason}`;
   }
 }
 

@@ -21,6 +21,7 @@ export interface GrokAcpRuntimeSettings {
   readonly binaryPath?: string;
   readonly model?: string;
   readonly reasoningEffort?: GrokModelOptions["reasoningEffort"];
+  readonly environment?: Readonly<Record<string, string>>;
 }
 
 export interface GrokAcpRuntimeInput extends Omit<
@@ -125,7 +126,10 @@ export function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
-    env: buildProviderChildEnvironment({ provider: "grok" }),
+    env: buildProviderChildEnvironment({
+      provider: "grok",
+      ...(grokSettings?.environment ? { overrides: grokSettings.environment } : {}),
+    }),
   };
 }
 
@@ -141,12 +145,17 @@ function describeAuthMethodIds(authMethodIds: ReadonlySet<string>): string {
   return authMethodIds.size > 0 ? [...authMethodIds].join(", ") : "none";
 }
 
-export const resolveGrokAcpAuthMethodId = (
-  initializeResult: Acp.InitializeResponse,
-): Effect.Effect<string, AcpErrors.AcpError> =>
-  Effect.gen(function* () {
+export const resolveGrokAcpAuthMethodIdForEnv =
+  (environment?: Readonly<Record<string, string>> | undefined) =>
+  (initializeResult: Acp.InitializeResponse): Effect.Effect<string, AcpErrors.AcpError> =>
+    Effect.gen(function* () {
     const authMethodIds = availableAuthMethodIds(initializeResult);
-    const hasApiKey = hasGrokApiKeyEnv();
+    const hasApiKey = hasGrokApiKeyEnv(
+      buildProviderChildEnvironment({
+        provider: "grok",
+        ...(environment ? { overrides: environment } : {}),
+      }),
+    );
     if (hasApiKey && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
       return GROK_API_KEY_AUTH_METHOD_ID;
     }
@@ -188,7 +197,9 @@ export const resolveGrokAcpAuthMethodId = (
         reason: "compatibility_mismatch",
       },
     });
-  });
+    });
+
+export const resolveGrokAcpAuthMethodId = resolveGrokAcpAuthMethodIdForEnv();
 
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
@@ -198,7 +209,7 @@ export const makeGrokAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd, input.runtimeMode),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodId,
+        resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(input.grokSettings?.environment),
         authenticateMeta: { headless: true },
         freshSessionRetry: {
           shouldRetry: isGrokSessionStoragePathNotFoundError,

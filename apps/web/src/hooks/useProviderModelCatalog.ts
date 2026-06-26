@@ -8,15 +8,18 @@ import type {
   ProviderAgentDescriptor,
   ProviderInstanceId,
   ProviderKind,
+  ProviderListModelsResult,
   ProviderModelDescriptor,
 } from "@synara/contracts";
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
 import {
   getAppModelOptions,
-  getCodexProviderDiscoveryOptions,
+  getCustomModelsForProviderInstance,
   getCustomModelsByProvider,
+  getProviderInstanceOptions,
+  getProviderStartOptions,
   useAppSettings,
 } from "../appSettings";
 import { resolveRuntimeModelDescriptor } from "../components/chat/runtimeModelCapabilities";
@@ -29,6 +32,7 @@ import {
   providerModelsQueryOptions,
 } from "../lib/providerDiscoveryReactQuery";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../providerModelOptions";
+import type { ProviderModelOptionsByProviderInstance } from "../components/chat/ProviderModelPicker";
 
 export interface ProviderModelCatalog {
   customModelsByProvider: ReturnType<typeof getCustomModelsByProvider>;
@@ -36,6 +40,7 @@ export interface ProviderModelCatalog {
     ProviderKind,
     ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
   >;
+  modelOptionsByProviderInstance: ProviderModelOptionsByProviderInstance;
   /** Providers whose runtime model discovery is still pending (no usable list yet). */
   loadingModelProviders: Partial<Record<ProviderKind, boolean>>;
   /**
@@ -58,6 +63,38 @@ export interface ProviderModelCatalog {
 }
 
 const EMPTY_PROVIDER_AGENTS: ReadonlyArray<ProviderAgentDescriptor> = [];
+
+function readProviderOptionString(options: unknown, key: string): string | null {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    return null;
+  }
+  const value = (options as Record<string, unknown>)[key];
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function modelQueryOptionsForProviderInstance(input: {
+  readonly settings: Parameters<typeof getProviderStartOptions>[0];
+  readonly provider: ProviderKind;
+  readonly instanceId: ProviderInstanceId;
+  readonly cwd: string | null;
+  readonly enabled: boolean;
+}) {
+  const providerOptions = getProviderStartOptions(input.settings, input.instanceId)?.[
+    input.provider
+  ];
+  return providerModelsQueryOptions({
+    provider: input.provider,
+    instanceId: input.instanceId,
+    binaryPath: readProviderOptionString(providerOptions, "binaryPath"),
+    homePath: readProviderOptionString(providerOptions, "homePath"),
+    shadowHomePath: readProviderOptionString(providerOptions, "shadowHomePath"),
+    accountId: readProviderOptionString(providerOptions, "accountId"),
+    apiEndpoint: readProviderOptionString(providerOptions, "apiEndpoint"),
+    agentDir: readProviderOptionString(providerOptions, "agentDir"),
+    cwd: input.cwd,
+    enabled: input.enabled,
+  });
+}
 
 function modelDiscoveryError(
   resultError: string | undefined,
@@ -99,10 +136,31 @@ export function useProviderModelCatalog(input: {
   const discoveryCwd = input.cwd ?? null;
   const { settings, serverSettings } = useAppSettings();
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
-  const codexDiscoveryOptions = useMemo(
-    () => getCodexProviderDiscoveryOptions(settings),
-    [settings],
-  );
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  const instanceModelQueries = useQueries({
+    queries: providerInstances.map((instance) =>
+      modelQueryOptionsForProviderInstance({
+        settings,
+        provider: instance.provider,
+        instanceId: instance.instanceId,
+        cwd: discoveryCwd,
+        enabled: discoveryEnabled || selectedProviderInstanceId === instance.instanceId,
+      }),
+    ),
+  });
+  const dynamicModelsByProviderInstance = useMemo(() => {
+    const byInstance: Partial<Record<ProviderInstanceId, ProviderListModelsResult>> = {};
+    providerInstances.forEach((instance, index) => {
+      const data = instanceModelQueries[index]?.data;
+      if (data) {
+        byInstance[instance.instanceId] =
+          instance.provider === "cursor"
+            ? { ...data, models: collapseCursorModelVariants(data.models) }
+            : data;
+      }
+    });
+    return byInstance;
+  }, [instanceModelQueries, providerInstances]);
   const hiddenProviderSet = useMemo(
     () => new Set<ProviderKind>(settings.hiddenProviders),
     [settings.hiddenProviders],
@@ -153,70 +211,37 @@ export function useProviderModelCatalog(input: {
   const piModelDiscoveryEnabled = shouldDiscoverProvider("pi");
   const devinModelDiscoveryEnabled = shouldDiscoverProvider("devin");
 
+  const queryOptionsForProvider = (provider: ProviderKind, enabled: boolean) => {
+    const selectedInstanceId =
+      selectedProvider === provider ? selectedProviderInstanceId?.trim() : undefined;
+    const instance =
+      providerInstances.find(
+        (candidate) =>
+          candidate.provider === provider && candidate.instanceId === selectedInstanceId,
+      ) ??
+      providerInstances.find(
+        (candidate) => candidate.provider === provider && candidate.instanceId === provider,
+      ) ??
+      providerInstances.find((candidate) => candidate.provider === provider);
+    return modelQueryOptionsForProviderInstance({
+      settings,
+      provider,
+      instanceId: instance?.instanceId ?? provider,
+      cwd: discoveryCwd,
+      enabled,
+    });
+  };
+
   const modelQueryOptionsByProvider = {
-    claudeAgent: providerModelsQueryOptions({
-      provider: "claudeAgent",
-      ...selectedInstanceQueryOption("claudeAgent"),
-      binaryPath: settings.claudeBinaryPath || null,
-      enabled: claudeModelDiscoveryEnabled,
-    }),
-    codex: providerModelsQueryOptions({
-      provider: "codex",
-      ...selectedInstanceQueryOption("codex"),
-      ...codexDiscoveryOptions,
-      enabled: codexModelDiscoveryEnabled,
-    }),
-    cursor: providerModelsQueryOptions({
-      provider: "cursor",
-      ...selectedInstanceQueryOption("cursor"),
-      binaryPath: settings.cursorBinaryPath || null,
-      apiEndpoint: settings.cursorApiEndpoint || null,
-      enabled: cursorModelDiscoveryEnabled,
-    }),
-    antigravity: providerModelsQueryOptions({
-      provider: "antigravity",
-      ...selectedInstanceQueryOption("antigravity"),
-      binaryPath: settings.antigravityBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: antigravityModelDiscoveryEnabled,
-    }),
-    grok: providerModelsQueryOptions({
-      provider: "grok",
-      ...selectedInstanceQueryOption("grok"),
-      binaryPath: settings.grokBinaryPath || null,
-      enabled: grokModelDiscoveryEnabled,
-    }),
-    droid: providerModelsQueryOptions({
-      provider: "droid",
-      ...selectedInstanceQueryOption("droid"),
-      binaryPath: settings.droidBinaryPath || null,
-      cwd: discoveryCwd,
-      // Droid probes every model through a disposable ACP session. Keep it
-      // provider-scoped instead of warming it from unrelated picker/settings UI.
-      enabled: droidModelDiscoveryEnabled,
-    }),
-    opencode: providerModelsQueryOptions({
-      provider: "opencode",
-      ...selectedInstanceQueryOption("opencode"),
-      binaryPath: settings.openCodeBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: openCodeModelDiscoveryEnabled,
-    }),
-    pi: providerModelsQueryOptions({
-      provider: "pi",
-      ...selectedInstanceQueryOption("pi"),
-      binaryPath: settings.piBinaryPath || null,
-      agentDir: settings.piAgentDir || null,
-      cwd: discoveryCwd,
-      enabled: piModelDiscoveryEnabled,
-    }),
-    devin: providerModelsQueryOptions({
-      provider: "devin",
-      ...selectedInstanceQueryOption("devin"),
-      binaryPath: settings.devinBinaryPath || null,
-      cwd: discoveryCwd,
-      enabled: devinModelDiscoveryEnabled,
-    }),
+    claudeAgent: queryOptionsForProvider("claudeAgent", claudeModelDiscoveryEnabled),
+    codex: queryOptionsForProvider("codex", codexModelDiscoveryEnabled),
+    cursor: queryOptionsForProvider("cursor", cursorModelDiscoveryEnabled),
+    antigravity: queryOptionsForProvider("antigravity", antigravityModelDiscoveryEnabled),
+    grok: queryOptionsForProvider("grok", grokModelDiscoveryEnabled),
+    droid: queryOptionsForProvider("droid", droidModelDiscoveryEnabled),
+    opencode: queryOptionsForProvider("opencode", openCodeModelDiscoveryEnabled),
+    pi: queryOptionsForProvider("pi", piModelDiscoveryEnabled),
+    devin: queryOptionsForProvider("devin", devinModelDiscoveryEnabled),
   } as const;
 
   const claudeDynamicModelsQuery = useQuery(modelQueryOptionsByProvider.claudeAgent);
@@ -438,6 +463,37 @@ export function useProviderModelCatalog(input: {
     devinDynamicModelsQuery.data,
   ]);
 
+  const modelOptionsByProviderInstance = useMemo<ProviderModelOptionsByProviderInstance>(() => {
+    const selectedInstanceId = (selectedProviderInstanceId?.trim() ||
+      selectedProvider) as ProviderInstanceId;
+    const byInstance: ProviderModelOptionsByProviderInstance = {};
+    for (const instance of providerInstances) {
+      const customModels = getCustomModelsForProviderInstance(settings, instance);
+      const selectedModelHint =
+        instance.provider === selectedProvider && instance.instanceId === selectedInstanceId
+          ? modelHintByProvider?.[instance.provider]
+          : null;
+      const staticOptions = getAppModelOptions(instance.provider, customModels, selectedModelHint);
+      const dynamicModels = dynamicModelsByProviderInstance[instance.instanceId]?.models;
+      byInstance[instance.instanceId] =
+        dynamicModels && dynamicModels.length > 0
+          ? mergeDynamicModelOptions({
+              provider: instance.provider,
+              staticOptions,
+              dynamicModels,
+            })
+          : staticOptions;
+    }
+    return byInstance;
+  }, [
+    dynamicModelsByProviderInstance,
+    modelHintByProvider,
+    providerInstances,
+    selectedProvider,
+    selectedProviderInstanceId,
+    settings,
+  ]);
+
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
     () => ({
       antigravity: antigravityModelDiscoveryPending,
@@ -590,6 +646,7 @@ export function useProviderModelCatalog(input: {
     () => ({
       customModelsByProvider,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
       loadingModelProviders,
       runtimeModelsByProvider,
       selectedRuntimeModel,
@@ -603,6 +660,7 @@ export function useProviderModelCatalog(input: {
       discoveryErrorsByProvider,
       loadingModelProviders,
       modelOptionsByProvider,
+      modelOptionsByProviderInstance,
       runtimeModelsByProvider,
       selectedProviderModelsLoading,
       selectedProviderRuntimeModelDiscoveryPending,

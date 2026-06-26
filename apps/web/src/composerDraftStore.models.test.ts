@@ -140,6 +140,55 @@ describe("composerDraftStore modelSelection", () => {
     );
   });
 
+  it("preserves provider instance ids when reusing existing model options", () => {
+    const store = useComposerDraftStore.getState();
+    store.setModelSelection(
+      threadId,
+      modelSelection(
+        "codex",
+        "gpt-5.3-codex",
+        { reasoningEffort: "xhigh" },
+        "codex_work",
+      ),
+    );
+
+    store.setModelSelection(
+      threadId,
+      modelSelection("codex", "gpt-5.4", undefined, "codex_work"),
+    );
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider
+        .codex_work,
+    ).toEqual(
+      modelSelection("codex", "gpt-5.4", { reasoningEffort: "xhigh" }, "codex_work"),
+    );
+  });
+
+  it("keeps same-provider instance selections in separate draft slots", () => {
+    const store = useComposerDraftStore.getState();
+    const personal = modelSelection(
+      "claudeAgent",
+      "claude-sonnet-personal",
+      undefined,
+      "claude_personal",
+    );
+    const work = modelSelection(
+      "claudeAgent",
+      "claude-sonnet-work",
+      { effort: "max" },
+      "claude_work",
+    );
+
+    store.setModelSelection(threadId, personal);
+    store.setModelSelection(threadId, work);
+
+    const selections =
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.modelSelectionByProvider;
+    expect(selections?.claude_personal).toEqual(personal);
+    expect(selections?.claude_work).toEqual(work);
+  });
+
   it.each(["max", "ultra"])(
     "retains runtime-discovered Codex %s effort in thread and sticky selections",
     (reasoningEffort) => {
@@ -427,6 +476,46 @@ describe("composerDraftStore modelSelection", () => {
     });
 
     expect(state.selectedModel).toBe("opencode/gpt-5-nano");
+  });
+
+  it("uses only the selected instance's draft model and options", () => {
+    const state = deriveEffectiveComposerModelState({
+      draft: {
+        modelSelectionByProvider: {
+          codex_work: modelSelection(
+            "codex",
+            "gpt-5-work",
+            { reasoningEffort: "xhigh" },
+            "codex_work",
+          ),
+          codex_personal: modelSelection(
+            "codex",
+            "gpt-5-personal",
+            { reasoningEffort: "low" },
+            "codex_personal",
+          ),
+        },
+        activeProvider: "codex",
+      },
+      selectedProvider: "codex",
+      selectedProviderInstanceId: "codex_work",
+      threadModelSelection: null,
+      projectModelSelection: null,
+      customModelsByProvider: {
+        codex: ["gpt-5-work", "gpt-5-personal"],
+        claudeAgent: [],
+        cursor: [],
+        antigravity: [],
+        grok: [],
+        droid: [],
+        opencode: [],
+        pi: [],
+        devin: [],
+      },
+    });
+
+    expect(state.selectedModel).toBe("gpt-5-work");
+    expect(state.modelOptions?.codex).toEqual({ reasoningEffort: "xhigh" });
   });
 
   it("preserves the persisted OpenCode thread model when discovery omits it", () => {

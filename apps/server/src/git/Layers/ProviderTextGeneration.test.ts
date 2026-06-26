@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
+  ClaudeTextGeneration,
   CodexTextGeneration,
   CursorTextGeneration,
   DroidTextGeneration,
@@ -10,6 +11,7 @@ import {
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderTextGenerationLive } from "./ProviderTextGeneration.ts";
 
 function createTextGenerationDouble(label: string) {
@@ -99,6 +101,7 @@ function makeProviderTextGenerationTestLayer(
   const droid = createTextGenerationDouble("droid");
   const opencode = createTextGenerationDouble("opencode");
   const layer = ProviderTextGenerationLive.pipe(
+    Layer.provide(Layer.succeed(ClaudeTextGeneration, claude.service)),
     Layer.provide(Layer.succeed(CodexTextGeneration, codex.service)),
     Layer.provide(Layer.succeed(CursorTextGeneration, cursor.service)),
     Layer.provide(Layer.succeed(DroidTextGeneration, droid.service)),
@@ -236,14 +239,15 @@ describe("ProviderTextGenerationLive", () => {
     expect(result.title).toBe("opencode title");
     expect(opencode.generateThreadTitle).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelSelection: {
+        modelSelection: expect.objectContaining({
+          instanceId: "opencode",
           provider: "opencode",
           model: "openai/gpt-5",
           options: {
             agent: "plan",
             variant: "balanced",
           },
-        },
+        }),
         providerOptions: {
           opencode: {
             binaryPath: "/custom/bin/opencode",
@@ -286,14 +290,15 @@ describe("ProviderTextGenerationLive", () => {
     expect(result.title).toBe("cursor title");
     expect(cursor.generateThreadTitle).toHaveBeenCalledWith(
       expect.objectContaining({
-        modelSelection: {
+        modelSelection: expect.objectContaining({
+          instanceId: "cursor",
           provider: "cursor",
           model: "composer-2",
           options: {
             reasoningEffort: "high",
             fastMode: true,
           },
-        },
+        }),
         providerOptions: {
           cursor: {
             binaryPath: "/custom/bin/agent",
@@ -431,5 +436,87 @@ describe("ProviderTextGenerationLive", () => {
     );
     expect(codex.evaluateAutomationCompletion).not.toHaveBeenCalled();
     expect(opencode.evaluateAutomationCompletion).not.toHaveBeenCalled();
+  });
+
+  it("routes text generation by exact provider instance and merges its provider options", async () => {
+    const { layer, claude, codex } = makeProviderTextGenerationTestLayer({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          displayName: "Claude Work",
+          enabled: true,
+          environment: [{ name: "ANTHROPIC_AUTH_TOKEN", value: "work-token", sensitive: true }],
+          config: {
+            binaryPath: "/opt/claude",
+            homePath: "/tmp/claude-work",
+          },
+        },
+      },
+    });
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+        return yield* textGeneration.generateThreadTitle({
+          cwd: "/repo",
+          message: "Name the account-isolated work",
+          modelSelection: {
+            provider: "codex",
+            instanceId: "claude_work",
+            model: "claude-sonnet-4",
+          },
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.title).toBe("claude title");
+    expect(claude.generateThreadTitle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "claude-sonnet-4",
+        modelSelection: expect.objectContaining({
+          provider: "claudeAgent",
+          instanceId: "claude_work",
+          model: "claude-sonnet-4",
+        }),
+        providerOptions: {
+          claudeAgent: {
+            binaryPath: "/opt/claude",
+            homePath: "/tmp/claude-work",
+            environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+          },
+        },
+      }),
+    );
+    expect(codex.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
+  it("rejects disabled provider instances", async () => {
+    const { layer, claude } = makeProviderTextGenerationTestLayer({
+      providerInstances: {
+        claude_disabled: {
+          driver: "claudeAgent",
+          enabled: false,
+          config: {},
+        },
+      },
+    });
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const textGeneration = yield* TextGeneration;
+          return yield* textGeneration.generateThreadTitle({
+            cwd: "/repo",
+            message: "This should not run",
+            modelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_disabled",
+              model: "claude-sonnet-4",
+            },
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toThrow("Provider instance 'claude_disabled' is disabled.");
+    expect(claude.generateThreadTitle).not.toHaveBeenCalled();
   });
 });

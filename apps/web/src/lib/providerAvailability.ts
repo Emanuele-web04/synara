@@ -99,14 +99,15 @@ export function isProviderUsable(status: ServerProviderStatus | null | undefined
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  return status.available && status.authStatus !== "unauthenticated";
+  return status.available && status.status === "ready" && status.authStatus !== "unauthenticated";
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {
   if (!status) {
     return "Provider status is still loading.";
   }
-  const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
+  const providerLabel =
+    status.displayName?.trim() || PROVIDER_DISPLAY_NAMES[status.provider] || status.provider;
   if (status.authStatus === "unauthenticated") {
     return `${providerLabel} is not authenticated yet.`;
   }
@@ -126,13 +127,7 @@ export function findProviderStatus(
       statuses.find(
         (status) =>
           status.provider === provider && (status.instanceId ?? status.provider) === instanceId,
-      ) ??
-      statuses.find(
-        (status) =>
-          status.provider === provider &&
-          (status.instanceId === undefined || status.instanceId === status.provider),
-      ) ??
-      null
+      ) ?? null
     );
   }
   return statuses.find((status) => status.provider === provider) ?? null;

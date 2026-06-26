@@ -54,6 +54,11 @@ import { realpathNearestExisting } from "./realpathNearestExisting";
 import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import { WORKSPACE_FILE_WRITE_CONFLICT_CODE } from "@synara/shared/workspaceFileWrite";
 import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
+import {
   isThreadDetailEventFor,
   THREAD_DETAIL_EVENT_TYPES,
 } from "@synara/shared/threadDetailEvents";
@@ -1431,7 +1436,25 @@ const makeWsRpcHandlersLayer = () =>
             "Failed to read working tree diff stats",
           ),
         [WS_METHODS.gitSummarizeDiff]: (input) =>
-          rpcEffect(gitManager.summarizeDiff(input), "Failed to summarize diff"),
+          rpcEffect(
+            Effect.gen(function* () {
+              if (input.providerOptions || !input.textGenerationModelSelection) {
+                return yield* gitManager.summarizeDiff(input);
+              }
+              const settings = yield* serverSettings.getSettings;
+              const instance = resolveProviderInstance(settings, {
+                provider: input.textGenerationModelSelection.provider,
+                instanceId: resolveModelSelectionInstanceId(input.textGenerationModelSelection),
+              });
+              return yield* gitManager.summarizeDiff({
+                ...input,
+                ...(instance
+                  ? { providerOptions: providerStartOptionsFromInstance(instance) }
+                  : {}),
+              });
+            }),
+            "Failed to summarize diff",
+          ),
         [WS_METHODS.gitPull]: (input) =>
           rpcEffect(
             refreshGitStatusAfter(
@@ -1822,6 +1845,13 @@ const makeWsRpcHandlersLayer = () =>
               const settings = yield* serverSettings.getSettings;
               const modelSelection =
                 input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              const fallbackInstance = resolveProviderInstance(settings, {
+                provider: modelSelection.provider,
+                instanceId: resolveModelSelectionInstanceId(modelSelection),
+              });
+              const providerOptions =
+                input.providerOptions ??
+                (fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined);
               return yield* textGeneration.generateThreadRecap({
                 cwd: input.cwd,
                 newMaterial: input.newMaterial,
@@ -1830,7 +1860,7 @@ const makeWsRpcHandlersLayer = () =>
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
                 model: input.textGenerationModel ?? modelSelection.model,
                 modelSelection,
-                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+                ...(providerOptions ? { providerOptions } : {}),
               });
             }),
             "Failed to generate thread recap",
@@ -1841,6 +1871,13 @@ const makeWsRpcHandlersLayer = () =>
               const settings = yield* serverSettings.getSettings;
               const modelSelection =
                 input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+              const fallbackInstance = resolveProviderInstance(settings, {
+                provider: modelSelection.provider,
+                instanceId: resolveModelSelectionInstanceId(modelSelection),
+              });
+              const providerOptions =
+                input.providerOptions ??
+                (fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined);
               return yield* textGeneration.generateAutomationIntent({
                 cwd: input.cwd,
                 message: input.message,
@@ -1849,7 +1886,7 @@ const makeWsRpcHandlersLayer = () =>
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
                 model: input.textGenerationModel ?? modelSelection.model,
                 modelSelection,
-                ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+                ...(providerOptions ? { providerOptions } : {}),
               });
             }),
             "Failed to generate automation intent",

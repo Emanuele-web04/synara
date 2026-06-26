@@ -40,6 +40,7 @@ import {
 import {
   getProviderIconClassName,
   ProviderModelMenuItems,
+  type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
   resolveProviderInstanceLabel,
   resolveProviderModelLabel,
@@ -55,6 +56,7 @@ type ComposerModelEffortPickerProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   discoveryErrorsByProvider?: Partial<Record<ProviderKind, string | undefined>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
@@ -116,6 +118,8 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     lockedProvider: props.lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
   const selectedInstanceLabel = resolveProviderInstanceLabel({
     provider: activeProvider,
@@ -309,6 +313,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
           <>
             <ComposerEffortSliderCard
               provider={props.provider}
+              providerInstanceId={props.selectedProviderInstanceId}
               threadId={props.threadId}
               model={props.model}
               modelLabel={modelLabel}

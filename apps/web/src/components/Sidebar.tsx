@@ -104,6 +104,7 @@ import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
+  getProviderInstanceOptions,
   useAppSettings,
 } from "../appSettings";
 import {
@@ -362,8 +363,9 @@ import { createClientPointMenuAnchor } from "~/lib/clientPointMenuAnchor";
 import { resolveThreadModelSummary } from "~/lib/threadModelSummary";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffBadgeLabel,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -2909,9 +2911,9 @@ export default function Sidebar() {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
+    async (thread: Thread, target: ThreadHandoffTarget) => {
       try {
-        await createThreadHandoff(thread, targetProvider);
+        await createThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -2963,15 +2965,19 @@ export default function Sidebar() {
       });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders({
+        ? resolveAvailableHandoffTargets({
             sourceProvider: thread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
+            sourceProviderInstanceId:
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            providerInstances: getProviderInstanceOptions(appSettings),
           })
         : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+      const handoffTargetById = new Map(
+        handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
+      );
+      const handoffItems = handoffTargets.map((target, index) => ({
+        id: `handoff:${target.instanceId}`,
+        label: `Handoff to ${target.label}`,
         icon: THREAD_CONTEXT_MENU_ICONS.handoff,
         separatorBefore: index === 0,
       }));
@@ -3059,9 +3065,9 @@ export default function Sidebar() {
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
+        const target = handoffTargetById.get(clicked);
+        if (target) {
+          await handoffThread(thread, target);
         }
         return;
       }
@@ -3178,6 +3184,7 @@ export default function Sidebar() {
       await confirmAndDeleteThread(threadId);
     },
     [
+      appSettings,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       copyPathToClipboard,

@@ -8,7 +8,6 @@ import {
   ProviderCredentialsLive,
 } from "../providerCredentials";
 import { ServerSettingsService } from "../serverSettings";
-import { ProviderValidationError } from "./Errors";
 import { makeClaudeAdapterLive } from "./Layers/ClaudeAdapter";
 import { makeCodexAdapterLive } from "./Layers/CodexAdapter";
 import { makeCursorAdapterLive } from "./Layers/CursorAdapter";
@@ -100,18 +99,6 @@ export function makeServerProviderLayer(
     );
     const providerServiceLayer = makeDurableProviderServiceLive({
       ...(canonicalEventLogger ? { canonicalEventLogger } : {}),
-      providerIsEnabled: (provider) =>
-        serverSettings.getSettings.pipe(
-          Effect.map((settings) => settings.providers[provider].enabled),
-          Effect.mapError(
-            (cause) =>
-              new ProviderValidationError({
-                operation: "ProviderService.startSession",
-                issue: "Failed to read provider enablement settings.",
-                cause,
-              }),
-          ),
-        ),
     }).pipe(
       Layer.provide(adapterRegistryLayer),
       Layer.provide(providerSessionDirectoryLayer),

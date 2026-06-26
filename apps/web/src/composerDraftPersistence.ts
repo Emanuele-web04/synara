@@ -39,6 +39,7 @@ import {
   type ComposerPromptHistorySavedDraft,
   type ComposerThreadDraftState,
   type DraftThreadEnvMode,
+  type ModelSelectionByProviderInstance,
   type QueuedComposerTurn,
 } from "./composerDraftDomain";
 import {
@@ -46,7 +47,9 @@ import {
   legacyMergeModelSelectionIntoProviderModelOptions,
   legacySyncModelSelectionOptions,
   legacyToModelSelectionByProvider,
+  modelSelectionStorageKey,
   normalizeModelSelection,
+  normalizeModelSelectionMapByInstance,
   normalizeProviderKind,
   normalizeProviderModelOptions,
   sanitizeStickyModelSelectionMap,
@@ -72,9 +75,9 @@ const DraftThreadEntryPointSchema = Schema.Literals(["chat", "terminal"]);
 
 function normalizePersistedModelSelectionMap(
   value: unknown,
-): Partial<Record<ProviderKind, ModelSelection>> {
+): ModelSelectionByProviderInstance {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
-  const result: Partial<Record<ProviderKind, ModelSelection>> = {};
+  const result: ModelSelectionByProviderInstance = {};
   for (const [legacyProvider, rawSelection] of Object.entries(value)) {
     const selection = normalizeModelSelection(rawSelection, {
       provider: legacyProvider,
@@ -83,8 +86,9 @@ function normalizePersistedModelSelectionMap(
           ? (rawSelection as Record<string, unknown>).model
           : undefined,
     });
-    if (selection && !(legacyProvider === "kilo" && result.opencode !== undefined)) {
-      result[selection.provider] = selection;
+    const key = selection ? modelSelectionStorageKey(selection) : null;
+    if (selection && key && !(legacyProvider === "kilo" && result[key] !== undefined)) {
+      result[key] = selection;
     }
   }
   return result;
@@ -288,7 +292,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   queuedTurns: Schema.optionalKey(Schema.Array(PersistedQueuedComposerTurn)),
   restoredSourceProposedPlan: Schema.optionalKey(PersistedRestoredSourceProposedPlan),
   modelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
   activeProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
   runtimeMode: Schema.optionalKey(RuntimeMode),
@@ -355,7 +359,7 @@ const PersistedComposerDraftStoreState = Schema.Struct({
   draftThreadsByThreadId: Schema.Record(ThreadId, PersistedDraftThreadState),
   projectDraftThreadIdByProjectId: Schema.Record(ProjectId, ThreadId),
   stickyModelSelectionByProvider: Schema.optionalKey(
-    Schema.Record(ProviderKind, Schema.optionalKey(ModelSelection)),
+    Schema.Record(Schema.String, Schema.optional(ModelSelection)),
   ),
   stickyActiveProvider: Schema.optionalKey(Schema.NullOr(ProviderKind)),
 });
@@ -999,7 +1003,7 @@ function normalizePersistedDraftsByThreadId(
     );
     // If the draft already has the v3 shape, use it directly
     const legacyDraftCandidate = draftValue as LegacyPersistedComposerThreadDraftState;
-    let modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
+    let modelSelectionByProvider: ModelSelectionByProviderInstance = {};
     let activeProvider: ProviderKind | null = null;
 
     if (
@@ -1415,7 +1419,7 @@ export function normalizeCurrentPersistedComposerDraftStoreState(
     );
 
   // Handle both v3 (modelSelectionByProvider) and v2/legacy formats
-  let stickyModelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> = {};
+  let stickyModelSelectionByProvider: ModelSelectionByProviderInstance = {};
   let stickyActiveProvider: ProviderKind | null = null;
   if (
     normalizedPersistedState.stickyModelSelectionByProvider &&
@@ -1538,8 +1542,9 @@ export function toHydratedThreadDraft(
   persistedDraft: PersistedComposerThreadDraftState,
 ): ComposerThreadDraftState {
   // The persisted draft is already in v3 shape (migration handles older formats)
-  const modelSelectionByProvider: Partial<Record<ProviderKind, ModelSelection>> =
-    persistedDraft.modelSelectionByProvider ?? {};
+  const modelSelectionByProvider = normalizeModelSelectionMapByInstance(
+    (persistedDraft.modelSelectionByProvider ?? {}) as ModelSelectionByProviderInstance,
+  );
   const activeProvider = normalizeProviderKind(persistedDraft.activeProvider) ?? null;
 
   return {

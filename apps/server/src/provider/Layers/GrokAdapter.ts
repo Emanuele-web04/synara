@@ -1053,6 +1053,9 @@ export function makeGrokAdapter(
             ...(providerGrokOptions?.binaryPath !== undefined
               ? { binaryPath: providerGrokOptions.binaryPath }
               : {}),
+            ...(providerGrokOptions?.environment !== undefined
+              ? { environment: providerGrokOptions.environment }
+              : {}),
             ...runtimeGrokModelSettings,
           };
 
@@ -1284,6 +1287,9 @@ export function makeGrokAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId
+              ? { providerInstanceId: input.providerInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -2395,7 +2401,10 @@ export function makeGrokAdapter(
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({ provider: "grok" });
+          const childEnv = buildProviderChildEnvironment({
+            provider: "grok",
+            ...(input.environment ? { overrides: input.environment } : {}),
+          });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models"], {
               env: childEnv,
@@ -2427,9 +2436,9 @@ export function makeGrokAdapter(
             }),
           ),
         );
-        const apiKey = getGrokApiKeyEnv();
+        const apiKey = getGrokApiKeyEnv(childEnv);
         const apiModels = apiKey
-          ? yield* fetchXaiLanguageModels({ apiKey, baseUrl: xaiApiBaseUrl() }).pipe(
+          ? yield* fetchXaiLanguageModels({ apiKey, baseUrl: xaiApiBaseUrl(childEnv) }).pipe(
               Effect.catch((error) =>
                 Effect.sync(() => {
                   apiError = error;
@@ -2539,6 +2548,9 @@ export function makeGrokAdapter(
                     : {}),
                   ...(providerGrokOptions?.binaryPath !== undefined
                     ? { binaryPath: providerGrokOptions.binaryPath }
+                    : {}),
+                  ...(providerGrokOptions?.environment !== undefined
+                    ? { environment: providerGrokOptions.environment }
                     : {}),
                 },
                 childProcessSpawner,

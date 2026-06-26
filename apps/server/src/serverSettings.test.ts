@@ -8,7 +8,11 @@ import {
 import { Effect, FileSystem, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 import { ServerConfig } from "./config";
-import { ServerSettingsLive, ServerSettingsService } from "./serverSettings";
+import {
+  redactServerSettingsForClient,
+  ServerSettingsLive,
+  ServerSettingsService,
+} from "./serverSettings";
 
 const serverConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "synara-settings-test-",
@@ -271,6 +275,269 @@ describe("ServerSettingsService", () => {
       expectedProvider === "droid"
         ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
         : DEFAULT_MODEL_BY_PROVIDER[expectedProvider],
+    );
+  });
+
+  it("keeps enabled text generation provider instances even when the legacy provider is disabled", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+            },
+            providers: {
+              claudeAgent: { enabled: false },
+            },
+            providerInstances: {
+              claude_work: {
+                driver: "claudeAgent",
+                enabled: true,
+                config: { homePath: "/tmp/claude-work" },
+              },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(settings.textGenerationModelSelection).toMatchObject({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+    });
+  });
+
+  it("resolves text generation patches through the selected provider instance", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.updateSettings({
+          providerInstances: {
+            work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+          },
+          textGenerationModelSelection: {
+            provider: "codex",
+            instanceId: "work",
+            model: "custom-model",
+          },
+        });
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+
+    expect(settings.textGenerationModelSelection).toMatchObject({
+      provider: "claudeAgent",
+      instanceId: "work",
+      model: "custom-model",
+    });
+  });
+
+  it("falls back from disabled text generation instances to another enabled instance", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        return yield* service.getSettings;
+      }).pipe(
+        Effect.provide(
+          ServerSettingsService.layerTest({
+            textGenerationModelSelection: {
+              provider: "claudeAgent",
+              instanceId: "claude_work",
+              model: DEFAULT_MODEL_BY_PROVIDER.claudeAgent,
+            },
+            providers: {
+              codex: { enabled: false },
+              claudeAgent: { enabled: false },
+              cursor: { enabled: false },
+            },
+            providerInstances: {
+              claude_work: {
+                driver: "claudeAgent",
+                enabled: false,
+                config: { homePath: "/tmp/claude-work" },
+              },
+              cursor_work: {
+                driver: "cursor",
+                enabled: true,
+                config: { binaryPath: "cursor-agent" },
+              },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(settings.textGenerationModelSelection).toMatchObject({
+      provider: "cursor",
+      instanceId: "cursor_work",
+      model: DEFAULT_MODEL_BY_PROVIDER.cursor,
+    });
+  });
+
+  it("replaces the providerInstances map on settings updates", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        yield* service.updateSettings({
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+            codex_work: {
+              driver: "codex",
+              enabled: true,
+              config: { homePath: "/tmp/codex-work" },
+            },
+          },
+        });
+        return yield* service.updateSettings({
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work-2" },
+            },
+          },
+        });
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+
+    expect(settings.providerInstances.claude_work?.config).toMatchObject({
+      homePath: "/tmp/claude-work-2",
+    });
+    expect(settings.providerInstances.codex_work).toBeUndefined();
+  });
+
+  it("redacts sensitive provider-instance environment and config values for clients", () => {
+    const settings = redactServerSettingsForClient({
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        grok_work: {
+          driver: "grok",
+          enabled: true,
+          environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: true }],
+          config: { binaryPath: "/opt/grok" },
+        },
+        opencode_work: {
+          driver: "opencode",
+          enabled: true,
+          config: {
+            serverUrl: "http://127.0.0.1:4096",
+            serverPassword: "opencode-secret",
+          },
+        },
+      },
+    });
+
+    expect(settings.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+    ]);
+    expect(settings.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "",
+      serverPasswordRedacted: true,
+    });
+  });
+
+  it("preserves redacted provider-instance environment values on writeback", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        yield* service.updateSettings({
+          providerInstances: {
+            grok_work: {
+              driver: "grok",
+              enabled: true,
+              environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: true }],
+              config: { binaryPath: "/opt/grok" },
+            },
+          },
+        });
+        return yield* service.updateSettings({
+          providerInstances: {
+            grok_work: {
+              driver: "grok",
+              displayName: "Grok Work",
+              enabled: true,
+              environment: [
+                { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+              ],
+              config: { binaryPath: "/opt/grok" },
+            },
+          },
+        });
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+
+    expect(settings.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "secret-token", sensitive: true },
+    ]);
+    const grokWork = deriveProviderInstances(settings).find(
+      (instance) => instance.instanceId === "grok_work",
+    );
+    expect(grokWork).toBeDefined();
+    expect(grokWork ? providerStartOptionsFromInstance(grokWork) : undefined).toMatchObject({
+      grok: { environment: { XAI_API_KEY: "secret-token" } },
+    });
+    expect(
+      redactServerSettingsForClient(settings).providerInstances.grok_work?.environment,
+    ).toEqual([{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }]);
+  });
+
+  it("preserves redacted provider-instance config secrets on writeback", async () => {
+    const settings = await Effect.runPromise(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        yield* service.updateSettings({
+          providerInstances: {
+            opencode_work: {
+              driver: "opencode",
+              enabled: true,
+              config: {
+                serverUrl: "http://127.0.0.1:4096",
+                serverPassword: "opencode-secret",
+              },
+            },
+          },
+        });
+        return yield* service.updateSettings({
+          providerInstances: {
+            opencode_work: {
+              driver: "opencode",
+              displayName: "OpenCode Work",
+              enabled: true,
+              config: {
+                serverUrl: "http://127.0.0.1:4096",
+                serverPassword: "",
+                serverPasswordRedacted: true,
+              },
+            },
+          },
+        });
+      }).pipe(Effect.provide(ServerSettingsService.layerTest())),
+    );
+
+    expect(settings.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "opencode-secret",
+    });
+    expect(redactServerSettingsForClient(settings).providerInstances.opencode_work?.config).toEqual(
+      {
+        serverUrl: "http://127.0.0.1:4096",
+        serverPassword: "",
+        serverPasswordRedacted: true,
+      },
     );
   });
 });

@@ -5,11 +5,17 @@
 
 import {
   CommandId,
+  type ModelSelection,
   type OrchestrationImportThreadInput,
   type ProviderKind,
   type ThreadHandoffImportedMessage,
   type ThreadId,
 } from "@synara/contracts";
+import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
@@ -104,7 +110,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
     readonly externalId: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const claudeSessionInfo = yield* Effect.tryPromise({
       try: async () => {
         const { getSessionInfo } = await loadClaudeAgentSdk();
@@ -142,6 +150,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly externalId: string;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
     if (!adapter.readExternalThread) return null;
@@ -150,6 +159,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       .readExternalThread({
         externalThreadId: input.externalId,
         ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       })
       .pipe(Effect.catch(() => Effect.succeed(null)));
     const externalCwd = snapshot?.cwd?.trim();
@@ -255,8 +265,10 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly cwd: string | undefined;
     readonly externalId: string;
     readonly importedAt: string;
+    readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const sessionMessages = yield* Effect.tryPromise({
       try: async () => {
         const { getSessionMessages } = await loadClaudeAgentSdk();
@@ -373,6 +385,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : [],
     });
     const externalId = body.externalId.trim();
+    const providerOptions = yield* resolveThreadProviderOptions({
+      modelSelection: thread.modelSelection,
+    });
 
     const importedProviderContext =
       (thread.modelSelection.provider === "codex" ||
@@ -384,6 +399,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
             externalId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
+            ...(providerOptions ? { providerOptions } : {}),
           })
         : null;
 
@@ -400,6 +416,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
+        ...(providerOptions ? { providerOptions } : {}),
       });
     }
 
@@ -462,6 +479,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         threadId: thread.id,
         status: mapProviderSessionStatusToOrchestrationStatus(session.status),
         providerName: session.provider,
+        providerInstanceId: session.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.runtimeMode,
         activeTurnId: null,
         lastError: session.lastError ?? null,

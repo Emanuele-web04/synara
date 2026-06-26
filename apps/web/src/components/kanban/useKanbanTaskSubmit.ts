@@ -20,7 +20,7 @@ import { useRef, useState } from "react";
 
 import { toastManager } from "~/components/ui/toast";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -104,19 +104,22 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
-    const storedModelSelection = scratchState?.modelSelectionByProvider[selectedProvider];
+    const storedModelSelection =
+      scratchState?.modelSelectionByProvider[
+        providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+      ];
     const storedModelSupportsAutoMode =
       storedModelSelection?.provider === "claudeAgent"
         ? storedModelSelection.supportsAutoMode
         : undefined;
     const modelSelection = buildModelSelection(
       selectedProvider,
-      selectedModel,
+      storedModelSelection?.model ?? selectedModel,
       storedModelSelection?.options,
       selectedProvider === "claudeAgent"
         ? (selectedModelSupportsAutoMode ?? storedModelSupportsAutoMode)
         : undefined,
-      { instanceId: storedModelSelection?.instanceId ?? selectedProviderInstanceId },
+      { instanceId: selectedProviderInstanceId },
     );
     const taskInput = {
       projectId: selectedProjectId,

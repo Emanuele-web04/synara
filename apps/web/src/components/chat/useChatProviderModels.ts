@@ -19,9 +19,13 @@ import type { AppSettings } from "../../appSettings";
 import {
   getProviderInstanceOptions,
   getProviderStartOptions,
-  resolveDefaultProviderInstanceId,
+  resolveSelectableProviderInstanceId,
 } from "../../appSettings";
-import { useComposerThreadDraft, useEffectiveComposerModelState } from "../../composerDraftStore";
+import {
+  providerInstanceModelSelectionKey,
+  useComposerThreadDraft,
+  useEffectiveComposerModelState,
+} from "../../composerDraftStore";
 import { buildSearchableModelOptions } from "../../hooks/useComposerCommandMenuItems";
 import { useProviderModelCatalog } from "../../hooks/useProviderModelCatalog";
 import { buildModelSelection } from "../../providerModelOptions";
@@ -108,23 +112,28 @@ export function useChatProviderModels({
         : undefined;
     if (sessionInstanceId) return sessionInstanceId;
 
-    const draftSelection = composerDraft.modelSelectionByProvider[selectedProvider];
+    let candidateInstanceId: ProviderInstanceId | undefined;
+    const draftSelection = Object.values(composerDraft.modelSelectionByProvider).find(
+      (selection) => selection?.provider === selectedProvider,
+    );
     if (draftSelection?.provider === selectedProvider && draftSelection.instanceId) {
-      return draftSelection.instanceId;
+      candidateInstanceId = draftSelection.instanceId;
     }
     if (
+      !candidateInstanceId &&
       activeThread?.modelSelection.provider === selectedProvider &&
       activeThread.modelSelection.instanceId
     ) {
-      return activeThread.modelSelection.instanceId;
+      candidateInstanceId = activeThread.modelSelection.instanceId;
     }
     if (
+      !candidateInstanceId &&
       activeProject?.defaultModelSelection?.provider === selectedProvider &&
       activeProject.defaultModelSelection.instanceId
     ) {
-      return activeProject.defaultModelSelection.instanceId;
+      candidateInstanceId = activeProject.defaultModelSelection.instanceId;
     }
-    return resolveDefaultProviderInstanceId(settings, selectedProvider);
+    return resolveSelectableProviderInstanceId(settings, selectedProvider, candidateInstanceId);
   }, [
     activeProject?.defaultModelSelection,
     activeThread?.modelSelection,
@@ -140,10 +149,23 @@ export function useChatProviderModels({
     const projectModelSelection = activeProject?.defaultModelSelection ?? null;
     const draftSelections = composerDraft.modelSelectionByProvider;
 
-    const resolveHint = (provider: ProviderKind): string | null =>
-      draftSelections[provider]?.model ??
-      (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
-      (projectModelSelection?.provider === provider ? projectModelSelection.model : null);
+    const resolveHint = (provider: ProviderKind): string | null => {
+      const draftSelection =
+        draftSelections[
+          providerInstanceModelSelectionKey(
+            provider,
+            provider === selectedProvider ? selectedProviderInstanceId : provider,
+          )
+        ] ??
+        (provider === selectedProvider
+          ? undefined
+          : Object.values(draftSelections).find((selection) => selection?.provider === provider));
+      return (
+        draftSelection?.model ??
+        (threadModelSelection?.provider === provider ? threadModelSelection.model : null) ??
+        (projectModelSelection?.provider === provider ? projectModelSelection.model : null)
+      );
+    };
 
     return {
       codex: resolveHint("codex"),
@@ -160,6 +182,8 @@ export function useChatProviderModels({
     activeProject?.defaultModelSelection,
     activeThread?.modelSelection,
     composerDraft.modelSelectionByProvider,
+    selectedProvider,
+    selectedProviderInstanceId,
   ]);
   const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
     activeThreadWorktreePath: resolvedThreadWorktreePath,
@@ -169,6 +193,7 @@ export function useChatProviderModels({
   const {
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,
@@ -183,16 +208,33 @@ export function useChatProviderModels({
     modelHintByProvider: composerModelHintByProvider,
     agentDiscoveryPolicy: "eager-core",
   });
+  const selectedInstanceModelOptionsByProvider = useMemo(
+    () => ({
+      ...modelOptionsByProvider,
+      [selectedProvider]:
+        modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+        modelOptionsByProvider[selectedProvider],
+    }),
+    [
+      modelOptionsByProvider,
+      modelOptionsByProviderInstance,
+      selectedProvider,
+      selectedProviderInstanceId,
+    ],
+  );
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     threadModelSelection: activeThread?.modelSelection,
     projectModelSelection: activeProject?.defaultModelSelection,
     customModelsByProvider,
-    availableModelOptionsByProvider: modelOptionsByProvider,
+    availableModelOptionsByProvider: selectedInstanceModelOptionsByProvider,
   });
   const draftModelSelectionForSelectedProvider =
-    composerDraft.modelSelectionByProvider[selectedProvider] ?? null;
+    composerDraft.modelSelectionByProvider[
+      providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+    ] ?? null;
   const persistedClaudeSupportsAutoMode =
     selectedProvider === "claudeAgent"
       ? draftModelSelectionForSelectedProvider?.provider === "claudeAgent" &&
@@ -267,11 +309,19 @@ export function useChatProviderModels({
       ? selectedModelSelection.model
       : selectedModel;
   const selectedModelForPickerWithCustomFallback = useMemo(() => {
-    const currentOptions = modelOptionsByProvider[selectedProvider];
+    const currentOptions =
+      modelOptionsByProviderInstance[selectedProviderInstanceId] ??
+      modelOptionsByProvider[selectedProvider];
     return currentOptions.some((option) => option.slug === selectedModelForPicker)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
-  }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
+  }, [
+    modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    selectedModelForPicker,
+    selectedProvider,
+    selectedProviderInstanceId,
+  ]);
   const persistedComposerModelSelection =
     sessionProvider && activeThread?.modelSelection.provider !== sessionProvider
       ? activeProject?.defaultModelSelection?.provider === selectedProvider
@@ -319,9 +369,12 @@ export function useChatProviderModels({
     lockedProvider,
     serverConfigQuery,
     selectedProvider,
+    providerInstances,
+    selectedProviderInstanceId,
     providerModelDiscoveryCwd,
     customModelsByProvider,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
     loadingModelProviders,
     discoveryErrorsByProvider,
     runtimeModelsByProvider,

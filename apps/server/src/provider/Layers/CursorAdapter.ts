@@ -752,6 +752,9 @@ export function makeCursorAdapter(
             ...(providerCursorOptions?.apiEndpoint !== undefined
               ? { apiEndpoint: providerCursorOptions.apiEndpoint }
               : {}),
+            ...(providerCursorOptions?.environment !== undefined
+              ? { environment: providerCursorOptions.environment }
+              : {}),
           };
 
           const acp = yield* makeCursorAcpRuntime({
@@ -983,6 +986,9 @@ export function makeCursorAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId
+              ? { providerInstanceId: input.providerInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -1627,6 +1633,7 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
+      const childEnv = input.environment ? { ...process.env, ...input.environment } : process.env;
       const effectiveBinaryPath = resolveCursorAgentBinaryPath(
         binaryPath || cursorSettings.binaryPath,
       );
@@ -1636,7 +1643,7 @@ export function makeCursorAdapter(
           binaryPath: effectiveBinaryPath,
           ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
         });
-        const env = buildCursorAgentHeadlessEnv();
+        const env = buildCursorAgentHeadlessEnv(childEnv);
         const child = yield* childProcessSpawner.spawn(
           makeEffectProcessCommand(command.command, command.args, {
             env,

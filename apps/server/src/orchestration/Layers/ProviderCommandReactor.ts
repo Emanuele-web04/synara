@@ -78,6 +78,7 @@ import {
   ProviderAdapterValidationError,
   ProviderServiceError,
 } from "../../provider/Errors.ts";
+import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
   PROVIDER_DEBUG_MODE_PROMPT_PREFIX,
@@ -103,7 +104,6 @@ import { TextGenerationError } from "../../git/Errors.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderHealth } from "../../provider/Services/ProviderHealth.ts";
-import { providerDisabledSettingsMessage } from "../../provider/enabledProviderAdapter.ts";
 import { resolveProviderDispatchAttachments } from "../../provider/providerAttachmentPaths.ts";
 import { OrchestrationEventDeliveryRepositoryLive } from "../../persistence/Layers/OrchestrationEventDeliveries.ts";
 import { ProjectionPendingInteractionRepositoryLive } from "../../persistence/Layers/ProjectionPendingInteractions.ts";
@@ -1714,6 +1714,28 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
+    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredProviderInstanceId =
+      desiredModelSelection.instanceId ?? desiredModelSelection.provider;
+    const settings = yield* serverSettings.getSettings;
+    const desiredProviderInstance = resolveProviderInstance(settings, {
+      instanceId: desiredProviderInstanceId,
+    });
+    const desiredProvider = desiredProviderInstance?.driver ?? desiredModelSelection.provider;
+    const desiredRoutedModelSelection =
+      desiredProviderInstance && desiredProvider !== desiredModelSelection.provider
+        ? ({
+            provider: desiredProvider,
+            instanceId: desiredProviderInstance.instanceId,
+            model: desiredModelSelection.model,
+          } as ModelSelection)
+        : desiredProviderInstance
+          ? ({
+              ...desiredModelSelection,
+              provider: desiredProvider,
+              instanceId: desiredProviderInstance.instanceId,
+            } as ModelSelection)
+          : desiredModelSelection;
     const resolveActiveSession = (threadId: ThreadId) =>
       providerService
         .listSessions()
@@ -1726,7 +1748,7 @@ const make = Effect.gen(function* () {
       currentProvider !== undefined &&
       thread.latestTurn === null &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== currentProvider
+      desiredProvider !== currentProvider
         ? yield* resolveActiveSession(threadId)
         : undefined;
     // A session row alone can be an optimistic placeholder written before the
@@ -1739,38 +1761,43 @@ const make = Effect.gen(function* () {
     if (
       establishedProvider !== undefined &&
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== establishedProvider
+      desiredProvider !== establishedProvider
     ) {
       return yield* new ProviderAdapterValidationError({
         provider: establishedProvider,
         operation: "thread.turn.start",
-        issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        issue: `Thread '${threadId}' is bound to provider '${establishedProvider}' and cannot switch to '${desiredProvider}'.`,
       });
     }
-    const preferredProvider: ProviderKind =
-      establishedProvider ??
-      requestedModelSelection?.provider ??
-      currentProvider ??
+    const preferredProvider: ProviderKind = establishedProvider ?? desiredProvider;
+    const currentProviderInstanceId =
+      thread.session?.providerInstanceId ??
+      thread.modelSelection.instanceId ??
       thread.modelSelection.provider;
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
-    const desiredProviderInstanceId =
-      desiredModelSelection.instanceId ?? desiredModelSelection.provider;
-    const settings = yield* serverSettings.getSettings;
-    if (!settings.providers[preferredProvider].enabled) {
+    const requestedProviderInstanceChanged =
+      requestedModelSelection !== undefined &&
+      desiredProviderInstanceId !== currentProviderInstanceId;
+    if (thread.session !== null && requestedProviderInstanceChanged) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
-        issue: `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`,
+        issue: `Thread '${threadId}' is bound to provider instance '${currentProviderInstanceId}' and cannot switch to '${desiredProviderInstanceId}'.`,
       });
     }
-    const resolvedInstance = resolveProviderInstance(settings, {
-      provider: preferredProvider,
-      instanceId: desiredProviderInstanceId,
-    });
+    if (desiredProviderInstance && !desiredProviderInstance.enabled) {
+      return yield* new ProviderAdapterValidationError({
+        provider: preferredProvider,
+        operation: "thread.turn.start",
+        issue:
+          desiredProviderInstance.instanceId === desiredProviderInstance.driver
+            ? `${providerDisabledSettingsMessage(preferredProvider)} Re-enable it to continue this thread.`
+            : `Provider instance '${desiredProviderInstance.displayName}' is disabled in Settings > Providers. Re-enable it to continue this thread.`,
+      });
+    }
     const resolvedProviderOptions = mergeProviderStartOptions(
       providerStartOptionsFromServerSettings(settings),
-      resolvedInstance?.driver === preferredProvider
-        ? providerStartOptionsFromInstance(resolvedInstance)
+      desiredProviderInstance?.driver === preferredProvider
+        ? providerStartOptionsFromInstance(desiredProviderInstance)
         : undefined,
     );
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
@@ -1789,7 +1816,7 @@ const make = Effect.gen(function* () {
       threadId,
       providerInstanceId: desiredProviderInstanceId,
       ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-      modelSelection: desiredModelSelection,
+      modelSelection: desiredRoutedModelSelection,
       providerOptions: resolvedProviderOptions,
       runtimeMode: desiredRuntimeMode,
     };
@@ -1849,16 +1876,12 @@ const make = Effect.gen(function* () {
       const existingSessionThreadId = thread.id;
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
-        requestedModelSelection !== undefined &&
-        requestedModelSelection.provider !== currentProvider;
-      const currentProviderInstanceId =
-        activeSession?.providerInstanceId ??
-        thread.session?.providerInstanceId ??
-        thread.modelSelection.instanceId ??
-        thread.modelSelection.provider;
+        requestedModelSelection !== undefined && desiredProvider !== currentProvider;
+      const currentActiveProviderInstanceId =
+        activeSession?.providerInstanceId ?? currentProviderInstanceId;
       const providerInstanceChanged =
         requestedModelSelection !== undefined &&
-        desiredProviderInstanceId !== currentProviderInstanceId;
+        desiredProviderInstanceId !== currentActiveProviderInstanceId;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
@@ -1888,7 +1911,7 @@ const make = Effect.gen(function* () {
             !Equal.equals(previousModelSelection, requestedModelSelection));
       const previousProviderOptions = threadProviderOptions.get(threadId);
       const providerOptionsChanged = shouldRestartForProviderOptionsChange({
-        requestedProvider: desiredModelSelection.provider,
+        requestedProvider: desiredRoutedModelSelection.provider,
         previousProviderOptions,
         requestedProviderOptions: resolvedProviderOptions,
       });
@@ -1916,7 +1939,7 @@ const make = Effect.gen(function* () {
         shouldRestartForModelChange ||
         runtimeModeChanged ||
         shouldDropResumeCursorForProviderOptionsChange({
-          requestedProvider: desiredModelSelection.provider,
+          requestedProvider: desiredRoutedModelSelection.provider,
           providerOptionsChanged,
           previousProviderOptions,
           requestedProviderOptions: resolvedProviderOptions,
@@ -1927,7 +1950,7 @@ const make = Effect.gen(function* () {
         threadId,
         existingSessionThreadId,
         currentProvider,
-        desiredProvider: desiredModelSelection.provider,
+        desiredProvider: desiredRoutedModelSelection.provider,
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode,
         runtimeModeChanged,

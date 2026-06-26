@@ -10,9 +10,27 @@ import {
   OrchestrationEventStoreLive,
 } from "./OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const layer = it.layer(
   OrchestrationEventStoreLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+);
+
+const providerInstanceSettingsLayer = it.layer(
+  OrchestrationEventStoreLive.pipe(
+    Layer.provideMerge(SqlitePersistenceMemory),
+    Layer.provideMerge(
+      ServerSettingsService.layerTest({
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { homePath: "/tmp/claude-work" },
+          },
+        },
+      }),
+    ),
+  ),
 );
 
 layer("OrchestrationEventStore", (it) => {
@@ -422,6 +440,7 @@ layer("OrchestrationEventStore", (it) => {
           : null,
         {
           provider: "codex",
+          instanceId: "codex",
           model: "imported-project-model",
         },
       );
@@ -429,6 +448,7 @@ layer("OrchestrationEventStore", (it) => {
         threadCreated?.type === "thread.created" ? threadCreated.payload.modelSelection : null,
         {
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.5",
           options: {
             reasoningEffort: "medium",
@@ -441,6 +461,7 @@ layer("OrchestrationEventStore", (it) => {
           : null,
         {
           provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.5",
           options: {
             reasoningEffort: "medium",
@@ -560,6 +581,77 @@ layer("OrchestrationEventStore", (it) => {
           replayResult.failure.issue,
         );
       }
+    }),
+  );
+});
+
+providerInstanceSettingsLayer("OrchestrationEventStore with settings", (it) => {
+  it.effect("uses provider instance settings when replaying providerless model selections", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-05-05T14:39:18.000Z";
+
+      yield* sql`
+        INSERT INTO orchestration_events (
+          event_id,
+          aggregate_kind,
+          stream_id,
+          stream_version,
+          event_type,
+          occurred_at,
+          command_id,
+          causation_event_id,
+          correlation_id,
+          actor_kind,
+          payload_json,
+          metadata_json
+        )
+        VALUES (
+          ${EventId.makeUnsafe("evt-settings-thread-created")},
+          ${"thread"},
+          ${ThreadId.makeUnsafe("thread-settings-instance")},
+          ${0},
+          ${"thread.created"},
+          ${now},
+          ${CommandId.makeUnsafe("cmd-settings-thread-created")},
+          ${null},
+          ${null},
+          ${"server"},
+          ${JSON.stringify({
+            threadId: "thread-settings-instance",
+            projectId: "project-settings-instance",
+            title: "Settings Instance Thread",
+            modelSelection: {
+              instanceId: "work",
+              model: "custom-model",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          })},
+          ${"{}"}
+        )
+      `;
+
+      const replayed = yield* Stream.runCollect(eventStore.readFromSequence(0, 10)).pipe(
+        Effect.map((chunk) => Array.from(chunk)),
+      );
+      const threadCreated = replayed.find(
+        (event) => event.eventId === EventId.makeUnsafe("evt-settings-thread-created"),
+      );
+
+      assert.deepStrictEqual(
+        threadCreated?.type === "thread.created" ? threadCreated.payload.modelSelection : null,
+        {
+          provider: "claudeAgent",
+          instanceId: "work",
+          model: "custom-model",
+        },
+      );
     }),
   );
 });

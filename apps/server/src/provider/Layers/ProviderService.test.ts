@@ -20,6 +20,7 @@ import type {
 import {
   ApprovalRequestId,
   EventId,
+  type ServerSettings,
   type ProviderKind,
   ProviderSessionStartInput,
   ThreadId,
@@ -460,6 +461,7 @@ function makeProviderServiceLayer(
     Layer.provide(SqlitePersistenceMemory),
   );
   const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+  const serverSettingsLayer = ServerSettingsService.layerTest(settings);
 
   const rawLayer = Layer.mergeAll(
     makeProviderServiceLive(options).pipe(
@@ -2559,6 +2561,85 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("rejects send turns whose model selection targets another provider", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      routing.codex.sendTurn.mockClear();
+      const session = yield* provider.startSession(asThreadId("thread-send-mismatch"), {
+        provider: "codex",
+        threadId: asThreadId("thread-send-mismatch"),
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* Effect.result(
+        provider.sendTurn({
+          threadId: session.threadId,
+          input: "wrong route",
+          attachments: [],
+          modelSelection: {
+            provider: "claudeAgent",
+            model: "claude-opus-4-6",
+          },
+        }),
+      );
+
+      assertFailure(
+        result,
+        new ProviderValidationError({
+          operation: "ProviderService.sendTurn",
+          issue:
+            "Model selection instance 'claudeAgent' does not match routed provider instance 'codex'.",
+        }),
+      );
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect(
+    "canonicalizes stale provider metadata when the selected instance matches the route",
+    () =>
+      Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const serverSettings = yield* ServerSettingsService;
+        routing.claude.sendTurn.mockClear();
+
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            claude_work: {
+              driver: "claudeAgent",
+              enabled: true,
+              config: { homePath: "/tmp/claude-work" },
+            },
+          },
+        });
+        const session = yield* provider.startSession(asThreadId("thread-stale-provider-instance"), {
+          provider: "claudeAgent",
+          providerInstanceId: "claude_work",
+          threadId: asThreadId("thread-stale-provider-instance"),
+          runtimeMode: "full-access",
+        });
+
+        yield* provider.sendTurn({
+          threadId: session.threadId,
+          input: "stale provider label, exact instance",
+          attachments: [],
+          modelSelection: {
+            provider: "codex",
+            instanceId: "claude_work",
+            model: "custom-claude-model",
+            options: { reasoningEffort: "high" },
+          },
+        });
+
+        assert.equal(routing.claude.sendTurn.mock.calls.length, 1);
+        assert.deepEqual(routing.claude.sendTurn.mock.calls[0]?.[0].modelSelection, {
+          provider: "claudeAgent",
+          instanceId: "claude_work",
+          model: "custom-claude-model",
+        });
+      }),
+  );
+
   it.effect(
     "routes early approval and user-input responses to live sessions before persistence",
     () =>
@@ -2609,8 +2690,18 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("preserves provider instance id when adopting binding-less live sessions", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
       const directory = yield* ProviderSessionDirectory;
       const threadId = asThreadId("thread-live-instance");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Codex Work",
+          },
+        },
+      });
 
       yield* routing.codex.adapter.startSession({
         provider: "codex",
@@ -2680,6 +2771,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("routes explicit claudeAgent provider session starts to the claude adapter", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
+      routing.claude.startSession.mockClear();
 
       const session = yield* provider.startSession(asThreadId("thread-claude"), {
         provider: "claudeAgent",
@@ -3218,6 +3310,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         assert.equal(startPayload.cwd, "/tmp/project-claude-send-turn");
         assert.deepEqual(startPayload.modelSelection, {
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
           options: {
             effort: "max",
@@ -3348,8 +3441,8 @@ routing.layer("ProviderServiceLive routing", (it) => {
         input: "hello",
         attachments: [],
         modelSelection: {
-          provider: "opencode",
-          model: "opencode/minimax-m2.5-free",
+          provider: "codex",
+          model: "gpt-5-codex",
         },
       });
       yield* sleep(50);
@@ -3382,8 +3475,9 @@ routing.layer("ProviderServiceLive routing", (it) => {
           assert.equal(runtimePayload.activeTurnId, null);
           assert.equal(runtimePayload.lastRuntimeEvent, "turn.completed");
           assert.deepEqual(runtimePayload.modelSelection, {
-            provider: "opencode",
-            model: "opencode/minimax-m2.5-free",
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
           });
         }
       }

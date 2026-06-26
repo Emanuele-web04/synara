@@ -16,6 +16,7 @@ import {
   DEFAULT_SERVER_SETTINGS_VIEW,
   GIT_TEXT_GENERATION_PROVIDERS,
   ProviderInstanceConfigMap,
+  type ProviderDriverKind,
   ProviderInstanceId,
   TrimmedNonEmptyString,
   ProviderKind,
@@ -685,9 +686,20 @@ export function resolveSelectedCodexAccount(
 export interface ProviderInstanceOption {
   readonly instanceId: ProviderInstanceId;
   readonly provider: ProviderKind;
+  readonly driver: ProviderKind;
   readonly label: string;
   readonly enabled: boolean;
   readonly isDefault: boolean;
+  readonly supported: true;
+}
+
+export interface UnsupportedProviderInstanceOption {
+  readonly instanceId: ProviderInstanceId;
+  readonly driver: ProviderDriverKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: false;
+  readonly supported: false;
 }
 
 const PROVIDER_INSTANCE_PROVIDER_ORDER = [
@@ -740,9 +752,11 @@ export function getProviderInstanceOptions(
     optionsById.set(provider, {
       instanceId: provider,
       provider,
+      driver: provider,
       label: defaultProviderInstanceLabel(provider),
       enabled: true,
       isDefault: true,
+      supported: true,
     });
   }
 
@@ -751,9 +765,11 @@ export function getProviderInstanceOptions(
     optionsById.set(instanceId, {
       instanceId,
       provider: "codex",
+      driver: "codex",
       label: account.label,
       enabled: true,
       isDefault: account.isDefault,
+      supported: true,
     });
   }
 
@@ -766,9 +782,11 @@ export function getProviderInstanceOptions(
     optionsById.set(instanceId, {
       instanceId,
       provider: raw.driver,
+      driver: raw.driver,
       label,
       enabled: raw.enabled !== false && config.enabled !== false,
       isDefault: instanceId === raw.driver,
+      supported: true,
     });
   }
 
@@ -786,6 +804,25 @@ export function getProviderInstanceOptions(
   });
 }
 
+export function getUnsupportedProviderInstanceOptions(
+  settings: Pick<AppSettings, "providerInstances">,
+): UnsupportedProviderInstanceOption[] {
+  return Object.entries(settings.providerInstances)
+    .filter(([, raw]) => !Schema.is(ProviderKind)(raw.driver))
+    .map(([instanceId, raw]) => {
+      const config = isRecord(raw.config) ? raw.config : {};
+      return {
+        instanceId,
+        driver: raw.driver,
+        label: raw.displayName?.trim() || fallbackProviderInstanceLabel(instanceId),
+        enabled: raw.enabled !== false && config.enabled !== false,
+        isDefault: false,
+        supported: false,
+      } satisfies UnsupportedProviderInstanceOption;
+    })
+    .toSorted((left, right) => left.label.localeCompare(right.label));
+}
+
 export function resolveDefaultProviderInstanceId(
   settings: Pick<AppSettings, "codexAccounts" | "codexHomePath" | "selectedCodexAccountId">,
   provider: ProviderKind,
@@ -794,6 +831,38 @@ export function resolveDefaultProviderInstanceId(
     return provider;
   }
   return providerInstanceIdForCodexAccount(resolveSelectedCodexAccount(settings).id);
+}
+
+export function resolveSelectableProviderInstanceId(
+  settings: Pick<
+    AppSettings,
+    "codexAccounts" | "codexHomePath" | "providerInstances" | "selectedCodexAccountId"
+  >,
+  provider: ProviderKind,
+  requestedInstanceId?: ProviderInstanceId | null,
+): ProviderInstanceId {
+  const instances = getProviderInstanceOptions(settings).filter(
+    (instance) => instance.provider === provider,
+  );
+  const requested = requestedInstanceId
+    ? instances.find((instance) => instance.instanceId === requestedInstanceId)
+    : undefined;
+  if (requested?.enabled) {
+    return requested.instanceId;
+  }
+
+  const defaultInstanceId = resolveDefaultProviderInstanceId(settings, provider);
+  const defaultInstance = instances.find((instance) => instance.instanceId === defaultInstanceId);
+  if (defaultInstance?.enabled) {
+    return defaultInstance.instanceId;
+  }
+
+  const enabledInstance = instances.find((instance) => instance.enabled);
+  if (enabledInstance) {
+    return enabledInstance.instanceId;
+  }
+
+  return defaultInstance?.instanceId ?? provider;
 }
 
 type CodexAccountLaunchSettingsInput = Pick<
@@ -1370,6 +1439,34 @@ export function patchCustomModels(
   };
 }
 
+export function patchCustomModelsForProviderInstance(
+  settings: Pick<AppSettings, "providerInstances">,
+  instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
+  models: string[],
+): Partial<Pick<AppSettings, CustomModelSettingsKey | "providerInstances">> {
+  if (instance.isDefault || instance.instanceId === instance.provider) {
+    return patchCustomModels(instance.provider, models);
+  }
+
+  const existing = settings.providerInstances[instance.instanceId];
+  if (!existing) {
+    return {};
+  }
+
+  return {
+    providerInstances: {
+      ...settings.providerInstances,
+      [instance.instanceId]: {
+        ...existing,
+        config: {
+          ...(isRecord(existing.config) ? existing.config : {}),
+          customModels: models,
+        },
+      },
+    },
+  };
+}
+
 export function getCustomModelsByProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
 ): Record<ProviderKind, readonly string[]> {
@@ -1384,6 +1481,22 @@ export function getCustomModelsByProvider(
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
   };
+}
+
+export function getCustomModelsForProviderInstance(
+  settings: Pick<AppSettings, CustomModelSettingsKey | "providerInstances">,
+  instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
+): readonly string[] {
+  const raw = settings.providerInstances[instance.instanceId];
+  const config = isRecord(raw?.config) ? raw.config : {};
+  const instanceCustomModels = config.customModels;
+  if (Array.isArray(instanceCustomModels)) {
+    return instanceCustomModels.filter((entry): entry is string => typeof entry === "string");
+  }
+  if (instance.isDefault || instance.provider === "codex") {
+    return getCustomModelsForProvider(settings, instance.provider);
+  }
+  return [];
 }
 
 export function getAppModelOptions(

@@ -22,7 +22,9 @@ import {
   type AutomationUpdateInput,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderInstanceId,
   type ProviderStartOptions,
+  type ServerSettings,
   type ThreadEnvironmentMode,
   type TurnId,
 } from "@synara/contracts";
@@ -36,6 +38,11 @@ import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSettings";
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
+import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@synara/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -609,12 +616,28 @@ export const AutomationServiceLive = Layer.effect(
     const git = yield* GitCore;
     const textGeneration = yield* TextGeneration;
     const serverSettings = yield* ServerSettingsService;
+    const providerInstanceUnavailableReason = (
+      settings: ServerSettings,
+      instanceId: ProviderInstanceId,
+    ): string | null => {
+      const instance = resolveProviderInstance(settings, { instanceId });
+      if (!instance) {
+        return `Provider instance '${instanceId}' is not configured.`;
+      }
+      if (instance.enabled) {
+        return null;
+      }
+      return instance.instanceId === instance.driver
+        ? providerDisabledSettingsMessage(instance.driver)
+        : `Provider instance '${instance.displayName}' is disabled in Synara settings.`;
+    };
     const providerDisabledReason = (definition: AutomationDefinition) =>
       serverSettings.getSettings.pipe(
         Effect.map((settings) =>
-          settings.providers[definition.modelSelection.provider].enabled
-            ? null
-            : providerDisabledSettingsMessage(definition.modelSelection.provider),
+          providerInstanceUnavailableReason(
+            settings,
+            resolveModelSelectionInstanceId(definition.modelSelection),
+          ),
         ),
         Effect.mapError(toServiceError("Failed to read provider settings.")),
       );
@@ -625,14 +648,18 @@ export const AutomationServiceLive = Layer.effect(
             definition.modelSelection,
             definition.providerOptions,
           );
+          const fallbackSelection = settings.textGenerationModelSelection;
           const provider =
             directInput?.modelSelection.provider ??
-            (hasDedicatedTextGenerationProvider(settings.textGenerationModelSelection.provider)
-              ? settings.textGenerationModelSelection.provider
+            (hasDedicatedTextGenerationProvider(fallbackSelection.provider)
+              ? fallbackSelection.provider
               : "codex");
-          return settings.providers[provider].enabled
-            ? null
-            : providerDisabledSettingsMessage(provider);
+          const instanceId = directInput?.modelSelection
+            ? resolveModelSelectionInstanceId(directInput.modelSelection)
+            : hasDedicatedTextGenerationProvider(fallbackSelection.provider)
+              ? resolveModelSelectionInstanceId(fallbackSelection)
+              : provider;
+          return providerInstanceUnavailableReason(settings, instanceId);
         }),
         Effect.mapError(toServiceError("Failed to read completion-evaluation provider settings.")),
       );
@@ -1563,10 +1590,17 @@ export const AutomationServiceLive = Layer.effect(
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
+        const fallbackInstance = resolveProviderInstance(settings, {
+          provider: settings.textGenerationModelSelection.provider,
+          instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+        });
+        const fallbackProviderOptions = fallbackInstance
+          ? providerStartOptionsFromInstance(fallbackInstance)
+          : definition.providerOptions;
         return (
           resolveTextGenerationInputForSelection(
             settings.textGenerationModelSelection,
-            definition.providerOptions,
+            fallbackProviderOptions,
           ) ?? {}
         );
       });

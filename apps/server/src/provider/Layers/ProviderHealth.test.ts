@@ -2003,6 +2003,29 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     );
   });
 
+  describe("checkAntigravityProviderStatus", () => {
+    it.effect("passes configured instance environment to the Antigravity version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* checkAntigravityProviderStatus("/custom/bin/agy", {
+          SYNARA_TEST_INSTANCE: "antigravity-work",
+        });
+        assert.strictEqual(status.provider, "antigravity");
+        assert.strictEqual(status.status, "error");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/agy");
+            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "antigravity-work");
+            assert.strictEqual(env?.NO_BROWSER, "true");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "", stderr: "version failed", code: 1 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+  });
+
   describe("checkOpenCodeProviderStatus", () => {
     it.effect("returns ready when opencode is installed", () =>
       Effect.gen(function* () {
@@ -2030,6 +2053,25 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command) => {
             assert.strictEqual(command, "/custom/bin/opencode");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("passes configured instance environment to the OpenCode version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckOpenCodeProviderStatus("/custom/bin/opencode", {
+          SYNARA_TEST_INSTANCE: "opencode-work",
+        });
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/opencode");
+            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "opencode-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "opencode 1.3.17\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2089,6 +2131,25 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         Effect.provide(
           mockSpawnerLayer((args, command) => {
             assert.strictEqual(command, "/custom/bin/pi");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("passes configured instance environment to the Pi version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* checkPiProviderStatus("/tmp/pi-agent", "/custom/bin/pi", {
+          SYNARA_TEST_INSTANCE: "pi-work",
+        });
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/pi");
+            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "pi-work");
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "pi 0.74.0\n", stderr: "", code: 0 };
             throw new Error(`Unexpected args: ${joined}`);
@@ -2270,6 +2331,46 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("marks Grok authenticated from configured instance environment", () => {
+      const previousXaiApiKey = process.env.XAI_API_KEY;
+      const previousApiKey = process.env.GROK_CODE_XAI_API_KEY;
+      delete process.env.XAI_API_KEY;
+      delete process.env.GROK_CODE_XAI_API_KEY;
+      return Effect.gen(function* () {
+        const status = yield* makeCheckGrokProviderStatus("/custom/bin/grok", {
+          XAI_API_KEY: "xai-instance-key",
+          SYNARA_TEST_INSTANCE: "grok-work",
+        });
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "apiKey");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command, env) => {
+            assert.strictEqual(command, "/custom/bin/grok");
+            assertProviderInstanceEnv(env, "SYNARA_TEST_INSTANCE", "grok-work");
+            assertProviderInstanceEnv(env, "XAI_API_KEY", "xai-instance-key");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "grok 0.1.0\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (previousXaiApiKey === undefined) {
+              delete process.env.XAI_API_KEY;
+            } else {
+              process.env.XAI_API_KEY = previousXaiApiKey;
+            }
+            if (previousApiKey === undefined) {
+              delete process.env.GROK_CODE_XAI_API_KEY;
+            } else {
+              process.env.GROK_CODE_XAI_API_KEY = previousApiKey;
+            }
+          }),
+        ),
+      );
+    });
 
     it.effect("returns unavailable when Grok CLI is missing", () =>
       Effect.gen(function* () {

@@ -616,6 +616,7 @@ function claudeDiscoveryKey(input: {
   readonly instanceId?: string | null | undefined;
   readonly binaryPath?: string | null | undefined;
   readonly homePath?: string | null | undefined;
+  readonly environment?: Readonly<Record<string, string>> | undefined;
   readonly cwd?: string | null | undefined;
   readonly includeCwd?: boolean;
 }): string {
@@ -623,16 +624,43 @@ function claudeDiscoveryKey(input: {
     instanceId: input.instanceId?.trim() || null,
     binaryPath: input.binaryPath?.trim() || "claude",
     homePath: input.homePath?.trim() || null,
+    environment: environmentFingerprint(input.environment),
     cwd: input.includeCwd === false ? null : input.cwd?.trim() || null,
   });
+}
+
+function environmentFingerprint(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | null {
+  if (!environment || Object.keys(environment).length === 0) {
+    return null;
+  }
+  return Object.fromEntries(
+    Object.entries(environment)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashCacheComponent(value)]),
+  );
+}
+
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
 }
 
 function claudeEnvironment(
   homePath: string | null | undefined,
   fallbackHomePath?: string | undefined,
+  environment?: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv {
   const resolvedHomePath = homePath?.trim() || fallbackHomePath?.trim();
-  return buildClaudeProcessEnv(resolvedHomePath ? { homeDir: resolvedHomePath } : undefined);
+  return buildClaudeProcessEnv({
+    ...(environment ? { env: { ...process.env, ...environment } } : {}),
+    ...(resolvedHomePath ? { homeDir: resolvedHomePath } : {}),
+  });
 }
 
 function isUuid(value: string): boolean {
@@ -1981,8 +2009,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
     const withSessionLifecycleLock = sessionLifecycleLock.withLock;
-    const resolveClaudeSdkEnv = (homePath?: string | null) =>
-      Effect.sync(() => claudeEnvironment(homePath, serverConfig.homeDir));
+    const resolveClaudeSdkEnv = (
+      homePath?: string | null,
+      environment?: Readonly<Record<string, string>>,
+    ) => Effect.sync(() => claudeEnvironment(homePath, serverConfig.homeDir, environment));
 
     const bindClaudeProcessOwner =
       (owner: ClaudeProcessOwner) =>
@@ -2065,6 +2095,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     ): Effect.Effect<void> =>
       Queue.offer(runtimeEventQueue, {
         ...event,
+        ...(event.providerInstanceId === undefined && context.session.providerInstanceId
+          ? { providerInstanceId: context.session.providerInstanceId }
+          : {}),
         ...(context.lifecycleGeneration !== undefined
           ? { lifecycleGeneration: context.lifecycleGeneration }
           : {}),
@@ -4966,6 +4999,12 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         const startedAt = yield* nowIso;
         const resumeState = readClaudeResumeState(input.resumeCursor);
         const threadId = input.threadId;
+        const existingContext = sessions.get(threadId);
+        if (existingContext) {
+          yield* stopSessionInternal(existingContext, {
+            emitExitEvent: true,
+          });
+        }
         const existingResumeSessionId = resumeState?.resume;
         const newSessionId =
           existingResumeSessionId === undefined ? yield* Random.nextUUIDv4 : undefined;
@@ -5336,12 +5375,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           instanceId: input.providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
+          environment: providerOptions?.environment,
           cwd: input.cwd,
         });
         const accountDiscoveryKey = claudeDiscoveryKey({
           instanceId: input.providerInstanceId,
           binaryPath: providerOptions?.binaryPath,
           homePath: providerOptions?.homePath,
+          environment: providerOptions?.environment,
           includeCwd: false,
         });
         const modelSelection =
@@ -5391,7 +5432,10 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(ultracode ? { ultracode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(providerOptions?.homePath);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(
+          providerOptions?.homePath,
+          providerOptions?.environment,
+        );
         if (input.runtimeMode === "auto") {
           const binaryPath = providerOptions?.binaryPath ?? "claude";
           const installedVersion = yield* Effect.tryPromise({
@@ -6492,7 +6536,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
         const discoveryPromise =
           pendingCommandDiscoveryByKey.get(discoveryKey) ??
           discoverCommandsViaTemporaryProcess(
@@ -6609,7 +6653,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         // Cold starts have no active Claude session. Discover with one
         // short-lived SDK process so the UI receives model capability flags on
         // its first request instead of caching an empty "pending" catalog.
-        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath);
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv(input.homePath, input.environment);
         const discoveryPromise =
           pendingModelDiscoveryByKey.get(discoveryKey) ??
           discoverModelsViaTemporaryProcess(

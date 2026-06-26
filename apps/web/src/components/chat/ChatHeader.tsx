@@ -64,6 +64,7 @@ import type { RepoDiffTotals } from "~/hooks/useRepoDiffTotals";
 import { ProviderIcon } from "../ProviderIcon";
 import { ProviderUsageMenuControl } from "../ProviderUsageMenuControl";
 import { EnvironmentToggle, type EnvironmentToggleState } from "./environment/EnvironmentToggle";
+import type { ThreadHandoffTarget } from "~/lib/threadHandoff";
 
 /**
  * Width (px) below which collapsible header controls drop their text labels and
@@ -99,7 +100,7 @@ interface ChatHeaderProps {
   handoffBadgeLabel: string | null;
   handoffActionLabel: string;
   handoffDisabled: boolean;
-  handoffActionTargetProviders: ReadonlyArray<ProviderKind>;
+  handoffActionTargets: ReadonlyArray<ThreadHandoffTarget>;
   handoffBadgeSourceProvider: ProviderKind | null;
   handoffBadgeTargetProvider: ProviderKind | null;
   gitCwd: string | null;
@@ -522,7 +523,7 @@ export function ChatHeader({
   handoffBadgeLabel,
   handoffActionLabel,
   handoffDisabled,
-  handoffActionTargetProviders,
+  handoffActionTargets,
   handoffBadgeSourceProvider,
   handoffBadgeTargetProvider,
   gitCwd,
@@ -809,7 +810,7 @@ export function ChatHeader({
                         tone="outline"
                         className={compact ? "gap-1" : "gap-1.5"}
                         aria-label={handoffActionLabel}
-                        disabled={handoffDisabled || handoffActionTargetProviders.length === 0}
+                        disabled={handoffDisabled || handoffActionTargets.length === 0}
                       />
                     }
                   >

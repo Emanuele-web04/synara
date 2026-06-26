@@ -340,6 +340,39 @@ describe("ProviderDiscoveryService provider instances", () => {
       }),
     ).rejects.toThrow("Unknown provider instance 'codex_removed'");
   });
+
+  it("rejects disabled provider instance ids", async () => {
+    await expect(
+      runDiscovery({
+        adapter: {
+          listModels: () =>
+            Effect.succeed({
+              models: [],
+              source: "stub",
+              cached: false,
+            } satisfies ProviderListModelsResult),
+        },
+        settings: {
+          providerInstances: {
+            codex_disabled: {
+              driver: "codex",
+              enabled: false,
+              config: {
+                homePath: "/disabled-codex",
+              },
+            },
+          },
+        },
+        effect: Effect.gen(function* () {
+          const discovery = yield* ProviderDiscoveryService;
+          return yield* discovery.listModels({
+            provider: "codex",
+            instanceId: "codex_disabled",
+          });
+        }),
+      }),
+    ).rejects.toThrow("Provider instance 'codex_disabled' is disabled");
+  });
 });
 
 describe("ProviderDiscoveryService.getComposerCapabilities", () => {

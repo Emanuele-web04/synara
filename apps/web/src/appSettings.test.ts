@@ -30,6 +30,7 @@ import {
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
   getCustomModelsForProvider,
+  getCustomModelsForProviderInstance,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
   getProviderInstanceOptions,
@@ -43,6 +44,7 @@ import {
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   patchCustomModels,
+  patchCustomModelsForProviderInstance,
   resolveAppModelSelection,
   resolveFollowUpDispatchMode,
   resolveTerminalFontFamilyStack,
@@ -992,6 +994,49 @@ describe("getProviderInstanceOptions", () => {
   });
 });
 
+describe("resolveSelectableProviderInstanceId", () => {
+  it("keeps a requested enabled provider instance", () => {
+    const settings = {
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+      selectedCodexAccountId: "default",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_work")).toBe(
+      "claude_work",
+    );
+  });
+
+  it("falls back from a deleted or disabled custom instance to the provider default", () => {
+    const settings = {
+      codexAccounts: [],
+      codexHomePath: "",
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: false,
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+      selectedCodexAccountId: "default",
+    } as const;
+
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_work")).toBe(
+      "claudeAgent",
+    );
+    expect(resolveSelectableProviderInstanceId(settings, "claudeAgent", "claude_deleted")).toBe(
+      "claudeAgent",
+    );
+  });
+});
+
 describe("provider-indexed custom model settings", () => {
   const settings = {
     customCodexModels: ["custom/codex-model"],
@@ -1118,6 +1163,41 @@ describe("provider-indexed custom model settings", () => {
     });
   });
 
+  it("patches custom models for a selected provider instance", () => {
+    const providerSettings = {
+      ...settings,
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          displayName: "Claude Work",
+          config: { homePath: "/tmp/claude-work" },
+        },
+      },
+    } as const;
+
+    expect(
+      patchCustomModelsForProviderInstance(
+        providerSettings,
+        {
+          instanceId: "claude_work",
+          provider: "claudeAgent",
+          isDefault: false,
+        },
+        ["claude/work-only"],
+      ),
+    ).toEqual({
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          displayName: "Claude Work",
+          config: { homePath: "/tmp/claude-work", customModels: ["claude/work-only"] },
+        },
+      },
+    });
+  });
+
   it("builds a complete provider-indexed custom model record", () => {
     expect(getCustomModelsByProvider(settings)).toEqual({
       codex: ["custom/codex-model"],
@@ -1225,6 +1305,46 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.pi.filter((option) => option.slug === "anthropic/custom-pi"),
     ).toHaveLength(1);
+  });
+
+  it("reads custom models from the selected provider instance without leaking provider buckets", () => {
+    const modelSettings = {
+      ...settings,
+      providerInstances: {
+        claude_work: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: { customModels: ["claude/work-only"] },
+        },
+        claude_empty: {
+          driver: "claudeAgent",
+          enabled: true,
+          config: {},
+        },
+      },
+    } as const;
+
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claudeAgent",
+        provider: "claudeAgent",
+        isDefault: true,
+      }),
+    ).toEqual(["claude/custom-opus"]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claude_work",
+        provider: "claudeAgent",
+        isDefault: false,
+      }),
+    ).toEqual(["claude/work-only"]);
+    expect(
+      getCustomModelsForProviderInstance(modelSettings, {
+        instanceId: "claude_empty",
+        provider: "claudeAgent",
+        isDefault: false,
+      }),
+    ).toEqual([]);
   });
 });
 

@@ -867,7 +867,10 @@ export function AutomationModelPicker({
   const providerStatuses = useProviderStatusesForLocalConfig();
   const [open, setOpen] = useState(false);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
-  const selectedProviderInstanceId = value.instanceId ?? value.provider;
+  const selectedProviderInstanceId = useMemo(
+    () => resolveSelectableProviderInstanceId(settings, value.provider, value.instanceId),
+    [settings, value.instanceId, value.provider],
+  );
   const modelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
     () => ({ [value.provider]: value.model }),
     [value.model, value.provider],
@@ -920,6 +923,7 @@ export function AutomationModelPicker({
       lockedProvider={null}
       providers={providerStatuses}
       modelOptionsByProvider={modelOptionsByProvider}
+      modelOptionsByProviderInstance={modelOptionsByProviderInstance}
       loadingModelProviders={loadingModelProviders}
       discoveryErrorsByProvider={discoveryErrorsByProvider}
       hiddenProviders={settings.hiddenProviders}

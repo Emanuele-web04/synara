@@ -6,7 +6,7 @@
  *
  * @module providerStatusCache
  */
-import { ServerProviderStatus } from "@synara/contracts";
+import { ServerProviderStatus, type ProviderInstanceId } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Schema } from "effect";
 import { writeFileStringAtomically } from "../atomicWrite";
 
@@ -34,15 +34,20 @@ const providerOrderRank = (provider: ServerProviderStatus["provider"]): number =
 export const orderProviderStatuses = (
   providers: ReadonlyArray<ServerProviderStatus>,
 ): ReadonlyArray<ServerProviderStatus> =>
-  [...providers].toSorted(
-    (left, right) => providerOrderRank(left.provider) - providerOrderRank(right.provider),
-  );
+  [...providers].toSorted((left, right) => {
+    const rankDelta = providerOrderRank(left.provider) - providerOrderRank(right.provider);
+    if (rankDelta !== 0) {
+      return rankDelta;
+    }
+    return (left.instanceId ?? left.provider).localeCompare(right.instanceId ?? right.provider);
+  });
 
 export function resolveProviderStatusCachePath(input: {
   readonly stateDir: string;
   readonly provider: ServerProviderStatus["provider"];
+  readonly instanceId?: ProviderInstanceId | undefined;
 }): string {
-  return `${input.stateDir}/provider-status/${input.provider}.json`;
+  return `${input.stateDir}/provider-status/${input.instanceId ?? input.provider}.json`;
 }
 
 // Ignore unreadable or malformed cache entries so the server can still boot

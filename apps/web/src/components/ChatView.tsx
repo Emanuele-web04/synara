@@ -146,8 +146,9 @@ import {
 } from "../lib/threadEnvironment";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffBadgeLabel,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { buildDraftThreadRenameCreateInput, dispatchThreadRename } from "../lib/threadRename";
 import { useProjectEnvironmentStore } from "../projectEnvironmentStore";
@@ -2074,16 +2075,17 @@ export default function ChatView({
   const handoffBadgeTargetProvider = activeThread?.handoff
     ? activeThread.modelSelection.provider
     : null;
-  const handoffTargetProviders = useMemo(
+  const handoffTargets = useMemo(
     () =>
       activeThread
-        ? resolveAvailableHandoffTargetProviders({
+        ? resolveAvailableHandoffTargets({
             sourceProvider: activeThread.modelSelection.provider,
-            providerSettings: serverSettingsQuery.data?.providers,
-            providerStatuses,
+            sourceProviderInstanceId:
+              activeThread.session?.providerInstanceId ?? activeThread.modelSelection.instanceId,
+            providerInstances,
           })
         : [],
-    [activeThread, providerStatuses, serverSettingsQuery.data?.providers],
+    [activeThread, providerInstances],
   );
   const handoffActionLabel = activeThread ? "Hand off thread" : "Create handoff thread";
   const activeProviderStatus = useMemo(
@@ -2616,6 +2618,7 @@ export default function ChatView({
     latestTurnSettled,
     codexHomePath: settings.codexHomePath || null,
     providerOptions: providerOptionsForDispatch ?? null,
+    textGenerationModelSelection: selectedModelSelection,
   });
   const hasRightDockPanes = useRightDockStore(
     (store) => selectRightDockState(threadId)(store).panes.length > 0,
@@ -3325,6 +3328,7 @@ export default function ChatView({
             setComposerDraftProviderModelOptions(activeThread.id, provider, undefined, {
               persistSticky: true,
               model: resolvedModel,
+              instanceId: resolvedInstanceId,
             });
           }
         },
@@ -3640,13 +3644,13 @@ export default function ChatView({
   );
 
   const onCreateHandoffThread = useCallback(
-    async (targetProvider: ProviderKind) => {
+    async (target: ThreadHandoffTarget) => {
       if (!activeThread || handoffDisabled) {
         return;
       }
 
       try {
-        await createThreadHandoff(activeThread, targetProvider);
+        await createThreadHandoff(activeThread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -4003,6 +4007,8 @@ export default function ChatView({
     lockedProvider,
     model: selectedModelForPickerWithCustomFallback,
     modelOptionsByProvider,
+    modelOptionsByProviderInstance,
+    selectedProviderInstanceId,
   });
   const composerFooterTraitsSummary = resolveTraitsTriggerSummary({
     provider: selectedProvider,
@@ -4101,6 +4107,7 @@ export default function ChatView({
         onOpenChange={handleTraitsPickerOpenChange}
         onSelectionCommitted={scheduleComposerFocus}
         shortcutLabel={traitsPickerShortcutLabel}
+        selectedProviderInstanceId={selectedProviderInstanceId}
         hideLabel={!composerFooterControlsPlan.showTraitsLabel}
       />
     </>
@@ -4146,7 +4153,7 @@ export default function ChatView({
       buildNextProviderOptions(selectedProvider, selectedProviderModelOptions, {
         fastMode: !composerTraitSelection.fastModeEnabled,
       }),
-      { persistSticky: true },
+      { instanceId: selectedProviderInstanceId, persistSticky: true },
     );
     scheduleComposerFocus();
   }, [
@@ -4154,6 +4161,7 @@ export default function ChatView({
     composerTraitSelection.fastModeEnabled,
     scheduleComposerFocus,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedProviderModelOptions,
     setComposerDraftProviderModelOptions,
     threadId,
@@ -5426,7 +5434,7 @@ export default function ChatView({
           handoffBadgeLabel={handoffBadgeLabel}
           handoffActionLabel={handoffActionLabel}
           handoffDisabled={handoffDisabled}
-          handoffActionTargetProviders={handoffTargetProviders}
+          handoffActionTargets={handoffTargets}
           handoffBadgeSourceProvider={handoffBadgeSourceProvider}
           handoffBadgeTargetProvider={handoffBadgeTargetProvider}
           gitCwd={threadWorkspaceCwd}

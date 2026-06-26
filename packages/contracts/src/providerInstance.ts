@@ -8,6 +8,8 @@ import { TrimmedNonEmptyString } from "./baseSchemas";
 
 const PROVIDER_SLUG_MAX_CHARS = 64;
 const PROVIDER_SLUG_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const ENVIRONMENT_VARIABLE_NAME_MAX_CHARS = 128;
+const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 const ProviderSlug = TrimmedNonEmptyString.check(
   Schema.isMaxLength(PROVIDER_SLUG_MAX_CHARS),
@@ -28,11 +30,30 @@ export const ProviderInstanceRef = Schema.Struct({
 });
 export type ProviderInstanceRef = typeof ProviderInstanceRef.Type;
 
+export const ProviderInstanceEnvironmentVariableName = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(ENVIRONMENT_VARIABLE_NAME_MAX_CHARS),
+  Schema.isPattern(ENVIRONMENT_VARIABLE_NAME_PATTERN),
+);
+export type ProviderInstanceEnvironmentVariableName =
+  typeof ProviderInstanceEnvironmentVariableName.Type;
+
+export const ProviderInstanceEnvironmentVariable = Schema.Struct({
+  name: ProviderInstanceEnvironmentVariableName,
+  value: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
+  sensitive: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
+  valueRedacted: Schema.optionalKey(Schema.Boolean),
+});
+export type ProviderInstanceEnvironmentVariable = typeof ProviderInstanceEnvironmentVariable.Type;
+
+export const ProviderInstanceEnvironment = Schema.Array(ProviderInstanceEnvironmentVariable);
+export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Type;
+
 // Opaque driver-specific config. Drivers decode this at the runtime boundary.
 export const ProviderInstanceConfig = Schema.Struct({
   driver: ProviderDriverKind,
   displayName: Schema.optional(TrimmedNonEmptyString),
   accentColor: Schema.optional(TrimmedNonEmptyString),
+  environment: Schema.optionalKey(ProviderInstanceEnvironment),
   enabled: Schema.optionalKey(Schema.Boolean),
   config: Schema.optionalKey(Schema.Unknown),
 });

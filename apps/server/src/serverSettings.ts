@@ -11,12 +11,18 @@ import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
   type ModelSelection,
+  type ProviderInstanceEnvironmentVariable,
   ServerSettings,
   ServerSettingsError,
   type ServerSettingsPatch,
   type ServerSettingsView,
 } from "@synara/contracts";
-import { deepMerge, type DeepPartial } from "@synara/shared/Struct";
+import type { DeepPartial } from "@synara/shared/Struct";
+import {
+  deriveProviderInstances,
+  type ResolvedProviderInstance,
+  resolveModelSelectionInstanceId,
+} from "@synara/shared/providerInstances";
 import { applyServerSettingsPatch } from "@synara/shared/serverSettings";
 import {
   Cause,
@@ -90,7 +96,7 @@ function migrateSettings(settings: ServerSettings, migrationVersion: number): Se
 }
 
 export function toServerSettingsView(settings: ServerSettings): ServerSettingsView {
-  return settings;
+  return redactServerSettingsForClient(settings);
 }
 
 export class ServerSettingsService extends ServiceMap.Service<
@@ -101,9 +107,12 @@ export class ServerSettingsService extends ServiceMap.Service<
     Layer.effect(
       ServerSettingsService,
       Effect.gen(function* () {
-        const currentSettingsRef = yield* Ref.make<ServerSettings>(
-          deepMerge(DEFAULT_SERVER_SETTINGS, overrides),
+        const initialSettings = yield* normalizeSettings(
+          "<memory>",
+          DEFAULT_SERVER_SETTINGS,
+          overrides as ServerSettingsPatch,
         );
+        const currentSettingsRef = yield* Ref.make<ServerSettings>(initialSettings);
         const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
         const revisionRef = yield* Ref.make(0);
         const emitChange = (settings: ServerSettings) =>
@@ -156,16 +165,25 @@ export class ServerSettingsService extends ServiceMap.Service<
 
 function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings {
   const selection = settings.textGenerationModelSelection;
+  const selectedInstance = findTextGenerationSelectionInstance(settings, selection);
   if (
-    hasDedicatedTextGenerationProvider(selection.provider) &&
-    settings.providers[selection.provider].enabled
+    selectedInstance?.enabled &&
+    hasDedicatedTextGenerationProvider(selectedInstance.driver)
   ) {
-    return settings;
+    return selectedInstance.driver === selection.provider &&
+      selectedInstance.instanceId === selection.instanceId
+      ? settings
+      : {
+          ...settings,
+          textGenerationModelSelection: {
+            provider: selectedInstance.driver,
+            instanceId: selectedInstance.instanceId,
+            model: selection.model,
+          } as ModelSelection,
+        };
   }
 
-  const fallback = GIT_TEXT_GENERATION_PROVIDER_ORDER.find(
-    (provider) => settings.providers[provider].enabled,
-  );
+  const fallback = findFallbackTextGenerationInstance(settings);
   if (!fallback) {
     return settings;
   }
@@ -173,14 +191,181 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
   return {
     ...settings,
     textGenerationModelSelection: {
-      provider: fallback,
-      instanceId: fallback,
+      provider: fallback.driver,
+      instanceId: fallback.instanceId,
       model:
-        fallback === "droid"
+        fallback.driver === "droid"
           ? DEFAULT_DROID_GIT_TEXT_GENERATION_MODEL
-          : DEFAULT_MODEL_BY_PROVIDER[fallback],
+          : DEFAULT_MODEL_BY_PROVIDER[fallback.driver],
     } as ModelSelection,
   };
+}
+
+function findTextGenerationSelectionInstance(
+  settings: ServerSettings,
+  selection: ModelSelection,
+): ResolvedProviderInstance | undefined {
+  const selectionInstanceId = resolveModelSelectionInstanceId(selection);
+  return deriveProviderInstances(settings).find(
+    (candidate) => candidate.instanceId === selectionInstanceId,
+  );
+}
+
+function findFallbackTextGenerationInstance(
+  settings: ServerSettings,
+): ResolvedProviderInstance | null {
+  const instances = deriveProviderInstances(settings);
+  for (const provider of GIT_TEXT_GENERATION_PROVIDER_ORDER) {
+    const instance = instances.find(
+      (candidate) => candidate.enabled && candidate.driver === provider,
+    );
+    if (instance) {
+      return instance;
+    }
+  }
+  return null;
+}
+
+function environmentByName(
+  entries: ReadonlyArray<ProviderInstanceEnvironmentVariable> | undefined,
+): ReadonlyMap<string, ProviderInstanceEnvironmentVariable> {
+  const byName = new Map<string, ProviderInstanceEnvironmentVariable>();
+  for (const entry of entries ?? []) {
+    byName.set(entry.name.trim(), entry);
+  }
+  return byName;
+}
+
+const SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS = new Set(["serverPassword"]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function preserveRedactedProviderInstanceConfig(
+  currentConfig: unknown,
+  nextConfig: unknown,
+): unknown {
+  if (!isRecord(currentConfig) || !isRecord(nextConfig)) {
+    return nextConfig;
+  }
+
+  let didRestore = false;
+  const restored: Record<string, unknown> = { ...nextConfig };
+  for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+    const markerKey = `${key}Redacted`;
+    if (nextConfig[markerKey] !== true) {
+      continue;
+    }
+    const currentValue = currentConfig[key];
+    if (typeof currentValue !== "string" || currentValue.length === 0) {
+      continue;
+    }
+    restored[key] = currentValue;
+    delete restored[markerKey];
+    didRestore = true;
+  }
+
+  return didRestore ? restored : nextConfig;
+}
+
+function preserveRedactedProviderInstanceEnvironment(
+  current: ServerSettings,
+  patch: ServerSettingsPatch,
+): ServerSettingsPatch {
+  if (patch.providerInstances === undefined) {
+    return patch;
+  }
+
+  const providerInstances: Record<
+    string,
+    NonNullable<ServerSettingsPatch["providerInstances"]>[string]
+  > = {};
+  for (const [instanceId, nextInstance] of Object.entries(patch.providerInstances)) {
+    const currentEnvironment = environmentByName(
+      current.providerInstances[instanceId]?.environment,
+    );
+    const nextEnvironment = nextInstance.environment?.map((entry) => {
+      if (entry.valueRedacted !== true) {
+        return entry;
+      }
+      const currentEntry = currentEnvironment.get(entry.name.trim());
+      if (
+        !currentEntry ||
+        typeof currentEntry.value !== "string" ||
+        currentEntry.value.length === 0
+      ) {
+        return entry;
+      }
+      const { valueRedacted: _valueRedacted, ...unredactedEntry } = entry;
+      return {
+        ...unredactedEntry,
+        sensitive: entry.sensitive || currentEntry.sensitive,
+        value: currentEntry.value,
+      };
+    });
+    const nextConfig =
+      nextInstance.config === undefined
+        ? undefined
+        : preserveRedactedProviderInstanceConfig(
+            current.providerInstances[instanceId]?.config,
+            nextInstance.config,
+          );
+    providerInstances[instanceId] = {
+      ...nextInstance,
+      ...(nextEnvironment !== undefined ? { environment: nextEnvironment } : {}),
+      ...(nextConfig !== undefined ? { config: nextConfig } : {}),
+    };
+  }
+
+  return {
+    ...patch,
+    providerInstances: providerInstances as NonNullable<ServerSettingsPatch["providerInstances"]>,
+  };
+}
+
+function redactProviderInstanceConfig(config: unknown): unknown {
+  if (!isRecord(config)) {
+    return config;
+  }
+
+  let didRedact = false;
+  const redacted: Record<string, unknown> = { ...config };
+  for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+    const value = config[key];
+    if (typeof value !== "string" || value.length === 0) {
+      continue;
+    }
+    redacted[key] = "";
+    redacted[`${key}Redacted`] = true;
+    didRedact = true;
+  }
+
+  return didRedact ? redacted : config;
+}
+
+export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
+  const providerInstances = Object.fromEntries(
+    Object.entries(settings.providerInstances).map(([instanceId, instance]) => [
+      instanceId,
+      {
+        ...instance,
+        ...(instance.config !== undefined
+          ? { config: redactProviderInstanceConfig(instance.config) }
+          : {}),
+        ...(instance.environment
+          ? {
+              environment: instance.environment.map((entry) =>
+                entry.sensitive || entry.valueRedacted === true
+                  ? { ...entry, value: "", valueRedacted: true }
+                  : entry,
+              ),
+            }
+          : {}),
+      },
+    ]),
+  );
+  return { ...settings, providerInstances };
 }
 
 function normalizeSettings(
@@ -188,7 +373,10 @@ function normalizeSettings(
   current: ServerSettings,
   patch: ServerSettingsPatch,
 ): Effect.Effect<ServerSettings, ServerSettingsError> {
-  return Schema.decodeUnknownEffect(ServerSettings)(applyServerSettingsPatch(current, patch)).pipe(
+  const preservedPatch = preserveRedactedProviderInstanceEnvironment(current, patch);
+  return Schema.decodeUnknownEffect(ServerSettings)(
+    applyServerSettingsPatch(current, preservedPatch),
+  ).pipe(
     Effect.mapError(
       (cause) =>
         new ServerSettingsError({

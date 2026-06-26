@@ -471,12 +471,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readDevinProviderStartOptions(
   providerOptions: unknown,
-): { readonly binaryPath?: string } | undefined {
+): {
+  readonly binaryPath?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+} | undefined {
   if (!isRecord(providerOptions) || !isRecord(providerOptions.devin)) {
     return undefined;
   }
   const binaryPath = providerOptions.devin.binaryPath;
-  return typeof binaryPath === "string" ? { binaryPath } : {};
+  const rawEnvironment = providerOptions.devin.environment;
+  const environment = isRecord(rawEnvironment)
+    ? Object.fromEntries(
+        Object.entries(rawEnvironment).filter(
+          (entry): entry is [string, string] => typeof entry[1] === "string",
+        ),
+      )
+    : undefined;
+  return {
+    ...(typeof binaryPath === "string" ? { binaryPath } : {}),
+    ...(environment && Object.keys(environment).length > 0 ? { environment } : {}),
+  };
 }
 
 function parseDevinResume(resumeCursor: unknown): { readonly sessionId: string } | undefined {
@@ -682,29 +696,71 @@ function setDevinDiscoveryCacheEntry<Result>(
   }
 }
 
+function devinDiscoveryCacheKey(input: {
+  readonly binaryPath: string;
+  readonly cwd?: string;
+  readonly instanceId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
+}): string {
+  const environment = input.environment
+    ? Object.entries(input.environment)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([name, value]) => {
+          let hash = 0x811c9dc5;
+          for (let index = 0; index < value.length; index += 1) {
+            hash ^= value.charCodeAt(index);
+            hash = Math.imul(hash, 0x01000193);
+          }
+          return [name, (hash >>> 0).toString(36)] as const;
+        })
+    : null;
+  return JSON.stringify([
+    input.instanceId ?? null,
+    input.binaryPath,
+    input.cwd ?? null,
+    environment,
+  ]);
+}
+
 export function makeCachedDevinModelDiscovery<E, R>(input: {
   readonly discoveryLock: Semaphore.Semaphore;
-  readonly discover: (binaryPath: string) => Effect.Effect<ProviderListModelsResult, E, R>;
+  readonly discover: (
+    binaryPath: string,
+    environment?: Readonly<Record<string, string>>,
+  ) => Effect.Effect<ProviderListModelsResult, E, R>;
 }) {
   const cache = new Map<
     string,
     { readonly expiresAt: number; readonly result: ProviderListModelsResult }
   >();
-  return (binaryPath: string, options?: { readonly forceReload?: boolean }) => {
-    const resolvedBinaryPath = resolveDevinBinaryPath(binaryPath);
-    const cached = cache.get(resolvedBinaryPath);
+  return (
+    binaryPath: string,
+    options?: {
+      readonly forceReload?: boolean;
+      readonly instanceId?: string;
+      readonly environment?: Readonly<Record<string, string>>;
+    },
+  ) => {
+    const childEnvironment = { ...process.env, ...(options?.environment ?? {}) };
+    const resolvedBinaryPath = resolveDevinBinaryPath(binaryPath, { env: childEnvironment });
+    const cacheKey = devinDiscoveryCacheKey({
+      binaryPath: resolvedBinaryPath,
+      ...(options?.instanceId ? { instanceId: options.instanceId } : {}),
+      ...(options?.environment ? { environment: options.environment } : {}),
+    });
+    const cached = cache.get(cacheKey);
     if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
       return Effect.succeed({ ...cached.result, cached: true });
     }
     return input.discoveryLock.withPermits(1)(
       Effect.gen(function* () {
-        const cached = cache.get(resolvedBinaryPath);
+        const cached = cache.get(cacheKey);
         if (options?.forceReload !== true && cached && cached.expiresAt > Date.now()) {
           return { ...cached.result, cached: true };
         }
-        const result = yield* input.discover(resolvedBinaryPath);
+        const result = yield* input.discover(resolvedBinaryPath, options?.environment);
         if (result.error === undefined) {
-          setDevinDiscoveryCacheEntry(cache, resolvedBinaryPath, {
+          setDevinDiscoveryCacheEntry(cache, cacheKey, {
             expiresAt: Date.now() + DEVIN_MODEL_DISCOVERY_CACHE_MS,
             result,
           });
@@ -1371,12 +1427,15 @@ export function makeDevinAdapter(
 
     const makeDevinDiscoveryRuntime = (input: {
       readonly binaryPath?: string;
+      readonly environment?: Readonly<Record<string, string>>;
       readonly cwd: string;
     }) =>
       createAcpRuntime({
         devinSettings: {
           ...(devinSettings.binaryPath ? { binaryPath: devinSettings.binaryPath } : {}),
           ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          ...(devinSettings.environment ? { environment: devinSettings.environment } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
         },
         childProcessSpawner,
         cwd: input.cwd,
@@ -1384,7 +1443,10 @@ export function makeDevinAdapter(
         clientInfo: { name: "Synara Command Discovery", version: "0.0.0" },
       });
 
-    const discoverDevinModelsUncached = (binaryPath: string) => {
+    const discoverDevinModelsUncached = (
+      binaryPath: string,
+      environment?: Readonly<Record<string, string>>,
+    ) => {
       const fallbackResult = {
         models: buildDevinStaticModelDescriptors(),
         source: "devin.static",
@@ -1394,7 +1456,10 @@ export function makeDevinAdapter(
       return Effect.gen(function* () {
         let discoveryError: string | undefined;
         const cliModels = yield* Effect.gen(function* () {
-          const childEnv = buildProviderChildEnvironment({ provider: PROVIDER });
+          const childEnv = buildProviderChildEnvironment({
+            provider: PROVIDER,
+            ...(environment ? { baseEnv: { ...process.env, ...environment } } : {}),
+          });
           const child = yield* childProcessSpawner.spawn(
             makeEffectProcessCommand(binaryPath, ["models", "list", "--format", "json"], {
               env: childEnv,
@@ -1763,6 +1828,15 @@ export function makeDevinAdapter(
 
           const devinModelSelection =
             input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
+          const configuredEnvironment = {
+            ...(devinSettings.environment ?? {}),
+            ...(providerDevinOptions?.environment ?? {}),
+          };
+          const providerEnvironment = {
+            ...process.env,
+            ...configuredEnvironment,
+          };
 
           const existing = sessions.get(input.threadId);
           // Recheck under the lock: a user turn may start while recovery waits.
@@ -1809,6 +1883,7 @@ export function makeDevinAdapter(
                 connection: gatewaySessionLease.connection,
                 stdioProxy: agentGatewayCredentials.stdioProxy,
                 bootstrapToken,
+                env: providerEnvironment,
               });
             },
             catch: (error) =>
@@ -1840,14 +1915,20 @@ export function makeDevinAdapter(
             payloadLimit: DEVIN_ACP_LOG_PAYLOAD_LIMIT,
             shouldMirrorIncomingRaw: (payload) => payload.includes("devinShell"),
           });
-          const providerDevinOptions = readDevinProviderStartOptions(input.providerOptions);
           const discoveryBinaryPath = resolveDevinBinaryPath(
             providerDevinOptions?.binaryPath?.trim() || devinSettings.binaryPath,
+            { env: providerEnvironment },
           );
           const effectiveModel = yield* resolveDevinStartModel({
             explicitModel: devinSettings.model,
             modelSelection: devinModelSelection,
-            discoverModels: () => discoverDevinModels(discoveryBinaryPath),
+            discoverModels: () =>
+              discoverDevinModels(discoveryBinaryPath, {
+                ...(input.providerInstanceId ? { instanceId: input.providerInstanceId } : {}),
+                ...(Object.keys(configuredEnvironment).length > 0
+                  ? { environment: configuredEnvironment }
+                  : {}),
+              }),
           });
           const effectiveDevinSettings: DevinAcpRuntimeSettings = {
             ...(devinSettings.binaryPath !== undefined
@@ -1856,6 +1937,9 @@ export function makeDevinAdapter(
             ...(effectiveModel !== undefined ? { model: effectiveModel } : {}),
             ...(providerDevinOptions?.binaryPath !== undefined
               ? { binaryPath: providerDevinOptions.binaryPath }
+              : {}),
+            ...(Object.keys(configuredEnvironment).length > 0
+              ? { environment: configuredEnvironment }
               : {}),
           };
 
@@ -1869,7 +1953,7 @@ export function makeDevinAdapter(
             requestedModel: devinModelSelection?.model,
             modelVariant: devinModelSelection?.options?.modelVariant,
             reasoningEffort: devinModelSelection?.options?.reasoningEffort,
-            apiKeyConfigured: hasDevinApiKeyEnv(),
+            apiKeyConfigured: hasDevinApiKeyEnv(providerEnvironment),
             alwaysApprove: input.runtimeMode === "full-access",
             binaryPath: effectiveDevinSettings.binaryPath ?? "devin",
           });
@@ -2068,6 +2152,9 @@ export function makeDevinAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId
+              ? { providerInstanceId: input.providerInstanceId }
+              : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -3132,7 +3219,13 @@ export function makeDevinAdapter(
       const cacheKey =
         cwd === undefined
           ? undefined
-          : `${input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin"}\u0000${cwd}`;
+          : devinDiscoveryCacheKey({
+              binaryPath:
+                input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin",
+              cwd,
+              ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+            });
       const cached = cacheKey === undefined ? undefined : commandDiscoveryCache.get(cacheKey);
       // Fast path: serve a fresh cached result without serializing behind the
       // discovery lock.
@@ -3160,7 +3253,12 @@ export function makeDevinAdapter(
           }
           const binaryPath =
             input.binaryPath?.trim() || devinSettings.binaryPath?.trim() || "devin";
-          const cacheKey = `${binaryPath}\u0000${cwd}`;
+          const cacheKey = devinDiscoveryCacheKey({
+            binaryPath,
+            cwd,
+            ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          });
           // Recheck under the lock: a concurrent discovery may have populated
           // the cache while this fiber waited for the permit.
           const cached = commandDiscoveryCache.get(cacheKey);
@@ -3170,6 +3268,7 @@ export function makeDevinAdapter(
 
           const runtime = yield* makeDevinDiscoveryRuntime({
             ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
             cwd,
           });
           yield* runtime.start();
@@ -3404,7 +3503,13 @@ export function makeDevinAdapter(
 
     const listModels: NonNullable<DevinAdapterShape["listModels"]> = (input) =>
       discoverDevinModels(
-        resolveDevinBinaryPath(input.binaryPath?.trim() || devinSettings.binaryPath),
+        resolveDevinBinaryPath(input.binaryPath?.trim() || devinSettings.binaryPath, {
+          env: { ...process.env, ...(input.environment ?? {}) },
+        }),
+        {
+          ...(input.instanceId ? { instanceId: input.instanceId } : {}),
+          ...(input.environment ? { environment: input.environment } : {}),
+        },
       );
 
     const stopAll: DevinAdapterShape["stopAll"] = () =>

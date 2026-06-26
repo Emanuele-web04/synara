@@ -300,6 +300,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const codexBinaryPath = resolveCodexBinaryPath(providerOptions);
       const resolvedCodexHomePath = resolveCodexHomePath(codexHomePath, providerOptions);
       const resolvedCodexAuthHomePath = resolveCodexAuthHomePath(providerOptions);
+      const resolvedCodexAccountId = resolveCodexAccountId(providerOptions);
       const schemaPath = yield* writeTempFile(
         operation,
         "codex-schema",
@@ -328,7 +329,13 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         }
 
         const env = yield* Effect.promise(() =>
-          buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
+          buildCodexProcessEnv({
+            ...(providerOptions?.codex?.environment
+              ? { env: { ...process.env, ...providerOptions.codex.environment } }
+              : {}),
+            homePath: isolatedCodexHome.homePath,
+            ...(resolvedCodexAccountId ? { accountId: resolvedCodexAccountId } : {}),
+          }),
         );
         const args = [
           "exec",
@@ -696,6 +703,13 @@ function resolveCodexAuthHomePath(
   providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
 ): string | undefined {
   const resolved = providerOptions?.codex?.shadowHomePath?.trim();
+  return resolved && resolved.length > 0 ? resolved : undefined;
+}
+
+function resolveCodexAccountId(
+  providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
+): string | undefined {
+  const resolved = providerOptions?.codex?.accountId?.trim();
   return resolved && resolved.length > 0 ? resolved : undefined;
 }
 
