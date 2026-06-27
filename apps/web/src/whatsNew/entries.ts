@@ -22,6 +22,68 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.2",
+    date: "Jun 27",
+    features: [
+      {
+        id: "branch-toolbar-projects",
+        title: "Project switching moved closer to your branch work",
+        description:
+          "The branch toolbar can now show and change the active project, so project, branch, and worktree context are easier to keep aligned while you move around Synara.",
+        details:
+          "This release teaches the branch toolbar about project selection, shared home-chat containers, draft-thread mapping, project creation recovery, and project picker state so navigation does not depend only on the sidebar.",
+      },
+      {
+        id: "absolute-file-previews",
+        title: "Local previews can open more real files",
+        description:
+          "Absolute local file paths now get preview grants, making image, PDF, and workspace previews more reliable when agent output points at files on disk.",
+        details:
+          "The server now grants and validates local preview access more carefully, including trusted-origin checks, local image route coverage, workspace file-system normalization, and web-side preview/download handling for absolute paths.",
+      },
+      {
+        id: "review-file-tree",
+        title: "Review diffs have a collapsible file tree",
+        description:
+          "The diff panel now has a review file tree, giving larger review batches a clearer outline before you dive into individual patches.",
+        details:
+          "Synara now builds file diff trees, renders a collapsible review panel with shared disclosure motion, and reuses file-row styling so review navigation feels closer to the rest of the workspace.",
+      },
+      {
+        id: "workspace-explorer",
+        title: "The workspace explorer is tidier",
+        description:
+          "The right-side workspace explorer and preview header were split into cleaner pieces, reducing composer chrome churn and making file browsing steadier.",
+        details:
+          "Workspace browsing now lives behind a reusable dock explorer pane and workspace explorer helpers, with tighter right-dock activation metadata, preview header behavior, and composer measurement boundaries.",
+      },
+      {
+        id: "send-readiness",
+        title: "Send actions check provider readiness first",
+        description:
+          "Starting a chat, Kanban task, or handoff now refreshes provider availability before sending and returns focus to the composer more consistently.",
+        details:
+          "Provider availability refresh has dedicated helpers and coverage, while ChatView, Kanban submit flows, thread handoff, and route startup paths now share more predictable send-readiness behavior.",
+      },
+      {
+        id: "visual-polish",
+        title: "Explorer icons and working states feel more coherent",
+        description:
+          "File explorer icons, working shimmers, route inset surfaces, composer pickers, and sidebar details received a focused visual cleanup pass.",
+        details:
+          "This release unifies more icon choices through central icon helpers, refines shimmer styling, tightens compact route surfaces, and keeps repeated explorer/sidebar affordances closer to the same visual language.",
+      },
+      {
+        id: "transcript-session-state",
+        title: "Long sessions keep their footing better",
+        description:
+          "Transcript scrolling, session state, sidebar routing, and draft equality checks were refactored so active work stays calmer across thread and project changes.",
+        details:
+          "ChatView now separates more browser-specific behavior, route inset layout has focused coverage, draft-thread comparisons are stricter, and project/chat container helpers handle exact optional state more safely.",
+      },
+    ],
+  },
+  {
     version: "0.3.1",
     date: "Jun 26",
     features: [

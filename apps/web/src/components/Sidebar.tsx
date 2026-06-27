@@ -2335,7 +2335,9 @@ export default function Sidebar() {
         const creationResult = await createOrRecoverProjectFromPath({
           api,
           workspaceRoot: cwd,
-          createIfMissing: options.createIfMissing,
+          ...(options.createIfMissing === undefined
+            ? {}
+            : { createIfMissing: options.createIfMissing }),
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,

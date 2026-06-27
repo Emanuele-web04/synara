@@ -708,8 +708,11 @@ function draftThreadStatesEqual(
   left: DraftThreadState | undefined,
   right: DraftThreadState,
 ): boolean {
-  return Boolean(
-    left &&
+  if (!left) {
+    return false;
+  }
+
+  return (
     left.projectId === right.projectId &&
     left.createdAt === right.createdAt &&
     left.runtimeMode === right.runtimeMode &&
@@ -720,7 +723,7 @@ function draftThreadStatesEqual(
     Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
     left.envMode === right.envMode &&
     (left.isTemporary === true) === (right.isTemporary === true) &&
-    left.promotedTo === right.promotedTo,
+    left.promotedTo === right.promotedTo
   );
 }
 

@@ -19,13 +19,13 @@ const pendingHomeChatCreationByWorkspaceRoot = new Map<string, Promise<ProjectId
 const pendingHomeChatFixupByWorkspaceRoot = new Map<string, Promise<void>>();
 
 interface HomeChatContainerCandidate {
-  readonly id?: ProjectId;
-  readonly kind?: Project["kind"];
-  readonly cwd?: string;
-  readonly workspaceRoot?: string;
-  readonly name?: string;
-  readonly remoteName?: string;
-  readonly title?: string;
+  readonly id?: ProjectId | undefined;
+  readonly kind?: Project["kind"] | undefined;
+  readonly cwd?: string | undefined;
+  readonly workspaceRoot?: string | undefined;
+  readonly name?: string | undefined;
+  readonly remoteName?: string | undefined;
+  readonly title?: string | undefined;
 }
 
 async function updateHomeChatProjectMetadata(

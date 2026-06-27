@@ -12,8 +12,7 @@ import {
 } from "./chat/composerPickerStyles";
 import { SidebarInset } from "./ui/sidebar";
 
-const CARD_SURFACE_ROUTE_INSET_CLASS_NAME =
-  "h-dvh min-h-0 overscroll-y-none text-foreground";
+const CARD_SURFACE_ROUTE_INSET_CLASS_NAME = "h-dvh min-h-0 overscroll-y-none text-foreground";
 
 // Default route cards keep SidebarInset as the sidebar peer while letting the
 // inner card shadow bleed past the unclipped outer inset.
