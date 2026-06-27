@@ -1277,10 +1277,15 @@ function configureAppIdentity(): void {
   }
 }
 
-// macOS 26 can reinterpret bundle icons with Liquid Glass styling. Force the Dock to
-// use our pre-rendered PNG so the icon stays a literal clear rounded image at runtime.
-function applyMacDockIcon(): void {
+// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
+// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
+// a runtime dock override because it does not apply the modern system mask itself.
+function applyLegacyMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
+    return;
+  }
+  const darwinMajor = Number.parseInt(OS.release().split(".")[0] ?? "", 10);
+  if (!Number.isFinite(darwinMajor) || darwinMajor >= 25) {
     return;
   }
   const iconPath = resolveResourcePath("dock-icon.png");
@@ -2665,7 +2670,7 @@ if (hasSingleInstanceLock) {
     .then(() => {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
-      applyMacDockIcon();
+      applyLegacyMacDockIcon();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();
