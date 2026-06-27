@@ -409,15 +409,15 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // Ventura and other pre-Tahoe macOS releases render .icns literally, so the
-    // fallback bundle/Dock icon must already contain rounded transparent corners.
+    // Pre-Tahoe macOS needs a rounded runtime Dock override; the bundle ICNS
+    // stays full-bleed so Tahoe can apply Liquid Glass safely.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
-    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
 
     if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
