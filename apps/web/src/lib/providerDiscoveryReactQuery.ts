@@ -55,8 +55,12 @@ export const providerDiscoveryQueryKeys = {
     agentDir: string | null,
     connectionKey: string | null = null,
   ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
-  skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
-    ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skills: (
+    provider: ProviderKind,
+    cwd: string | null,
+    agentDir: string | null,
+    threadId: string | null,
+  ) => ["provider-discovery", "skills", provider, cwd, agentDir, threadId] as const,
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
     ["provider-discovery", "plugins", provider, cwd] as const,
@@ -94,7 +98,12 @@ export function providerSkillsQueryOptions(input: {
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
+    queryKey: providerDiscoveryQueryKeys.skills(
+      input.provider,
+      input.cwd,
+      input.agentDir ?? null,
+      input.threadId ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {

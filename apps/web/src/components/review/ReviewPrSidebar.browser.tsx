@@ -252,6 +252,14 @@ function activeInfoOption(): HTMLElement {
   return panel!;
 }
 
+function activeSidebar(): HTMLElement {
+  const sidebar = page.getByRole("tablist", { name: "Pull request sidebar" })
+    .element()
+    .closest<HTMLElement>("aside");
+  expect(sidebar).toBeTruthy();
+  return sidebar!;
+}
+
 function exactTextElementWithin(root: HTMLElement, text: string): HTMLElement {
   const element = Array.from(root.querySelectorAll<HTMLElement>("*")).find(
     (candidate) => candidate.textContent?.trim() === text,
@@ -275,7 +283,7 @@ describe("ReviewPrSidebar", () => {
     try {
       await expect.element(page.getByRole("tab", { name: "Chat" })).toBeInTheDocument();
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeInTheDocument();
-      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeInTheDocument();
+      await expect.element(page.getByTestId("composer-editor")).toBeInTheDocument();
       await page.getByRole("tab", { name: "Info" }).click();
       await vi.waitFor(() => {
         const infoOption = activeInfoOption();
@@ -310,11 +318,10 @@ describe("ReviewPrSidebar", () => {
 
     try {
       const input = page.getByTestId("composer-editor");
-      const sidebar = page.getByRole("heading", { name: "Ask Devin" }).element().closest("aside");
-      expect(sidebar).toBeTruthy();
-      expect(sidebar?.scrollWidth).toBeLessThanOrEqual(sidebar?.clientWidth ?? 0);
+      const sidebar = activeSidebar();
+      expect(sidebar.scrollWidth).toBeLessThanOrEqual(sidebar.clientWidth);
       expect(input.element().getBoundingClientRect().bottom).toBeGreaterThan(
-        (sidebar?.getBoundingClientRect().bottom ?? 0) - 96,
+        sidebar.getBoundingClientRect().bottom - 96,
       );
       await input.fill("What changed?");
       await page.getByRole("button", { name: "Send PR chat question" }).click();
@@ -334,9 +341,8 @@ describe("ReviewPrSidebar", () => {
     const mounted = await mountSidebar();
 
     try {
-      const sidebar = page.getByRole("heading", { name: "Ask Devin" }).element().closest("aside");
-      expect(sidebar).toBeTruthy();
-      const initialWidth = sidebar?.getBoundingClientRect().width ?? 0;
+      const sidebar = activeSidebar();
+      const initialWidth = sidebar.getBoundingClientRect().width;
       expect(initialWidth).toBeGreaterThanOrEqual(358);
       expect(initialWidth).toBeLessThanOrEqual(362);
 
@@ -347,16 +353,16 @@ describe("ReviewPrSidebar", () => {
         new KeyboardEvent("keydown", { bubbles: true, key: "ArrowLeft" }),
       );
       await vi.waitFor(() => {
-        expect(sidebar?.getBoundingClientRect().width ?? 0).toBeGreaterThan(initialWidth);
+        expect(sidebar.getBoundingClientRect().width).toBeGreaterThan(initialWidth);
       });
-      const expandedWidth = sidebar?.getBoundingClientRect().width ?? 0;
+      const expandedWidth = sidebar.getBoundingClientRect().width;
 
       await vi.waitFor(() => {
         expect(Number(resizeElement.getAttribute("aria-valuemax"))).toBeGreaterThanOrEqual(700);
       });
       resizeElement.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "End" }));
       await vi.waitFor(() => {
-        expect(sidebar?.getBoundingClientRect().width ?? 0).toBeGreaterThanOrEqual(700);
+        expect(sidebar.getBoundingClientRect().width).toBeGreaterThanOrEqual(700);
       });
       expect(sidebar?.getBoundingClientRect().width ?? 0).toBeLessThanOrEqual(720);
 
@@ -573,7 +579,7 @@ describe("ReviewPrSidebar", () => {
   it("keeps skill discovery off plain PR chat sends", async () => {
     const mounted = await mountSidebar();
     try {
-      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
+      await expect.element(page.getByTestId("composer-editor")).toBeVisible();
       expect(nativeApiMock.listSkills).toHaveBeenCalledTimes(0);
 
       await page.getByRole("button", { name: "Find review risks" }).click();
@@ -824,9 +830,6 @@ describe("ReviewPrSidebar", () => {
     try {
       const input = page.getByTestId("composer-editor");
       await expect.element(page.getByText("Reading changed files")).toBeVisible();
-      await vi.waitFor(() => {
-        expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
-      });
 
       const threadId = ThreadId.makeUnsafe("thread-review-chat-normalized");
       const startedAt = performance.now();
@@ -859,7 +862,7 @@ describe("ReviewPrSidebar", () => {
 
       expect(performance.now() - startedAt).toBeLessThan(1_500);
       await expect.element(input).toHaveTextContent("Production question 19");
-      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(1);
+      expect(prewarmReviewChatThreadMock).toHaveBeenCalledTimes(0);
     } finally {
       await mounted.cleanup();
     }
@@ -872,7 +875,7 @@ describe("ReviewPrSidebar", () => {
       await expect.element(page.getByRole("tab", { name: "Info" })).toBeVisible();
       expect(activeInfoOption().textContent).toContain("test");
       await page.getByRole("tab", { name: "Chat" }).click();
-      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
+      await expect.element(page.getByTestId("composer-editor")).toBeVisible();
       await page.getByRole("button", { name: "Collapse AI chat sidebar" }).click();
       await expect
         .element(page.getByRole("button", { name: "Expand AI chat sidebar" }))
@@ -881,7 +884,7 @@ describe("ReviewPrSidebar", () => {
 
       await page.getByRole("button", { name: "Expand AI chat sidebar" }).click();
       await page.getByRole("tab", { name: "Chat" }).click();
-      await expect.element(page.getByRole("heading", { name: "Ask Devin" })).toBeVisible();
+      await expect.element(page.getByTestId("composer-editor")).toBeVisible();
     } finally {
       await mounted.cleanup();
     }

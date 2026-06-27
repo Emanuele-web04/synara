@@ -131,6 +131,9 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.pullRequestHeader(payload.cwd, payload.reference),
       pullRequestHeaderFromOverview(payload.data),
     );
+    updateReviewPullRequestSurfaceCaches(queryClient, payload.cwd, payload.reference, {
+      overview: payload.data,
+    });
     return;
   }
   if (payload._tag === "pullRequestConversation") {
@@ -138,6 +141,9 @@ export function applyReviewUpdatedPayload(
       reviewQueryKeys.conversation(payload.cwd, payload.reference),
       payload.data,
     );
+    updateReviewPullRequestSurfaceCaches(queryClient, payload.cwd, payload.reference, {
+      conversation: payload.data,
+    });
     return;
   }
   if (payload._tag === "pullRequestWalkthrough") {
@@ -197,6 +203,35 @@ export function applyReviewUpdatedPayload(
       reviewSourceKey({ _tag: "pullRequest", reference: payload.reference }),
     ),
     payload.data,
+  );
+  updateReviewPullRequestSurfaceCaches(queryClient, payload.cwd, payload.reference, {
+    changeset: payload.data,
+  });
+}
+
+function updateReviewPullRequestSurfaceCaches(
+  queryClient: QueryClient,
+  cwd: string,
+  reference: string,
+  patch: Partial<ReviewPullRequestSurfaceResult>,
+): void {
+  queryClient.setQueriesData<ReviewPullRequestSurfaceResult>(
+    { queryKey: reviewQueryKeys.pullRequestSurfaces(cwd, reference) },
+    (current) => {
+      if (!current) {
+        return current;
+      }
+      return {
+        ...current,
+        ...(patch.overview !== undefined ? { overview: patch.overview } : {}),
+        ...(patch.conversation !== undefined && current.conversation !== undefined
+          ? { conversation: patch.conversation }
+          : {}),
+        ...(patch.changeset !== undefined && current.changeset !== undefined
+          ? { changeset: patch.changeset }
+          : {}),
+      };
+    },
   );
 }
 
@@ -282,6 +317,8 @@ export const reviewQueryKeys = {
     ["review", "pull-request", cwd, reference] as const,
   pullRequestHeader: (cwd: string | null, reference: string | null) =>
     ["review", "pull-request-header", cwd, reference] as const,
+  pullRequestSurfaces: (cwd: string | null, reference: string | null) =>
+    ["review", "pull-request-surface", cwd, reference] as const,
   pullRequestSurface: (
     cwd: string | null,
     reference: string | null,
@@ -689,6 +726,18 @@ function invalidateReviewComments(queryClient: QueryClient, target: ReviewTarget
   });
 }
 
+function invalidateReviewPullRequestCaches(
+  queryClient: QueryClient,
+  cwd: string,
+  reference: string,
+): void {
+  void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequest(cwd, reference) });
+  void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequestHeader(cwd, reference) });
+  void queryClient.invalidateQueries({
+    queryKey: reviewQueryKeys.pullRequestSurfaces(cwd, reference),
+  });
+}
+
 function sameInlineComment(left: ReviewLocalComment, right: ReviewInlineComment): boolean {
   return (
     left.path === right.path &&
@@ -726,6 +775,7 @@ export function reviewSubmitMutationOptions(input: {
     mutationKey: ["review", "submit"],
     mutationFn: async (args: ReviewSubmitInput) => ensureNativeApi().review.submit(args),
     onSettled: (_data, _error, args) => {
+      invalidateReviewPullRequestCaches(input.queryClient, args.cwd, args.reference);
       void input.queryClient.invalidateQueries({
         queryKey: reviewQueryKeys.conversation(args.cwd, args.reference),
       });

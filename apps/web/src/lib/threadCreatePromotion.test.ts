@@ -219,4 +219,37 @@ describe("threadCreatePromotion", () => {
     expect(getShellSnapshot).toHaveBeenCalledTimes(1);
     expect(getThreadFromState(useStore.getState(), threadId)?.id).toBe(threadId);
   });
+
+  it("keeps duplicate promotion failures visible when the shell snapshot is missing the thread", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-duplicate-missing");
+    const projectId = ProjectId.makeUnsafe("project-promote");
+    const error = new Error(
+      `Orchestration command invariant failed (thread.create): Thread '${threadId}' already exists and cannot be created twice.`,
+    );
+    const dispatchCommand = vi.fn(() => Promise.reject(error));
+    const getShellSnapshot = vi.fn(() =>
+      Promise.resolve({
+        snapshotSequence: 1,
+        projects: [
+          {
+            id: projectId,
+            kind: "project",
+            title: "Project",
+            workspaceRoot: "/tmp/project",
+            defaultModelSelection: null,
+            scripts: [],
+            createdAt: "2026-05-06T20:00:00.000Z",
+            updatedAt: "2026-05-06T20:00:00.000Z",
+          },
+        ],
+        threads: [],
+        updatedAt: "2026-05-06T20:00:00.000Z",
+      }),
+    );
+    const api = makeApi({ dispatchCommand, getShellSnapshot });
+
+    await expect(promoteThreadCreate(makeThreadCreateCommand(threadId), api)).rejects.toBe(error);
+    expect(getShellSnapshot).toHaveBeenCalledTimes(1);
+    expect(getThreadFromState(useStore.getState(), threadId)).toBeUndefined();
+  });
 });

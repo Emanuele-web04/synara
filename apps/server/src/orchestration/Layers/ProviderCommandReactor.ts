@@ -61,6 +61,7 @@ import {
 } from "../../git/Services/TextGeneration.ts";
 import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import type { ProviderSessionStartServerOptions } from "../../provider/Services/ProviderAdapter.ts";
 import { ExecutionRuntimeService } from "../../executionRuntime/Services/ExecutionRuntimeService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -721,25 +722,31 @@ const make = Effect.gen(function* () {
       providerService
         .listSessions()
         .pipe(Effect.map((sessions) => sessions.find((session) => session.threadId === threadId)));
+    const sessionServerOptions: ProviderSessionStartServerOptions | undefined =
+      thread.reviewChatTarget ? { reviewProfile: "review-chat" } : undefined;
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
       readonly provider?: ProviderKind;
     }) =>
-      providerService.startSession(threadId, {
+      providerService.startSession(
         threadId,
-        ...(preferredProvider ? { provider: preferredProvider } : {}),
-        ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
-          : {}),
-        ...(thread.reviewChatTarget
-          ? { approvalPolicy: "never" as const, sandboxMode: "read-only" as const }
-          : {}),
-        ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
-        runtimeMode: desiredRuntimeMode,
-      });
+        {
+          threadId,
+          ...(preferredProvider ? { provider: preferredProvider } : {}),
+          ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
+          modelSelection: desiredModelSelection,
+          ...(options?.providerOptions !== undefined
+            ? { providerOptions: options.providerOptions }
+            : {}),
+          ...(thread.reviewChatTarget
+            ? { approvalPolicy: "never" as const, sandboxMode: "read-only" as const }
+            : {}),
+          ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
+          runtimeMode: desiredRuntimeMode,
+        },
+        sessionServerOptions,
+      );
 
     const startProviderSessionWithStaleResumeRetry = (input?: {
       readonly resumeCursor?: unknown;

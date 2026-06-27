@@ -42,6 +42,7 @@ import { CodexAdapter, type CodexAdapterShape } from "../Services/CodexAdapter.t
 import {
   CodexAppServerManager,
   type CodexAppServerStartSessionInput,
+  type CodexTransportFactoryInput,
 } from "../../codexAppServerManager.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
@@ -1589,7 +1590,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
-    const startSession: CodexAdapterShape["startSession"] = (input) => {
+    const startSession: CodexAdapterShape["startSession"] = (input, serverOptions) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
           new ProviderAdapterValidationError({
@@ -1600,12 +1601,31 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         );
       }
 
+      const reviewProfile =
+        serverOptions?.reviewProfile ??
+        (input.approvalPolicy === "never" && input.sandboxMode === "read-only"
+          ? "review-chat"
+          : undefined);
       const managerInput: CodexAppServerStartSessionInput = {
         threadId: input.threadId,
         provider: "codex",
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
         ...(input.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
+        ...(input.approvalPolicy !== undefined ? { approvalPolicy: input.approvalPolicy } : {}),
+        ...(input.sandboxMode !== undefined ? { sandboxMode: input.sandboxMode } : {}),
+        ...(reviewProfile !== undefined ? { reviewProfile } : {}),
+        ...(serverOptions?.remoteTransport !== undefined
+          ? {
+              createTransport: (transportInput: CodexTransportFactoryInput) =>
+                serverOptions.remoteTransport?.({
+                  command: transportInput.binaryPath,
+                  args: ["app-server"],
+                  cwd: transportInput.cwd,
+                }) ??
+                Promise.reject(new Error("Codex remote transport factory was unavailable.")),
+            }
+          : {}),
         runtimeMode: input.runtimeMode,
         ...(input.modelSelection?.provider === "codex"
           ? { model: input.modelSelection.model }
@@ -1806,6 +1826,12 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       Effect.tryPromise({
         try: () => manager.interruptTurn(threadId, turnId, providerThreadId),
         catch: (cause) => toRequestError(threadId, "turn/interrupt", cause),
+      });
+
+    const injectThreadItems: NonNullable<CodexAdapterShape["injectThreadItems"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.injectThreadItems(input),
+        catch: (cause) => toRequestError(input.threadId, "thread/inject_items", cause),
       });
 
     const readThread: CodexAdapterShape["readThread"] = (threadId) =>
@@ -2045,6 +2071,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       sendTurn,
       steerTurn,
       startReview,
+      injectThreadItems,
       interruptTurn,
       readThread,
       readExternalThread,

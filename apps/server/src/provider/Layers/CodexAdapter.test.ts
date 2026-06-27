@@ -18,6 +18,7 @@ import { Effect, Fiber, Layer, Option, Stream } from "effect";
 
 import {
   CodexAppServerManager,
+  type CodexAppServerInjectThreadItemsInput,
   type CodexAppServerStartSessionInput,
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
@@ -60,6 +61,10 @@ class FakeCodexManager extends CodexAppServerManager {
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-steer-1"),
     }),
+  );
+
+  public injectThreadItemsImpl = vi.fn(
+    async (_input: CodexAppServerInjectThreadItemsInput): Promise<void> => undefined,
   );
 
   public interruptTurnImpl = vi.fn(
@@ -105,6 +110,10 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override steerTurn(input: CodexAppServerSendTurnInput): Promise<ProviderTurnStartResult> {
     return this.steerTurnImpl(input);
+  }
+
+  override injectThreadItems(input: CodexAppServerInjectThreadItemsInput): Promise<void> {
+    return this.injectThreadItemsImpl(input);
   }
 
   override interruptTurn(
@@ -223,6 +232,87 @@ validationLayer("CodexAdapterLive validation", (it) => {
         effort: "high",
         serviceTier: "fast",
         runtimeMode: "full-access",
+      });
+    }),
+  );
+  it.effect("passes review chat session options through to the Codex manager", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession(
+        {
+          provider: "codex",
+          threadId: asThreadId("thread-review-chat"),
+          approvalPolicy: "never",
+          sandboxMode: "read-only",
+          runtimeMode: "approval-required",
+        },
+        {
+          reviewProfile: "review-chat",
+        },
+      );
+
+      assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: asThreadId("thread-review-chat"),
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        reviewProfile: "review-chat",
+        runtimeMode: "approval-required",
+      });
+    }),
+  );
+  it.effect("uses review chat profile for read-only never-approval sessions", () =>
+    Effect.gen(function* () {
+      validationManager.startSessionImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-implicit-review-chat"),
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        runtimeMode: "approval-required",
+      });
+
+      assert.deepStrictEqual(validationManager.startSessionImpl.mock.calls[0]?.[0], {
+        provider: "codex",
+        threadId: asThreadId("thread-implicit-review-chat"),
+        approvalPolicy: "never",
+        sandboxMode: "read-only",
+        reviewProfile: "review-chat",
+        runtimeMode: "approval-required",
+      });
+    }),
+  );
+  it.effect("forwards thread item injection to the Codex manager", () =>
+    Effect.gen(function* () {
+      validationManager.injectThreadItemsImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const injectThreadItems = adapter.injectThreadItems;
+      assert.notEqual(injectThreadItems, undefined);
+
+      yield* injectThreadItems({
+        threadId: asThreadId("thread-review-chat"),
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Loaded review context." }],
+          },
+        ],
+      });
+
+      assert.deepStrictEqual(validationManager.injectThreadItemsImpl.mock.calls[0]?.[0], {
+        threadId: asThreadId("thread-review-chat"),
+        items: [
+          {
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text: "Loaded review context." }],
+          },
+        ],
       });
     }),
   );

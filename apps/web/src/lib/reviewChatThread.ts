@@ -16,7 +16,10 @@ import { readNativeApi } from "../nativeApi";
 import { useStore, type AppState } from "../store";
 import type { Project, Thread } from "../types";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
-import { buildReviewSidechatInitialPrompt } from "../components/review/reviewSidechatContext";
+import {
+  buildReviewSidechatInitialPrompt,
+  hasReviewSidechatAgentContext,
+} from "../components/review/reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "../components/review/reviewSidechatContext";
 import { newCommandId, newMessageId, newThreadId } from "./utils";
 import { promoteThreadCreate } from "./threadCreatePromotion";
@@ -730,6 +733,9 @@ export async function resolveOrCreateReviewChatThread(input: {
   if (!api) {
     return { status: "unavailable", reason: "Native API is not available." };
   }
+  if (!hasReviewSidechatAgentContext(input.payload)) {
+    return { status: "unavailable", reason: "Review chat is still loading PR context." };
+  }
   const project = await resolveProjectWithRefresh(api, input.payload);
   if (!project) {
     return { status: "unavailable", reason: "No Synara project is open for this repository." };
@@ -774,6 +780,9 @@ export async function startNewReviewChatThread(input: {
   const api = input.api ?? readNativeApi();
   if (!api) {
     return { status: "unavailable", reason: "Native API is not available." };
+  }
+  if (!hasReviewSidechatAgentContext(input.payload)) {
+    return { status: "unavailable", reason: "Review chat is still loading PR context." };
   }
   const project = await resolveProjectWithRefresh(api, input.payload);
   if (!project) {
@@ -821,6 +830,9 @@ export async function prewarmReviewChatThread(input: {
   const api = input.api ?? readNativeApi();
   if (!api) {
     return { status: "unavailable", reason: "Native API is not available." };
+  }
+  if (!hasReviewSidechatAgentContext(input.payload)) {
+    return { status: "unavailable", reason: "Review chat is still loading PR context." };
   }
   const project = await resolveProjectWithRefresh(api, input.payload);
   if (!project) {
@@ -1145,6 +1157,9 @@ export async function sendReviewChatQuestion(input: {
   if (!api) {
     return { status: "unavailable", reason: "Native API is not available." };
   }
+  if (!hasReviewSidechatAgentContext(input.payload)) {
+    return { status: "unavailable", reason: "Review chat is still loading PR context." };
+  }
   const project = await resolveProjectWithRefresh(api, input.payload);
   if (!project) {
     return { status: "unavailable", reason: "No Synara project is open for this repository." };
@@ -1165,10 +1180,12 @@ export async function sendReviewChatQuestion(input: {
   const requestedThreadId = input.threadId;
   const requestedThread =
     requestedThreadId !== undefined
-      ? useStore.getState().threads.find((candidate) => candidate.id === requestedThreadId)
+      ? findThreadById(useStore.getState(), requestedThreadId)
       : undefined;
   const canUseRequestedThread =
-    requestedThread === undefined || isUsableReviewChatThread(requestedThread);
+    requestedThread !== undefined &&
+    reviewChatTargetsEqual(requestedThread.reviewChatTarget, target) &&
+    isUsableReviewChatThread(requestedThread);
   const resolution = await (async (): Promise<ReviewChatThreadResult> => {
     if (prewarmResolution?.status === "ready") {
       return prewarmResolution;

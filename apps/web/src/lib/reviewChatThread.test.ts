@@ -855,7 +855,7 @@ describe("reviewChatThread", () => {
     expect(turnCommands[1]?.threadId).toBe(createCommands[0]?.threadId);
   });
 
-  it("reuses a just-created review thread after repository metadata loads", async () => {
+  it("waits for repository metadata before creating a review thread", async () => {
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
     const commands: ClientOrchestrationCommand[] = [];
     const api: ReviewChatTestApi = {
@@ -885,17 +885,19 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(first.status).toBe("queued");
+    expect(first).toEqual({
+      status: "unavailable",
+      reason: "Review chat is still loading PR context.",
+    });
     expect(["queued", "sent"]).toContain(second.status);
     await vi.waitFor(() => {
-      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(2);
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
     });
     const createCommands = commands.filter(isThreadCreateCommand);
     const turnCommands = commands.filter(isThreadTurnStartCommand);
     expect(createCommands).toHaveLength(1);
-    expect(turnCommands).toHaveLength(2);
+    expect(turnCommands).toHaveLength(1);
     expect(turnCommands[0]?.threadId).toBe(createCommands[0]?.threadId);
-    expect(turnCommands[1]?.threadId).toBe(createCommands[0]?.threadId);
   });
 
   it("prewarms a review thread by injecting context and sends the first visible question on the same thread", async () => {
@@ -951,7 +953,7 @@ describe("reviewChatThread", () => {
     expect(turnCommands[0]?.message.text).toContain("Summarize this PR");
   });
 
-  it("refreshes placeholder review chat metadata when full PR context arrives", async () => {
+  it("does not prewarm review chat until full PR context arrives", async () => {
     const payload = makePayload();
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
@@ -982,25 +984,16 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    const metaUpdate = commands.find(isThreadMetaUpdateCommand);
-    expect(earlyPrewarm.status).toBe("ready");
-    expect(completePrewarm.status).toBe("ready");
-    expect(metaUpdate).toMatchObject({
-      title: "Review #7884: fix(wellsky): correct OT physical-assessment scale",
-      branch: "main",
-      lastKnownPr: {
-        number: 7884,
-        title: "fix(wellsky): correct OT physical-assessment scale",
-        url: "https://github.com/enzo-health/bonaparte/pull/7884",
-        baseBranch: "main",
-        headBranch: "fix/ot-eval-physical-assessment-scale",
-        state: "open",
-      },
-      reviewChatTarget: target,
+    expect(earlyPrewarm).toEqual({
+      status: "unavailable",
+      reason: "Review chat is still loading PR context.",
     });
+    expect(completePrewarm.status).toBe("ready");
+    expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
+    expect(commands.find(isThreadCreateCommand)?.reviewChatTarget).toEqual(target);
   });
 
-  it("revalidates session readiness when early and complete Codex prewarm targets differ", async () => {
+  it("keeps incomplete prewarm attempts from creating placeholder review threads", async () => {
     const payload = makePayload();
     const target = buildReviewChatTarget(payload, projectId);
     useStore.getState().syncServerShellSnapshot(makeShellSnapshot({}));
@@ -1031,10 +1024,13 @@ describe("reviewChatThread", () => {
       api,
     });
 
-    expect(incomplete.status).toBe("ready");
+    expect(incomplete).toEqual({
+      status: "unavailable",
+      reason: "Review chat is still loading PR context.",
+    });
     expect(complete.status).toBe("ready");
     expect(commands.filter(isThreadCreateCommand)).toHaveLength(1);
-    expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(2);
+    expect(commands.filter(isThreadSessionEnsureCommand)).toHaveLength(1);
     // Codex review chats no longer inject context during prewarm.
     // Context is deferred to the first visible user message.
     expect(commands.filter(isThreadContextInjectCommand)).toHaveLength(0);
@@ -1333,6 +1329,46 @@ describe("reviewChatThread", () => {
     const createCommand = commands.find(isThreadCreateCommand);
     const turnCommand = commands.find(isThreadTurnStartCommand);
     expect(createCommand?.threadId).not.toBe(staleThreadId);
+    expect(turnCommand?.threadId).toBe(createCommand?.threadId);
+  });
+
+  it("does not reuse a supplied thread id when it belongs to a different review target", async () => {
+    const payload = makePayload();
+    const target = buildReviewChatTarget(payload, projectId);
+    const wrongThreadId = ThreadId.makeUnsafe("thread-wrong-review-chat");
+    useStore.getState().syncServerShellSnapshot(
+      makeShellSnapshot({
+        existingThreadId: wrongThreadId,
+        reviewChatTarget: target ? { ...target, number: 9999, reference: "9999" } : target,
+        latestUserMessageAt: "2026-06-07T12:05:00.000Z",
+      }),
+    );
+    const commands: ClientOrchestrationCommand[] = [];
+    const api: ReviewChatTestApi = {
+      orchestration: {
+        dispatchCommand: vi.fn(async (command) => {
+          commands.push(command);
+          syncReadyReviewChatSessionForEnsure({ command, commands, reviewChatTarget: target });
+          return { sequence: commands.length };
+        }),
+        getShellSnapshot: vi.fn(async () => makeShellSnapshot({})),
+      },
+    };
+
+    const result = await sendReviewChatQuestion({
+      payload,
+      question: "Summarize this PR",
+      threadId: wrongThreadId,
+      api,
+    });
+
+    expect(result.status).toBe("queued");
+    await vi.waitFor(() => {
+      expect(commands.filter(isThreadTurnStartCommand)).toHaveLength(1);
+    });
+    const createCommand = commands.find(isThreadCreateCommand);
+    const turnCommand = commands.find(isThreadTurnStartCommand);
+    expect(createCommand?.threadId).not.toBe(wrongThreadId);
     expect(turnCommand?.threadId).toBe(createCommand?.threadId);
   });
 

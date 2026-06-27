@@ -63,6 +63,16 @@ export interface ReviewSidechatContextPayload {
   readonly selectedFilePath: string | null;
 }
 
+export function hasReviewSidechatAgentContext(payload: ReviewSidechatContextPayload): boolean {
+  return (
+    payload.cwd !== null &&
+    payload.repositoryId !== null &&
+    payload.target !== null &&
+    payload.headSha !== null &&
+    (payload.files.length > 0 || payload.stats.files === 0)
+  );
+}
+
 type ReviewSidechatRecentConversation = ReviewSidechatContextPayload["recentConversation"][number];
 type ReviewSidechatPromptIntent =
   | "summary"

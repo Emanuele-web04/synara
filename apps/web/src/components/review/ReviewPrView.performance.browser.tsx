@@ -290,22 +290,24 @@ describe("ReviewPrView performance", () => {
       expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
-      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(1);
+      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(0);
       expect(queuedFrame.current).not.toBeNull();
 
       queuedFrame.current?.(performance.now());
 
       await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
-      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
       });
-      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledWith({
+      expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
         cwd: CWD,
         reference: REFERENCE,
+        source: SOURCE,
+        includeChangeset: true,
       });
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
       await page.getByRole("tab", { name: "Info" }).click();
       const commitsRow = exactTextElementWithin(activeInfoOption(), "Commits").closest("div");
@@ -350,24 +352,94 @@ describe("ReviewPrView performance", () => {
       expect(queuedFrame.current).not.toBeNull();
       queuedFrame.current?.(performance.now());
       await expect.poll(() => nativeApiMock.loadConversation.mock.calls.length).toBe(1);
-      await expect.poll(() => nativeApiMock.loadPullRequest.mock.calls.length).toBe(1);
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
       nativeApiMock.loadPullRequestSurface.mockClear();
       nativeApiMock.loadPullRequest.mockClear();
       nativeApiMock.loadConversation.mockClear();
 
-      await page.getByRole("button", { name: "Review changes" }).click();
+      await page.getByRole("tab", { name: /^Files/ }).click();
 
-      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
-      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledWith({
-        cwd: CWD,
-        reference: REFERENCE,
-        source: SOURCE,
-        includeChangeset: true,
-      });
+      expect(nativeApiMock.loadPullRequestSurface).toHaveBeenCalledTimes(0);
+      expect(reviewChatThreadMock.prewarmReviewChatThread).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadChangeset).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadConversation).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadPullRequest).toHaveBeenCalledTimes(0);
+    } finally {
+      await screen.unmount();
+      queryClient.clear();
+      host.remove();
+    }
+  });
+
+  it("prewarms review chat for loaded zero-file pull requests", async () => {
+    await page.viewport(1200, 800);
+    const queuedFrame: { current: FrameRequestCallback | null } = { current: null };
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      queuedFrame.current = callback;
+      return 1;
+    });
+    vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => undefined);
+
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+        mutations: { retry: false },
+      },
+    });
+    const zeroFileDetail = {
+      ...DETAIL,
+      additions: 0,
+      deletions: 0,
+      changedFiles: 0,
+    } satisfies ReviewPullRequestDetail;
+    nativeApiMock.loadPullRequestHeader.mockResolvedValueOnce({
+      detail: {
+        ...HEADER_DETAIL,
+        additions: 0,
+        deletions: 0,
+        changedFiles: 0,
+      },
+    });
+    nativeApiMock.loadPullRequestSurface.mockResolvedValueOnce({
+      overview: {
+        detail: zeroFileDetail,
+        commits: [],
+        checks: [],
+      },
+      changeset: {
+        files: [],
+        headSha: "zero-file-head",
+        patch: "",
+        target: { _tag: "pullRequest", repositoryId: "acme/repo", number: 42 },
+      },
+    });
+
+    const host = document.createElement("div");
+    host.className = "flex h-[800px] bg-background text-foreground";
+    document.body.append(host);
+    const screen = await render(
+      <QueryClientProvider client={queryClient}>
+        <ReviewPrView cwd={CWD} reference={REFERENCE} source={SOURCE} />
+      </QueryClientProvider>,
+      { container: host },
+    );
+
+    try {
+      await expect.element(page.getByRole("heading", { name: DETAIL.title })).toBeVisible();
+      expect(queuedFrame.current).not.toBeNull();
+      queuedFrame.current?.(performance.now());
+
+      await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
+      await expect.poll(() => reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length).toBe(
+        1,
+      );
+      expect(reviewChatThreadMock.prewarmReviewChatThread.mock.calls[0]?.[0].payload).toMatchObject(
+        {
+          headSha: "zero-file-head",
+          files: [],
+          stats: { files: 0 },
+        },
+      );
     } finally {
       await screen.unmount();
       queryClient.clear();
