@@ -132,11 +132,9 @@ import {
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
-  LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
-  LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   serverConfigQueryOptions,
-  serverLocalServersQueryOptions,
   serverQueryKeys,
+  sidebarLocalServersQueryOptions,
 } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
@@ -3961,20 +3959,16 @@ export default function Sidebar() {
     return commandByProjectId;
   }, [discoveredScriptTargetsByProjectId, standardProjects]);
   projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
-  // Keep manual server attribution alive, but slow the always-on folder scan
-  // when no Synara-owned run needs near-real-time reconciliation.
+  // Keep manual server attribution alive without repeating the expensive
+  // port/process scan while no Synara-owned run needs near-real-time status.
   const hasActiveProjectRun = useMemo(
     () => Object.keys(projectRunsByProjectId).length > 0,
     [projectRunsByProjectId],
   );
-  const shouldTrackLocalServers = standardProjects.length > 0 || hasActiveProjectRun;
-  const localServersRefetchInterval = hasActiveProjectRun
-    ? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS
-    : LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS;
   const projectRunLocalServersQuery = useQuery(
-    serverLocalServersQueryOptions({
-      enabled: shouldTrackLocalServers,
-      refetchInterval: localServersRefetchInterval,
+    sidebarLocalServersQueryOptions({
+      hasActiveProjectRun,
+      hasProjects: standardProjects.length > 0,
     }),
   );
   const projectRunServerByProjectId = useMemo(() => {
