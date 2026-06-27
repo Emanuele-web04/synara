@@ -94,14 +94,13 @@ import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel"
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { SidebarInset } from "../components/ui/sidebar";
+import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -958,9 +957,6 @@ function SettingsRouteView() {
       ? ["Assistant output"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
-    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
-      ? ["Prompt suggestions"]
-      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -2083,14 +2079,6 @@ function SettingsRouteView() {
             "Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session.",
           resetLabel: "diff line wrapping",
           ariaLabel: "Wrap diff lines by default",
-        })}
-
-        {renderBooleanSettingRow({
-          settingKey: "enableComposerSuggestions",
-          title: "Prompt suggestions",
-          description: "Show suggested prompts under the composer when starting a new thread.",
-          resetLabel: "prompt suggestions",
-          ariaLabel: "Show composer prompt suggestions",
         })}
       </SettingsSection>
 
@@ -3275,10 +3263,7 @@ function SettingsRouteView() {
         CHAT_CONTENT_CARD_CLASS_NAME,
       )}
     >
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
-      >
+      <RouteInsetSurface surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}>
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
@@ -3344,7 +3329,7 @@ function SettingsRouteView() {
           onOpenChange={setReleaseHistoryOpen}
           defaultExpandedVersion={APP_VERSION}
         />
-      </SidebarInset>
+      </RouteInsetSurface>
     </div>
   );
 }

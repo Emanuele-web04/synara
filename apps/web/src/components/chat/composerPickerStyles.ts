@@ -14,6 +14,14 @@ export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
 export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
   "text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground-secondary)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
 
+/**
+ * Compact pill trigger for the composer-footer toolbar pickers (environment + branch).
+ * Matches `PickerTriggerButton` sizing (ui-sm label) so the project / environment / branch
+ * row in the empty-state footer reads as one set. Pair with a `size-3.5` leading icon and a
+ * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
+ */
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";
@@ -85,9 +93,8 @@ export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative z-[15] o
  *  `CHAT_CONTENT_CARD_CLASS_NAME` with their own background token instead. */
 export const CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME = `${CHAT_BACKGROUND_CLASS_NAME} ${CHAT_CONTENT_CARD_CLASS_NAME}`;
 
-/** Full-height inset shell for chat-style routes (settings, workspace, single thread pane).
- *  The opaque card lives on the SidebarInset `surfaceClassName`, never on this transparent
- *  shell, so it never covers/blocks the sidebar. */
+/** Clipped full-height inset shell for routes that already own an outer card wrapper.
+ *  Default RouteInsetSurface card routes use an unclipped inset so seam shadows can bleed. */
 export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
   "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground";
 

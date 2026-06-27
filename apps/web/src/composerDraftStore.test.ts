@@ -1099,15 +1099,15 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
 
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)).toMatchObject(
-      {
-        threadId,
-        projectId: otherProjectId,
-        branch: null,
-        worktreePath: null,
-        envMode: "local",
-      },
-    );
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
       "keep this draft",
     );
@@ -1139,15 +1139,15 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
 
     expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
-    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId)).toMatchObject(
-      {
-        threadId,
-        projectId: otherProjectId,
-        branch: null,
-        worktreePath: null,
-        envMode: "local",
-      },
-    );
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
       "move this draft",
     );

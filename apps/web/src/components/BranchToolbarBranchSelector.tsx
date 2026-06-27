@@ -64,6 +64,7 @@ import {
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./chat/environment/EnvironmentRow";
+import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "./chat/composerPickerStyles";
 import type { ThreadWorkspacePatch } from "../types";
 
 /**
@@ -841,7 +842,7 @@ export function BranchToolbarBranchSelector({
         className={
           isPanel
             ? ENVIRONMENT_ROW_CLASS_NAME
-            : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+            : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} disabled:cursor-not-allowed disabled:opacity-50`
         }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
@@ -853,9 +854,9 @@ export function BranchToolbarBranchSelector({
           />
         ) : (
           <>
-            <CentralIcon name="branch" className="size-4 shrink-0" />
+            <CentralIcon name="branch" className="size-3.5 shrink-0" />
             <span className="max-w-[240px] truncate">{triggerLabel}</span>
-            <ChevronDownIcon className="size-3.5 opacity-60" />
+            <ChevronDownIcon className="size-3 opacity-60" />
           </>
         )}
       </ComboboxTrigger>

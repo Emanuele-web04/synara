@@ -75,6 +75,7 @@ interface TestFixture {
   snapshot: OrchestrationReadModel;
   serverConfig: ServerConfig;
   welcome: WsWelcomePayload;
+  gitBranchByCwd: Record<string, string>;
 }
 
 let fixture: TestFixture;
@@ -426,6 +427,7 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   return {
     snapshot,
     serverConfig: createBaseServerConfig(),
+    gitBranchByCwd: {},
     welcome: {
       cwd: "/repo/project",
       projectName: "Project",
@@ -959,12 +961,14 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     return fixture.serverConfig;
   }
   if (tag === WS_METHODS.gitListBranches) {
+    const cwd = typeof body.cwd === "string" ? body.cwd : null;
+    const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
     return {
       isRepo: true,
       hasOriginRemote: true,
       branches: [
         {
-          name: "main",
+          name: branchName,
           current: true,
           isDefault: true,
           worktreePath: null,
@@ -973,8 +977,10 @@ function resolveWsRpc(body: WsRequestEnvelope["body"]): unknown {
     };
   }
   if (tag === WS_METHODS.gitStatus) {
+    const cwd = typeof body.cwd === "string" ? body.cwd : null;
+    const branchName = cwd ? (fixture.gitBranchByCwd[cwd] ?? "main") : "main";
     return {
-      branch: "main",
+      branch: branchName,
       hasWorkingTreeChanges: false,
       workingTree: {
         files: [],
@@ -3384,6 +3390,103 @@ describe("ChatView timeline estimator parity (full app)", () => {
         { timeout: 8_000, interval: 16 },
       );
       await expect.element(page.getByTestId("workspace-picker-trigger")).toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("moves a home draft into an existing project from the home picker without carrying branch", async () => {
+    useComposerDraftStore.setState({
+      draftThreadsByThreadId: {
+        [THREAD_ID]: {
+          projectId: HOME_PROJECT_ID,
+          createdAt: NOW_ISO,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          entryPoint: "chat",
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        },
+      },
+      projectDraftThreadIdByProjectId: {
+        [HOME_PROJECT_ID]: THREAD_ID,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withHomeChatProject(createDraftOnlySnapshot()),
+      configureFixture: (nextFixture) => {
+        nextFixture.welcome = {
+          ...nextFixture.welcome,
+          homeDir: "/Users/tester",
+          chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+        };
+        nextFixture.gitBranchByCwd = {
+          "/Users/tester": "home-main",
+          "/repo/project": "main",
+        };
+      },
+    });
+
+    try {
+      const workspacePickerTrigger = page.getByTestId("workspace-picker-trigger");
+      await expect.element(workspacePickerTrigger).toBeInTheDocument();
+      const controlsBefore = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+      );
+      const composerBlockBefore = document.querySelector<HTMLElement>(
+        '[data-empty-landing-composer-block="true"]',
+      );
+      expect(controlsBefore).not.toBeNull();
+      expect(composerBlockBefore).not.toBeNull();
+      const beforeRect = controlsBefore!.getBoundingClientRect();
+      const composerBlockBeforeRect = composerBlockBefore!.getBoundingClientRect();
+      await workspacePickerTrigger.click();
+
+      const projectOption = await waitForElement(
+        () =>
+          Array.from(document.querySelectorAll<HTMLElement>('[data-slot="combobox-item"]')).find(
+            (item) => item.textContent?.trim() === "project",
+          ) ?? null,
+        "Unable to find existing project option.",
+      );
+      projectOption.click();
+
+      await vi.waitFor(
+        () => {
+          expect(useComposerDraftStore.getState().getDraftThread(THREAD_ID)).toMatchObject({
+            projectId: PROJECT_ID,
+            envMode: "local",
+            branch: null,
+            worktreePath: null,
+          });
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+      await expect.element(page.getByTestId("project-picker-trigger")).toBeInTheDocument();
+      await expect.element(page.getByRole("button", { name: "Local" })).toBeInTheDocument();
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      const controlsAfter = document.querySelector<HTMLElement>(
+        'form[data-chat-composer-form="true"] + .chat-composer-shell',
+      );
+      const composerBlockAfter = document.querySelector<HTMLElement>(
+        '[data-empty-landing-composer-block="true"]',
+      );
+      expect(controlsAfter).not.toBeNull();
+      expect(composerBlockAfter).not.toBeNull();
+      const afterRect = controlsAfter!.getBoundingClientRect();
+      const composerBlockAfterRect = composerBlockAfter!.getBoundingClientRect();
+      // Guard against the empty-pane entry animation restarting with a vertical translate
+      // when Home selection turns into a project draft.
+      expect(Math.round(Math.abs(afterRect.height - beforeRect.height))).toBeLessThanOrEqual(1);
+      expect(Math.round(Math.abs(afterRect.top - beforeRect.top))).toBeLessThanOrEqual(1);
+      expect(
+        Math.round(Math.abs(composerBlockAfterRect.top - composerBlockBeforeRect.top)),
+      ).toBeLessThanOrEqual(1);
     } finally {
       await mounted.cleanup();
     }

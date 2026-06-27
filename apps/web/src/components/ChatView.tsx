@@ -124,7 +124,6 @@ import {
   maybeResolveBrowserPromptAttachment,
   type BrowserPromptAttachmentResolution,
 } from "../lib/browserPromptContext";
-import { deriveComposerSuggestions, type ComposerSuggestion } from "../lib/composerSuggestions";
 import {
   buildComposerFileAttachmentsFromFiles,
   IMAGE_SIZE_LIMIT_LABEL,
@@ -184,11 +183,7 @@ import {
   ensureLeadingSpaceForReplacement,
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
-import {
-  createAllThreadsSelector,
-  createProjectSelector,
-  createThreadSelector,
-} from "../storeSelectors";
+import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
   canOfferSideSlashCommand,
@@ -440,8 +435,6 @@ import { ComposerInputBanners } from "./chat/ComposerInputBanners";
 import { ComposerVoiceButton } from "./chat/ComposerVoiceButton";
 import { ComposerVoiceRecorderBar } from "./chat/ComposerVoiceRecorderBar";
 import { ComposerReferenceAttachments } from "./chat/ComposerReferenceAttachments";
-import { ComposerSuggestions } from "./chat/ComposerSuggestions";
-import { DisclosureRegion } from "./ui/DisclosureRegion";
 import { TranscriptSelectionActionLayer } from "./chat/TranscriptSelectionActionLayer";
 import { ComposerActiveTaskListCard } from "./chat/ComposerActiveTaskListCard";
 import { ComposerColumnFrame } from "./chat/ComposerColumnFrame";
@@ -541,10 +534,6 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
-const EMPTY_COMPOSER_SUGGESTIONS: ComposerSuggestion[] = [];
-const EMPTY_SUGGESTION_SOURCE_THREADS: Thread[] = [];
-const selectEmptyComposerSuggestionThreads: ReturnType<typeof createAllThreadsSelector> = () =>
-  EMPTY_SUGGESTION_SOURCE_THREADS;
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -1051,9 +1040,7 @@ export default function ChatView({
   );
   const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
-  const moveDraftThreadToProject = useComposerDraftStore(
-    (store) => store.moveDraftThreadToProject,
-  );
+  const moveDraftThreadToProject = useComposerDraftStore((store) => store.moveDraftThreadToProject);
   const getDraftThreadByProjectId = useComposerDraftStore(
     (store) => store.getDraftThreadByProjectId,
   );
@@ -3603,68 +3590,6 @@ export default function ChatView({
       scheduleComposerFocus();
     }
   }, [composerFocusRequestNonce, scheduleComposerFocus]);
-  // Context gate is intentionally prompt-independent so the suggestion list stays
-  // mounted while the user types — that lets us animate it closed instead of an
-  // abrupt unmount (which jolted the centered composer).
-  const shouldPrepareComposerSuggestions =
-    settings.enableComposerSuggestions &&
-    isLocalDraftThread &&
-    isCenteredEmptyLanding &&
-    draftThread?.entryPoint !== "terminal" &&
-    composerImages.length === 0 &&
-    composerAssistantSelections.length === 0 &&
-    composerTerminalContexts.length === 0 &&
-    queuedComposerTurns.length === 0 &&
-    !composerMenuOpen &&
-    !isComposerApprovalState &&
-    pendingUserInputs.length === 0 &&
-    !showPlanFollowUpPrompt;
-
-  const selectComposerSuggestionThreads = useMemo(() => {
-    if (!shouldPrepareComposerSuggestions) {
-      return selectEmptyComposerSuggestionThreads;
-    }
-    return createAllThreadsSelector();
-  }, [shouldPrepareComposerSuggestions]);
-  const projectSuggestionSourceThreads = useStore(selectComposerSuggestionThreads);
-  const composerSuggestions = useMemo(() => {
-    // Suggestions belong only to brand-new empty chats; existing threads should not scan history.
-    if (!shouldPrepareComposerSuggestions) {
-      return EMPTY_COMPOSER_SUGGESTIONS;
-    }
-    return deriveComposerSuggestions({
-      activeThreadId,
-      project: activeProject,
-      threads: projectSuggestionSourceThreads,
-    });
-  }, [
-    activeProject,
-    activeThreadId,
-    projectSuggestionSourceThreads,
-    shouldPrepareComposerSuggestions,
-  ]);
-  // Suggestions stay open for the whole eligible empty-landing context, even
-  // while the user types, so they remain a persistent pick list rather than a
-  // transient empty-prompt hint.
-  const showComposerSuggestions =
-    shouldPrepareComposerSuggestions && composerSuggestions.length > 0;
-  const composerSuggestionsOpen = showComposerSuggestions;
-  const onSelectComposerSuggestion = useCallback(
-    (suggestion: ComposerSuggestion) => {
-      // Append the picked prompt as a quoted block instead of replacing the
-      // composer, so clicking accumulates onto whatever is already typed.
-      const quotedPrompt = `"${suggestion.prompt}"`;
-      const current = promptRef.current;
-      const separator = current.length === 0 ? "" : /\s$/.test(current) ? "" : " ";
-      const nextPrompt = `${current}${separator}${quotedPrompt}`;
-      promptRef.current = nextPrompt;
-      setPrompt(nextPrompt);
-      setComposerCursor(collapseExpandedComposerCursor(nextPrompt, nextPrompt.length));
-      setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-      scheduleComposerFocus();
-    },
-    [scheduleComposerFocus, setPrompt],
-  );
   useEffect(() => {
     if (!secondaryChromeReady || !pendingComposerFocusRef.current) return;
     const frame = window.requestAnimationFrame(() => {
@@ -8410,6 +8335,7 @@ export default function ChatView({
 
   const moveEmptyDraftToLocalProject = useCallback(
     (projectId: ProjectId) => {
+      // Project moves reset branch; the previous project's current branch may not exist here.
       moveDraftThreadToProject(threadId, projectId, LOCAL_PROJECT_DRAFT_CONTEXT);
       scheduleComposerFocus();
     },
@@ -9433,7 +9359,7 @@ export default function ChatView({
       : {}),
   };
   const showEmptyLandingBranchToolbar =
-    isCenteredEmptyLanding && Boolean(activeProject) && !isHomeChatContainer && isGitRepo;
+    isCenteredEmptyLanding && activeProject?.kind === "project" && !isHomeChatContainer;
   const showEmptyLandingProjectPicker =
     isCenteredEmptyLanding && isLocalDraftThread && activeProject?.kind === "project";
   const emptyLandingProjectChip =
@@ -9451,7 +9377,7 @@ export default function ChatView({
       showEmptyLandingBranchToolbar) ? (
       <div
         className={cn(
-          "chat-composer-shell relative mt-0 flex flex-wrap items-center gap-x-2 gap-y-1 !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-2 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-['']",
+          "chat-composer-shell relative mt-0 flex min-h-8 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1 pt-0.5 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] transition-[background-color,box-shadow] duration-150 ease-out before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-[''] motion-reduce:transition-none",
           COMPOSER_COLUMN_FRAME_CLASS_NAME,
         )}
       >
@@ -9461,7 +9387,9 @@ export default function ChatView({
             side="top"
             showResetToHome={Boolean(resolvedThreadWorktreePath)}
             selectedWorkspaceRoot={resolvedThreadWorktreePath}
+            onSelectProject={handleSelectProjectForEmptyDraft}
             onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+            onCreateProjectFromPath={handleCreateProjectFromPickerPath}
             onResetToHome={handleResetWorkspaceToHome}
           />
         ) : showEmptyLandingProjectPicker ? (
@@ -9479,12 +9407,24 @@ export default function ChatView({
         ) : (
           emptyLandingProjectChip
         )}
-        {showEmptyLandingBranchToolbar ? (
-          <BranchToolbar
-            {...branchToolbarProps}
-            className="mx-0 !w-auto min-w-0 shrink-0 !justify-start !px-0 !pb-0 !pt-0"
-          />
-        ) : null}
+        {/* Reserve the Local/branch slot so project selection fades controls in without resizing. */}
+        <div
+          aria-hidden={showEmptyLandingBranchToolbar ? undefined : true}
+          className={cn(
+            "flex min-w-0 flex-1 items-center transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
+            showEmptyLandingBranchToolbar
+              ? "translate-y-0 opacity-100"
+              : "pointer-events-none opacity-0",
+          )}
+        >
+          {showEmptyLandingBranchToolbar ? (
+            <BranchToolbar
+              {...branchToolbarProps}
+              className="mx-0 min-w-0 flex-1 !justify-start !px-0 !pb-0 !pt-0"
+              showBranchSelector={isGitRepo}
+            />
+          ) : null}
+        </div>
       </div>
     ) : null;
 
@@ -9570,7 +9510,10 @@ export default function ChatView({
 
   const composerSection =
     secondaryChromeReady && shouldRenderChatPaneContent ? (
-      <>
+      <div
+        className={cn(isCenteredEmptyLanding ? "w-full overflow-visible" : "contents")}
+        data-empty-landing-composer-block={isCenteredEmptyLanding ? "true" : undefined}
+      >
         <form
           ref={composerFormRef}
           onSubmit={onSend}
@@ -10033,7 +9976,7 @@ export default function ChatView({
           </ComposerColumnFrame>
         </form>
         {emptyLandingControls}
-      </>
+      </div>
     ) : (
       <div
         aria-hidden="true"
@@ -10251,7 +10194,10 @@ export default function ChatView({
                     )}
                   >
                     <SynaraLogo aria-label="Synara logo" className="size-10" />
-                    <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
+                    <h2
+                      data-testid="empty-landing-heading"
+                      className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]"
+                    >
                       {isEmptyChatLanding ? (
                         "What should we work on?"
                       ) : (
@@ -10280,18 +10226,6 @@ export default function ChatView({
                         ) : null}
                       </div>
                     </div>
-                  ) : null}
-                  {showComposerSuggestions ? (
-                    <DisclosureRegion
-                      open={composerSuggestionsOpen}
-                      className={COMPOSER_COLUMN_FRAME_CLASS_NAME}
-                      contentClassName="pt-5"
-                    >
-                      <ComposerSuggestions
-                        suggestions={composerSuggestions}
-                        onSelectSuggestion={onSelectComposerSuggestion}
-                      />
-                    </DisclosureRegion>
                   ) : null}
                 </div>
               </div>

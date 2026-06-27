@@ -196,13 +196,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Set the default wrap state when the diff panel opens. word wrap",
   },
   {
-    id: "behavior:prompt-suggestions",
-    section: "behavior",
-    title: "Prompt suggestions",
-    keywords:
-      "Show suggested prompts under the composer when starting a new thread. composer suggestions",
-  },
-  {
     id: "behavior:delete-confirmation",
     section: "behavior",
     title: "Delete confirmation",

@@ -710,17 +710,17 @@ function draftThreadStatesEqual(
 ): boolean {
   return Boolean(
     left &&
-      left.projectId === right.projectId &&
-      left.createdAt === right.createdAt &&
-      left.runtimeMode === right.runtimeMode &&
-      left.interactionMode === right.interactionMode &&
-      left.entryPoint === right.entryPoint &&
-      left.branch === right.branch &&
-      left.worktreePath === right.worktreePath &&
-      Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
-      left.envMode === right.envMode &&
-      (left.isTemporary === true) === (right.isTemporary === true) &&
-      left.promotedTo === right.promotedTo,
+    left.projectId === right.projectId &&
+    left.createdAt === right.createdAt &&
+    left.runtimeMode === right.runtimeMode &&
+    left.interactionMode === right.interactionMode &&
+    left.entryPoint === right.entryPoint &&
+    left.branch === right.branch &&
+    left.worktreePath === right.worktreePath &&
+    Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
+    left.envMode === right.envMode &&
+    (left.isTemporary === true) === (right.isTemporary === true) &&
+    left.promotedTo === right.promotedTo,
   );
 }
 

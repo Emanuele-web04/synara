@@ -532,10 +532,7 @@ function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
     return <ThreadRunningSpinner />;
   }
   return (
-    <span
-      aria-hidden="true"
-      className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)}
-    />
+    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
   );
 }
 
@@ -2352,7 +2349,10 @@ export default function Sidebar() {
                 creationResult.project.id,
                 creationResult.snapshot,
               )
-            : await openExistingProjectFromSnapshot(creationResult.project.id, creationResult.snapshot);
+            : await openExistingProjectFromSnapshot(
+                creationResult.project.id,
+                creationResult.snapshot,
+              );
           if (recovered) {
             finishAddingProject();
             return;
@@ -5217,6 +5217,7 @@ export default function Sidebar() {
     // A project reads as "running" when Synara tracks a run for it or when a
     // local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
+    const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
     // the hover toolbar always reserves space for the three thread actions. The
     // reserve lives on the *name* container (not the button) so only the truncating
@@ -5286,20 +5287,25 @@ export default function Sidebar() {
                   </span>
                 ) : null}
               </div>
-              {/* Dev-run and child-chat status share the trailing resting slot. The
-                  chat status stays far-right, while the dev-server dot sits just to
-                  its left when both are present. */}
-              {isProjectRunning || projectStatus ? (
+              {/* Closed folders surface child-chat status on the project row; open
+                  folders leave that signal to their visible child thread rows. */}
+              {isProjectRunning || collapsedProjectStatus ? (
                 <span
-                  aria-label={projectStatus ? `Project status: ${projectStatus.label}` : undefined}
-                  title={projectStatus?.label}
+                  aria-label={
+                    collapsedProjectStatus
+                      ? `Project status: ${collapsedProjectStatus.label}`
+                      : undefined
+                  }
+                  title={collapsedProjectStatus?.label}
                   className={cn(
-                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-1 self-center",
+                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
                     sidebarHoverRevealHideClassName("project-header"),
                   )}
                 >
                   {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
-                  {projectStatus ? <SidebarStatusTrailingGlyph status={projectStatus} /> : null}
+                  {collapsedProjectStatus ? (
+                    <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
+                  ) : null}
                 </span>
               ) : null}
             </SidebarMenuButton>

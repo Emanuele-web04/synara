@@ -162,9 +162,6 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
-  // Local-only UI preference: show prompt suggestions under the composer on the
-  // empty new-thread landing. Off hides the suggestion list entirely.
-  enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showWorkspaceSection` controls the

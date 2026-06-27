@@ -31,7 +31,9 @@ function makeProject(id: string, workspaceRoot = WORKSPACE_ROOT) {
   };
 }
 
-function makeSnapshot(projects: OrchestrationShellSnapshot["projects"]): OrchestrationShellSnapshot {
+function makeSnapshot(
+  projects: OrchestrationShellSnapshot["projects"],
+): OrchestrationShellSnapshot {
   return {
     snapshotSequence: 2,
     projects,
@@ -40,9 +42,7 @@ function makeSnapshot(projects: OrchestrationShellSnapshot["projects"]): Orchest
   };
 }
 
-function makeApi(
-  dispatchCommand: ReturnType<typeof vi.fn>,
-): NativeApi {
+function makeApi(dispatchCommand: ReturnType<typeof vi.fn>): NativeApi {
   return {
     orchestration: {
       dispatchCommand,

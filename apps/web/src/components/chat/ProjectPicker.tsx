@@ -110,7 +110,12 @@ export const ProjectPicker = memo(function ProjectPicker({
       for (const thread of sidebarThreads) {
         const workspaceRoot = thread.worktreePath ?? null;
         const folderName = basenameOfPath(workspaceRoot);
-        if (!workspaceRoot || !folderName || folderName.startsWith(".") || seen.has(workspaceRoot)) {
+        if (
+          !workspaceRoot ||
+          !folderName ||
+          folderName.startsWith(".") ||
+          seen.has(workspaceRoot)
+        ) {
           continue;
         }
         seen.add(workspaceRoot);
@@ -145,19 +150,16 @@ export const ProjectPicker = memo(function ProjectPicker({
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
   );
-  const macFolderOptions = useMemo(
-    () => {
-      if (isProjectSelectionMode) return [];
-      return directoryEntries
-        .filter((entry) => !entry.name.startsWith("."))
-        .map((entry) => ({
-          absolutePath: homeDir ? joinDirectoryPath(homeDir, entry.path) : entry.path,
-          entry,
-        }))
-        .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
-    },
-    [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode],
-  );
+  const macFolderOptions = useMemo(() => {
+    if (isProjectSelectionMode) return [];
+    return directoryEntries
+      .filter((entry) => !entry.name.startsWith("."))
+      .map((entry) => ({
+        absolutePath: homeDir ? joinDirectoryPath(homeDir, entry.path) : entry.path,
+        entry,
+      }))
+      .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
+  }, [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode]);
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
   const filteredActiveFolderOptions = useMemo(() => {
@@ -283,11 +285,13 @@ export const ProjectPicker = memo(function ProjectPicker({
   const handleSelectActiveFolder = useCallback(
     (folder: ActiveFolderOption) => {
       try {
-        const selection = isProjectSelectionMode
-          ? folder.projectId
-            ? onSelectProject?.(folder.projectId)
-            : undefined
-          : onSelectWorkspaceRoot?.(folder.cwd);
+        // Existing projects should switch the draft into that project; raw paths stay workspace roots.
+        const selection =
+          folder.projectId && onSelectProject
+            ? onSelectProject(folder.projectId)
+            : isProjectSelectionMode
+              ? undefined
+              : onSelectWorkspaceRoot?.(folder.cwd);
         void Promise.resolve(selection)
           .then(() => {
             setOpen(false);
@@ -419,7 +423,9 @@ export const ProjectPicker = memo(function ProjectPicker({
                 disabled={isPicking}
               >
                 <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                <span className="truncate">{isPicking ? loadingAddProjectLabel : addProjectLabel}</span>
+                <span className="truncate">
+                  {isPicking ? loadingAddProjectLabel : addProjectLabel}
+                </span>
               </button>
               {shouldShowResetToHome ? (
                 <button
