@@ -37,6 +37,29 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("text-neutral-900");
   });
 
+  it("lets markdown prose resolve text direction automatically", async () => {
+    const markup = await renderMarkdown("שלום from Synara");
+
+    expect(markup).toContain('class="chat-markdown');
+    expect(markup).toContain('dir="auto"');
+  });
+
+  it("keeps code surfaces isolated as ltr inside bidi markdown", async () => {
+    const markup = await renderMarkdown(
+      [
+        "שלום with inline `const value = 1`.",
+        "",
+        "```ts",
+        "const path = 'src/app.ts';",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain('<code dir="ltr">const value = 1</code>');
+    expect(markup).toContain('class="chat-markdown-codeblock"');
+    expect(markup).toContain('dir="ltr"');
+  });
+
   it("renders inline math with KaTeX", async () => {
     const markup = await renderMarkdown("Euler wrote $e^{i\\\\pi} + 1 = 0$.");
 
@@ -72,7 +95,7 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain(
       'href="https://example.com" target="_blank" rel="noopener noreferrer"',
     );
-    expect(markup).toContain("<code>$z$</code>");
+    expect(markup).toContain('<code dir="ltr">$z$</code>');
     expect(markup).toContain("const price = &quot;$5&quot;;");
     expect(markup.match(/class="katex"/g) ?? []).toHaveLength(1);
   });

@@ -81,6 +81,7 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
       <a
         className={COMPOSER_INLINE_MENTION_CHIP_INTERACTIVE_CLASS_NAME}
         title={props.path}
+        dir="ltr"
         {...(href !== undefined ? { href } : {})}
         {...(handleActivate ? { onClick: handleActivate } : {})}
         {...(handleHoverPrefetch
@@ -93,7 +94,7 @@ export const InlineMentionChip = memo(function InlineMentionChip(props: InlineMe
   }
 
   return (
-    <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path}>
+    <span className={COMPOSER_INLINE_MENTION_CHIP_CLASS_NAME} title={props.path} dir="ltr">
       {inner}
     </span>
   );

@@ -1130,13 +1130,14 @@ function ComposerPromptEditorInner({
           contentEditable={
             <ContentEditable
               className={cn(
-                "block max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-foreground focus:outline-none",
+                "block max-h-[200px] w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent text-start text-foreground focus:outline-none",
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
                 className,
               )}
               data-testid="composer-editor"
+              dir="auto"
               aria-placeholder={placeholder}
               placeholder={<span />}
               onPaste={onPaste}
@@ -1147,9 +1148,11 @@ function ComposerPromptEditorInner({
               <div
                 className={cn(
                   "pointer-events-none absolute inset-0",
+                  "text-start",
                   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
                   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
                 )}
+                dir="auto"
               >
                 {placeholder}
               </div>

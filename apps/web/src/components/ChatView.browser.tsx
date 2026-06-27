@@ -1883,6 +1883,41 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps Hebrew-leading composer text RTL without mirroring the chat shell", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-composer-rtl-target" as MessageId,
+        targetText: "composer rtl target",
+      }),
+    });
+
+    try {
+      const prompt = "שלום, please inspect src/App.tsx";
+      useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
+
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain(prompt);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const composerParagraph = await waitForElement(
+        () => composerEditor.querySelector<HTMLParagraphElement>("p"),
+        "Unable to find composer paragraph.",
+      );
+      expect(composerParagraph.getAttribute("dir")).toBe("auto");
+      expect(getComputedStyle(composerParagraph).direction).toBe("rtl");
+      expect(getComputedStyle(composerParagraph).textAlign).toBe("start");
+      expect(composerEditor.className).toContain("text-start");
+      expect(document.documentElement.getAttribute("dir")).not.toBe("rtl");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("sends unmarked automation questions as normal chat messages", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

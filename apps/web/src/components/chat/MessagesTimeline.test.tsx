@@ -153,6 +153,93 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("katex-display");
   });
 
+  it("renders RTL assistant prose with transcript-scoped direction", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-assistant-rtl",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("assistant-message-rtl"),
+              role: "assistant",
+              text: "שלום, keep `const value = 1` readable.",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-assistant-message-id="assistant-message-rtl"');
+    expect(markup).toContain('dir="rtl"');
+    expect(markup).toContain('<code dir="ltr">const value = 1</code>');
+  });
+
+  it("renders RTL user prose without mirroring the whole transcript row", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-user-rtl",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-user-rtl"),
+              role: "user",
+              text: "שלום, please inspect @src/App.tsx",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("flex w-full justify-end");
+    expect(markup).toContain('dir="rtl"');
+    expect(markup).toContain('dir="ltr"');
+    expect(markup).toContain("src/App.tsx");
+  });
+
   it("renders user message metadata outside the bubble shell", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -599,9 +686,8 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain(
-      "block max-w-full min-w-0 whitespace-pre-wrap break-words font-system-ui",
-    );
+    expect(markup).toContain("block max-w-full min-w-0 whitespace-pre-wrap break-words");
+    expect(markup).toContain("font-system-ui");
     expect(markup).not.toContain("<pre");
   });
 

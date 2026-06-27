@@ -36,6 +36,7 @@ import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
+import type { TextDirectionAttribute } from "../textDirection";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import {
@@ -85,6 +86,7 @@ interface ChatMarkdownProps {
   isStreaming?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
+  direction?: TextDirectionAttribute | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
   /**
@@ -813,7 +815,7 @@ function MarkdownCodeBlock({
   );
 
   return (
-    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"}>
+    <div className="chat-markdown-codeblock" data-wrap={wrap ? "true" : "false"} dir="ltr">
       <div className="chat-markdown-codeblock__header">
         <CodeBlockHeaderTitle fence={fence} />
         <div className="chat-markdown-codeblock__actions">
@@ -952,6 +954,7 @@ function ChatMarkdown({
   isStreaming = false,
   className = "text-sm leading-relaxed",
   style,
+  direction = "auto",
   onImageExpand,
   markers,
   onTaskToggle,
@@ -1056,7 +1059,7 @@ function ChatMarkdown({
           }
         }
         return (
-          <code className={className} {...props}>
+          <code className={className} dir="ltr" {...props}>
             {children}
           </code>
         );
@@ -1104,7 +1107,11 @@ function ChatMarkdown({
   );
 
   return (
-    <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
+    <div
+      className={`chat-markdown w-full min-w-0 text-start ${className} text-foreground`}
+      dir={direction}
+      style={style}
+    >
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
