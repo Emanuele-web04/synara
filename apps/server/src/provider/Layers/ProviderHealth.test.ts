@@ -223,6 +223,36 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
 
+    it("suppresses cached update advisories when automatic update checks are disabled", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [
+          {
+            ...cachedReadyCodexStatus,
+            version: "0.129.0",
+            versionAdvisory: {
+              status: "behind_latest",
+              currentVersion: "0.129.0",
+              latestVersion: "0.130.0",
+              updateCommand: "npm install -g @openai/codex@latest",
+              canUpdate: true,
+              checkedAt: "2026-06-16T12:00:00.000Z",
+              message: "Update available.",
+            },
+          },
+        ],
+        { ...DEFAULT_SERVER_SETTINGS, enableProviderUpdateChecks: false },
+        "2026-06-16T12:05:00.000Z",
+      );
+      const codex = statuses.find((status) => status.provider === "codex");
+
+      assert.strictEqual(codex?.available, true);
+      assert.strictEqual(codex?.version, "0.129.0");
+      assert.strictEqual(codex?.versionAdvisory?.status, "unknown");
+      assert.strictEqual(codex?.versionAdvisory?.latestVersion, null);
+      assert.strictEqual(codex?.versionAdvisory?.canUpdate, false);
+      assert.strictEqual(codex?.versionAdvisory?.updateCommand, null);
+    });
+
     it.effect("does not expose cached ready statuses for disabled providers", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;

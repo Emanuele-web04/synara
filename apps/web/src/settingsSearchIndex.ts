@@ -258,6 +258,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
 
   // ── Providers ─────────────────────────────────────────────────────────────────
   {
+    id: "providers:automatic-cli-update-checks",
+    section: "providers",
+    title: "Automatic CLI update checks",
+    keywords:
+      "Check Codex Claude and other provider CLIs for newer versions in the background. updates upgrade disable nags",
+  },
+  {
     id: "providers:visible-providers",
     section: "providers",
     title: "Visible providers",

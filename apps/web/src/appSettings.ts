@@ -182,6 +182,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
+  enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -444,6 +445,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -502,6 +504,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
 
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
+  }
+  if (hasOwn(patch, "enableProviderUpdateChecks")) {
+    serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -640,6 +645,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
     "kiloBinaryPath",

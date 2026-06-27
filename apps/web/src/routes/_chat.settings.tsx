@@ -761,14 +761,24 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
+  const providerUpdateServerSettings = useMemo(
+    () =>
+      serverSettingsQuery.data
+        ? {
+            ...serverSettingsQuery.data,
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }
+        : null,
+    [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
+  );
   const outdatedProviderStatuses = useMemo(
     () =>
       getVisibleProviderUpdateStatuses({
         providers: serverConfigQuery.data?.providers ?? [],
         hiddenProviders: settings.hiddenProviders,
-        serverSettings: serverSettingsQuery.data ?? null,
+        serverSettings: providerUpdateServerSettings,
       }),
-    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
+    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
   );
   const outdatedProviderCount = outdatedProviderStatuses.length;
   useSettingsTargetScroll(
@@ -956,6 +966,9 @@ function SettingsRouteView() {
       : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
+      : []),
+    ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
+      ? ["Provider update checks"]
       : []),
     ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
@@ -2588,16 +2601,27 @@ function SettingsRouteView() {
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
+        {renderBooleanSettingRow({
+          settingKey: "enableProviderUpdateChecks",
+          title: "Automatic CLI update checks",
+          description:
+            "Check Codex, Claude, and other provider CLIs for newer versions in the background.",
+          resetLabel: "CLI update checks",
+          ariaLabel: "Automatic CLI update checks",
+        })}
+
         <SettingsRow
           title="Provider updates"
-          description="Update installed provider tools that Synara can safely update."
+          description="Review installed provider tools that Synara can safely update."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
         >
-          {outdatedProviderStatuses.length > 0 ? (
+          {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
             <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
               {outdatedProviderStatuses.map((providerStatus) => {
                 const updateAdvisory = providerStatus.versionAdvisory;
@@ -2667,9 +2691,11 @@ function SettingsRouteView() {
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
           resetAction={
             isInstallSettingsDirty ? (
@@ -2760,16 +2786,21 @@ function SettingsRouteView() {
                   ? shouldShowProviderUpdateStatus({
                       provider: providerStatus,
                       hiddenProviderSet,
-                      serverSettings: serverSettingsQuery.data ?? null,
+                      serverSettings: providerUpdateServerSettings,
                     })
                   : false;
                 const providerUpdateSuppressed =
                   providerStatus?.versionAdvisory?.status === "behind_latest" &&
                   !showProviderUpdateStatus;
+                const currentProviderVersion = formatProviderVersion(providerStatus?.version);
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateSuppressed
-                    ? null
-                    : providerUpdateStatusLabel(providerStatus)
+                  ? !settings.enableProviderUpdateChecks
+                    ? currentProviderVersion
+                      ? `Current ${currentProviderVersion}`
+                      : null
+                    : providerUpdateSuppressed
+                      ? null
+                      : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;

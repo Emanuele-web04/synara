@@ -1757,6 +1757,29 @@ function mergeProviderStatusUpdates(
   return orderProviderStatuses([...statusByProvider.values()]);
 }
 
+// Keeps local CLI version/status visible while removing network-backed update metadata.
+function makeSuppressedProviderVersionAdvisory(
+  status: ServerProviderStatus,
+  currentVersion?: string | null,
+): NonNullable<ServerProviderStatus["versionAdvisory"]> {
+  return {
+    status: "unknown",
+    currentVersion: currentVersion ?? status.version ?? null,
+    latestVersion: null,
+    updateCommand: null,
+    canUpdate: false,
+    checkedAt: status.checkedAt,
+    message: null,
+  };
+}
+
+function suppressProviderVersionAdvisory(status: ServerProviderStatus): ServerProviderStatus {
+  return {
+    ...status,
+    versionAdvisory: makeSuppressedProviderVersionAdvisory(status),
+  };
+}
+
 // Disabled providers are a settings overlay, not a probe result. Keep the raw
 // cached/probed status intact so re-enabling a provider can reuse it immediately.
 export function projectProviderStatusesForSettings(
@@ -1773,15 +1796,7 @@ export function projectProviderStatusesForSettings(
       const disabledStatus = makeDisabledProviderStatus(provider, status?.checkedAt ?? checkedAt);
       const disabledStatusWithAdvisory = {
         ...disabledStatus,
-        versionAdvisory: {
-          status: "unknown" as const,
-          currentVersion: status?.version ?? null,
-          latestVersion: null,
-          updateCommand: null,
-          canUpdate: false,
-          checkedAt: disabledStatus.checkedAt,
-          message: null,
-        },
+        versionAdvisory: makeSuppressedProviderVersionAdvisory(disabledStatus, status?.version),
       } satisfies ServerProviderStatus;
       projected.push(
         status?.updateState
@@ -1792,7 +1807,9 @@ export function projectProviderStatusesForSettings(
     }
 
     if (status && !isDisabledProviderStatusOverlay(status)) {
-      projected.push(status);
+      projected.push(
+        settings.enableProviderUpdateChecks ? status : suppressProviderVersionAdvisory(status),
+      );
     }
   }
 
@@ -1992,6 +2009,18 @@ export const ProviderHealthLive = Layer.effect(
     const enrichStatuses = Effect.fn("enrichProviderStatuses")(function* (
       statuses: ReadonlyArray<ServerProviderStatus>,
     ) {
+      const settings = yield* serverSettings.ready.pipe(
+        Effect.flatMap(() => serverSettings.getSettings),
+        Effect.catch(() => Effect.succeed(null)),
+      );
+      if (settings?.enableProviderUpdateChecks === false) {
+        return yield* Effect.forEach(
+          statuses.map(suppressProviderVersionAdvisory),
+          applyVolatileProviderState,
+          { concurrency: "unbounded" },
+        );
+      }
+
       const enriched = yield* Effect.forEach(
         statuses,
         (status) =>
@@ -2030,8 +2059,9 @@ export const ProviderHealthLive = Layer.effect(
         ? check.pipe(Effect.map(Option.some))
         : Effect.succeed(Option.none());
 
-    const loadProviderStatuses = serverSettings.getSettings
+    const loadProviderStatuses = serverSettings.ready
       .pipe(
+        Effect.flatMap(() => serverSettings.getSettings),
         Effect.flatMap((settings) =>
           Effect.all(
             [
