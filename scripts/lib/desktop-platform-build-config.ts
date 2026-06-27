@@ -8,23 +8,17 @@ export const MICROPHONE_USAGE_DESCRIPTION =
 export const MAC_ENTITLEMENTS_PATH = "apps/desktop/resources/entitlements.mac.plist";
 export const MAC_INHERITED_ENTITLEMENTS_PATH =
   "apps/desktop/resources/entitlements.mac.inherit.plist";
-const MAC_AFTER_PACK_HOOK_PATH = "./electron-builder-after-pack.cjs";
 const MAC_DMG_ICON_PATH = "icon.icns";
 export const NODE_PTY_ASAR_UNPACK_GLOBS = ["node_modules/node-pty/**"] as const;
 
 export interface DesktopPlatformBuildConfig {
-  readonly afterPack?: string;
   readonly asarUnpack?: ReadonlyArray<string>;
-  readonly dmg?: {
-    readonly icon: string;
-  };
   readonly linux?: Record<string, unknown>;
   readonly mac?: Record<string, unknown>;
   readonly win?: Record<string, unknown>;
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
-  readonly hasMacIconComposer: boolean;
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly windowsAzureSignOptions?: Record<string, string>;
@@ -35,28 +29,6 @@ export interface DesktopNativeBuildHostInput {
   readonly hostArch: string;
   readonly hostPlatform: NodeJS.Platform;
   readonly platform: "linux" | "mac" | "win";
-}
-
-export interface MacIconComposerSupportInput {
-  readonly hostPlatform: NodeJS.Platform;
-  readonly xcodebuildVersionOutput: string | null;
-}
-
-// Extracts the major Xcode version from `xcodebuild -version` output.
-export function parseXcodeMajorVersion(output: string): number | null {
-  const match = /^Xcode\s+(\d+)(?:\.\d+)?/m.exec(output);
-  if (!match) return null;
-
-  const major = Number.parseInt(match[1], 10);
-  return Number.isFinite(major) ? major : null;
-}
-
-// Icon Composer packaging requires a Darwin host with the Xcode 26+ asset toolchain.
-export function supportsMacIconComposerPackaging(input: MacIconComposerSupportInput): boolean {
-  if (input.hostPlatform !== "darwin" || !input.xcodebuildVersionOutput) return false;
-
-  const major = parseXcodeMajorVersion(input.xcodebuildVersionOutput);
-  return major !== null && major >= 26;
 }
 
 export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInput): string | null {
@@ -81,29 +53,17 @@ export function createDesktopPlatformBuildConfig(
   if (input.platform === "mac") {
     const mac = {
       target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
-      icon: input.hasMacIconComposer ? "icon.icon" : MAC_DMG_ICON_PATH,
+      icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
       hardenedRuntime: true,
       entitlements: MAC_ENTITLEMENTS_PATH,
       entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
-        ...(input.hasMacIconComposer ? { CFBundleIconFile: MAC_DMG_ICON_PATH } : {}),
       },
     } satisfies Record<string, unknown>;
 
-    if (!input.hasMacIconComposer) {
-      return { ...nativePackaging, mac };
-    }
-
-    return {
-      ...nativePackaging,
-      mac,
-      afterPack: MAC_AFTER_PACK_HOOK_PATH,
-      dmg: {
-        icon: MAC_DMG_ICON_PATH,
-      },
-    };
+    return { ...nativePackaging, mac };
   }
 
   if (input.platform === "linux") {
