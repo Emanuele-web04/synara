@@ -37,6 +37,28 @@ export interface DesktopNativeBuildHostInput {
   readonly platform: "linux" | "mac" | "win";
 }
 
+export interface MacIconComposerSupportInput {
+  readonly hostPlatform: NodeJS.Platform;
+  readonly xcodebuildVersionOutput: string | null;
+}
+
+// Extracts the major Xcode version from `xcodebuild -version` output.
+export function parseXcodeMajorVersion(output: string): number | null {
+  const match = /^Xcode\s+(\d+)(?:\.\d+)?/m.exec(output);
+  if (!match) return null;
+
+  const major = Number.parseInt(match[1], 10);
+  return Number.isFinite(major) ? major : null;
+}
+
+// Icon Composer packaging requires a Darwin host with the Xcode 26+ asset toolchain.
+export function supportsMacIconComposerPackaging(input: MacIconComposerSupportInput): boolean {
+  if (input.hostPlatform !== "darwin" || !input.xcodebuildVersionOutput) return false;
+
+  const major = parseXcodeMajorVersion(input.xcodebuildVersionOutput);
+  return major !== null && major >= 26;
+}
+
 export function validateDesktopNativeBuildHost(input: DesktopNativeBuildHostInput): string | null {
   if (input.platform !== "linux") return null;
   if (input.arch === "universal") {

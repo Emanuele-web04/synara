@@ -16,6 +16,7 @@ import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 import {
   createDesktopPlatformBuildConfig,
+  supportsMacIconComposerPackaging,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
@@ -128,6 +129,13 @@ function getDefaultArch(platform: typeof BuildPlatform.Type): typeof BuildArch.T
   }
 
   return config.archChoices[0] ?? "x64";
+}
+
+function readXcodebuildVersionOutput(): string | null {
+  const result = spawnSync("xcodebuild", ["-version"], { encoding: "utf8" });
+  if (result.status !== 0) return null;
+
+  return [result.stdout, result.stderr].filter(Boolean).join("\n");
 }
 
 class BuildScriptError extends Data.TaggedError("BuildScriptError")<{
@@ -393,6 +401,17 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     }
     const composerIconSource = yield* ProductionMacIconComposerSource;
     const hasComposerIcon = yield* fs.exists(composerIconSource);
+    const canUseComposerIcon =
+      hasComposerIcon &&
+      supportsMacIconComposerPackaging({
+        hostPlatform: process.platform,
+        xcodebuildVersionOutput: readXcodebuildVersionOutput(),
+      });
+    if (hasComposerIcon && !canUseComposerIcon) {
+      yield* Effect.log(
+        "[desktop-artifact] Skipping Icon Composer asset because this host lacks Xcode 26+ packaging support.",
+      );
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3code-icon-build-",
@@ -402,7 +421,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
     const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
-    const fallbackIcnsSource = hasComposerIcon ? legacyIconSource : modernIconSource;
+    const fallbackIcnsSource = canUseComposerIcon ? legacyIconSource : modernIconSource;
 
     yield* runCommand(
       ChildProcess.make({
@@ -410,8 +429,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // The Icon Composer asset owns Tahoe; with it present, the classic ICNS can
-    // stay rounded for pre-Tahoe bundle/DMG surfaces.
+    // Icon Composer owns Tahoe on supported hosts; otherwise ICNS stays full-bleed.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
@@ -420,14 +438,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
 
     yield* generateMacIconSet(fallbackIcnsSource, iconIcnsPath, tmpRoot, path, verbose);
 
-    if (hasComposerIcon) {
+    if (canUseComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
       yield* fs.remove(iconComposerPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
       yield* fs.copy(composerIconSource, iconComposerPath);
     }
 
     return {
-      hasComposerIcon,
+      hasComposerIcon: canUseComposerIcon,
     } as const;
   });
 }
