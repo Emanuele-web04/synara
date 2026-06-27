@@ -402,6 +402,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
     const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
+    const fallbackIcnsSource = hasComposerIcon ? legacyIconSource : modernIconSource;
 
     yield* runCommand(
       ChildProcess.make({
@@ -409,15 +410,15 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // Pre-Tahoe macOS needs a rounded runtime Dock override; the bundle ICNS
-    // stays full-bleed so Tahoe can apply Liquid Glass safely.
+    // The Icon Composer asset owns Tahoe; with it present, the classic ICNS can
+    // stay rounded for pre-Tahoe bundle/DMG surfaces.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
       })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
     );
 
-    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    yield* generateMacIconSet(fallbackIcnsSource, iconIcnsPath, tmpRoot, path, verbose);
 
     if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
