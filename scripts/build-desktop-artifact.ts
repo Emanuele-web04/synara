@@ -401,16 +401,16 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     }
     const composerIconSource = yield* ProductionMacIconComposerSource;
     const hasComposerIcon = yield* fs.exists(composerIconSource);
-    const canUseComposerIcon =
+    if (
       hasComposerIcon &&
-      supportsMacIconComposerPackaging({
+      !supportsMacIconComposerPackaging({
         hostPlatform: process.platform,
         xcodebuildVersionOutput: readXcodebuildVersionOutput(),
+      })
+    ) {
+      return yield* new BuildScriptError({
+        message: "Mac Icon Composer packaging requires a Darwin host with Xcode 26+.",
       });
-    if (hasComposerIcon && !canUseComposerIcon) {
-      yield* Effect.log(
-        "[desktop-artifact] Skipping Icon Composer asset because this host lacks Xcode 26+ packaging support.",
-      );
     }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
@@ -421,7 +421,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
     const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
-    const fallbackIcnsSource = canUseComposerIcon ? legacyIconSource : modernIconSource;
+    const fallbackIcnsSource = hasComposerIcon ? legacyIconSource : modernIconSource;
 
     yield* runCommand(
       ChildProcess.make({
@@ -429,7 +429,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    // Icon Composer owns Tahoe on supported hosts; otherwise ICNS stays full-bleed.
+    // Icon Composer owns Tahoe when present; the classic ICNS stays rounded for older macOS.
     yield* runCommand(
       ChildProcess.make({
         ...commandOutputOptions(verbose),
@@ -438,14 +438,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
 
     yield* generateMacIconSet(fallbackIcnsSource, iconIcnsPath, tmpRoot, path, verbose);
 
-    if (canUseComposerIcon) {
+    if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
       yield* fs.remove(iconComposerPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
       yield* fs.copy(composerIconSource, iconComposerPath);
     }
 
     return {
-      hasComposerIcon: canUseComposerIcon,
+      hasComposerIcon,
     } as const;
   });
 }
