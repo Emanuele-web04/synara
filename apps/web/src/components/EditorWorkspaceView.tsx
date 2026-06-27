@@ -48,6 +48,7 @@ import {
   CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
 } from "./chat/chatHeaderControls";
+import { EXPLORER_ROW_PROPS, useExplorerListNavigation } from "./chat/explorerListNavigation";
 import { FileEntryIcon } from "./chat/FileEntryIcon";
 import { fileRowClassName } from "./chat/fileRowStyles";
 import { DiffStat } from "./chat/DiffStatLabel";
@@ -182,6 +183,7 @@ function DiffFileRow(props: {
 
   return (
     <button
+      {...EXPLORER_ROW_PROPS}
       type="button"
       className={fileRowClassName(props.selected, "h-8 px-2")}
       title={filePath}
@@ -245,6 +247,7 @@ function DiffFilesSidebar(props: {
 }) {
   const { resolvedTheme } = useTheme();
   const { onAskWhyInChat, onReferenceInChat } = props;
+  const handleListKeyDown = useExplorerListNavigation();
   const totals = useMemo(() => summarizeFileDiffStats(props.files), [props.files]);
   const hasDiffStats = totals.additions > 0 || totals.deletions > 0;
   const showLoadingRows = props.isLoading && props.files.length === 0;
@@ -285,11 +288,15 @@ function DiffFilesSidebar(props: {
           />
         </div>
       ) : null}
+      {/* Keyboard nav lives on the scrolling list, not the whole aside, so the
+          header's actions menu stays out of arrow-key scope (the search sidebars
+          attach at the aside because their only header control is a text input). */}
       <div
         className={cn(
           "min-h-0 flex-1 overflow-auto px-1 py-1",
           !showLoadingRows && props.files.length === 0 && "flex flex-col",
         )}
+        onKeyDown={handleListKeyDown}
       >
         {showLoadingRows ? (
           <DiffFilesLoadingRows />

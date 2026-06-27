@@ -1395,7 +1395,7 @@ export function resolvePrStatePresentation(
   }
   return {
     label: "PR merged",
-    colorClass: "text-violet-500 dark:text-violet-400",
+    colorClass: "text-indigo-500 dark:text-indigo-400",
     iconKind: "merged-simple",
   };
 }

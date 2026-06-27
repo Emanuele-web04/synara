@@ -9,6 +9,7 @@ export const SETTINGS_SECTION_IDS = [
   "appearance",
   "notifications",
   "behavior",
+  "shortcuts",
   "worktrees",
   "archived",
   "models",
@@ -93,6 +94,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Streaming, diff handling, and destructive confirmations.",
     icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
+  },
+  {
+    id: "shortcuts",
+    group: "app",
+    label: "Keyboard Shortcuts",
+    description: "Every keyboard shortcut available in Synara, grouped by context.",
+    icon: "shortcut",
+    eyebrow: "Key bindings",
   },
   {
     id: "worktrees",

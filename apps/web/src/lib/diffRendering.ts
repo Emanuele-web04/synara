@@ -131,6 +131,24 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   cursor: pointer;
   color: var(--foreground) !important;
 }
+
+/* Every number rendered inside a diff reads in the UI font (with tabular figures
+   so columns still line up), not the mono code font: gutter line numbers, the
+   "N unmodified lines" separators, and the header +/- counts. The library pins
+   the header counts to --diffs-font-family and the gutter/separators inherit it
+   from the hunk body, so each needs an explicit override. */
+[data-line-number-content],
+[data-column-number],
+[data-unmodified-lines] {
+  font-family: var(--font-ui-family) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  font-family: var(--font-ui-family) !important;
+  font-variant-numeric: tabular-nums !important;
+}
 `;
   diffPanelUnsafeCssCache.set(theme, css);
   return css;

@@ -2,8 +2,8 @@
 // Purpose: Shared workspace file-tree explorer + file-search building blocks used
 //          by both the full editor view and the right-dock explorer pane.
 // Layer: Chat workspace-browsing UI primitives
-// Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, ExplorerActivityBarButton,
-//          useExplorerEntryPrefetch, setFileReferenceDragData.
+// Exports: WorkspaceFilesSidebar, WorkspaceSearchSidebar, WorkspaceExplorerSidebar,
+//          ExplorerActivityBarButton, useExplorerEntryPrefetch, setFileReferenceDragData.
 
 import type { ProjectEntry, ProjectFileSystemEntry } from "@t3tools/contracts";
 import { useDebouncedValue } from "@tanstack/react-pacer";
@@ -37,6 +37,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { DisclosureChevron } from "../ui/DisclosureChevron";
 import { SearchInput } from "../ui/search-input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { EXPLORER_ROW_PROPS, useExplorerListNavigation } from "./explorerListNavigation";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { fileRowClassName, fileRowIndentStyle } from "./fileRowStyles";
 import { PanelStateMessage } from "./PanelStateMessage";
@@ -179,6 +180,7 @@ const ExplorerRow = forwardRef<
   return (
     <button
       {...rest}
+      {...EXPLORER_ROW_PROPS}
       ref={ref}
       type="button"
       className={fileRowClassName(selected, cn("h-7 pr-2", className))}
@@ -315,6 +317,65 @@ function WorkspaceDirectory(props: {
   );
 }
 
+// Opening the file-reference context menu from a tree row (full entry) or a
+// search-result row (path only). Both wrap the same menu, so they live here
+// instead of being re-declared in every sidebar that renders these rows.
+function useTreeEntryContextMenu(
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
+) {
+  return useCallback(
+    (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => {
+      void showFileReferenceContextMenu({ path: entry.path, position, onReferenceInChat });
+    },
+    [onReferenceInChat],
+  );
+}
+
+function useResultEntryContextMenu(
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined,
+) {
+  return useCallback(
+    (path: string, position: { x: number; y: number }) => {
+      void showFileReferenceContextMenu({ path, position, onReferenceInChat });
+    },
+    [onReferenceInChat],
+  );
+}
+
+// Scrollable file-tree body, shared by the standalone files sidebar and the
+// combined explorer sidebar (which shows it whenever the search box is empty).
+function WorkspaceFilesTreeBody(props: {
+  workspaceRoot: string | null;
+  selectedFilePath: string | null;
+  expandedDirectories: ReadonlySet<string>;
+  onSelectFile: (path: string) => void;
+  onToggleDirectory: (path: string) => void;
+  onPrefetchEntry: (entry: ProjectFileSystemEntry) => void;
+  onEntryContextMenu: (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => void;
+}) {
+  return (
+    <div className="min-h-0 flex-1 overflow-auto px-1 py-1">
+      {props.workspaceRoot ? (
+        <WorkspaceDirectory
+          cwd={props.workspaceRoot}
+          relativePath={null}
+          depth={0}
+          selectedFilePath={props.selectedFilePath}
+          expandedDirectories={props.expandedDirectories}
+          onSelectFile={props.onSelectFile}
+          onToggleDirectory={props.onToggleDirectory}
+          onPrefetchEntry={props.onPrefetchEntry}
+          onEntryContextMenu={props.onEntryContextMenu}
+        />
+      ) : (
+        <PanelStateMessage density="compact" fill="flex">
+          <p>No workspace.</p>
+        </PanelStateMessage>
+      )}
+    </div>
+  );
+}
+
 export function WorkspaceFilesSidebar(props: {
   workspaceRoot: string | null;
   selectedFilePath: string | null;
@@ -325,34 +386,22 @@ export function WorkspaceFilesSidebar(props: {
   onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const { onReferenceInChat } = props;
-  const handleEntryContextMenu = useCallback(
-    (entry: ProjectFileSystemEntry, position: { x: number; y: number }) => {
-      void showFileReferenceContextMenu({ path: entry.path, position, onReferenceInChat });
-    },
-    [onReferenceInChat],
-  );
+  const handleEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
+  const handleListKeyDown = useExplorerListNavigation();
   return (
-    <aside className={props.containerClassName ?? EXPLORER_SIDEBAR_CONTAINER_CLASS}>
-      <div className="min-h-0 flex-1 overflow-auto px-1 py-1">
-        {props.workspaceRoot ? (
-          <WorkspaceDirectory
-            cwd={props.workspaceRoot}
-            relativePath={null}
-            depth={0}
-            selectedFilePath={props.selectedFilePath}
-            expandedDirectories={props.expandedDirectories}
-            onSelectFile={props.onSelectFile}
-            onToggleDirectory={props.onToggleDirectory}
-            onPrefetchEntry={prefetchEntry}
-            onEntryContextMenu={handleEntryContextMenu}
-          />
-        ) : (
-          <PanelStateMessage density="compact" fill="flex">
-            <p>No workspace.</p>
-          </PanelStateMessage>
-        )}
-      </div>
+    <aside
+      className={props.containerClassName ?? EXPLORER_SIDEBAR_CONTAINER_CLASS}
+      onKeyDown={handleListKeyDown}
+    >
+      <WorkspaceFilesTreeBody
+        workspaceRoot={props.workspaceRoot}
+        selectedFilePath={props.selectedFilePath}
+        expandedDirectories={props.expandedDirectories}
+        onSelectFile={props.onSelectFile}
+        onToggleDirectory={props.onToggleDirectory}
+        onPrefetchEntry={prefetchEntry}
+        onEntryContextMenu={handleEntryContextMenu}
+      />
     </aside>
   );
 }
@@ -372,6 +421,7 @@ function WorkspaceSearchResultRow(props: {
 
   return (
     <button
+      {...EXPLORER_ROW_PROPS}
       type="button"
       className={fileRowClassName(props.selected, "h-8 px-2")}
       title={entry.path}
@@ -398,31 +448,32 @@ function WorkspaceSearchResultRow(props: {
   );
 }
 
-export function WorkspaceSearchSidebar(props: {
-  workspaceRoot: string | null;
-  query: string;
-  onQueryChange: (query: string) => void;
-  selectedFilePath: string | null;
-  containerClassName?: string;
-  onSelectFile: (path: string) => void;
-  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
-}) {
-  const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
-  const { onQueryChange, onReferenceInChat, onSelectFile } = props;
-  const handleEntryContextMenu = useCallback(
-    (path: string, position: { x: number; y: number }) => {
-      void showFileReferenceContextMenu({ path, position, onReferenceInChat });
-    },
-    [onReferenceInChat],
-  );
-  const [debouncedQuery] = useDebouncedValue(props.query, {
+interface WorkspaceFileSearchState {
+  // Trimmed live input — drives the "is the box empty?" decision (tree vs results).
+  inputQuery: string;
+  fileMatches: ReadonlyArray<ProjectEntry>;
+  searchResultsPending: boolean;
+  searchResultsCurrent: boolean;
+  isFetching: boolean;
+  error: Error | null;
+  truncated: boolean;
+}
+
+// Fuzzy file-name search shared by the standalone search sidebar and the
+// combined explorer sidebar: debounce keystrokes, then expose the matches plus
+// the freshness flags both surfaces need to gate selection on stale results.
+function useWorkspaceFileSearch(
+  workspaceRoot: string | null,
+  query: string,
+): WorkspaceFileSearchState {
+  const [debouncedQuery] = useDebouncedValue(query, {
     wait: EXPLORER_SEARCH_QUERY_DEBOUNCE_MS,
   });
-  const inputQuery = props.query.trim();
+  const inputQuery = query.trim();
   const trimmedQuery = debouncedQuery.trim();
   const entriesQuery = useQuery(
     projectSearchEntriesQueryOptions({
-      cwd: props.workspaceRoot,
+      cwd: workspaceRoot,
       query: trimmedQuery,
       kind: "file",
       limit: EXPLORER_SEARCH_RESULTS_LIMIT,
@@ -435,42 +486,78 @@ export function WorkspaceSearchSidebar(props: {
   const fileMatches = searchResultsCurrent
     ? (entriesQuery.data?.entries ?? EMPTY_WORKSPACE_SEARCH_FILE_MATCHES)
     : EMPTY_WORKSPACE_SEARCH_FILE_MATCHES;
+  return {
+    inputQuery,
+    fileMatches,
+    searchResultsPending,
+    searchResultsCurrent,
+    isFetching: entriesQuery.isFetching,
+    error: searchResultsCurrent ? entriesQuery.error : null,
+    truncated: entriesQuery.data?.truncated ?? false,
+  };
+}
+
+// Search-box header: a fixed, full-width input that selects the top match on
+// Enter and clears (returning to the tree, in the combined sidebar) on Escape.
+function WorkspaceSearchInputHeader(props: {
+  query: string;
+  search: WorkspaceFileSearchState;
+  autoFocus?: boolean;
+  onQueryChange: (query: string) => void;
+  onSelectFile: (path: string) => void;
+}) {
+  const { onQueryChange, onSelectFile, query, search } = props;
   const handleInputKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        if (!searchResultsCurrent) {
+        if (!search.searchResultsCurrent) {
           return;
         }
-        const topMatch = fileMatches[0];
+        const topMatch = search.fileMatches[0];
         if (topMatch) {
           onSelectFile(topMatch.path);
         }
         return;
       }
-      if (event.key === "Escape" && props.query.length > 0) {
+      if (event.key === "Escape" && query.length > 0) {
         event.stopPropagation();
         onQueryChange("");
       }
     },
-    [fileMatches, onQueryChange, onSelectFile, props.query.length, searchResultsCurrent],
+    [onQueryChange, onSelectFile, query.length, search.fileMatches, search.searchResultsCurrent],
   );
 
   return (
-    <aside className={props.containerClassName ?? EXPLORER_SIDEBAR_CONTAINER_CLASS}>
-      <div className="shrink-0 border-b border-border/65 p-2">
-        <SearchInput
-          value={props.query}
-          autoFocus
-          spellCheck={false}
-          autoCorrect="off"
-          autoCapitalize="off"
-          placeholder="Search files..."
-          aria-label="Search files"
-          onChange={(event) => onQueryChange(event.target.value)}
-          onKeyDown={handleInputKeyDown}
-        />
-      </div>
+    <div className="shrink-0 border-b border-border/65 p-2">
+      <SearchInput
+        value={query}
+        autoFocus={props.autoFocus}
+        spellCheck={false}
+        autoCorrect="off"
+        autoCapitalize="off"
+        placeholder="Search files..."
+        aria-label="Search files"
+        onChange={(event) => onQueryChange(event.target.value)}
+        onKeyDown={handleInputKeyDown}
+      />
+    </div>
+  );
+}
+
+// Scrollable search-results body (matches list + truncation hint). Callers only
+// mount it once the query is non-empty, so the empty-query state lives outside.
+function WorkspaceSearchResultsBody(props: {
+  workspaceRoot: string | null;
+  search: WorkspaceFileSearchState;
+  selectedFilePath: string | null;
+  onSelectFile: (path: string) => void;
+  onPrefetchEntry: (entry: Pick<ProjectFileSystemEntry, "path" | "kind">) => void;
+  onEntryContextMenu: (path: string, position: { x: number; y: number }) => void;
+}) {
+  const { fileMatches } = props.search;
+  return (
+    <>
       <div
         className={cn(
           "min-h-0 flex-1 overflow-auto px-1 py-1",
@@ -481,20 +568,16 @@ export function WorkspaceSearchSidebar(props: {
           <PanelStateMessage density="compact" fill="flex">
             <p>No workspace.</p>
           </PanelStateMessage>
-        ) : inputQuery.length === 0 ? (
-          <PanelStateMessage density="compact" fill="flex">
-            <p>Search files by name or path.</p>
-          </PanelStateMessage>
-        ) : searchResultsCurrent && entriesQuery.error ? (
+        ) : props.search.searchResultsCurrent && props.search.error ? (
           <PanelStateMessage density="compact" fill="flex">
             <p className="text-destructive/85">
-              {entriesQuery.error instanceof Error
-                ? entriesQuery.error.message
+              {props.search.error instanceof Error
+                ? props.search.error.message
                 : "Could not search files."}
             </p>
           </PanelStateMessage>
         ) : fileMatches.length === 0 ? (
-          searchResultsPending || entriesQuery.isFetching ? (
+          props.search.searchResultsPending || props.search.isFetching ? (
             <ExplorerLoadingRows depth={0} />
           ) : (
             <PanelStateMessage density="compact" fill="flex">
@@ -507,18 +590,119 @@ export function WorkspaceSearchSidebar(props: {
               key={entry.path}
               entry={entry}
               selected={entry.path === props.selectedFilePath}
-              onSelectFile={onSelectFile}
-              onPrefetchEntry={prefetchEntry}
-              onEntryContextMenu={handleEntryContextMenu}
+              onSelectFile={props.onSelectFile}
+              onPrefetchEntry={props.onPrefetchEntry}
+              onEntryContextMenu={props.onEntryContextMenu}
             />
           ))
         )}
       </div>
-      {fileMatches.length > 0 && entriesQuery.data?.truncated ? (
+      {fileMatches.length > 0 && props.search.truncated ? (
         <p className="shrink-0 border-t border-border/45 px-3 py-1.5 text-[10px] text-muted-foreground/70">
           Showing the top matches. Refine the search to narrow them down.
         </p>
       ) : null}
+    </>
+  );
+}
+
+export function WorkspaceSearchSidebar(props: {
+  workspaceRoot: string | null;
+  query: string;
+  onQueryChange: (query: string) => void;
+  selectedFilePath: string | null;
+  containerClassName?: string;
+  onSelectFile: (path: string) => void;
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
+}) {
+  const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const handleEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
+  const handleListKeyDown = useExplorerListNavigation();
+  const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
+
+  return (
+    <aside
+      className={props.containerClassName ?? EXPLORER_SIDEBAR_CONTAINER_CLASS}
+      onKeyDown={handleListKeyDown}
+    >
+      <WorkspaceSearchInputHeader
+        query={props.query}
+        search={search}
+        autoFocus
+        onQueryChange={props.onQueryChange}
+        onSelectFile={props.onSelectFile}
+      />
+      {search.inputQuery.length === 0 ? (
+        <div className="flex min-h-0 flex-1 flex-col px-1 py-1">
+          <PanelStateMessage density="compact" fill="flex">
+            <p>Search files by name or path.</p>
+          </PanelStateMessage>
+        </div>
+      ) : (
+        <WorkspaceSearchResultsBody
+          workspaceRoot={props.workspaceRoot}
+          search={search}
+          selectedFilePath={props.selectedFilePath}
+          onSelectFile={props.onSelectFile}
+          onPrefetchEntry={prefetchEntry}
+          onEntryContextMenu={handleEntryContextMenu}
+        />
+      )}
+    </aside>
+  );
+}
+
+// Combined explorer: one panel with a fixed search box on top that shows the
+// full file tree while empty and switches to fuzzy file-name results as soon as
+// the user types — no separate Files/Search activity rail needed.
+export function WorkspaceExplorerSidebar(props: {
+  workspaceRoot: string | null;
+  selectedFilePath: string | null;
+  expandedDirectories: ReadonlySet<string>;
+  query: string;
+  onQueryChange: (query: string) => void;
+  containerClassName?: string;
+  onSelectFile: (path: string) => void;
+  onToggleDirectory: (path: string) => void;
+  onReferenceInChat: ((reference: ChatFileReference) => void) | undefined;
+}) {
+  const prefetchEntry = useExplorerEntryPrefetch(props.workspaceRoot);
+  const handleTreeEntryContextMenu = useTreeEntryContextMenu(props.onReferenceInChat);
+  const handleResultEntryContextMenu = useResultEntryContextMenu(props.onReferenceInChat);
+  const handleListKeyDown = useExplorerListNavigation();
+  const search = useWorkspaceFileSearch(props.workspaceRoot, props.query);
+
+  return (
+    <aside
+      className={props.containerClassName ?? EXPLORER_SIDEBAR_CONTAINER_CLASS}
+      onKeyDown={handleListKeyDown}
+    >
+      <WorkspaceSearchInputHeader
+        query={props.query}
+        search={search}
+        onQueryChange={props.onQueryChange}
+        onSelectFile={props.onSelectFile}
+      />
+      {search.inputQuery.length === 0 ? (
+        <WorkspaceFilesTreeBody
+          workspaceRoot={props.workspaceRoot}
+          selectedFilePath={props.selectedFilePath}
+          expandedDirectories={props.expandedDirectories}
+          onSelectFile={props.onSelectFile}
+          onToggleDirectory={props.onToggleDirectory}
+          onPrefetchEntry={prefetchEntry}
+          onEntryContextMenu={handleTreeEntryContextMenu}
+        />
+      ) : (
+        <WorkspaceSearchResultsBody
+          workspaceRoot={props.workspaceRoot}
+          search={search}
+          selectedFilePath={props.selectedFilePath}
+          onSelectFile={props.onSelectFile}
+          onPrefetchEntry={prefetchEntry}
+          onEntryContextMenu={handleResultEntryContextMenu}
+        />
+      )}
     </aside>
   );
 }

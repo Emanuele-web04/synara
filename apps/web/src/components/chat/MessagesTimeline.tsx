@@ -47,6 +47,7 @@ import {
   McpIcon,
   NewThreadIcon,
   PinIcon,
+  SearchIcon,
   SkillCubeIcon,
   SquarePenIcon,
   SteerIcon,
@@ -2116,7 +2117,7 @@ function workEntryPreview(
 }
 
 // Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the eye icon
+// without a `file-read` requestKind, so match their tool name to surface the search icon
 // instead of the generic tool/wrench fallback.
 function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
@@ -2125,7 +2126,7 @@ function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return TerminalIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
+  if (workEntry.requestKind === "file-read") return SearchIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
@@ -2135,10 +2136,9 @@ function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
     return SquarePenIcon;
   }
   if (workEntry.itemType === "web_search") return WebSearchIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
-  if (isFileReadToolEntry(workEntry)) return EyeIcon;
+  if (isFileReadToolEntry(workEntry)) return SearchIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":

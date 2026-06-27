@@ -18,8 +18,8 @@ import { cn } from "~/lib/utils";
 import { ShortcutKbd } from "./ui/shortcut-kbd";
 import {
   buildShortcutSheetSections,
+  filterShortcutSheetSections,
   type ShortcutSheetContext,
-  type ShortcutSheetEntry,
   type ShortcutSheetSection,
 } from "../shortcutsSheet";
 import type { ProjectScript } from "../types";
@@ -62,7 +62,10 @@ export default function ShortcutsDialog(props: {
     [props.keybindings, props.projectScripts, props.platform, props.context],
   );
 
-  const filteredSections = useMemo(() => filterSections(sections, query), [sections, query]);
+  const filteredSections = useMemo(
+    () => filterShortcutSheetSections(sections, query),
+    [sections, query],
+  );
 
   const hasResults = filteredSections.some((section) => section.entries.length > 0);
 
@@ -148,29 +151,5 @@ function ShortcutSection({
         ))}
       </ul>
     </section>
-  );
-}
-
-// Filter each section's entries against a free-text query. We match on the
-// human-readable label, the description, and the rendered shortcut label so a
-// user can search by action name ("terminal"), intent ("split"), or even the
-// key combo itself ("⌘N" / "ctrl+n"). Sections with no remaining entries are
-// hidden by the `ShortcutSection` guard above.
-function filterSections(sections: ShortcutSheetSection[], query: string): ShortcutSheetSection[] {
-  const trimmed = query.trim().toLowerCase();
-  if (trimmed.length === 0) return sections;
-  return sections
-    .map((section) => ({
-      ...section,
-      entries: section.entries.filter((entry) => matchesEntry(entry, trimmed)),
-    }))
-    .filter((section) => section.entries.length > 0);
-}
-
-function matchesEntry(entry: ShortcutSheetEntry, needle: string): boolean {
-  return (
-    entry.label.toLowerCase().includes(needle) ||
-    entry.description.toLowerCase().includes(needle) ||
-    entry.shortcutLabel.toLowerCase().includes(needle)
   );
 }

@@ -347,3 +347,31 @@ export function buildShortcutSheetSections(
 
   return sections;
 }
+
+// Match a single entry against a free-text query on the human-readable label, the
+// description, and the rendered shortcut label, so a user can search by action name
+// ("terminal"), intent ("split"), or even the key combo itself ("⌘N" / "ctrl+n").
+function shortcutSheetEntryMatchesQuery(entry: ShortcutSheetEntry, needle: string): boolean {
+  return (
+    entry.label.toLowerCase().includes(needle) ||
+    entry.description.toLowerCase().includes(needle) ||
+    entry.shortcutLabel.toLowerCase().includes(needle)
+  );
+}
+
+// Filter each section's entries against a free-text query, dropping sections that end up
+// empty. Shared by the keyboard-shortcuts dialog (Mod+/) and the settings reference panel
+// so the two surfaces search identically.
+export function filterShortcutSheetSections(
+  sections: ShortcutSheetSection[],
+  query: string,
+): ShortcutSheetSection[] {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length === 0) return sections;
+  return sections
+    .map((section) => ({
+      ...section,
+      entries: section.entries.filter((entry) => shortcutSheetEntryMatchesQuery(entry, trimmed)),
+    }))
+    .filter((section) => section.entries.length > 0);
+}
