@@ -5,6 +5,7 @@
 // Exports: app/package search helpers used by open.ts and editorAppIcons.ts
 // Depends on: EDITORS metadata plus filesystem stat checks.
 
+import { execFileSync } from "node:child_process";
 import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -16,6 +17,20 @@ export interface WindowsStorePackageDefinition {
   readonly packageName: string;
   readonly publisherId: string;
 }
+
+type ExecFileSyncLike = (
+  file: string,
+  args: readonly string[],
+  options: {
+    encoding: "utf8";
+    env: NodeJS.ProcessEnv;
+    stdio: ["ignore", "pipe", "ignore"];
+    timeout: number;
+    windowsHide: true;
+  },
+) => string | Buffer;
+
+const POWERSHELL_APPX_LOOKUP_TIMEOUT_MS = 1_500;
 
 export function getEditorMacApplications(editor: EditorDefinition): readonly string[] | undefined {
   return "macApplications" in editor ? editor.macApplications : undefined;
@@ -111,13 +126,11 @@ function uniqueNonEmpty(values: ReadonlyArray<string | null>): string[] {
 export function resolveWindowsStorePackageSearchRoots(
   env: NodeJS.ProcessEnv,
 ): ReadonlyArray<string> {
-  const localAppData = trimNonEmpty(env.LOCALAPPDATA);
   const programFiles = trimNonEmpty(env.ProgramFiles);
   const programW6432 = trimNonEmpty(env.ProgramW6432);
   const systemDrive = trimNonEmpty(env.SystemDrive);
 
   return uniqueNonEmpty([
-    localAppData ? join(localAppData, "Microsoft", "WindowsApps") : null,
     programFiles ? join(programFiles, "WindowsApps") : null,
     programW6432 ? join(programW6432, "WindowsApps") : null,
     systemDrive ? join(systemDrive, "Program Files", "WindowsApps") : null,
@@ -170,4 +183,61 @@ export function resolveWindowsStorePackageDirectory(
   }
 
   return null;
+}
+
+function quotePowerShellLiteral(value: string): string {
+  return `'${value.replaceAll("'", "''")}'`;
+}
+
+export function resolveWindowsStorePackageDirectoryFromPowerShell(
+  packages: readonly WindowsStorePackageDefinition[] | undefined,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  execFile: ExecFileSyncLike = execFileSync,
+): string | null {
+  if (platform !== "win32" || !packages) return null;
+
+  const packageNames = Array.from(new Set(packages.map((packageDef) => packageDef.packageName)));
+  const packageArray = `@(${packageNames.map(quotePowerShellLiteral).join(",")})`;
+  const script = [
+    `$packageNames = ${packageArray}`,
+    "foreach ($packageName in $packageNames) {",
+    "  $package = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue | " +
+      "Select-Object -First 1",
+    "  if ($null -ne $package -and $package.InstallLocation) {",
+    "    Write-Output $package.InstallLocation",
+    "    exit 0",
+    "  }",
+    "}",
+    "exit 1",
+  ].join("; ");
+
+  try {
+    const stdout = execFile("powershell.exe", ["-NoProfile", "-Command", script], {
+      encoding: "utf8",
+      env,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: POWERSHELL_APPX_LOOKUP_TIMEOUT_MS,
+      windowsHide: true,
+    });
+    return (
+      String(stdout)
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find(Boolean) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function resolveWindowsStorePackageInstallLocation(
+  packages: readonly WindowsStorePackageDefinition[] | undefined,
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string | null {
+  return (
+    resolveWindowsStorePackageDirectory(packages, platform, env) ??
+    resolveWindowsStorePackageDirectoryFromPowerShell(packages, platform, env)
+  );
 }

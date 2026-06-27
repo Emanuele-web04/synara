@@ -20,7 +20,7 @@ import {
   getEditorWindowsStorePackages,
   resolveMacApplicationBundlePath,
   resolveWindowsStorePackageDirectory,
-  type WindowsStorePackageDefinition,
+  resolveWindowsStorePackageDirectoryFromPowerShell,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -508,82 +508,52 @@ async function findWindowsStorePackageIcon(packageDir: string): Promise<string |
   return best?.path ?? null;
 }
 
-function quotePowerShellLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
-
-async function resolveWindowsStorePackageDirectoryFromPowerShell(input: {
-  readonly packages: readonly WindowsStorePackageDefinition[] | undefined;
-  readonly platform: NodeJS.Platform;
-  readonly env: NodeJS.ProcessEnv;
-}): Promise<string | null> {
-  if (input.platform !== "win32" || !input.packages) return null;
-
-  const packageNames = Array.from(
-    new Set(input.packages.map((packageDef) => packageDef.packageName)),
-  );
-  const packageArray = `@(${packageNames.map(quotePowerShellLiteral).join(",")})`;
-  const script = [
-    `$packageNames = ${packageArray}`,
-    "foreach ($packageName in $packageNames) {",
-    "  $package = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue | " +
-      "Select-Object -First 1",
-    "  if ($null -ne $package -and $package.InstallLocation) {",
-    "    Write-Output $package.InstallLocation",
-    "    exit 0",
-    "  }",
-    "}",
-    "exit 1",
-  ].join("; ");
-
-  try {
-    const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
-      env: input.env,
-    });
-    return (
-      String(stdout)
-        .split(/\r?\n/)
-        .map((line) => line.trim())
-        .find(Boolean) ?? null
-    );
-  } catch {
-    return null;
-  }
-}
-
 async function resolveWindowsStoreEditorIconSource(input: {
   readonly editor: EditorDefinition;
   readonly platform: NodeJS.Platform;
   readonly env: NodeJS.ProcessEnv;
 }): Promise<EditorIconSource | null> {
   const packages = getEditorWindowsStorePackages(input.editor);
-  const packageDir =
-    resolveWindowsStorePackageDirectory(packages, input.platform, input.env) ??
-    (await resolveWindowsStorePackageDirectoryFromPowerShell({
-      packages,
-      platform: input.platform,
-      env: input.env,
-    }));
-  if (!packageDir) return null;
+  const triedPackageDirs = new Set<string>();
+  const findIconSource = async (packageDir: string): Promise<EditorIconSource | null> => {
+    triedPackageDirs.add(packageDir);
+    const iconPath = await findWindowsStorePackageIcon(packageDir);
+    if (!iconPath) return null;
+    const extension = path.extname(iconPath).toLowerCase();
+    if (extension === ".svg") {
+      return {
+        sourcePath: iconPath,
+        outputExtension: "svg",
+        contentType: "image/svg+xml",
+        transform: "copy",
+      };
+    }
 
-  const iconPath = await findWindowsStorePackageIcon(packageDir);
-  if (!iconPath) return null;
-  const extension = path.extname(iconPath).toLowerCase();
-  if (extension === ".svg") {
     return {
       sourcePath: iconPath,
-      outputExtension: "svg",
-      contentType: "image/svg+xml",
+      outputExtension: "png",
+      contentType: "image/png",
       transform: "copy",
     };
+  };
+
+  const packageDir = resolveWindowsStorePackageDirectory(packages, input.platform, input.env);
+  if (packageDir) {
+    const iconSource = await findIconSource(packageDir);
+    if (iconSource) return iconSource;
   }
 
-  return {
-    sourcePath: iconPath,
-    outputExtension: "png",
-    contentType: "image/png",
-    transform: "copy",
-  };
+  const appxPackageDir = resolveWindowsStorePackageDirectoryFromPowerShell(
+    packages,
+    input.platform,
+    input.env,
+  );
+  if (appxPackageDir && !triedPackageDirs.has(appxPackageDir)) {
+    const iconSource = await findIconSource(appxPackageDir);
+    if (iconSource) return iconSource;
+  }
+
+  return null;
 }
 
 async function resolveWindowsEditorIconSource(input: {

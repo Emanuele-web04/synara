@@ -22,7 +22,7 @@ import {
   getEditorWindowsStorePackages,
   getEditorWindowsUriScheme,
   resolveAvailableMacApplication,
-  resolveWindowsStorePackageDirectory,
+  resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -236,11 +236,16 @@ function encodeWindowsEditorUriPath(targetPath: string): string {
 function resolveWindowsEditorUri(scheme: string, target: string): string {
   const parsedTarget = parseTargetPathAndPosition(target);
   const targetPath = parsedTarget?.path ?? target;
+  const encodedPath = encodeWindowsEditorUriPath(targetPath);
+  const directorySuffix =
+    !parsedTarget && statSync(targetPath, { throwIfNoEntry: false })?.isDirectory() === true
+      ? "/"
+      : "";
   const positionSuffix = parsedTarget?.line
     ? `:${parsedTarget.line}${parsedTarget.column ? `:${parsedTarget.column}` : ""}`
     : "";
 
-  return `${scheme}://file/${encodeWindowsEditorUriPath(targetPath)}${positionSuffix}`;
+  return `${scheme}://file/${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
 export function resolveWindowsEditorUriLaunch(
@@ -383,8 +388,11 @@ export function resolveAvailableEditors(
     }
 
     if (
-      resolveWindowsStorePackageDirectory(getEditorWindowsStorePackages(editor), platform, env) !==
-      null
+      resolveWindowsStorePackageInstallLocation(
+        getEditorWindowsStorePackages(editor),
+        platform,
+        env,
+      ) !== null
     ) {
       available.push(editor.id);
       continue;

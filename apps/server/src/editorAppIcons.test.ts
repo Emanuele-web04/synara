@@ -139,6 +139,7 @@ describe("resolveCachedEditorIcon", () => {
     const programFilesDir = makeTempDir("synara-editor-icon-win-program-files-");
     const cacheDir = makeTempDir("synara-editor-icon-win-cache-");
     const aliasDir = makeTempDir("synara-editor-icon-win-alias-");
+    const localAppData = makeTempDir("synara-editor-icon-win-local-appdata-");
     const bytes = new Uint8Array([137, 80, 78, 71, 20, 21, 22]);
     writeFakeWindowsStorePackageIcon({
       programFilesDir,
@@ -146,6 +147,15 @@ describe("resolveCachedEditorIcon", () => {
       iconFileName: "Square44x44Logo.targetsize-256_altform-unplated.png",
       bytes,
     });
+    fs.mkdirSync(
+      path.join(
+        localAppData,
+        "Microsoft",
+        "WindowsApps",
+        "Microsoft.VisualStudioCode_8wekyb3d8bbwe",
+      ),
+      { recursive: true },
+    );
     fs.writeFileSync(path.join(aliasDir, "code.EXE"), new Uint8Array([0, 1, 2, 3]));
 
     const icon = await resolveCachedEditorIcon({
@@ -153,7 +163,7 @@ describe("resolveCachedEditorIcon", () => {
       cacheDir,
       platform: "win32",
       env: {
-        LOCALAPPDATA: "",
+        LOCALAPPDATA: localAppData,
         PATH: aliasDir,
         PATHEXT: ".EXE",
         ProgramFiles: programFilesDir,
