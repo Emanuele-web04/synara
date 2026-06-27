@@ -1,6 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertSuccess } from "@effect/vitest/utils";
+import { EDITORS } from "@t3tools/contracts";
 import { FileSystem, Path, Effect } from "effect";
 
 import {
@@ -8,6 +9,7 @@ import {
   launchDetached,
   resolveAvailableEditors,
   resolveEditorLaunch,
+  resolveWindowsEditorUriLaunch,
 } from "./open";
 
 it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
@@ -148,6 +150,27 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       });
     }),
   );
+
+  it.effect("falls back to the VS Code URL handler on Windows when the CLI is absent", () =>
+    Effect.gen(function* () {
+      const launch = yield* resolveEditorLaunch(
+        { cwd: "C:\\Users\\Chris\\Project Folder\\src\\open.ts:71:5", editor: "vscode" },
+        "win32",
+        { PATH: "", PATHEXT: ".COM;.EXE;.BAT;.CMD", SystemRoot: "C:\\Windows" },
+      );
+
+      assert.deepEqual(launch, {
+        command: "C:\\Windows\\explorer.exe",
+        args: ["vscode://file/C:/Users/Chris/Project%20Folder/src/open.ts:71:5"],
+      });
+    }),
+  );
+
+  it("does not build URL-handler launches for non-Windows platforms", () => {
+    const editor = EDITORS.find((candidate) => candidate.id === "vscode");
+    assert.ok(editor);
+    assert.equal(resolveWindowsEditorUriLaunch(editor, "/tmp/workspace", "linux"), null);
+  });
 
   it.effect("opens terminal-style editors in the target working directory", () =>
     Effect.gen(function* () {
@@ -431,6 +454,30 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
       });
       assert.deepEqual(editors, ["cursor", "vscode-insiders", "zed", "file-manager"]);
+    }),
+  );
+
+  it.effect("returns VS Code when the Windows Store package is installed without a CLI", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const programFiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vscode-store-" });
+      yield* fs.makeDirectory(
+        path.join(
+          programFiles,
+          "WindowsApps",
+          "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe",
+        ),
+        { recursive: true },
+      );
+
+      const editors = resolveAvailableEditors("win32", {
+        PATH: "",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        ProgramFiles: programFiles,
+      });
+
+      assert.equal(editors.includes("vscode"), true);
     }),
   );
 });

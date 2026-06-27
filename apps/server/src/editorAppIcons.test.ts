@@ -71,6 +71,17 @@ function writeFakeLinuxDesktopIcon(input: {
   fs.writeFileSync(path.join(iconsDir, `${input.iconName}.png`), input.bytes);
 }
 
+function writeFakeWindowsStorePackageIcon(input: {
+  readonly programFilesDir: string;
+  readonly packageDirName: string;
+  readonly iconFileName: string;
+  readonly bytes: Uint8Array;
+}): void {
+  const assetsDir = path.join(input.programFilesDir, "WindowsApps", input.packageDirName, "Assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+  fs.writeFileSync(path.join(assetsDir, input.iconFileName), input.bytes);
+}
+
 describe("resolveCachedEditorIcon", () => {
   it("copies a macOS app PNG icon into the cache", async () => {
     const homeDir = makeTempDir("synara-editor-icon-home-");
@@ -117,6 +128,38 @@ describe("resolveCachedEditorIcon", () => {
       cacheDir,
       platform: "linux",
       env: { HOME: homeDir, PATH: "", XDG_DATA_DIRS: "" },
+    });
+
+    expect(icon?.contentType).toBe("image/png");
+    expect(icon?.path.startsWith(cacheDir)).toBe(true);
+    expect(icon ? fs.readFileSync(icon.path) : null).toEqual(Buffer.from(bytes));
+  });
+
+  it("copies a Windows Store package PNG icon for VS Code", async () => {
+    const programFilesDir = makeTempDir("synara-editor-icon-win-program-files-");
+    const cacheDir = makeTempDir("synara-editor-icon-win-cache-");
+    const aliasDir = makeTempDir("synara-editor-icon-win-alias-");
+    const bytes = new Uint8Array([137, 80, 78, 71, 20, 21, 22]);
+    writeFakeWindowsStorePackageIcon({
+      programFilesDir,
+      packageDirName: "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe",
+      iconFileName: "Square44x44Logo.targetsize-256_altform-unplated.png",
+      bytes,
+    });
+    fs.writeFileSync(path.join(aliasDir, "code.EXE"), new Uint8Array([0, 1, 2, 3]));
+
+    const icon = await resolveCachedEditorIcon({
+      editorId: "vscode",
+      cacheDir,
+      platform: "win32",
+      env: {
+        LOCALAPPDATA: "",
+        PATH: aliasDir,
+        PATHEXT: ".EXE",
+        ProgramFiles: programFilesDir,
+        ProgramW6432: "",
+        SystemDrive: "",
+      },
     });
 
     expect(icon?.contentType).toBe("image/png");
