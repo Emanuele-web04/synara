@@ -5,10 +5,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
   LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   serverAllProviderUsageQueryOptions,
   serverLocalServersQueryOptions,
+  sidebarLocalServersQueryOptions,
 } from "./serverReactQuery";
 
 describe("serverLocalServersQueryOptions", () => {
@@ -26,13 +26,35 @@ describe("serverLocalServersQueryOptions", () => {
     expect(options.refetchInterval).toBe(false);
   });
 
-  it("allows the sidebar to use the cheaper background polling interval", () => {
-    const options = serverLocalServersQueryOptions({
-      enabled: true,
-      refetchInterval: LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
+  it("keeps sidebar attribution enabled without idle polling", () => {
+    const options = sidebarLocalServersQueryOptions({
+      hasActiveProjectRun: false,
+      hasProjects: true,
     });
 
-    expect(options.refetchInterval).toBe(LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS);
+    expect(options.enabled).toBe(true);
+    expect(options.refetchInterval).toBe(false);
+    expect(options.refetchOnWindowFocus).toBe(true);
+  });
+
+  it("uses visible polling while a Synara-owned project run is active", () => {
+    const options = sidebarLocalServersQueryOptions({
+      hasActiveProjectRun: true,
+      hasProjects: true,
+    });
+
+    expect(options.enabled).toBe(true);
+    expect(options.refetchInterval).toBe(LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS);
+  });
+
+  it("disables sidebar attribution when no projects or project runs exist", () => {
+    const options = sidebarLocalServersQueryOptions({
+      hasActiveProjectRun: false,
+      hasProjects: false,
+    });
+
+    expect(options.enabled).toBe(false);
+    expect(options.refetchInterval).toBe(false);
   });
 });
 

@@ -115,6 +115,19 @@ export function serverLocalServersQueryOptions(
   });
 }
 
+// Sidebar project badges need a snapshot, but idle Home should not keep shelling out
+// through lsof/ps; active Synara-owned runs still poll for responsive status.
+export function sidebarLocalServersQueryOptions(input: {
+  hasActiveProjectRun: boolean;
+  hasProjects: boolean;
+}) {
+  const enabled = input.hasProjects || input.hasActiveProjectRun;
+  return serverLocalServersQueryOptions({
+    enabled,
+    refetchInterval: input.hasActiveProjectRun ? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS : false,
+  });
+}
+
 export function serverStopLocalServerMutationOptions(input: { queryClient: QueryClient }) {
   return mutationOptions({
     mutationKey: serverMutationKeys.stopLocalServer(),
