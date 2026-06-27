@@ -6,8 +6,11 @@ import {
   MAC_INHERITED_ENTITLEMENTS_PATH,
   MICROPHONE_USAGE_DESCRIPTION,
   NODE_PTY_ASAR_UNPACK_GLOBS,
+  parseXcodeMajorVersion,
+  supportsMacIconComposerPackaging,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
   it("adds explicit microphone entitlements to macOS builds", () => {
@@ -20,6 +23,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const extendInfo = mac.extendInfo as Record<string, unknown>;
 
     assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
+    assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
@@ -122,5 +126,40 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.ok(issue?.includes("Build linux/x64 on a matching Linux host"));
+  });
+
+  it("keeps separate macOS sources for modern and legacy rounded icons", () => {
+    assert.equal(BRAND_ASSET_PATHS.productionMacIconComposer, "assets/prod/black-macos.icon");
+    assert.equal(BRAND_ASSET_PATHS.productionMacIconPng, "assets/prod/black-macos-1024.png");
+    assert.equal(
+      BRAND_ASSET_PATHS.productionMacLegacyIconPng,
+      "assets/prod/black-macos-legacy-1024.png",
+    );
+  });
+
+  it("uses Icon Composer packaging only on supported Xcode hosts", () => {
+    assert.equal(parseXcodeMajorVersion("Xcode 26.6\nBuild version 17F113"), 26);
+    assert.equal(parseXcodeMajorVersion("not xcode"), null);
+    assert.equal(
+      supportsMacIconComposerPackaging({
+        hostPlatform: "darwin",
+        xcodebuildVersionOutput: "Xcode 26.0\nBuild version 17A000",
+      }),
+      true,
+    );
+    assert.equal(
+      supportsMacIconComposerPackaging({
+        hostPlatform: "darwin",
+        xcodebuildVersionOutput: "Xcode 16.4\nBuild version 16F6",
+      }),
+      false,
+    );
+    assert.equal(
+      supportsMacIconComposerPackaging({
+        hostPlatform: "linux",
+        xcodebuildVersionOutput: "Xcode 26.0\nBuild version 17A000",
+      }),
+      false,
+    );
   });
 });

@@ -1,0 +1,30 @@
+{
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "black-macos-1024.png",
+          "name" : "black-macos",
+          "position" : {
+            "scale" : 100,
+            "translation-in-points" : [
+              0,
+              0
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.5
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "squares" : "shared"
+  }
+}

@@ -88,12 +88,12 @@ jobs:
       matrix:
         include:
           - label: macOS arm64
-            runner: macos-14
+            runner: macos-26
             platform: mac
             target: dmg
             arch: arm64
           - label: macOS x64
-            runner: macos-15-intel
+            runner: macos-26-intel
             platform: mac
             target: dmg
             arch: x64

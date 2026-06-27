@@ -16,6 +16,7 @@ import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 import {
   createDesktopPlatformBuildConfig,
+  supportsMacIconComposerPackaging,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
@@ -48,6 +49,11 @@ const ProductionMacIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
+);
+const ProductionMacLegacyIconSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
 );
 const ProductionLinuxIconSource = Effect.zipWith(
   RepoRoot,
@@ -123,6 +129,13 @@ function getDefaultArch(platform: typeof BuildPlatform.Type): typeof BuildArch.T
   }
 
   return config.archChoices[0] ?? "x64";
+}
+
+function readXcodebuildVersionOutput(): string | null {
+  const result = spawnSync("xcodebuild", ["-version"], { encoding: "utf8" });
+  if (result.status !== 0) return null;
+
+  return [result.stdout, result.stderr].filter(Boolean).join("\n");
 }
 
 class BuildScriptError extends Data.TaggedError("BuildScriptError")<{
@@ -380,8 +393,25 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production macOS icon source is missing at ${modernIconSource}`,
       });
     }
+    const legacyIconSource = yield* ProductionMacLegacyIconSource;
+    if (!(yield* fs.exists(legacyIconSource))) {
+      return yield* new BuildScriptError({
+        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
+      });
+    }
     const composerIconSource = yield* ProductionMacIconComposerSource;
     const hasComposerIcon = yield* fs.exists(composerIconSource);
+    if (
+      hasComposerIcon &&
+      !supportsMacIconComposerPackaging({
+        hostPlatform: process.platform,
+        xcodebuildVersionOutput: readXcodebuildVersionOutput(),
+      })
+    ) {
+      return yield* new BuildScriptError({
+        message: "Mac Icon Composer packaging requires a Darwin host with Xcode 26+.",
+      });
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3code-icon-build-",
@@ -390,6 +420,8 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
     const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
+    const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
+    const fallbackIcnsSource = hasComposerIcon ? legacyIconSource : modernIconSource;
 
     yield* runCommand(
       ChildProcess.make({
@@ -397,7 +429,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    // Icon Composer owns Tahoe when present; the classic ICNS stays rounded for older macOS.
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
+    );
+
+    yield* generateMacIconSet(fallbackIcnsSource, iconIcnsPath, tmpRoot, path, verbose);
 
     if (hasComposerIcon) {
       // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
