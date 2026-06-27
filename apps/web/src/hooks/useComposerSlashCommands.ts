@@ -34,6 +34,8 @@ import { resolveForkThreadEnvironment } from "../lib/threadEnvironment";
 import { type SplitViewId } from "../splitViewStore";
 import { useRightDockStore } from "../rightDockStore";
 import { registerSidechatCreator } from "../lib/sidechatCreatorRegistry";
+import { downloadUrlAsBlob } from "../lib/browserDownload";
+import { resolveWsHttpUrl } from "../lib/wsHttpUrl";
 
 type ComposerSnapshot = {
   value: string;
@@ -604,6 +606,24 @@ export function useComposerSlashCommands(input: {
       }
       if (slashInvocation.command === "subagents") {
         editorActions.setComposerPromptValue(buildSubagentsPrompt(slashInvocation.args));
+        return true;
+      }
+      if (slashInvocation.command === "export") {
+        editorActions.clearComposerSlashDraft();
+        const params = new URLSearchParams({ threadId: threadId });
+        void downloadUrlAsBlob({
+          url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+          filename: `synara-thread-${threadId}.zip`,
+        }).catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not export thread",
+            description:
+              error instanceof Error
+                ? error.message
+                : "An error occurred while exporting the thread.",
+          });
+        });
         return true;
       }
       if (slashInvocation.command === "review") {
