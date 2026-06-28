@@ -137,10 +137,12 @@ export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
   "data-pressed:text-[var(--color-text-foreground)]",
 );
 
-/** Flat dock tab chip — identical chrome to the header diff toggle. */
+/** Flat dock tab chip — shares the header diff toggle chrome, but adds one extra
+ *  step of right padding (`px-1.5` → `pr-2.5`) so the label/trailing edge has a
+ *  touch more breathing room than the symmetric chip base. */
 export const DOCK_TAB_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
-  "inline-flex min-w-0 items-center",
+  "inline-flex min-w-0 items-center pr-2.5",
 );
 
 /** Icon slot for dock tabs — bare larger icon at rest; on hover a circular disc + X appears.

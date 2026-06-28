@@ -34,20 +34,15 @@ const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
-const DesktopAfterPackHookSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/electron-builder-after-pack.cjs"),
-);
-const ProductionMacIconComposerSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconComposer),
-);
 const ProductionMacIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
+);
+const ProductionMacLegacyIconSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
 );
 const ProductionLinuxIconSource = Effect.zipWith(
   RepoRoot,
@@ -380,8 +375,12 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production macOS icon source is missing at ${modernIconSource}`,
       });
     }
-    const composerIconSource = yield* ProductionMacIconComposerSource;
-    const hasComposerIcon = yield* fs.exists(composerIconSource);
+    const legacyIconSource = yield* ProductionMacLegacyIconSource;
+    if (!(yield* fs.exists(legacyIconSource))) {
+      return yield* new BuildScriptError({
+        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
+      });
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3code-icon-build-",
@@ -389,7 +388,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
 
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
-    const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
+    const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
 
     yield* runCommand(
       ChildProcess.make({
@@ -397,17 +396,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    // The solid ICNS is the bundle icon on every macOS release; Icon Composer glass alters the mark.
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
+    );
 
-    if (hasComposerIcon) {
-      // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
-      yield* fs.remove(iconComposerPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
-      yield* fs.copy(composerIconSource, iconComposerPath);
-    }
-
-    return {
-      hasComposerIcon,
-    } as const;
+    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
 
@@ -546,7 +542,6 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
-  hasMacIconComposer: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: "com.t3tools.synara",
@@ -574,7 +569,6 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const platformBuildConfigInput = {
     platform,
     target,
-    hasMacIconComposer,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -589,26 +583,19 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   verbose: boolean,
 ) {
   if (platform === "mac") {
-    return yield* stageMacIcons(stageResourcesDir, verbose);
+    yield* stageMacIcons(stageResourcesDir, verbose);
+    return;
   }
 
   if (platform === "linux") {
     yield* stageLinuxIcons(stageResourcesDir);
-    return {
-      hasComposerIcon: false,
-    } as const;
+    return;
   }
 
   if (platform === "win") {
     yield* stageWindowsIcons(stageResourcesDir);
-    return {
-      hasComposerIcon: false,
-    } as const;
+    return;
   }
-
-  return {
-    hasComposerIcon: false,
-  } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -737,24 +724,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
 
-  const stagedPlatformResources = yield* assertPlatformBuildResources(
-    options.platform,
-    stageResourcesDir,
-    options.verbose,
-  );
-
-  if (options.platform === "mac" && stagedPlatformResources.hasComposerIcon) {
-    const afterPackHookSource = yield* DesktopAfterPackHookSource;
-    if (!(yield* fs.exists(afterPackHookSource))) {
-      return yield* new BuildScriptError({
-        message: `Missing electron-builder afterPack hook at ${afterPackHookSource}`,
-      });
-    }
-    yield* fs.copyFile(
-      afterPackHookSource,
-      path.join(stageAppDir, "electron-builder-after-pack.cjs"),
-    );
-  }
+  yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
@@ -775,7 +745,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      stagedPlatformResources.hasComposerIcon,
     ),
     dependencies: {
       ...resolvedServerDependencies,

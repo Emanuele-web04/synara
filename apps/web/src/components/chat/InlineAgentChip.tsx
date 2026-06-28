@@ -6,7 +6,7 @@
 // Exports: InlineAgentChip
 
 import { memo } from "react";
-import { RiRobot3Line } from "react-icons/ri";
+import { BotIcon } from "~/lib/icons";
 import {
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
@@ -25,7 +25,7 @@ export const InlineAgentChip = memo(function InlineAgentChip(props: {
       style={{ backgroundColor: colors.bg, color: colors.text }}
     >
       <InlineChipContent
-        icon={<RiRobot3Line className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />}
+        icon={<BotIcon className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />}
         label={`@${props.alias}`}
       />
     </span>

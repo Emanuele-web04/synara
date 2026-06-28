@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderStatus } from "@t3tools/contracts";
 import {
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
+  resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
 
 const BASE_STATUS: ServerProviderStatus = {
@@ -14,6 +15,13 @@ const BASE_STATUS: ServerProviderStatus = {
   authStatus: "unknown",
   checkedAt: "2026-04-17T10:00:00.000Z",
   message: "Gemini CLI (`gemini`) is not installed or not on PATH.",
+};
+
+const READY_STATUS: ServerProviderStatus = {
+  ...BASE_STATUS,
+  available: true,
+  status: "ready",
+  authStatus: "authenticated",
 };
 
 describe("normalizeProviderStatusForLocalConfig", () => {
@@ -127,6 +135,64 @@ describe("isProviderUsable", () => {
     expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
       true,
     );
+  });
+});
+
+describe("resolveProviderSendAvailabilityWithRefresh", () => {
+  it("returns usable providers without refreshing", async () => {
+    const refreshStatuses = vi.fn(async () => null);
+
+    await expect(
+      resolveProviderSendAvailabilityWithRefresh({
+        provider: "gemini",
+        statuses: [READY_STATUS],
+        refreshStatuses,
+      }),
+    ).resolves.toMatchObject({ usable: true });
+    expect(refreshStatuses).not.toHaveBeenCalled();
+  });
+
+  it("rechecks missing provider status before showing the loading block", async () => {
+    const refreshStatuses = vi.fn(async () => [READY_STATUS]);
+
+    await expect(
+      resolveProviderSendAvailabilityWithRefresh({
+        provider: "gemini",
+        statuses: [],
+        refreshStatuses,
+      }),
+    ).resolves.toMatchObject({ usable: true });
+    expect(refreshStatuses).toHaveBeenCalledTimes(1);
+  });
+
+  it("rechecks stale unauthenticated status before blocking send", async () => {
+    const refreshStatuses = vi.fn(async () => [READY_STATUS]);
+
+    await expect(
+      resolveProviderSendAvailabilityWithRefresh({
+        provider: "gemini",
+        statuses: [
+          { ...BASE_STATUS, available: true, status: "error", authStatus: "unauthenticated" },
+        ],
+        refreshStatuses,
+      }),
+    ).resolves.toMatchObject({ usable: true });
+    expect(refreshStatuses).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the original blocked reason when refresh fails", async () => {
+    await expect(
+      resolveProviderSendAvailabilityWithRefresh({
+        provider: "gemini",
+        statuses: [{ ...BASE_STATUS, authStatus: "unauthenticated" }],
+        refreshStatuses: vi.fn(async () => {
+          throw new Error("refresh failed");
+        }),
+      }),
+    ).resolves.toMatchObject({
+      usable: false,
+      unavailableReason: "Gemini is not authenticated yet.",
+    });
   });
 });
 

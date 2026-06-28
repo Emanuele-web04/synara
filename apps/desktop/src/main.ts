@@ -924,12 +924,9 @@ function configureAppIdentity(): void {
   }
 }
 
-// macOS 26 (Darwin 25+, "Tahoe") masks the full-bleed bundle icon into a clean squircle
-// on its own, so we leave it completely untouched there. Older macOS does NOT round app
-// icons, so the same square bundle icon would look square in the dock. Only on those
-// older versions do we override the dock tile with a pre-rounded literal image (drawn
-// as-is, no system styling). Baking transparent rounded corners into the bundle icon is
-// not an option because that transparency is exactly what triggers Tahoe's Liquid Glass.
+// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
+// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
+// a runtime dock override because it does not apply the modern system mask itself.
 function applyLegacyMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;

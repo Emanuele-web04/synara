@@ -159,9 +159,12 @@ export const AppSettingsSchema = Schema.Struct({
   reviewWalkthroughDiffStyle: ReviewWalkthroughDiffStyle.pipe(
     withDefaults(() => DEFAULT_REVIEW_WALKTHROUGH_DIFF_STYLE),
   ),
-  // Local-only UI preference: show prompt suggestions under the composer on the
-  // empty new-thread landing. Off hides the suggestion list entirely.
-  enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
+  // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
+  // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
+  // (rootless chats not tied to a project). `showWorkspaceSection` controls the
+  // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
+  // shown, so the switcher is hidden by default and only appears when Workspace is
+  // enabled in Settings (see the sidebar segmented picker).
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -173,6 +176,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -366,6 +370,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -401,6 +406,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
 
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
+  }
+  if (hasOwn(patch, "enableProviderUpdateChecks")) {
+    serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -543,6 +551,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
     "kiloBinaryPath",

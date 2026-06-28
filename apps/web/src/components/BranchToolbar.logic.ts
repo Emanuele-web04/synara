@@ -57,6 +57,7 @@ export function shouldSyncLocalThreadBranch(input: {
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
+  hasServerThread: boolean;
   isBranchActionPending: boolean;
 }): boolean {
   return (
@@ -64,6 +65,7 @@ export function shouldSyncLocalThreadBranch(input: {
     input.activeWorktreePath === null &&
     !input.isBranchActionPending &&
     input.currentGitBranch !== null &&
+    (input.hasServerThread || input.activeThreadBranch !== null) &&
     input.activeThreadBranch !== input.currentGitBranch
   );
 }

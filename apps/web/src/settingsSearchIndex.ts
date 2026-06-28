@@ -196,13 +196,6 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Set the default wrap state when the diff panel opens. word wrap",
   },
   {
-    id: "behavior:prompt-suggestions",
-    section: "behavior",
-    title: "Prompt suggestions",
-    keywords:
-      "Show suggested prompts under the composer when starting a new thread. composer suggestions",
-  },
-  {
     id: "behavior:delete-confirmation",
     section: "behavior",
     title: "Delete confirmation",
@@ -219,6 +212,16 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     section: "behavior",
     title: "Terminal close confirmation",
     keywords: "Ask before closing a terminal tab and clearing its history. safety confirm",
+  },
+
+  // ── Keyboard Shortcuts ────────────────────────────────────────────────────────
+  {
+    id: "shortcuts:keyboard-shortcuts",
+    section: "shortcuts",
+    title: "Keyboard Shortcuts",
+    keywords:
+      "Every keyboard shortcut available in Synara, grouped by context. keybindings hotkeys key combo cmd ctrl reference",
+    target: null,
   },
 
   // ── Worktrees ─────────────────────────────────────────────────────────────────
@@ -254,6 +257,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
   },
 
   // ── Providers ─────────────────────────────────────────────────────────────────
+  {
+    id: "providers:automatic-cli-update-checks",
+    section: "providers",
+    title: "Automatic CLI update checks",
+    keywords:
+      "Check Codex Claude and other provider CLIs for newer versions in the background. updates upgrade disable nags",
+  },
   {
     id: "providers:visible-providers",
     section: "providers",

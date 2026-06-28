@@ -21,7 +21,7 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
-import { resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
+import { CURSOR_AGENT_BROWSERLESS_ENV, resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
 import {
   buildCursorAcpModelDescriptorsFromAvailableModels,
   collectCursorAcpConfigUpdates,
@@ -87,6 +87,8 @@ export function buildCursorAcpSpawnInput(
       "acp",
     ],
     cwd,
+    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
+    env: CURSOR_AGENT_BROWSERLESS_ENV,
   };
 }
 
@@ -99,6 +101,7 @@ export const makeCursorAcpRuntime = (
         ...input,
         spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
         authMethodId: "cursor_login",
+        authenticateMeta: { headless: true },
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
       }).pipe(
         Layer.provide(
