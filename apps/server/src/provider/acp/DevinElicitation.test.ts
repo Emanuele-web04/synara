@@ -204,6 +204,70 @@ describe("elicitationFormToUserInputQuestions", () => {
     assert.strictEqual(questions[0]!.header, "confirm");
     assert.strictEqual(questions[0]!.question, "Proceed?");
   });
+
+  it("uses OK fallback for string with empty enum array", () => {
+    const questions = elicitationFormToUserInputQuestions({
+      ...baseForm,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          choice: { type: "string", enum: [] },
+        },
+      },
+    });
+
+    assert.strictEqual(questions.length, 1);
+    assert.deepStrictEqual(questions[0]!.options, [{ label: "OK", description: "Continue" }]);
+  });
+
+  it("uses OK fallback for string with empty oneOf array", () => {
+    const questions = elicitationFormToUserInputQuestions({
+      ...baseForm,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          kind: { type: "string", oneOf: [] },
+        },
+      },
+    });
+
+    assert.strictEqual(questions.length, 1);
+    assert.deepStrictEqual(questions[0]!.options, [{ label: "OK", description: "Continue" }]);
+  });
+
+  it("uses OK fallback for array with items having no enum or anyOf", () => {
+    const questions = elicitationFormToUserInputQuestions({
+      ...baseForm,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          tags: {
+            type: "array",
+            items: { type: "string" },
+          },
+        },
+      },
+    });
+
+    assert.strictEqual(questions.length, 1);
+    assert.strictEqual(questions[0]!.multiSelect, true);
+    assert.deepStrictEqual(questions[0]!.options, [{ label: "OK", description: "Continue" }]);
+  });
+
+  it("uses OK fallback for unknown property type", () => {
+    const questions = elicitationFormToUserInputQuestions({
+      ...baseForm,
+      requestedSchema: {
+        type: "object",
+        properties: {
+          meta: { type: "object" },
+        },
+      },
+    });
+
+    assert.strictEqual(questions.length, 1);
+    assert.deepStrictEqual(questions[0]!.options, [{ label: "OK", description: "Continue" }]);
+  });
 });
 
 describe("userInputAnswersToElicitationContent", () => {
@@ -415,6 +479,121 @@ describe("userInputAnswersToElicitationContent", () => {
       flag: true,
       tags: ["a"],
     });
+  });
+
+  it("skips non-numeric number answer (NaN)", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { count: "not-a-number" });
+    assert.deepStrictEqual(content, {});
+  });
+
+  it("skips non-numeric integer answer (Infinity string)", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "integer" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { count: "Infinity" });
+    assert.deepStrictEqual(content, {});
+  });
+
+  it("converts float string for number type (not integer)", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { count: "3.14" });
+    assert.deepStrictEqual(content, { count: 3.14 });
+  });
+
+  it("boolean normalization with array input uses first element", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { flag: ["Yes", "No"] });
+    assert.deepStrictEqual(content, { flag: true });
+  });
+
+  it("boolean normalization with empty array returns nothing", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { flag: [] });
+    assert.deepStrictEqual(content, {});
+  });
+
+  it("boolean normalization is case insensitive", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    assert.deepStrictEqual(userInputAnswersToElicitationContent(form, { flag: "YES" }), {
+      flag: true,
+    });
+    assert.deepStrictEqual(userInputAnswersToElicitationContent(form, { flag: "TRUE" }), {
+      flag: true,
+    });
+    assert.deepStrictEqual(userInputAnswersToElicitationContent(form, { flag: "NO" }), {
+      flag: false,
+    });
+    assert.deepStrictEqual(userInputAnswersToElicitationContent(form, { flag: "FALSE" }), {
+      flag: false,
+    });
+  });
+
+  it("string normalization joins array with comma-space", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          note: { type: "string" as const },
+        },
+      },
+    };
+
+    const content = userInputAnswersToElicitationContent(form, { note: ["a", "b", "c"] });
+    assert.deepStrictEqual(content, { note: "a, b, c" });
   });
 });
 
@@ -638,5 +817,156 @@ describe("validateUserInputAnswersForElicitation", () => {
 
     const result = validateUserInputAnswersForElicitation(form, { note: "anything goes" });
     assert.strictEqual(result.valid, true);
+  });
+
+  it("accepts integer value for integer property", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "integer" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "42" });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it("accepts float value for number property (not integer)", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "3.14" });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it("rejects NaN for number property", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "NaN" });
+    assert.strictEqual(result.valid, false);
+    assert.match(result.issues[0]!, /finite number/);
+  });
+
+  it("rejects Infinity for number property", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "Infinity" });
+    assert.strictEqual(result.valid, false);
+    assert.match(result.issues[0]!, /finite number/);
+  });
+
+  it("accepts valid array values for array with anyOf", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          files: {
+            type: "array" as const,
+            items: {
+              anyOf: [
+                { const: "f1", title: "File One" },
+                { const: "f2", title: "File Two" },
+              ],
+            },
+          },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { files: ["f1", "f2"] });
+    assert.strictEqual(result.valid, true);
+    assert.deepStrictEqual(result.issues, []);
+  });
+
+  it("validates number property with negative value", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "number" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "-5" });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it("validates integer property with zero", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "integer" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, { count: "0" });
+    assert.strictEqual(result.valid, true);
+  });
+
+  it("collects multiple issues for multiple invalid answers", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          count: { type: "integer" as const },
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    const result = validateUserInputAnswersForElicitation(form, {
+      count: "abc",
+      flag: "maybe",
+    });
+    assert.strictEqual(result.valid, false);
+    assert.strictEqual(result.issues.length, 2);
+  });
+
+  it("boolean validation accepts 'TRUE' and 'FALSE' (case insensitive)", () => {
+    const form = {
+      ...baseForm,
+      requestedSchema: {
+        type: "object" as const,
+        properties: {
+          flag: { type: "boolean" as const },
+        },
+      },
+    };
+
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { flag: "TRUE" }).valid, true);
+    assert.strictEqual(validateUserInputAnswersForElicitation(form, { flag: "FALSE" }).valid, true);
   });
 });

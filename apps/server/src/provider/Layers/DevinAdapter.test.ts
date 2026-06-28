@@ -1,5 +1,5 @@
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Fiber, Option, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import {
@@ -37,11 +37,26 @@ function makeMockRuntime(input?: {
       request: EffectAcpSchema.ElicitationRequest,
     ) => Effect.Effect<EffectAcpSchema.ElicitationResponse, EffectAcpErrors.AcpError>,
   ) => void;
+  readonly onHandleRequestPermission?: (
+    handler: (
+      params: EffectAcpSchema.SessionRequestPermissionRequest,
+    ) => Effect.Effect<EffectAcpSchema.SessionRequestPermissionResponse, EffectAcpErrors.AcpError>,
+  ) => void;
   readonly availableCommands?: ReadonlyArray<{ name: string; description?: string }>;
   readonly onStart?: () => void;
 }) {
   return {
-    handleRequestPermission: () => Effect.void,
+    handleRequestPermission: (
+      handler: (
+        params: EffectAcpSchema.SessionRequestPermissionRequest,
+      ) => Effect.Effect<
+        EffectAcpSchema.SessionRequestPermissionResponse,
+        EffectAcpErrors.AcpError
+      >,
+    ) => {
+      input?.onHandleRequestPermission?.(handler);
+      return Effect.void;
+    },
     handleElicitation: (
       handler: (
         request: EffectAcpSchema.ElicitationRequest,
@@ -1118,4 +1133,562 @@ describe("DevinAdapterLive", () => {
       ),
     );
   });
+
+  // ── Resume cursor edge cases ──────────────────────────────────────
+
+  it.effect("starts a fresh session when resumeCursor has wrong schemaVersion", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 99, sessionId: "old-session" },
+      });
+
+      // Mock runtime ignores resumeSessionId, so a fresh session id is returned.
+      assert.strictEqual(session.status, "ready");
+      assert.deepStrictEqual(session.resumeCursor, {
+        schemaVersion: 1,
+        sessionId: "devin-session-1",
+      });
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("starts a fresh session when resumeCursor is missing sessionId", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1 },
+      });
+
+      assert.strictEqual(session.status, "ready");
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("starts a fresh session when resumeCursor is a non-object primitive", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        resumeCursor: "not-an-object",
+      });
+
+      assert.strictEqual(session.status, "ready");
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("starts a fresh session when resumeCursor sessionId is whitespace-only", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const session = yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "   " },
+      });
+
+      assert.strictEqual(session.status, "ready");
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("passes a trimmed sessionId to the runtime when resumeCursor is valid", () => {
+    let receivedResumeSessionId: string | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+        resumeCursor: { schemaVersion: 1, sessionId: "  prior-session-id  " },
+      });
+      assert.strictEqual(receivedResumeSessionId, "prior-session-id");
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: (input) => {
+            receivedResumeSessionId = input.resumeSessionId;
+            return Effect.succeed(makeMockRuntime());
+          },
+        }),
+      ),
+    );
+  });
+
+  // ── sendTurn empty prompt validation ──────────────────────────────
+
+  it.effect("rejects an empty prompt with a validation error", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const error = yield* adapter.sendTurn({ threadId, input: "" }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /non-empty prompt/);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("rejects a whitespace-only prompt with a validation error", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const error = yield* adapter.sendTurn({ threadId, input: "   \n\t  " }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /non-empty prompt/);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  // ── sendTurn interruption ─────────────────────────────────────────
+
+  it.effect("interruptTurn is a no-op when no turn is active", () => {
+    let cancelCalled = false;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      // interruptTurn on a session with no active turn should succeed cleanly.
+      yield* adapter.interruptTurn(threadId);
+      assert.strictEqual(cancelCalled, true);
+
+      // Session should still be usable.
+      assert.strictEqual(yield* adapter.hasSession(threadId), true);
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                cancel: Effect.sync(() => {
+                  cancelCalled = true;
+                }),
+              }),
+            ),
+        }),
+      ),
+    );
+  });
+
+  // ── Permission auto-approval in full-access mode ──────────────────
+
+  it.effect(
+    "auto-approves permission requests in full-access mode when a full-access option exists",
+    () => {
+      type PermissionHandler = (
+        params: EffectAcpSchema.SessionRequestPermissionRequest,
+      ) => Effect.Effect<
+        EffectAcpSchema.SessionRequestPermissionResponse,
+        EffectAcpErrors.AcpError
+      >;
+      let permissionHandler: PermissionHandler | undefined;
+      return Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        yield* adapter.startSession({
+          threadId,
+          provider: "devin",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        });
+        assert.isDefined(permissionHandler);
+
+        // Drive the registered handler with a permission request that has a
+        // "allow_always" option kind which full-access mode auto-selects.
+        const params = {
+          options: [
+            { kind: "allow_once", optionId: "allow-once" },
+            { kind: "allow_always", optionId: "always-allow" },
+          ],
+          kind: "command",
+          command: "rm -rf /tmp/scratch",
+        } as unknown as EffectAcpSchema.SessionRequestPermissionRequest;
+
+        const result = yield* permissionHandler!(params);
+        assert.strictEqual(result.outcome.outcome, "selected");
+        if (result.outcome.outcome === "selected") {
+          assert.strictEqual(result.outcome.optionId, "always-allow");
+        }
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeDevinAdapterLive({
+            makeRuntime: () =>
+              Effect.succeed(
+                makeMockRuntime({
+                  onHandleRequestPermission: (handler) => {
+                    permissionHandler = handler;
+                  },
+                }),
+              ),
+          }),
+        ),
+      );
+    },
+  );
+
+  // ── stopSession settles pending approvals ─────────────────────────
+
+  it.effect("stopSession settles pending approval requests with cancel", () => {
+    type PermissionHandler = (
+      params: EffectAcpSchema.SessionRequestPermissionRequest,
+    ) => Effect.Effect<EffectAcpSchema.SessionRequestPermissionResponse, EffectAcpErrors.AcpError>;
+    let permissionHandler: PermissionHandler | undefined;
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "approval-required",
+      });
+      assert.isDefined(permissionHandler);
+
+      // Wait for the request.opened event to ensure the handler has
+      // registered its deferred before we call stopSession.
+      const requestedFiber = yield* Stream.runHead(
+        Stream.filter(
+          adapter.streamEvents,
+          (event): event is Extract<typeof event, { type: "request.opened" }> =>
+            event.type === "request.opened",
+        ),
+      ).pipe(Effect.forkChild);
+
+      const permissionFiber = yield* permissionHandler!({
+        options: [{ kind: "allow_once", optionId: "allow" }],
+        toolCall: {
+          toolCallId: "tc-1",
+          title: "Run echo",
+          kind: "command",
+          status: "pending",
+          rawInput: { command: "echo hi" },
+        },
+      } as unknown as EffectAcpSchema.SessionRequestPermissionRequest).pipe(Effect.forkChild);
+
+      // Wait for the request to be registered before stopping.
+      Option.getOrThrow(yield* Fiber.join(requestedFiber));
+
+      // stopSession should settle the pending approval as cancel.
+      yield* adapter.stopSession(threadId);
+
+      const result = yield* Fiber.join(permissionFiber);
+      assert.deepStrictEqual(result, { outcome: { outcome: "cancelled" } });
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                onHandleRequestPermission: (handler) => {
+                  permissionHandler = handler;
+                },
+              }),
+            ),
+        }),
+      ),
+    );
+  });
+
+  // ── listCommands cwd matching when threadId is omitted ────────────
+
+  it.effect(
+    "does not return commands from a session whose cwd differs when threadId is omitted",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* DevinAdapter;
+        yield* adapter.startSession({
+          threadId,
+          provider: "devin",
+          cwd: "/tmp/project-a",
+          runtimeMode: "full-access",
+        });
+
+        const result = yield* adapter.listCommands!({
+          provider: "devin",
+          cwd: "/tmp/project-b",
+        });
+
+        assert.deepStrictEqual(result.commands, []);
+        assert.strictEqual(result.source, "devin.acp");
+        yield* adapter.stopSession(threadId);
+      }).pipe(
+        Effect.provide(
+          makeDevinAdapterLive({
+            makeRuntime: () =>
+              Effect.succeed(
+                makeMockRuntime({
+                  availableCommands: [{ name: "revert", description: "Revert changes" }],
+                }),
+              ),
+          }),
+        ),
+      ),
+  );
+
+  it.effect("returns commands from a session whose cwd matches when threadId is omitted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project-a",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listCommands!({
+        provider: "devin",
+        cwd: "/tmp/project-a",
+      });
+
+      assert.deepStrictEqual(result.commands, [{ name: "revert", description: "Revert changes" }]);
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                availableCommands: [{ name: "revert", description: "Revert changes" }],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
+  // ── rollbackThread validation ─────────────────────────────────────
+
+  it.effect("rejects rollback with non-integer numTurns", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const error = yield* adapter.rollbackThread(threadId, 1.5).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /numTurns must be an integer/);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("rejects rollback with numTurns < 1", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      const error = yield* adapter.rollbackThread(threadId, 0).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /numTurns must be an integer/);
+
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  // ── hasSession / readThread ───────────────────────────────────────
+
+  it.effect("hasSession returns false for unknown thread and true for running session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      assert.strictEqual(yield* adapter.hasSession(threadId), false);
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      assert.strictEqual(yield* adapter.hasSession(threadId), true);
+      yield* adapter.stopSession(threadId);
+      assert.strictEqual(yield* adapter.hasSession(threadId), false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("readThread returns turns and cwd for a running session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      const thread = yield* adapter.readThread(threadId);
+      assert.strictEqual(thread.threadId, threadId);
+      assert.deepStrictEqual(thread.turns, []);
+      assert.strictEqual(thread.cwd, "/tmp/project");
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("readThread fails for an unknown thread", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const error = yield* adapter.readThread(threadId).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterSessionNotFoundError");
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  // ── stopAll ───────────────────────────────────────────────────────
+
+  it.effect("stopAll stops every running session", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const threadId2 = ThreadId.makeUnsafe("thread-devin-2");
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.startSession({
+        threadId: threadId2,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.stopAll();
+
+      assert.strictEqual(yield* adapter.hasSession(threadId), false);
+      assert.strictEqual(yield* adapter.hasSession(threadId2), false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  // ── startSession provider mismatch ────────────────────────────────
+
+  it.effect("startSession rejects when input.provider is a different provider", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const error = yield* adapter
+        .startSession({
+          threadId,
+          provider: "codex",
+          cwd: "/tmp/project",
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterValidationError");
+      assert.match(error.message, /Expected provider 'devin'/);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
 });

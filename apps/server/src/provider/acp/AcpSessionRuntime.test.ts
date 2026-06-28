@@ -37,6 +37,54 @@ describe("isAcpAuthRequiredError", () => {
     });
     expect(isAcpAuthRequiredError(error)).toBe(false);
   });
+
+  it("returns true when errorMessage contains 'authorization required'", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -1,
+      errorMessage: "Authorization required",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(true);
+  });
+
+  it("returns true when errorMessage contains 'authentication expired'", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -1,
+      errorMessage: "Authentication expired",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(true);
+  });
+
+  it("returns true when errorMessage contains 'auth' as a standalone word", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -1,
+      errorMessage: "Auth required for this action",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(true);
+  });
+
+  it("returns false when errorMessage contains 'authoring' (not 'auth' as a word boundary)", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -1,
+      errorMessage: "authoring mode is not supported",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(false);
+  });
+
+  it("returns true for AcpRequestError with code -32000 but undefined errorMessage", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -32000,
+      errorMessage: "",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(true);
+  });
+
+  it("returns true for code -32000 regardless of errorMessage content", () => {
+    const error = new EffectAcpErrors.AcpRequestError({
+      code: -32000,
+      errorMessage: "something unrelated",
+    });
+    expect(isAcpAuthRequiredError(error)).toBe(true);
+  });
 });
 
 describe("causeIndicatesAuthRequired", () => {
@@ -74,5 +122,44 @@ describe("causeIndicatesAuthRequired", () => {
     });
     const cause = Cause.fail(error);
     expect(causeIndicatesAuthRequired(cause)).toBe(false);
+  });
+
+  it("returns true for a Die cause with 'authorization required' message", () => {
+    const cause = Cause.die(new Error("Authorization required"));
+    expect(causeIndicatesAuthRequired(cause)).toBe(true);
+  });
+
+  it("returns true for a Die cause with 'authentication expired' message", () => {
+    const cause = Cause.die(new Error("Authentication expired"));
+    expect(causeIndicatesAuthRequired(cause)).toBe(true);
+  });
+
+  it("returns true for a Die cause with 'auth required' message", () => {
+    const cause = Cause.die(new Error("Auth required"));
+    expect(causeIndicatesAuthRequired(cause)).toBe(true);
+  });
+
+  it("returns false for a Die cause with 'author' in the message (no auth word boundary)", () => {
+    const cause = Cause.die(new Error("the author field is missing"));
+    expect(causeIndicatesAuthRequired(cause)).toBe(false);
+  });
+
+  it("returns false for a Die cause with a non-auth error", () => {
+    const cause = Cause.die(new Error("Internal server error"));
+    expect(causeIndicatesAuthRequired(cause)).toBe(false);
+  });
+
+  it("returns false for a Die cause with a non-string defect (number)", () => {
+    const cause = Cause.die(42);
+    expect(causeIndicatesAuthRequired(cause)).toBe(false);
+  });
+
+  it("returns false for a Die cause with a non-string defect (object)", () => {
+    const cause = Cause.die({ foo: "bar" });
+    expect(causeIndicatesAuthRequired(cause)).toBe(false);
+  });
+
+  it("returns false for an Empty cause", () => {
+    expect(causeIndicatesAuthRequired(Cause.empty)).toBe(false);
   });
 });

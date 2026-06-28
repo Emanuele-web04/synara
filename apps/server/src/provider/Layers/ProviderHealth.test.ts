@@ -1855,6 +1855,47 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it.effect("includes version advisory when Devin CLI is below recommended minimum", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.provider, "devin");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.match(status.message ?? "", /below the recommended minimum/);
+        assert.match(status.message ?? "", /devin update/);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 0.9.0\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("does not include version advisory when Devin CLI meets recommended minimum", () =>
+      Effect.gen(function* () {
+        const status = yield* checkDevinProviderStatus;
+        assert.strictEqual(status.status, "ready");
+        assert.notMatch(status.message ?? "", /below the recommended minimum/);
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
   });
 
   // ── parseClaudeAuthStatusFromOutput pure tests ────────────────────
@@ -1974,6 +2015,108 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         stdout: "",
         stderr: "Please run devin auth login\n",
         code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("'not authenticated' text pattern is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "Not authenticated. Run `devin auth login`.\n",
+        stderr: "",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("'login required' text pattern is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "Login required\n",
+        stderr: "",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("'authentication required' text pattern is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "Authentication required\n",
+        stderr: "",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("'run devin auth login' without backticks is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "Please run devin auth login to continue\n",
+        stderr: "",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "error");
+      assert.strictEqual(parsed.authStatus, "unauthenticated");
+    });
+
+    it("JSON parse failure with non-JSON output falls back to exit code", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "not json at all",
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+    });
+
+    it("JSON parse failure with non-zero exit code is warning", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "not json at all",
+        stderr: "some error",
+        code: 1,
+      });
+      assert.strictEqual(parsed.status, "warning");
+      assert.strictEqual(parsed.authStatus, "unknown");
+    });
+
+    it("JSON without auth marker is warning", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: '{"status":"ok"}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "warning");
+      assert.strictEqual(parsed.authStatus, "unknown");
+      assert.match(parsed.message ?? "", /missing auth marker/);
+    });
+
+    it("exit code non-zero with stderr detail includes detail in message", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: "",
+        stderr: "connection refused\n",
+        code: 2,
+      });
+      assert.strictEqual(parsed.status, "warning");
+      assert.strictEqual(parsed.authStatus, "unknown");
+      assert.match(parsed.message ?? "", /connection refused/);
+    });
+
+    it("direct 'auth' boolean field is extracted", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: '{"auth":true}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+    });
+
+    it("direct 'auth' boolean false without API key is unauthenticated", () => {
+      const parsed = parseDevinAuthStatusFromOutput({
+        stdout: '{"auth":false}\n',
+        stderr: "",
+        code: 0,
       });
       assert.strictEqual(parsed.status, "error");
       assert.strictEqual(parsed.authStatus, "unauthenticated");

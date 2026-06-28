@@ -1,6 +1,7 @@
 import { describe, it, assert } from "@effect/vitest";
 import { Effect } from "effect";
 import type * as EffectAcpSchema from "effect-acp/schema";
+import * as EffectAcpErrors from "effect-acp/errors";
 import { ThreadId } from "@t3tools/contracts";
 
 import type { AcpSessionRuntimeShape } from "./AcpSessionRuntime.ts";
@@ -23,10 +24,11 @@ function makeModeState(
 function makeMockRuntime(input?: {
   readonly modeState?: AcpSessionModeState;
   readonly onSetMode?: (modeId: string) => void;
+  readonly setModeEffect?: Effect.Effect<EffectAcpSchema.SetSessionModeResponse, unknown>;
 }) {
   const setMode = (modeId: string) => {
     input?.onSetMode?.(modeId);
-    return Effect.succeed({} as EffectAcpSchema.SetSessionModeResponse);
+    return input?.setModeEffect ?? Effect.succeed({} as EffectAcpSchema.SetSessionModeResponse);
   };
 
   return {
@@ -128,6 +130,81 @@ describe("resolveDevinModeId", () => {
     });
     assert.strictEqual(result, undefined);
   });
+
+  it("full-access prefers bypass over code when both are present", () => {
+    const modes = [makeMode("code", "Code"), makeMode("bypass", "Bypass Permissions")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+    });
+    assert.strictEqual(result, "bypass");
+  });
+
+  it("full-access falls back to accept-edits alias", () => {
+    const modes = [makeMode("ask", "Ask"), makeMode("edits", "Accept Edits")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+    });
+    assert.strictEqual(result, "edits");
+  });
+
+  it("plan mode matches by id when id is 'plan'", () => {
+    const modes = [makeMode("plan", "Planning Mode")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    assert.strictEqual(result, "plan");
+  });
+
+  it("plan mode matches by substring when neither id nor name exactly match", () => {
+    const modes = [makeMode("plan-mode", "Planning")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    assert.strictEqual(result, "plan-mode");
+  });
+
+  it("default mode matches 'code' by id", () => {
+    const modes = [makeMode("code", "Code Mode")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+    });
+    assert.strictEqual(result, "code");
+  });
+
+  it("default mode matches 'accept-edits' by id with hyphen", () => {
+    const modes = [makeMode("accept-edits", "Accept Edits")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+    });
+    assert.strictEqual(result, "accept-edits");
+  });
+
+  it("full-access returns undefined when neither bypass nor code aliases match", () => {
+    const modes = [makeMode("ask", "Ask"), makeMode("review", "Review")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+    });
+    assert.strictEqual(result, undefined);
+  });
+
+  it("interactionMode plan takes priority over runtimeMode full-access", () => {
+    const modes = [makeMode("bypass", "Bypass"), makeMode("plan", "Plan")];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+      interactionMode: "plan",
+    });
+    assert.strictEqual(result, "plan");
+  });
 });
 
 describe("applyDevinModeSelection", () => {
@@ -208,6 +285,28 @@ describe("applyDevinModeSelection", () => {
         runtimeMode: "approval-required",
       });
       assert.strictEqual(setModeCalled, false);
+    }),
+  );
+
+  it.effect("propagates setMode error as ProviderAdapterError", () =>
+    Effect.gen(function* () {
+      const modes = [makeMode("code", "Code")];
+      const modeState = makeModeState("ask", modes);
+      const runtime = makeMockRuntime({
+        modeState,
+        setModeEffect: Effect.fail(
+          new EffectAcpErrors.AcpRequestError({
+            code: -1,
+            errorMessage: "mode change failed",
+          }),
+        ),
+      });
+      const error = yield* applyDevinModeSelection({
+        runtime,
+        threadId,
+        runtimeMode: "approval-required",
+      }).pipe(Effect.flip);
+      assert.strictEqual(error._tag, "ProviderAdapterRequestError");
     }),
   );
 });
