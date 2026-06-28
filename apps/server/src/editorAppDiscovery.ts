@@ -30,7 +30,19 @@ type ExecFileSyncLike = (
   },
 ) => string | Buffer;
 
+interface WindowsStorePowerShellLookupOptions {
+  readonly useCache?: boolean;
+  readonly now?: () => number;
+}
+
+interface CachedPowerShellAppxLookup {
+  readonly value: string | null;
+  readonly expiresAt: number;
+}
+
 const POWERSHELL_APPX_LOOKUP_TIMEOUT_MS = 1_500;
+const POWERSHELL_APPX_LOOKUP_CACHE_TTL_MS = 300_000;
+const powershellAppxLookupCache = new Map<string, CachedPowerShellAppxLookup>();
 
 export function getEditorMacApplications(editor: EditorDefinition): readonly string[] | undefined {
   return "macApplications" in editor ? editor.macApplications : undefined;
@@ -152,6 +164,21 @@ function windowsStorePackageDirMatches(
   );
 }
 
+function windowsStorePackageFamilyName(packageDef: WindowsStorePackageDefinition): string {
+  return `${packageDef.packageName}_${packageDef.publisherId}`;
+}
+
+function uniqueWindowsStorePackageDefinitions(
+  packages: readonly WindowsStorePackageDefinition[],
+): readonly WindowsStorePackageDefinition[] {
+  const byFamily = new Map<string, WindowsStorePackageDefinition>();
+  for (const packageDef of packages) {
+    byFamily.set(windowsStorePackageFamilyName(packageDef).toLowerCase(), packageDef);
+  }
+  return Array.from(byFamily.values());
+}
+
+// Scans package payload folders only. Availability still needs current-user AppX registration.
 export function resolveWindowsStorePackageDirectory(
   packages: readonly WindowsStorePackageDefinition[] | undefined,
   platform: NodeJS.Platform,
@@ -189,21 +216,74 @@ function quotePowerShellLiteral(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
 
+function resolvePowerShellCacheKey(
+  packages: readonly WindowsStorePackageDefinition[],
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+): string {
+  const families = uniqueWindowsStorePackageDefinitions(packages)
+    .map((packageDef) => windowsStorePackageFamilyName(packageDef).toLowerCase())
+    .sort();
+  return JSON.stringify({
+    platform,
+    families,
+    path: env.PATH ?? env.Path ?? env.path ?? "",
+    systemRoot: env.SystemRoot ?? env.WINDIR ?? "",
+  });
+}
+
+function readPowerShellAppxLookupCache(key: string, now: number): string | null | undefined {
+  const cached = powershellAppxLookupCache.get(key);
+  if (!cached) return undefined;
+  if (cached.expiresAt > now) return cached.value;
+  powershellAppxLookupCache.delete(key);
+  return undefined;
+}
+
+function writePowerShellAppxLookupCache(key: string, value: string | null, now: number): void {
+  powershellAppxLookupCache.set(key, {
+    value,
+    expiresAt: now + POWERSHELL_APPX_LOOKUP_CACHE_TTL_MS,
+  });
+}
+
+export function clearWindowsStorePackageDiscoveryCache(): void {
+  powershellAppxLookupCache.clear();
+}
+
 export function resolveWindowsStorePackageDirectoryFromPowerShell(
   packages: readonly WindowsStorePackageDefinition[] | undefined,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
   execFile: ExecFileSyncLike = execFileSync,
+  options: WindowsStorePowerShellLookupOptions = {},
 ): string | null {
   if (platform !== "win32" || !packages) return null;
 
-  const packageNames = Array.from(new Set(packages.map((packageDef) => packageDef.packageName)));
-  const packageArray = `@(${packageNames.map(quotePowerShellLiteral).join(",")})`;
+  const packageDefs = uniqueWindowsStorePackageDefinitions(packages);
+  if (packageDefs.length === 0) return null;
+
+  const now = options.now?.() ?? Date.now();
+  const useCache = options.useCache ?? execFile === execFileSync;
+  const cacheKey = useCache ? resolvePowerShellCacheKey(packageDefs, platform, env) : null;
+  if (cacheKey) {
+    const cached = readPowerShellAppxLookupCache(cacheKey, now);
+    if (cached !== undefined) return cached;
+  }
+
+  const packageArray = `@(${packageDefs
+    .map(
+      (packageDef) =>
+        `@{ Name = ${quotePowerShellLiteral(packageDef.packageName)}; Family = ${quotePowerShellLiteral(
+          windowsStorePackageFamilyName(packageDef),
+        )} }`,
+    )
+    .join(",")})`;
   const script = [
-    `$packageNames = ${packageArray}`,
-    "foreach ($packageName in $packageNames) {",
-    "  $package = Get-AppxPackage -Name $packageName -ErrorAction SilentlyContinue | " +
-      "Select-Object -First 1",
+    `$packages = ${packageArray}`,
+    "foreach ($packageDef in $packages) {",
+    "  $package = Get-AppxPackage -Name $packageDef.Name -ErrorAction SilentlyContinue | " +
+      "Where-Object { $_.PackageFamilyName -ieq $packageDef.Family } | Select-Object -First 1",
     "  if ($null -ne $package -and $package.InstallLocation) {",
     "    Write-Output $package.InstallLocation",
     "    exit 0",
@@ -220,13 +300,15 @@ export function resolveWindowsStorePackageDirectoryFromPowerShell(
       timeout: POWERSHELL_APPX_LOOKUP_TIMEOUT_MS,
       windowsHide: true,
     });
-    return (
+    const result =
       String(stdout)
         .split(/\r?\n/)
         .map((line) => line.trim())
-        .find(Boolean) ?? null
-    );
+        .find(Boolean) ?? null;
+    if (cacheKey) writePowerShellAppxLookupCache(cacheKey, result, now);
+    return result;
   } catch {
+    if (cacheKey) writePowerShellAppxLookupCache(cacheKey, null, now);
     return null;
   }
 }
@@ -235,9 +317,14 @@ export function resolveWindowsStorePackageInstallLocation(
   packages: readonly WindowsStorePackageDefinition[] | undefined,
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
+  execFile: ExecFileSyncLike = execFileSync,
+  options: WindowsStorePowerShellLookupOptions = {},
 ): string | null {
-  return (
-    resolveWindowsStorePackageDirectory(packages, platform, env) ??
-    resolveWindowsStorePackageDirectoryFromPowerShell(packages, platform, env)
+  return resolveWindowsStorePackageDirectoryFromPowerShell(
+    packages,
+    platform,
+    env,
+    execFile,
+    options,
   );
 }

@@ -12,9 +12,11 @@ import {
   resolveWindowsEditorUriLaunch,
 } from "./open";
 import {
+  clearWindowsStorePackageDiscoveryCache,
   getEditorWindowsStorePackages,
   resolveWindowsStorePackageDirectory,
   resolveWindowsStorePackageDirectoryFromPowerShell,
+  resolveWindowsStorePackageInstallLocation,
 } from "./editorAppDiscovery";
 
 function encodeExpectedWindowsEditorUriPath(targetPath: string): string {
@@ -23,6 +25,14 @@ function encodeExpectedWindowsEditorUriPath(targetPath: string): string {
     .split("/")
     .map((segment) => encodeURIComponent(segment).replaceAll("%3A", ":"))
     .join("/");
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function fakePowerShellAppxScript(installLocation: string): string {
+  return `#!/bin/sh\nprintf '%s\\n' ${shellSingleQuote(installLocation)}\n`;
 }
 
 it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
@@ -496,17 +506,24 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
       const fs = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const programFiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vscode-store-" });
-      yield* fs.makeDirectory(
-        path.join(
-          programFiles,
-          "WindowsApps",
-          "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe",
-        ),
-        { recursive: true },
+      const binDir = path.join(programFiles, "bin");
+      const installLocation = path.join(
+        programFiles,
+        "WindowsApps",
+        "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe",
       );
+      yield* fs.makeDirectory(installLocation, { recursive: true });
+      yield* fs.makeDirectory(binDir, { recursive: true });
+      yield* fs.writeFileString(
+        path.join(binDir, "powershell.exe"),
+        fakePowerShellAppxScript(installLocation),
+      );
+      yield* fs.chmod(path.join(binDir, "powershell.exe"), 0o755);
+
+      clearWindowsStorePackageDiscoveryCache();
 
       const editors = resolveAvailableEditors("win32", {
-        PATH: "",
+        PATH: binDir,
         PATHEXT: ".COM;.EXE;.BAT;.CMD",
         ProgramFiles: programFiles,
       });
@@ -543,19 +560,90 @@ it.layer(NodeServices.layer)("resolveAvailableEditors", (it) => {
     }),
   );
 
-  it("resolves Windows Store package locations through AppX when filesystem enumeration fails", () => {
+  it("resolves Windows Store package locations through matching AppX registration", () => {
     const editor = EDITORS.find((candidate) => candidate.id === "vscode");
     assert.ok(editor);
     const installLocation =
       "C:\\Program Files\\WindowsApps\\Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe";
+    let script = "";
 
     const result = resolveWindowsStorePackageDirectoryFromPowerShell(
       getEditorWindowsStorePackages(editor),
       "win32",
       { PATH: "" },
-      () => `${installLocation}\r\n`,
+      (_file, args) => {
+        script = String(args[2]);
+        return `${installLocation}\r\n`;
+      },
     );
 
     assert.equal(result, installLocation);
+    assert.equal(script.includes("PackageFamilyName -ieq $packageDef.Family"), true);
+    assert.equal(script.includes("Microsoft.VisualStudioCode_8wekyb3d8bbwe"), true);
   });
+
+  it("caches Windows Store AppX registration probes", () => {
+    clearWindowsStorePackageDiscoveryCache();
+    const editor = EDITORS.find((candidate) => candidate.id === "vscode");
+    assert.ok(editor);
+    const installLocation =
+      "C:\\Program Files\\WindowsApps\\Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe";
+    let calls = 0;
+
+    const first = resolveWindowsStorePackageDirectoryFromPowerShell(
+      getEditorWindowsStorePackages(editor),
+      "win32",
+      { PATH: "C:\\Windows\\System32" },
+      () => {
+        calls += 1;
+        return `${installLocation}\r\n`;
+      },
+      { useCache: true, now: () => 1_000 },
+    );
+    const second = resolveWindowsStorePackageDirectoryFromPowerShell(
+      getEditorWindowsStorePackages(editor),
+      "win32",
+      { PATH: "C:\\Windows\\System32" },
+      () => {
+        calls += 1;
+        return "C:\\wrong\r\n";
+      },
+      { useCache: true, now: () => 1_100 },
+    );
+
+    assert.equal(first, installLocation);
+    assert.equal(second, installLocation);
+    assert.equal(calls, 1);
+    clearWindowsStorePackageDiscoveryCache();
+  });
+
+  it.effect("does not treat filesystem-only AppX package directories as installed", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const editor = EDITORS.find((candidate) => candidate.id === "vscode");
+      assert.ok(editor);
+      const programFiles = yield* fs.makeTempDirectoryScoped({ prefix: "t3-vscode-staged-" });
+      yield* fs.makeDirectory(
+        path.join(
+          programFiles,
+          "WindowsApps",
+          "Microsoft.VisualStudioCode_1.0.0.0_x64__8wekyb3d8bbwe",
+        ),
+        { recursive: true },
+      );
+
+      const installLocation = resolveWindowsStorePackageInstallLocation(
+        getEditorWindowsStorePackages(editor),
+        "win32",
+        { PATH: "", ProgramFiles: programFiles },
+        () => {
+          throw new Error("not registered");
+        },
+        { useCache: false },
+      );
+
+      assert.equal(installLocation, null);
+    }),
+  );
 });

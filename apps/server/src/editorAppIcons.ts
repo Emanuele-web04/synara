@@ -19,8 +19,7 @@ import {
   getEditorMacApplications,
   getEditorWindowsStorePackages,
   resolveMacApplicationBundlePath,
-  resolveWindowsStorePackageDirectory,
-  resolveWindowsStorePackageDirectoryFromPowerShell,
+  resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -514,9 +513,7 @@ async function resolveWindowsStoreEditorIconSource(input: {
   readonly env: NodeJS.ProcessEnv;
 }): Promise<EditorIconSource | null> {
   const packages = getEditorWindowsStorePackages(input.editor);
-  const triedPackageDirs = new Set<string>();
   const findIconSource = async (packageDir: string): Promise<EditorIconSource | null> => {
-    triedPackageDirs.add(packageDir);
     const iconPath = await findWindowsStorePackageIcon(packageDir);
     if (!iconPath) return null;
     const extension = path.extname(iconPath).toLowerCase();
@@ -537,21 +534,12 @@ async function resolveWindowsStoreEditorIconSource(input: {
     };
   };
 
-  const packageDir = resolveWindowsStorePackageDirectory(packages, input.platform, input.env);
-  if (packageDir) {
-    const iconSource = await findIconSource(packageDir);
-    if (iconSource) return iconSource;
-  }
-
-  const appxPackageDir = resolveWindowsStorePackageDirectoryFromPowerShell(
+  const appxPackageDir = resolveWindowsStorePackageInstallLocation(
     packages,
     input.platform,
     input.env,
   );
-  if (appxPackageDir && !triedPackageDirs.has(appxPackageDir)) {
-    const iconSource = await findIconSource(appxPackageDir);
-    if (iconSource) return iconSource;
-  }
+  if (appxPackageDir) return findIconSource(appxPackageDir);
 
   return null;
 }
