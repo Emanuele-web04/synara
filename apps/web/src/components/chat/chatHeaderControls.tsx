@@ -107,7 +107,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
  */
 export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors duration-200 ease-out",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
