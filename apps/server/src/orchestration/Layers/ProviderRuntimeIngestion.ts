@@ -653,6 +653,36 @@ function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unkno
   return payload as Record<string, unknown>;
 }
 
+function rawRuntimeEventPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+  const raw = asObject((event as { raw?: unknown }).raw);
+  return asObject(raw?.payload);
+}
+
+function runtimeWarningSummary(event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>) {
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  if (
+    (event.provider === "opencode" || event.provider === "kilo") &&
+    (nativeType === "session.next.retried" || nativeType === "session.status")
+  ) {
+    return event.provider === "opencode" ? "OpenCode retrying" : "Kilo retrying";
+  }
+  return "Runtime warning";
+}
+
+// Runtime warning rows should show the user-visible message even when raw detail is structured.
+function runtimeWarningPayload(
+  event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>,
+): ActivityPayload {
+  const message = truncateDetail(event.payload.message);
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  return toActivityPayload({
+    message,
+    detail: message,
+    ...(nativeType ? { nativeEventType: nativeType } : {}),
+    ...activityDataField(event.payload.detail),
+  });
+}
+
 function normalizeRuntimeTurnState(
   value: string | undefined,
 ): "completed" | "failed" | "interrupted" | "cancelled" {
@@ -852,11 +882,8 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
-          payload: toActivityPayload({
-            message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          }),
+          summary: runtimeWarningSummary(event),
+          payload: runtimeWarningPayload(event),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
