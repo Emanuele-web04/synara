@@ -159,8 +159,7 @@ function windowsStorePackageDirMatches(
 
   return (
     normalizedName === `${packageName}_${publisherId}` ||
-    (normalizedName.startsWith(`${packageName}_`) &&
-      normalizedName.endsWith(`__${publisherId}`))
+    (normalizedName.startsWith(`${packageName}_`) && normalizedName.endsWith(`__${publisherId}`))
   );
 }
 

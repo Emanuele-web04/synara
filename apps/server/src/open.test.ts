@@ -212,11 +212,11 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       const folderPath = path.join(dir, "Project Folder");
       yield* fs.makeDirectory(folderPath);
 
-      const launch = yield* resolveEditorLaunch(
-        { cwd: folderPath, editor: "vscode" },
-        "win32",
-        { PATH: "", PATHEXT: ".COM;.EXE;.BAT;.CMD", SystemRoot: "C:\\Windows" },
-      );
+      const launch = yield* resolveEditorLaunch({ cwd: folderPath, editor: "vscode" }, "win32", {
+        PATH: "",
+        PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        SystemRoot: "C:\\Windows",
+      });
 
       assert.deepEqual(launch, {
         command: "C:\\Windows\\explorer.exe",

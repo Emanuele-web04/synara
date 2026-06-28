@@ -512,7 +512,7 @@ function launchDetachedWithEditorFallback(
   launch: EditorLaunch,
 ): Effect.Effect<void, OpenError> {
   return launchDetached(launch).pipe(
-    Effect.catchAll((primaryError) => {
+    Effect.catch((primaryError) => {
       const editorDef = EDITORS.find((editor) => editor.id === input.editor);
       const fallbackLaunch = editorDef ? resolveWindowsEditorUriLaunch(editorDef, input.cwd) : null;
 

@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.3",
+    date: "Jun 28",
+    features: [
+      {
+        id: "windows-vscode-store-launch",
+        title: "VS Code from the Microsoft Store opens correctly on Windows",
+        description:
+          "Synara can now launch VS Code Store installs through the right Windows app identity and URI fallback, so editor buttons work even when the normal `code` command is unavailable.",
+        details:
+          "Editor launch discovery now understands Windows packaged app metadata, adds VS Code and VS Code Insiders Store coverage, falls back from command launch to URI activation, and keeps file-manager launches isolated from editor-specific behavior.",
+      },
+      {
+        id: "provider-update-checks",
+        title: "Provider update checks are now optional",
+        description:
+          "A new settings toggle lets you disable provider update checks when you want Synara to stay quieter about external CLI versions.",
+        details:
+          "Provider health, server settings, app settings migration, settings search, root notifications, and provider update filtering now share the same `enableProviderUpdateChecks` flag so background update notices respect the user's preference.",
+      },
+      {
+        id: "icons-and-logo-refresh",
+        title: "The app icon and Synara mark look cleaner",
+        description:
+          "The desktop, web, marketing, and release assets were refreshed so the Synara icon renders more consistently across macOS, Windows, browser favicons, and update artifacts.",
+        details:
+          "This release refreshes the inline Synara logo path, replaces generated icon assets from the full source image, corrects macOS bundle icon handling after the rounded-icon Ventura pass, and removes a literal Dock-icon workaround that was not the final direction.",
+      },
+      {
+        id: "workspace-explorer-polish",
+        title: "Workspace browsing feels more unified",
+        description:
+          "Workspace explorer navigation, file-row presentation, diff stat labels, and shortcut settings now use more shared behavior, making file browsing and review surfaces easier to scan.",
+        details:
+          "Explorer keyboard navigation moved into shared logic with coverage, DockExplorerPane and workspaceExplorer were simplified, keyboard shortcut settings gained a clearer panel, and file/diff row styling now lines up with the rest of the workspace UI.",
+      },
+      {
+        id: "lighter-idle-polling",
+        title: "Idle server polling is lighter",
+        description:
+          "Synara polls local server state less aggressively while idle, reducing background work without changing the active-session refresh path.",
+        details:
+          "The server React Query helper now separates active and idle refresh intervals, the sidebar uses the calmer idle cadence, and focused tests cover the interval behavior.",
+      },
+      {
+        id: "release-gate-cleanups",
+        title: "Release gates caught a few small compatibility fixes",
+        description:
+          "The v0.3.3 release pass tightened formatting, settings test coverage, and Effect API compatibility before publishing.",
+        details:
+          "The release check formatted recent Windows editor-launch and desktop artifact code, updated the web settings push fixture for provider update checks, and switched one editor fallback path from `Effect.catchAll` to the Effect API used by this workspace.",
+      },
+    ],
+  },
+  {
     version: "0.3.2",
     date: "Jun 27",
     features: [
