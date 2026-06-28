@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.3.4 - 2026-06-29
+
+### Added
+
+- Added assistant streaming as the default for fresh app/server settings so new installs start with live assistant output enabled.
+- Added smoother transcript auto-follow coverage for optimistic sends, streaming assistant text, message entry animations, and tool detail interactions.
+- Added broader provider-health coverage for Claude local CLI credentials, Cursor ACP/headless probing, OpenCode model/runtime handling, and provider model-probe failures.
+- Added focused OpenCode retry-warning ingestion and web session coverage so retry notices stay attached to work-log rows and collapse consistently across turns.
+- Added tool-call label coverage and refined central icon usage for agent mentions, task rows, and file-change entries.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.4` across the server, desktop, web, and contracts packages.
+- Refined transcript streaming and session-state handling so live assistant output, tool rows, and bottom-stick behavior stay separated more predictably.
+- Made Claude provider health prefer usable local CLI credentials before inheriting direct credential env keys into subprocesses.
+- Made Cursor provider probing use a safer headless environment for ACP commands.
+- Improved chat card contrast, agent glyph consistency, file-change icon choices, and shared switch sizing/thumb animation.
+
+### Fixed
+
+- Fixed OpenCode retry warnings being projected into the wrong conversation surface or failing to collapse consistently across turns.
+- Fixed provider-health status handling so model-probe failures can keep an authenticated provider available with a warning instead of degrading it too aggressively.
+- Fixed transcript browser test type drift by normalizing `scrollTo` test-helper options without explicit `undefined` optional fields.
+- Fixed Claude provider-health type drift by only passing `homeDir` to the Claude env builder when it exists.
+- Fixed ProviderHealth test type drift by using the Effect platform `"Unknown"` system error tag supported by this workspace.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 155 warnings, 0 errors.
+- Initial `bun run typecheck` failed in `@t3tools/web` on `apps/web/src/components/ChatView.browser.tsx` because a browser `scrollTo` test helper produced explicit `undefined` optional fields; after that fix it failed in `t3` on `apps/server/src/provider/Layers/ProviderHealth.ts` and `ProviderHealth.test.ts` for the same exact-optional pattern and an unsupported Effect platform error tag; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- Initial `bun run test` failed in `@t3tools/web` on `apps/web/src/appSettings.test.ts` because the persisted-settings decode-default fixture still expected `enableAssistantStreaming: false`; after updating the fixture to the new default, the targeted app settings test passed.
+- Final `bun run test` passed: 10 tasks successful in 6m5.217s. `t3` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.4`, and `npm run lint` passed.
+
 ## 0.3.3 - 2026-06-28
 
 ### Added

@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.4",
+    date: "Jun 29",
+    features: [
+      {
+        id: "assistant-streaming-default",
+        title: "Assistant streaming is on by default",
+        description:
+          "New installs now start with assistant streaming enabled, so replies feel live immediately without needing a settings pass first.",
+        details:
+          "The default app settings and shared settings schema now agree on streamed assistant output, keeping fresh web and server state aligned.",
+      },
+      {
+        id: "smooth-transcript-follow",
+        title: "Live transcript follow feels smoother",
+        description:
+          "Streaming replies, optimistic sends, tool details, and message entry animations now keep the transcript pinned more predictably while work is active.",
+        details:
+          "ChatView, ChatTranscriptPane, MessagesTimeline, smooth streamed text, and browser regression coverage were tightened so live assistant text and tool rows do not fight the scroll position.",
+      },
+      {
+        id: "provider-health-hardening",
+        title: "Provider health handles more real-world CLI states",
+        description:
+          "Claude, Cursor, and OpenCode status checks are sturdier around credentials, headless environments, model probes, and transient command failures.",
+        details:
+          "Provider health now detects usable local Claude CLI credentials before passing process env through, runs Cursor ACP probes with a safer headless env, handles model-probe failures without marking an authenticated provider unusable, and expands focused provider-health coverage.",
+      },
+      {
+        id: "opencode-retry-warnings",
+        title: "OpenCode retry warnings are easier to follow",
+        description:
+          "Retry warnings from OpenCode now stay in the work-log flow and collapse consistently across turns instead of cluttering the main conversation.",
+        details:
+          "Provider runtime ingestion and session logic now preserve OpenCode retry-warning metadata, keep it attached to work rows, and cover repeated warning behavior in both server and web tests.",
+      },
+      {
+        id: "tool-and-agent-polish",
+        title: "Tool rows and agent markers are cleaner",
+        description:
+          "Agent mentions, task rows, tool labels, file-change rows, chat seams, and switches received a small polish pass that makes dense chats easier to scan.",
+        details:
+          "Synara now reuses the central robot glyph for agent chips, improves file-change and tool-call labels, refines chat card contrast, and tightens shared switch sizing, thumb travel, and animation.",
+      },
+      {
+        id: "release-gate-type-fixes",
+        title: "Release gates tightened browser and provider tests",
+        description:
+          "The v0.3.4 deep release pass fixed exact-optional type drift in transcript browser coverage and provider health checks before publishing.",
+        details:
+          "The release pass corrected a browser `scrollTo` test helper so it no longer passes explicit `undefined` optional fields, fixed a Claude health env call the same way, and updated a ProviderHealth test to use the Effect platform error tag supported by this workspace.",
+      },
+    ],
+  },
+  {
     version: "0.3.3",
     date: "Jun 28",
     features: [

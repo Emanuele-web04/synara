@@ -1165,7 +1165,9 @@ export const makeCheckClaudeProviderStatus = (
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
-    const claudeEnv = buildClaudeProcessEnv({ env: process.env, homeDir });
+    const claudeEnv = buildClaudeProcessEnv(
+      homeDir ? { env: process.env, homeDir } : { env: process.env },
+    );
 
     // Probe 1: `claude --version` — is the CLI reachable?
     const versionProbe = yield* runClaudeCommand(["--version"], executable, claudeEnv).pipe(

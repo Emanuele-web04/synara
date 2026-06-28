@@ -1710,7 +1710,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               if (joined === "models") {
                 return Effect.fail(
                   PlatformError.systemError({
-                    _tag: "UnknownException",
+                    _tag: "Unknown",
                     module: "ChildProcess",
                     method: "spawn",
                     description: "models probe failed",

@@ -1871,7 +1871,12 @@ describe("ChatView timeline estimator parity (full app)", () => {
       originalScrollTo = scrollContainer.scrollTo;
       scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
         const normalized: ScrollToOptions =
-          typeof options === "object" && options !== null ? options : { left: options, top: y };
+          typeof options === "object" && options !== null
+            ? options
+            : {
+                ...(typeof options === "number" ? { left: options } : {}),
+                ...(typeof y === "number" ? { top: y } : {}),
+              };
         scrollToCalls.push(normalized);
         if (typeof normalized.left === "number") {
           scrollContainer.scrollLeft = normalized.left;
