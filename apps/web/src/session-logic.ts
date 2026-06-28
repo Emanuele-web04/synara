@@ -1166,6 +1166,9 @@ function shouldCollapseRuntimeWarningEntries(
   if (previous.activityKind !== "runtime.warning" || next.activityKind !== "runtime.warning") {
     return false;
   }
+  if (previous.turnId !== next.turnId) {
+    return false;
+  }
   return (
     normalizeWorkLogTextForComparison(previous.label) ===
       normalizeWorkLogTextForComparison(next.label) &&

@@ -1057,6 +1057,40 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("does not collapse identical runtime warnings across turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-retry",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "turn-2-retry",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-2",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["turn-1-retry", "turn-2-retry"]);
+    expect(entries.map((entry) => entry.detail)).toEqual([
+      "Provider request failed; retrying.",
+      "Provider request failed; retrying.",
+    ]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
