@@ -820,12 +820,16 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
+  // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
+  // `toolName` is intentionally kept: it is a public WorkLogEntry field that the
+  // timeline relies on to pick the right tool icon (e.g. file-read tools like
+  // Claude's `Read` -> search icon, GitHub MCP rows -> GitHub icon). Stripping it
+  // here previously made those icon checks dead code, leaving the generic wrench.
   return collapseDerivedWorkLogEntries(entries).map(
     ({
       activityKind: _activityKind,
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
-      toolName: _toolName,
       ...entry
     }) => entry,
   );

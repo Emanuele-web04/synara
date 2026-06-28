@@ -9369,64 +9369,73 @@ export default function ChatView({
         <span className="min-w-0 truncate">{activeProjectDisplayName}</span>
       </span>
     ) : null;
-  const emptyLandingControls =
+  const showEmptyLandingControls =
     isCenteredEmptyLanding &&
     (isEmptyChatLanding ||
       showEmptyLandingProjectPicker ||
-      emptyLandingProjectChip ||
-      showEmptyLandingBranchToolbar) ? (
+      emptyLandingProjectChip !== null ||
+      showEmptyLandingBranchToolbar);
+  const emptyLandingControls = showEmptyLandingControls ? (
+    <div
+      className={cn(
+        // Full-width tray under the composer that reads as UNITED but not fused: it carries extra
+        // top height (pt-6) and is pulled up by that amount (-mt-5 = 20px, just past the
+        // --composer-radius ~19px corner). That hidden top slice sits BEHIND the composer's rounded
+        // bottom corners (z-0), so its tint fills those corner notches and its straight full-width
+        // top edge stays covered by the composer's solid sides — no gap/poke at the sides. The
+        // composer keeps its own rounded shape; the tray keeps its tint + rounded bottom.
+        "chat-composer-shell relative z-0 -mt-5 flex min-w-0 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1.5 pt-6 transition-colors duration-150 ease-out motion-reduce:transition-none",
+        COMPOSER_COLUMN_FRAME_CLASS_NAME,
+      )}
+    >
+      {isEmptyChatLanding ? (
+        <ProjectPicker
+          align="start"
+          side="top"
+          triggerClassName="h-auto py-1 sm:h-auto"
+          showResetToHome={Boolean(resolvedThreadWorktreePath)}
+          selectedWorkspaceRoot={resolvedThreadWorktreePath}
+          onSelectProject={handleSelectProjectForEmptyDraft}
+          onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
+          onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+          onResetToHome={handleResetWorkspaceToHome}
+        />
+      ) : showEmptyLandingProjectPicker ? (
+        <ProjectPicker
+          align="start"
+          side="top"
+          triggerClassName="h-auto py-1 sm:h-auto"
+          selectionMode="project"
+          selectedProjectId={activeProject.id}
+          selectedWorkspaceRoot={activeProject.cwd}
+          showResetToHome
+          onSelectProject={handleSelectProjectForEmptyDraft}
+          onCreateProjectFromPath={handleCreateProjectFromPickerPath}
+          onResetToHome={handleResetWorkspaceToHome}
+        />
+      ) : (
+        emptyLandingProjectChip
+      )}
+      {/* Reserve the Local/branch slot so project selection fades controls in without resizing. */}
       <div
+        aria-hidden={showEmptyLandingBranchToolbar ? undefined : true}
         className={cn(
-          "chat-composer-shell relative mt-0 flex min-h-8 flex-nowrap items-center gap-x-1.5 overflow-hidden !rounded-t-none !rounded-b-[var(--composer-radius)] bg-[color-mix(in_srgb,var(--color-background-elevated-secondary)_76%,var(--color-background-surface)_24%)] px-2 pb-1 pt-0.5 shadow-[0_18px_36px_-26px_rgba(0,0,0,0.78)] transition-[background-color,box-shadow] duration-150 ease-out before:pointer-events-none before:absolute before:inset-x-0 before:-top-3 before:h-3 before:bg-inherit before:content-[''] motion-reduce:transition-none",
-          COMPOSER_COLUMN_FRAME_CLASS_NAME,
+          "flex min-w-0 flex-1 items-center transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
+          showEmptyLandingBranchToolbar
+            ? "translate-y-0 opacity-100"
+            : "pointer-events-none opacity-0",
         )}
       >
-        {isEmptyChatLanding ? (
-          <ProjectPicker
-            align="start"
-            side="top"
-            showResetToHome={Boolean(resolvedThreadWorktreePath)}
-            selectedWorkspaceRoot={resolvedThreadWorktreePath}
-            onSelectProject={handleSelectProjectForEmptyDraft}
-            onSelectWorkspaceRoot={handleSelectWorkspaceRoot}
-            onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-            onResetToHome={handleResetWorkspaceToHome}
+        {showEmptyLandingBranchToolbar ? (
+          <BranchToolbar
+            {...branchToolbarProps}
+            className="mx-0 min-w-0 flex-1 !justify-start !px-0 !pb-0 !pt-0"
+            showBranchSelector={isGitRepo}
           />
-        ) : showEmptyLandingProjectPicker ? (
-          <ProjectPicker
-            align="start"
-            side="top"
-            selectionMode="project"
-            selectedProjectId={activeProject.id}
-            selectedWorkspaceRoot={activeProject.cwd}
-            showResetToHome
-            onSelectProject={handleSelectProjectForEmptyDraft}
-            onCreateProjectFromPath={handleCreateProjectFromPickerPath}
-            onResetToHome={handleResetWorkspaceToHome}
-          />
-        ) : (
-          emptyLandingProjectChip
-        )}
-        {/* Reserve the Local/branch slot so project selection fades controls in without resizing. */}
-        <div
-          aria-hidden={showEmptyLandingBranchToolbar ? undefined : true}
-          className={cn(
-            "flex min-w-0 flex-1 items-center transition-[opacity,transform] duration-150 ease-out motion-reduce:transition-none",
-            showEmptyLandingBranchToolbar
-              ? "translate-y-0 opacity-100"
-              : "pointer-events-none opacity-0",
-          )}
-        >
-          {showEmptyLandingBranchToolbar ? (
-            <BranchToolbar
-              {...branchToolbarProps}
-              className="mx-0 min-w-0 flex-1 !justify-start !px-0 !pb-0 !pt-0"
-              showBranchSelector={isGitRepo}
-            />
-          ) : null}
-        </div>
+        ) : null}
       </div>
-    ) : null;
+    </div>
+  ) : null;
 
   const threadAutomationItems = heartbeatAutomationsForThread(
     automationData.definitions,

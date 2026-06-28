@@ -43,6 +43,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       message: ChatMessage;
+      leadingWorkEntries?: WorkLogEntry[];
+      leadingWorkGroupId?: string;
       inlineWorkEntries?: WorkLogEntry[];
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
@@ -195,8 +197,9 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Derives transcript rows from timeline entries while preserving the current
-// t3code behavior of attaching trailing work groups to the adjacent assistant reply.
+// Derives transcript rows from timeline entries while keeping live narration and
+// tool rows in visual chronology. Work already waiting when assistant text
+// arrives renders above that text; trailing work renders below it.
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
@@ -219,7 +222,10 @@ export function deriveMessagesTimelineRows(input: {
     right: ReadonlyArray<WorkLogEntry>,
   ) => left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-  const appendWorkEntriesToPreviousAssistant = (groupedEntries: WorkLogEntry[]): boolean => {
+  const appendWorkEntriesToPreviousAssistant = (
+    groupedEntries: WorkLogEntry[],
+    groupId: string,
+  ): boolean => {
     const previousRow = nextRows.at(-1);
     if (
       !previousRow ||
@@ -238,6 +244,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     previousRow.inlineWorkEntries = nextInlineWorkEntries;
+    previousRow.inlineWorkGroupId ??= groupId;
     return true;
   };
 
@@ -246,7 +253,7 @@ export function deriveMessagesTimelineRows(input: {
     const shouldAttachToPreviousAssistant = options?.attachToPreviousAssistant ?? true;
     if (
       !shouldAttachToPreviousAssistant ||
-      !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)
+      !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries, pendingWorkGroup.id)
     ) {
       nextRows.push(pendingWorkGroup);
     }
@@ -292,9 +299,9 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    const inlineWorkEntries =
+    const leadingWorkEntries =
       timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
-    const inlineWorkGroupId =
+    const leadingWorkGroupId =
       timelineEntry.message.role === "assistant" ? pendingWorkGroup?.id : undefined;
     if (timelineEntry.message.role === "assistant") {
       pendingWorkGroup = null;
@@ -313,8 +320,8 @@ export function deriveMessagesTimelineRows(input: {
       id: timelineEntry.id,
       createdAt: timelineEntry.createdAt,
       message: timelineEntry.message,
-      ...(inlineWorkEntries ? { inlineWorkEntries } : {}),
-      ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
+      ...(leadingWorkEntries ? { leadingWorkEntries } : {}),
+      ...(leadingWorkGroupId ? { leadingWorkGroupId } : {}),
       durationStart:
         durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
       showAssistantCopyButton:
@@ -449,20 +456,23 @@ function collapseSettledTurns(
             row.assistantTurnDiffSummary ?? folded.assistantTurnDiffSummary,
           );
         }
-        // Work that preceded a narration message was attached as its inline
-        // entries; keep it ahead of the narration text in chronological order.
+        if (folded.leadingWorkEntries) collectWorkItems(folded.leadingWorkEntries, collapsedItems);
         if (folded.collapsedTurnItems) collapsedItems.push(...folded.collapsedTurnItems);
-        if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
         collapsedItems.push({ kind: "narration", id: folded.message.id, message: folded.message });
+        if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
       }
     }
-    // The terminal's own inline work happened before its final answer text.
+    // The terminal's own work rows are details around the final answer; fold
+    // them into the disclosure so completed chats do not end with tool-log rows.
+    if (row.leadingWorkEntries) collectWorkItems(row.leadingWorkEntries, collapsedItems);
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
       const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
+      delete row.leadingWorkEntries;
+      delete row.leadingWorkGroupId;
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
@@ -686,6 +696,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const bm = b as typeof a;
       return (
         a.message === bm.message &&
+        workLogEntryArraysEqual(a.leadingWorkEntries, bm.leadingWorkEntries) &&
+        a.leadingWorkGroupId === bm.leadingWorkGroupId &&
         workLogEntryArraysEqual(a.inlineWorkEntries, bm.inlineWorkEntries) &&
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&

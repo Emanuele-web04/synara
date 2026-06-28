@@ -20,6 +20,7 @@ import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
@@ -215,9 +216,17 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           />
         )}
 
-        {scrollButtonVisible && !agentActivityDetail ? (
+        {!agentActivityDetail ? (
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1",
+              // Reuse the shared disclosure motion so the arrow fades + drifts in/out with
+              // the same 220ms ease-out curve (and motion-reduce fallback) as every other
+              // show/hide in the app. The wrapper stays pointer-events-none; only the
+              // button re-enables pointer events while visible.
+              DISCLOSURE_CONTENT_MOTION_CLASS,
+              scrollButtonVisible ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
+            )}
             // Follow the same right inset as transcript rows so the button centers in the
             // visible chat column while the side panel overlays the viewport edge.
             style={scrollButtonFrameStyle}
@@ -227,7 +236,12 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
               aria-label="Scroll to bottom"
-              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]"
+              aria-hidden={!scrollButtonVisible}
+              tabIndex={scrollButtonVisible ? 0 : -1}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]",
+                scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
+              )}
             >
               <ArrowDownIcon className="size-3.5" />
             </button>

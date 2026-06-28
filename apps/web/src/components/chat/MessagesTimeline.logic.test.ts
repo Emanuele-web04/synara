@@ -713,6 +713,37 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.collapsedTurnItems).toBeUndefined();
   });
 
+  it("keeps pre-existing tool work above the new live narration text", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "I will inspect it.",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "read files"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Here is what I found so far.",
+          streaming: true,
+        }),
+        workEntry("w2", "2026-01-01T00:00:04Z", "search files"),
+      ],
+    });
+
+    const streamingNarration = messageRow(rows, "a2");
+
+    expect(streamingNarration?.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(streamingNarration?.leadingWorkGroupId).toBe("entry-w1");
+    expect(streamingNarration?.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w2"]);
+    expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
+  });
+
   it("keeps a just-settled tail assistant expanded when the active turn id is briefly unavailable", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
@@ -731,8 +762,10 @@ describe("deriveMessagesTimelineRows", () => {
 
     const terminal = messageRow(rows, "a1");
     expect(terminal).toBeDefined();
-    expect(terminal!.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.inlineWorkEntries).toBeUndefined();
     expect(terminal!.collapsedTurnItems).toBeUndefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
   it("collapses an older settled turn when a follow-up user message is waiting for output", () => {

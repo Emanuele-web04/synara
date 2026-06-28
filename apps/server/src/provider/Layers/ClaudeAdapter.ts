@@ -82,6 +82,7 @@ import {
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
+import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
 import { positiveFiniteNumber } from "../tokenUsage.ts";
 import {
   ProviderAdapterProcessError,
@@ -1297,6 +1298,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
+    const resolveClaudeSdkEnv = Effect.sync(() =>
+      buildClaudeProcessEnv({ env: process.env, homeDir: serverConfig.homeDir }),
+    );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
       Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
@@ -3298,6 +3302,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(ultracode ? { ultracode: true } : {}),
         };
         const claudeSubagents = buildClaudeSdkSubagents();
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv;
 
         const queryOptions: ClaudeQueryOptions = {
           ...(input.cwd ? { cwd: input.cwd } : {}),
@@ -3328,7 +3333,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(newSessionId ? { sessionId: newSessionId } : {}),
           includePartialMessages: true,
           canUseTool,
-          env: process.env,
+          env: claudeSdkEnv,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         };
 
@@ -3685,6 +3690,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
     async function discoverCommandsViaTemporaryProcess(
       cwd: string,
+      env: NodeJS.ProcessEnv,
     ): Promise<ProviderListCommandsResult> {
       // Spawn a lightweight Claude Code process for native command discovery.
       // The SDK's supportedCommands() awaits an internal initialization promise
@@ -3698,6 +3704,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           settingSources: [...CLAUDE_SETTING_SOURCES],
           permissionMode: "plan" as PermissionMode,
           persistSession: false,
+          env,
         },
       });
 
@@ -3743,8 +3750,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // 3. Spawn a temporary process for discovery (deduplicating concurrent requests).
+        const claudeSdkEnv = yield* resolveClaudeSdkEnv;
         const discoveryPromise =
-          pendingCommandDiscovery ?? discoverCommandsViaTemporaryProcess(input.cwd);
+          pendingCommandDiscovery ?? discoverCommandsViaTemporaryProcess(input.cwd, claudeSdkEnv);
         pendingCommandDiscovery = discoveryPromise;
 
         const result = yield* Effect.tryPromise({

@@ -58,6 +58,7 @@ import {
 } from "../geminiAcpProbe";
 import { DEFAULT_CURSOR_AGENT_BINARY, resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
+import { buildClaudeProcessEnv } from "../claudeProcessEnv";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -742,8 +743,12 @@ const runCodexCommand = (
     ),
   );
 
-const runClaudeCommand = (args: ReadonlyArray<string>, executable = "claude") =>
-  runProviderCommand(executable, args).pipe(
+const runClaudeCommand = (
+  args: ReadonlyArray<string>,
+  executable = "claude",
+  env: NodeJS.ProcessEnv = buildClaudeProcessEnv(),
+) =>
+  runProviderCommand(executable, args, env).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
@@ -795,6 +800,78 @@ const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURS
         : Effect.succeed(result),
     ),
   );
+
+function parseCursorAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+} {
+  const output = `${result.stdout}\n${result.stderr}`;
+  const lowerOutput = output.toLowerCase();
+
+  if (
+    lowerOutput.includes("unknown command") ||
+    lowerOutput.includes("unrecognized command") ||
+    lowerOutput.includes("unexpected argument")
+  ) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message:
+        "Cursor Agent authentication status command is unavailable in this Cursor Agent version.",
+    };
+  }
+
+  if (
+    lowerOutput.includes("authentication required") ||
+    lowerOutput.includes("not logged in") ||
+    lowerOutput.includes("not authenticated") ||
+    lowerOutput.includes("unauthenticated") ||
+    lowerOutput.includes("login required") ||
+    lowerOutput.includes("run 'agent login'") ||
+    lowerOutput.includes("run `agent login`") ||
+    lowerOutput.includes("run cursor-agent login")
+  ) {
+    return {
+      status: "error",
+      authStatus: "unauthenticated",
+      message: "Cursor Agent is not authenticated. Run `cursor-agent login` and try again.",
+    };
+  }
+
+  if (
+    lowerOutput.includes("logged in") ||
+    lowerOutput.includes("login successful") ||
+    lowerOutput.includes("authenticated")
+  ) {
+    return { status: "ready", authStatus: "authenticated" };
+  }
+
+  if (result.code === 0) {
+    return {
+      status: "warning",
+      authStatus: "unknown",
+      message: "Cursor Agent is installed, but Synara could not verify authentication status.",
+    };
+  }
+
+  const detail = detailFromResult(result);
+  return {
+    status: "warning",
+    authStatus: "unknown",
+    message: detail
+      ? `Could not verify Cursor Agent authentication status. ${detail}`
+      : "Could not verify Cursor Agent authentication status.",
+  };
+}
+
+function cursorModelsOutputHasModels(output: string): boolean {
+  return output.split(/\r?\n/u).some((line) => line.trim().length > 0 && line.includes(" - "));
+}
+
+function cursorModelsOutputHasNoModels(output: string): boolean {
+  return output.toLowerCase().includes("no models available");
+}
 
 const runPiCommand = (args: ReadonlyArray<string>, executable = "pi") =>
   runProviderCommand(executable, args).pipe(
@@ -1079,13 +1156,15 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
 export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
+  homeDir?: string,
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "claude";
+    const claudeEnv = buildClaudeProcessEnv({ env: process.env, homeDir });
 
     // Probe 1: `claude --version` — is the CLI reachable?
-    const versionProbe = yield* runClaudeCommand(["--version"], executable).pipe(
+    const versionProbe = yield* runClaudeCommand(["--version"], executable, claudeEnv).pipe(
       Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
@@ -1133,7 +1212,7 @@ export const makeCheckClaudeProviderStatus = (
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
     // Probe 2: `claude auth status` — is the user authenticated?
-    const authProbe = yield* runClaudeCommand(["auth", "status"], executable).pipe(
+    const authProbe = yield* runClaudeCommand(["auth", "status"], executable, claudeEnv).pipe(
       Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
       Effect.result,
     );
@@ -1623,15 +1702,147 @@ export const makeCheckCursorProviderStatus = (
     }
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
+    const authProbe = yield* runCursorCommand(["status"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(authProbe)) {
+      const error = authProbe.failure;
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Could not verify Cursor Agent authentication status: ${error.message}.`
+            : "Could not verify Cursor Agent authentication status.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(authProbe.success)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "unknown" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Could not verify Cursor Agent authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const parsedAuth = parseCursorAuthStatusFromOutput(authProbe.success.value);
+    if (parsedAuth.authStatus !== "authenticated") {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: parsedAuth.status,
+        available: true,
+        authStatus: parsedAuth.authStatus,
+        version: parsedVersion,
+        checkedAt,
+        ...(parsedAuth.message ? { message: parsedAuth.message } : {}),
+      } satisfies ServerProviderStatus;
+    }
+
+    const modelsProbe = yield* runCursorCommand(["models"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(modelsProbe)) {
+      const error = modelsProbe.failure;
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          error instanceof Error
+            ? `Cursor Agent is authenticated, but model discovery failed: ${error.message}.`
+            : "Cursor Agent is authenticated, but model discovery failed.",
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(modelsProbe.success)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but model discovery timed out before Synara could verify available models.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const modelsResult = modelsProbe.success.value;
+    const modelsOutput = `${modelsResult.stdout}\n${modelsResult.stderr}`;
+    const modelAuth = parseCursorAuthStatusFromOutput(modelsResult);
+    if (modelAuth.authStatus === "unauthenticated") {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: modelAuth.status,
+        available: true,
+        authStatus: modelAuth.authStatus,
+        version: parsedVersion,
+        checkedAt,
+        ...(modelAuth.message ? { message: modelAuth.message } : {}),
+      } satisfies ServerProviderStatus;
+    }
+    if (cursorModelsOutputHasNoModels(modelsOutput)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but it reports no models available for this account.",
+      } satisfies ServerProviderStatus;
+    }
+    if (modelsResult.code !== 0) {
+      const detail = detailFromResult(modelsResult);
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message: detail
+          ? `Cursor Agent is authenticated, but model discovery failed. ${detail}`
+          : "Cursor Agent is authenticated, but model discovery failed.",
+      } satisfies ServerProviderStatus;
+    }
+    if (!cursorModelsOutputHasModels(modelsOutput)) {
+      return {
+        provider: CURSOR_PROVIDER,
+        status: "warning" as const,
+        available: true,
+        authStatus: "authenticated" as const,
+        version: parsedVersion,
+        checkedAt,
+        message:
+          "Cursor Agent is authenticated, but model discovery returned no recognizable model rows.",
+      } satisfies ServerProviderStatus;
+    }
+
     return {
       provider: CURSOR_PROVIDER,
       status: "ready" as const,
       available: true,
-      authStatus: "unknown" as const,
+      authStatus: "authenticated" as const,
       version: parsedVersion,
       checkedAt,
-      message:
-        "Cursor Agent CLI is installed. Sign in with Cursor if a session prompts for authentication.",
     } satisfies ServerProviderStatus;
   });
 
@@ -2079,6 +2290,7 @@ export const ProviderHealthLive = Layer.effect(
                 makeCheckClaudeProviderStatus(
                   resolveClaudeSubscription,
                   settings.providers.claudeAgent.binaryPath,
+                  serverConfig.homeDir,
                 ),
               ),
               checkProviderWhenEnabled(

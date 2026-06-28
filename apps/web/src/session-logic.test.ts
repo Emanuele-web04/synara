@@ -2222,6 +2222,9 @@ describe("deriveWorkLogEntries", () => {
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
       toolTitle: "Read",
+      // toolName must survive derivation so the timeline can pick the file-read
+      // (search) icon instead of the generic wrench fallback.
+      toolName: "Read",
     });
   });
 

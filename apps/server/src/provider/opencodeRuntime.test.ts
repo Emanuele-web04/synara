@@ -100,28 +100,45 @@ function openCodeRuntimePoolTestLayer(state: {
 }
 
 describe("toOpenCodeFileParts", () => {
-  it("materializes generic file attachments as SDK file parts", () => {
+  it("materializes image attachments as SDK file parts", () => {
     const attachment = {
-      type: "file",
-      id: "thread-attachment-file",
-      name: "notes.txt",
-      mimeType: "text/plain",
+      type: "image",
+      id: "thread-attachment-image",
+      name: "screenshot.png",
+      mimeType: "image/png",
       sizeBytes: 12,
     } satisfies ChatAttachment;
 
     expect(
       toOpenCodeFileParts({
         attachments: [attachment],
-        resolveAttachmentPath: () => "/tmp/synara-attachments/notes.txt",
+        resolveAttachmentPath: () => "/tmp/synara-attachments/screenshot.png",
       }),
     ).toEqual([
       {
         type: "file",
-        mime: "text/plain",
-        filename: "notes.txt",
-        url: "file:///tmp/synara-attachments/notes.txt",
+        mime: "image/png",
+        filename: "screenshot.png",
+        url: "file:///tmp/synara-attachments/screenshot.png",
       },
     ]);
+  });
+
+  it("leaves generic files for prompt-path projection", () => {
+    const attachment = {
+      type: "file",
+      id: "thread-attachment-file",
+      name: "notes.docx",
+      mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      sizeBytes: 12,
+    } satisfies ChatAttachment;
+
+    expect(
+      toOpenCodeFileParts({
+        attachments: [attachment],
+        resolveAttachmentPath: () => "/tmp/synara-attachments/notes.docx",
+      }),
+    ).toEqual([]);
   });
 });
 

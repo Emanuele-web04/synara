@@ -1059,6 +1059,87 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect(
+      "strips stale direct Claude credentials from health probes when local OAuth is usable",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "provider-health-claude-home-",
+          });
+          const claudeDir = path.join(homeDir, ".claude");
+          yield* fileSystem.makeDirectory(claudeDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "local-access-token",
+                expiresAt: Date.now() + 60_000,
+              },
+            }),
+          );
+
+          const envKeys = [
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_AUTH_TOKEN",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "ANTHROPIC_BASE_URL",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+          ] as const;
+          yield* Effect.acquireRelease(
+            Effect.sync(() => {
+              const previous = new Map<string, string | undefined>();
+              for (const key of envKeys) {
+                previous.set(key, process.env[key]);
+                delete process.env[key];
+              }
+              process.env.ANTHROPIC_API_KEY = "stale-api-key";
+              process.env.ANTHROPIC_AUTH_TOKEN = "stale-auth-token";
+              process.env.CLAUDE_CODE_OAUTH_TOKEN = "stale-oauth-token";
+              return previous;
+            }),
+            (previous) =>
+              Effect.sync(() => {
+                for (const [key, value] of previous) {
+                  if (value === undefined) {
+                    delete process.env[key];
+                  } else {
+                    process.env[key] = value;
+                  }
+                }
+              }),
+          );
+
+          const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args, command, env) => {
+                assert.strictEqual(command, "claude");
+                assert.strictEqual(env?.ANTHROPIC_API_KEY, undefined);
+                assert.strictEqual(env?.ANTHROPIC_AUTH_TOKEN, undefined);
+                assert.strictEqual(env?.CLAUDE_CODE_OAUTH_TOKEN, undefined);
+
+                const joined = args.join(" ");
+                if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+                if (joined === "auth status")
+                  return {
+                    stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.provider, "claudeAgent");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.authStatus, "authenticated");
+        }),
+    );
+
     it.effect("returns unavailable when claude is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;
@@ -1392,13 +1473,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkCursorProviderStatus", () => {
-    it.effect("returns ready when Cursor Agent is installed", () =>
+    it.effect("returns ready when Cursor Agent is authenticated and has models", () =>
       Effect.gen(function* () {
         const status = yield* checkCursorProviderStatus;
         assert.strictEqual(status.provider, "cursor");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
-        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.authStatus, "authenticated");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
@@ -1406,6 +1487,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            if (joined === "status") {
+              return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -1425,6 +1512,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
             }
+            if (joined === "status") {
+              return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
+            }
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -1442,6 +1535,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            if (joined === "status") {
+              return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
@@ -1484,6 +1583,139 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             }
             throw new Error(`Unexpected args: ${joined}`);
           }),
+        ),
+      ),
+    );
+
+    it.effect("returns unauthenticated when Cursor Agent status requires login", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(
+          status.message,
+          "Cursor Agent is not authenticated. Run `cursor-agent login` and try again.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            if (joined === "status") {
+              return {
+                stdout: "",
+                stderr:
+                  "Error: Authentication required. Please run 'agent login' first, or set CURSOR_API_KEY environment variable.\n",
+                code: 1,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unauthenticated when Cursor Agent says not authenticated", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unauthenticated");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            if (joined === "status") {
+              return { stdout: "Not authenticated\n", stderr: "", code: 1 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Cursor Agent has no account models", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(
+          status.message,
+          "Cursor Agent is authenticated, but it reports no models available for this account.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "cursor-agent");
+            const joined = args.join(" ");
+            if (joined === "--version") {
+              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+            }
+            if (joined === "status") {
+              return { stdout: "Logged in (unable to fetch user details)\n", stderr: "", code: 0 };
+            }
+            if (joined === "models") {
+              return { stdout: "No models available for this account.\n", stderr: "", code: 0 };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns warning when Cursor Agent model discovery fails to spawn", () =>
+      Effect.gen(function* () {
+        const status = yield* checkCursorProviderStatus;
+        assert.strictEqual(status.provider, "cursor");
+        assert.strictEqual(status.status, "warning");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+      }).pipe(
+        Effect.provide(
+          Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) => {
+              const cmd = command as unknown as {
+                command: string;
+                args: ReadonlyArray<string>;
+              };
+              assert.strictEqual(cmd.command, "cursor-agent");
+              const joined = cmd.args.join(" ");
+              if (joined === "--version") {
+                return Effect.succeed(
+                  mockHandle({ stdout: "agent 2026.04.27\n", stderr: "", code: 0 }),
+                );
+              }
+              if (joined === "status") {
+                return Effect.succeed(
+                  mockHandle({ stdout: "Logged in as user@example.com\n", stderr: "", code: 0 }),
+                );
+              }
+              if (joined === "models") {
+                return Effect.fail(
+                  PlatformError.systemError({
+                    _tag: "UnknownException",
+                    module: "ChildProcess",
+                    method: "spawn",
+                    description: "models probe failed",
+                  }),
+                );
+              }
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
         ),
       ),
     );

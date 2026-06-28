@@ -1,3 +1,8 @@
+// FILE: OpenCodeTextGeneration.ts
+// Purpose: Runs OpenCode-compatible one-shot text generation for titles, branches, recaps, and release text.
+// Layer: Server git/text-generation adapter
+// Depends on: OpenCode SDK runtime, prompt builders, attachment projection, and server config.
+
 import { Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -14,6 +19,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../../provider/attachmentProjection.ts";
 import {
   OpenCodeRuntime,
   KILO_CLI_SPEC,
@@ -351,6 +357,13 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const agent = modelOptions?.agent?.trim();
       const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant")?.trim();
 
+      const promptText =
+        appendFileAttachmentsPromptBlock({
+          text: input.prompt,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        }) ?? input.prompt;
       const fileParts = toOpenCodeFileParts({
         attachments: input.attachments,
         resolveAttachmentPath: (attachment) =>
@@ -388,7 +401,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               model: parsedModel,
               ...(agent ? { agent } : {}),
               ...(variant ? { variant } : {}),
-              parts: [{ type: "text", text: input.prompt }, ...fileParts],
+              parts: [{ type: "text", text: promptText }, ...fileParts],
             });
             const info = result.data?.info;
             const errorMessage = getOpenCodePromptErrorMessage(info?.error);

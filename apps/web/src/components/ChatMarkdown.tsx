@@ -34,6 +34,7 @@ import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
 import { useTheme } from "../hooks/useTheme";
+import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -958,7 +959,12 @@ function ChatMarkdown({
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
+  // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
+  // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
+  // streaming or under reduced motion. Governs cadence only; the deferred value below still
+  // bounds the markdown re-parse cost.
+  const smoothedText = useSmoothStreamedText(text, isStreaming);
+  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(smoothedText), [smoothedText]);
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
