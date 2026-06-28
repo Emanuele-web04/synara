@@ -189,6 +189,21 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
     }),
   );
 
+  it.effect("preserves UNC paths in VS Code URL-handler launches", () =>
+    Effect.gen(function* () {
+      const launch = yield* resolveEditorLaunch(
+        { cwd: "\\\\server\\share\\Project Folder\\src\\open.ts:71:5", editor: "vscode" },
+        "win32",
+        { PATH: "", PATHEXT: ".COM;.EXE;.BAT;.CMD", SystemRoot: "C:\\Windows" },
+      );
+
+      assert.deepEqual(launch, {
+        command: "C:\\Windows\\explorer.exe",
+        args: ["vscode://file//server/share/Project%20Folder/src/open.ts:71:5"],
+      });
+    }),
+  );
+
   it.effect("adds the VS Code URL-handler trailing slash for existing folders", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

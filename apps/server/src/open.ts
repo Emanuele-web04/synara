@@ -237,6 +237,8 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
   const parsedTarget = parseTargetPathAndPosition(target);
   const targetPath = parsedTarget?.path ?? target;
   const encodedPath = encodeWindowsEditorUriPath(targetPath);
+  // UNC paths normalize to //server/share; adding another slash changes the network path.
+  const filePathSeparator = encodedPath.startsWith("//") ? "" : "/";
   const directorySuffix =
     !parsedTarget && statSync(targetPath, { throwIfNoEntry: false })?.isDirectory() === true
       ? "/"
@@ -245,7 +247,7 @@ function resolveWindowsEditorUri(scheme: string, target: string): string {
     ? `:${parsedTarget.line}${parsedTarget.column ? `:${parsedTarget.column}` : ""}`
     : "";
 
-  return `${scheme}://file/${encodedPath}${directorySuffix}${positionSuffix}`;
+  return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
 }
 
 export function resolveWindowsEditorUriLaunch(
