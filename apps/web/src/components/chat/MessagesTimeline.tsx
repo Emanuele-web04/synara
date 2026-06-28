@@ -47,10 +47,10 @@ import {
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
+  PencilIcon,
   PinIcon,
   SearchIcon,
   SkillCubeIcon,
-  SquarePenIcon,
   SteerIcon,
   TerminalIcon,
   Undo2Icon,
@@ -131,7 +131,6 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
-import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
@@ -167,9 +166,9 @@ export interface MessagesTimelineController {
   scrollToMarker: (marker: ThreadMarker) => void;
 }
 
-const AgentTaskIcon: LucideIcon = (props) => (
-  <RiRobot3Line className={props.className} style={props.style} />
-);
+// Distinct component identity from BotIcon so prefersCompactWorkEntryRow can
+// target agent-task rows specifically; both render the shared central robot glyph.
+const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
 // Keeps the steer marker visually attached to the whole sent-message stack.
 function UserDispatchModeChip({
@@ -2444,13 +2443,13 @@ function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
-  if (workEntry.requestKind === "file-change") return SquarePenIcon;
+  if (workEntry.requestKind === "file-change") return PencilIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
     return commandWorkEntryIcon(workEntry);
   }
   if (workEntry.itemType === "file_change") {
-    return SquarePenIcon;
+    return PencilIcon;
   }
   if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
@@ -2486,7 +2485,7 @@ function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
     EntryIcon === TerminalIcon ||
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
-    EntryIcon === SquarePenIcon ||
+    EntryIcon === PencilIcon ||
     EntryIcon === SkillCubeIcon
   );
 }

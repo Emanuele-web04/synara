@@ -203,10 +203,10 @@
      sidebar; when the sidebar is collapsed the seam sits at the window edge and the shadow
      simply falls off-screen. */
   .chat-content-card {
-    /* The rounded outer seam stays at FULL --color-border (NOT the more-transparent
+    /* The rounded outer seam reads stronger than --color-border (and NOT the more-transparent
        --app-surface-divider used by the internal hairlines/splits): the card's outer
-       edge against the sidebar should read as solid as before. Do not re-unify these. */
-    --seam-line: var(--color-border);
+       edge against the sidebar should read as solid. Do not re-unify these. */
+    --seam-line: --alpha(var(--color-black) / 8%);
     --seam-shadow-color: rgba(0, 0, 0, 0.1);
     --seam-shadow-x: 0px;
     /* Soft, low-spread depth: a modest blur + negative spread keeps the shadow near the
@@ -223,6 +223,7 @@
 
   .dark .chat-content-card {
     --seam-shadow-color: rgba(0, 0, 0, 0.36);
+    --seam-line: --alpha(var(--color-white) / 8%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {

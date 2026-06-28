@@ -163,8 +163,10 @@ describe("MessagesTimeline message enter animation", () => {
       document.querySelector<HTMLButtonElement>("button")?.click();
 
       await expect
-        .poll(() =>
-          document.querySelector<HTMLElement>('[data-message-id="hydrated-user-message"]') !== null,
+        .poll(
+          () =>
+            document.querySelector<HTMLElement>('[data-message-id="hydrated-user-message"]') !==
+            null,
         )
         .toBe(true);
       expect(

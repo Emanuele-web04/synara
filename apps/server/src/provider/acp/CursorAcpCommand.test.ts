@@ -9,10 +9,7 @@
  */
 import { describe, expect, it } from "vitest";
 
-import {
-  buildCursorAgentHeadlessEnv,
-  resolveCursorAgentBinaryPath,
-} from "./CursorAcpCommand.ts";
+import { buildCursorAgentHeadlessEnv, resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
 
 describe("resolveCursorAgentBinaryPath", () => {
   it("defaults to cursor-agent when no binary is configured", () => {

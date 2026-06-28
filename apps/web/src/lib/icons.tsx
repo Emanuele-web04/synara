@@ -42,7 +42,6 @@ import {
   IconHash,
   IconFolder,
   IconFolderOpen,
-  IconEdit,
   IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
@@ -65,7 +64,6 @@ import {
   IconPlus,
   IconRefresh,
   IconRocket,
-  IconRobot,
   IconRotate2,
   IconSelector,
   IconSettings,
@@ -128,7 +126,13 @@ export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
-export const BotIcon = adaptIcon(IconRobot);
+// Single source for the robot/agent glyph. Sourced from the Central icon set so
+// every robot affordance (reasoning rows, agent-task rows, agent mention chips,
+// subagent menus, agent-activity headers) renders one identical icon. Use
+// BotIcon in React; AGENT_ROBOT_ICON_NAME for imperative DOM via
+// createCentralIconElement.
+export const AGENT_ROBOT_ICON_NAME = "robot";
+export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
@@ -236,7 +240,6 @@ export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
 export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);
-export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />
 );

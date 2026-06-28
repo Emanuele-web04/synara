@@ -19,10 +19,7 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
-import {
-  CURSOR_AGENT_BROWSERLESS_ENV,
-  resolveCursorAgentBinaryPath,
-} from "./CursorAcpCommand.ts";
+import { CURSOR_AGENT_BROWSERLESS_ENV, resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
 
 export interface CursorAcpRuntimeCursorSettings {
   readonly apiEndpoint?: string;
