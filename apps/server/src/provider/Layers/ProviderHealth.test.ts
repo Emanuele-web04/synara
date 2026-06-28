@@ -1482,8 +1482,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "authenticated");
       }).pipe(
         Effect.provide(
-          mockSpawnerLayer((args, command) => {
+          mockSpawnerLayer((args, command, env) => {
             assert.strictEqual(command, "cursor-agent");
+            assert.strictEqual(env?.NO_BROWSER, "true");
+            assert.strictEqual(env?.BROWSER, "www-browser");
+            assert.strictEqual(env?.CI, "true");
+            assert.strictEqual(env?.DEBIAN_FRONTEND, "noninteractive");
             const joined = args.join(" ");
             if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };

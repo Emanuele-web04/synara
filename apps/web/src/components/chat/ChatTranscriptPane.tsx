@@ -49,6 +49,7 @@ interface ChatTranscriptPaneProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -103,6 +104,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers,
+  enteringUserMessageIds,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -174,6 +176,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}

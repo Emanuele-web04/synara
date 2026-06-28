@@ -17,6 +17,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -39,7 +40,6 @@ import {
   BotIcon,
   CheckIcon,
   ChangesIcon,
-  ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
   GitHubIcon,
@@ -80,12 +80,13 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
+  type CollapsedTurnItem,
   type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveReadableCommandDisplay } from "../../lib/toolCallLabel";
+import { deriveReadableCommandDisplay, isInspectCommand } from "../../lib/toolCallLabel";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -146,11 +147,16 @@ const MESSAGE_HOVER_REVEAL_CLASS_NAME =
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
 const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
 const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
+const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
+const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
+const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
 // The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
 // never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
 const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
 const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
+const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
 
 /**
  * Imperative handle the transcript exposes so the Environment panel's pinned-message
@@ -245,6 +251,8 @@ interface MessagesTimelineProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
+  /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
+  enteringUserMessageIds?: ReadonlySet<MessageId>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -298,6 +306,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers = [],
+  enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -421,32 +430,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return byMessageId;
   }, [threadMarkers]);
-  const timelineExtraData = useMemo(
-    () => ({
-      editingUserMessageId,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      highlightedMessageId,
-      pinnedMessageIds,
-      submittingEditedUserMessageId,
-      threadMarkersByMessageId,
-    }),
-    [
-      editingUserMessageId,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      highlightedMessageId,
-      pinnedMessageIds,
-      submittingEditedUserMessageId,
-      threadMarkersByMessageId,
-    ],
-  );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -478,6 +461,38 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
+  const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
+  const timelineExtraData = useMemo(
+    () => ({
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      threadMarkersByMessageId,
+    }),
+    [
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      threadMarkersByMessageId,
+    ],
+  );
   const selectedToolDetailsEntry = useMemo(
     () => findToolDetailsEntryById(rows, selectedToolDetailsEntryId),
     [rows, selectedToolDetailsEntryId],
@@ -735,6 +750,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.kind === "message" && row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
           : null,
+        enteringMessageRowIds.has(row.id) ? "chat-message-send-enter" : null,
       )}
       data-timeline-row-kind={row.kind}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
@@ -1020,10 +1036,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
-          const buildWorkDisplay = (
-            workEntries: WorkLogEntry[],
-            workGroupId: string | null,
-          ) => {
+          const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
             const toolEntries = workEntries.filter((entry) => entry.tone === "tool");
             const statusEntries = workEntries.filter((entry) => entry.tone !== "tool");
             const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
@@ -1120,6 +1133,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
+          const settledCollapseTransition = isCollapsedWorkExpanded
+            ? undefined
+            : settledTurnCollapseTransitions[row.message.id];
           const isTailContentRow = row.id === tailContentRowId;
           const renderWorkDisplay = (
             display: typeof leadingWorkDisplay,
@@ -1186,8 +1202,56 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               )}
             </>
           );
+          const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) =>
+            item.kind === "work" ? (
+              <SimpleWorkEntryRow
+                key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
+                workEntry={item.entry}
+                chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                textFontSizePx={normalizedChatFontSizePx}
+                density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
+                markdownCwd={markdownCwd}
+                onImageExpand={onImageExpand}
+                onOpenToolDetails={openToolDetails}
+                {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+                {...(onOpenThread ? { onOpenThread } : {})}
+                {...(onOpenAutomation ? { onOpenAutomation } : {})}
+              />
+            ) : (
+              <div
+                key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
+                className="text-muted-foreground/80"
+              >
+                <ChatMarkdown
+                  text={item.message.text}
+                  cwd={markdownCwd}
+                  isStreaming={false}
+                  style={chatTypographyStyle}
+                  onImageExpand={onImageExpand}
+                />
+              </div>
+            );
           return (
             <>
+              {settledCollapseTransition && (
+                <div
+                  aria-hidden="true"
+                  inert
+                  // The clone is visual-only for the entire close transition; keep it inert
+                  // even while the inner DisclosureRegion starts open for its first frame.
+                  className="pointer-events-none mb-3 select-none"
+                  data-settled-turn-collapse-transition="true"
+                >
+                  <DisclosureRegion
+                    open={settledCollapseTransition.open}
+                    contentClassName="space-y-1.5 pb-2.5"
+                  >
+                    {settledCollapseTransition.items.map((item) =>
+                      renderCollapsedTurnItem(item, "settling-turn-close"),
+                    )}
+                  </DisclosureRegion>
+                </div>
+              )}
               {hasCollapsedWork && (
                 <div className="mb-3">
                   <Collapsible
@@ -1224,36 +1288,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         )}
                       >
                         {collapsedTurnItems!.map((item) =>
-                          item.kind === "work" ? (
-                            <SimpleWorkEntryRow
-                              key={`collapsed-work:${row.message.id}:${item.id}`}
-                              workEntry={item.entry}
-                              chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                              textFontSizePx={normalizedChatFontSizePx}
-                              density={
-                                prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
-                              }
-                              markdownCwd={markdownCwd}
-                              onImageExpand={onImageExpand}
-                              onOpenToolDetails={openToolDetails}
-                              {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                              {...(onOpenThread ? { onOpenThread } : {})}
-                              {...(onOpenAutomation ? { onOpenAutomation } : {})}
-                            />
-                          ) : (
-                            <div
-                              key={`collapsed-narration:${row.message.id}:${item.id}`}
-                              className="text-muted-foreground/80"
-                            >
-                              <ChatMarkdown
-                                text={item.message.text}
-                                cwd={markdownCwd}
-                                isStreaming={false}
-                                style={chatTypographyStyle}
-                                onImageExpand={onImageExpand}
-                              />
-                            </div>
-                          ),
+                          renderCollapsedTurnItem(item, "collapsed-panel"),
                         )}
                       </div>
                     </CollapsiblePanel>
@@ -1607,6 +1642,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
 type TimelineMessage = Extract<MessagesTimelineRow, { kind: "message" }>["message"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
+type SettledTurnCollapseTransition = {
+  open: boolean;
+  items: readonly CollapsedTurnItem[];
+};
+type SettledTurnCollapseTimer = {
+  closeFrame: number | null;
+  cleanupTimeout: number | null;
+};
 
 export function findToolDetailsEntryById(
   rows: ReadonlyArray<MessagesTimelineRow>,
@@ -1657,6 +1700,217 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     previousStateRef.current = nextState;
     return nextState.result;
   }, [rows]);
+}
+
+// Animates only user rows that ChatView identifies as local optimistic sends;
+// transcript hydration can add rows too, but should not replay send motion.
+function useMessageSendEnterAnimations(
+  rows: readonly MessagesTimelineRow[],
+  enteringUserMessageIds: ReadonlySet<MessageId>,
+): ReadonlySet<string> {
+  const [enteringRowIds, setEnteringRowIds] = useState<ReadonlySet<string>>(() => new Set());
+  const previousRowIdsRef = useRef<ReadonlySet<string> | null>(null);
+  const cleanupTimeoutsRef = useRef<number[]>([]);
+
+  useLayoutEffect(() => {
+    const currentRowIds = new Set(rows.map((row) => row.id));
+    const previousRowIds = previousRowIdsRef.current;
+    previousRowIdsRef.current = currentRowIds;
+
+    const freshUserRowIds = rows
+      .filter(
+        (row) =>
+          row.kind === "message" &&
+          row.message.role === "user" &&
+          enteringUserMessageIds.has(row.message.id) &&
+          (previousRowIds === null || !previousRowIds.has(row.id)),
+      )
+      .map((row) => row.id);
+    if (freshUserRowIds.length === 0) {
+      return;
+    }
+
+    setEnteringRowIds((current) => {
+      const next = new Set(current);
+      for (const rowId of freshUserRowIds) {
+        next.add(rowId);
+      }
+      return next;
+    });
+
+    const cleanupTimeout = window.setTimeout(() => {
+      cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
+      setEnteringRowIds((current) => {
+        const next = new Set(current);
+        for (const rowId of freshUserRowIds) {
+          next.delete(rowId);
+        }
+        return next.size === current.size ? current : next;
+      });
+    }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
+    cleanupTimeoutsRef.current.push(cleanupTimeout);
+  }, [enteringUserMessageIds, rows]);
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of cleanupTimeoutsRef.current) {
+        window.clearTimeout(timeoutId);
+      }
+      cleanupTimeoutsRef.current = [];
+    },
+    [],
+  );
+
+  return enteringRowIds;
+}
+
+// Keeps newly folded turn details mounted for one shared-disclosure close
+// animation, so settled turns do not disappear in one height recalculation.
+function useSettledTurnCollapseTransitions(
+  rows: readonly MessagesTimelineRow[],
+): Readonly<Record<string, SettledTurnCollapseTransition>> {
+  const [transitions, setTransitions] = useState<Record<string, SettledTurnCollapseTransition>>({});
+  const previousAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const previousCollapsedSignaturesRef = useRef<ReadonlyMap<string, string>>(new Map());
+  const timersRef = useRef(new Map<string, SettledTurnCollapseTimer>());
+
+  const clearTransitionTimer = useCallback((messageId: string) => {
+    const timer = timersRef.current.get(messageId);
+    if (!timer) {
+      return;
+    }
+    if (timer.closeFrame !== null) {
+      window.cancelAnimationFrame(timer.closeFrame);
+    }
+    if (timer.cleanupTimeout !== null) {
+      window.clearTimeout(timer.cleanupTimeout);
+    }
+    timersRef.current.delete(messageId);
+  }, []);
+
+  const scheduleTransitionClose = useCallback(
+    (messageId: string) => {
+      clearTransitionTimer(messageId);
+      const closeFrame = window.requestAnimationFrame(() => {
+        const timer = timersRef.current.get(messageId);
+        if (!timer) {
+          return;
+        }
+        timersRef.current.set(messageId, { ...timer, closeFrame: null });
+        setTransitions((current) => {
+          const transition = current[messageId];
+          if (!transition || !transition.open) {
+            return current;
+          }
+          return {
+            ...current,
+            [messageId]: { ...transition, open: false },
+          };
+        });
+
+        const cleanupTimeout = window.setTimeout(() => {
+          timersRef.current.delete(messageId);
+          setTransitions((current) => {
+            if (!current[messageId]) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[messageId];
+            return next;
+          });
+        }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+        timersRef.current.set(messageId, { closeFrame: null, cleanupTimeout });
+      });
+      timersRef.current.set(messageId, { closeFrame, cleanupTimeout: null });
+    },
+    [clearTransitionTimer],
+  );
+
+  useLayoutEffect(() => {
+    const currentAssistantMessageIds = new Set<string>();
+    const currentCollapsed = new Map<
+      string,
+      { signature: string; items: readonly CollapsedTurnItem[] }
+    >();
+
+    for (const row of rows) {
+      if (row.kind !== "message" || row.message.role !== "assistant") {
+        continue;
+      }
+      const messageId = row.message.id;
+      currentAssistantMessageIds.add(messageId);
+      if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
+        currentCollapsed.set(messageId, {
+          signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
+          items: row.collapsedTurnItems,
+        });
+      }
+    }
+
+    const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
+    const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
+    const startedTransitions: Array<{
+      messageId: string;
+      items: readonly CollapsedTurnItem[];
+    }> = [];
+
+    for (const [messageId, collapsed] of currentCollapsed) {
+      if (
+        previousAssistantMessageIds.has(messageId) &&
+        !previousCollapsedSignatures.has(messageId)
+      ) {
+        startedTransitions.push({ messageId, items: collapsed.items });
+      }
+    }
+
+    previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
+    previousCollapsedSignaturesRef.current = new Map(
+      Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
+    );
+
+    setTransitions((current) => {
+      let next: Record<string, SettledTurnCollapseTransition> | null = null;
+      const ensureNext = () => {
+        next ??= { ...current };
+        return next;
+      };
+
+      for (const messageId of Object.keys(current)) {
+        if (!currentCollapsed.has(messageId)) {
+          clearTransitionTimer(messageId);
+          delete ensureNext()[messageId];
+        }
+      }
+
+      for (const transition of startedTransitions) {
+        ensureNext()[transition.messageId] = {
+          open: true,
+          items: transition.items,
+        };
+      }
+
+      return next ?? current;
+    });
+
+    for (const transition of startedTransitions) {
+      scheduleTransitionClose(transition.messageId);
+    }
+  }, [clearTransitionTimer, rows, scheduleTransitionClose]);
+
+  useEffect(
+    () => () => {
+      for (const messageId of Array.from(timersRef.current.keys())) {
+        clearTransitionTimer(messageId);
+      }
+    },
+    [clearTransitionTimer],
+  );
+
+  return transitions;
+}
+
+function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
+  return items.map((item) => `${item.kind}:${item.id}`).join("|");
 }
 
 // Keep the live clock scoped to tiny leaf components so active Claude turns do
@@ -2180,13 +2434,20 @@ function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   return name === "read" || name === "readfile" || name === "viewfile";
 }
 
+// Read-only inspection commands (read/search/find/list) share the search icon so
+// every inspection row looks the same; other shell commands keep the terminal icon.
+function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  const command = workEntry.command ?? workEntry.rawCommand;
+  return command && isInspectCommand(command) ? SearchIcon : TerminalIcon;
+}
+
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
-  if (workEntry.requestKind === "command") return TerminalIcon;
+  if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
-    return TerminalIcon;
+    return commandWorkEntryIcon(workEntry);
   }
   if (workEntry.itemType === "file_change") {
     return SquarePenIcon;
@@ -2215,6 +2476,11 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 
 // Render command, agent-task, and file-change rows at the tighter compact density.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  // Commands stay compact even when surfaced with a non-terminal icon (read-only
+  // inspections like `cat` now use the file-read search icon).
+  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
+    return true;
+  }
   const EntryIcon = workEntryIcon(workEntry);
   return (
     EntryIcon === TerminalIcon ||
@@ -2650,7 +2916,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <>
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/40 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+                  "flex shrink-0 items-center justify-center text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
                   compact ? "size-4" : "size-5",
                 )}
                 data-tool-icon={leftIconKind}
@@ -2693,7 +2959,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       compact ? "truncate leading-5" : "truncate leading-6",
                       // Match the leading icon's tone so the row reads as one muted unit, and
                       // brighten the whole row to foreground on hover/focus instead of a fill.
-                      "text-muted-foreground/40 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+                      "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
@@ -2846,37 +3112,78 @@ function ToolDetailsDisclosure(props: {
       props.compact ? "gap-1.5" : "gap-2",
       "cursor-pointer focus-visible:outline-none",
     );
-  const [hasOpened, setHasOpened] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [renderDetails, setRenderDetails] = useState(false);
+  const [motionOpen, setMotionOpen] = useState(false);
+  const openFrameRef = useRef<number | null>(null);
+  const cleanupTimeoutRef = useRef<number | null>(null);
+
+  const clearMotionTimers = useCallback(() => {
+    if (openFrameRef.current !== null) {
+      window.cancelAnimationFrame(openFrameRef.current);
+      openFrameRef.current = null;
+    }
+    if (cleanupTimeoutRef.current !== null) {
+      window.clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setDetailsOpen = useCallback(
+    (nextOpen: boolean) => {
+      clearMotionTimers();
+      setOpen(nextOpen);
+
+      if (nextOpen) {
+        setRenderDetails(true);
+        setMotionOpen(false);
+        openFrameRef.current = window.requestAnimationFrame(() => {
+          openFrameRef.current = null;
+          setMotionOpen(true);
+        });
+        return;
+      }
+
+      setMotionOpen(false);
+      cleanupTimeoutRef.current = window.setTimeout(() => {
+        cleanupTimeoutRef.current = null;
+        setRenderDetails(false);
+      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    },
+    [clearMotionTimers],
+  );
+
+  useEffect(() => () => clearMotionTimers(), [clearMotionTimers]);
 
   return (
-    <details
-      className="group/tool-details min-w-0"
-      onToggle={(event) => {
-        if (event.currentTarget.open) {
-          setHasOpened(true);
-        }
-      }}
-    >
-      <summary
-        className={cn("list-none [&::-webkit-details-marker]:hidden", summaryClassName)}
+    <div className="group/tool-details min-w-0">
+      <button
+        type="button"
+        className={summaryClassName}
         title={props.title ?? "View tool details"}
+        aria-expanded={open}
         data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
         data-tool-detail-trigger="true"
+        onClick={() => {
+          setDetailsOpen(!open);
+        }}
       >
         {props.children}
-        <ChevronRightIcon
-          aria-hidden="true"
-          className="size-3.5 shrink-0 text-muted-foreground/38 transition-[transform,color] duration-200 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground group-open/tool-details:rotate-90"
+        <DisclosureChevron
+          open={open}
+          className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
         />
-      </summary>
-      {hasOpened ? (
-        <div
-          className={cn("mt-2 min-w-0", props.compact ? "ml-5" : "ml-7")}
-          data-tool-details-inline="true"
+      </button>
+      {renderDetails ? (
+        <DisclosureRegion
+          open={motionOpen}
+          contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
         >
-          <ToolCallDetailsContent details={props.details} />
-        </div>
+          <div data-tool-details-inline="true">
+            <ToolCallDetailsContent details={props.details} />
+          </div>
+        </DisclosureRegion>
       ) : null}
-    </details>
+    </div>
   );
 }

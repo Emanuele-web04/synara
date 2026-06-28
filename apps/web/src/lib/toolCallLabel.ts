@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, isInspectCommand, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle
 // Depends on: @t3tools/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
@@ -294,6 +294,24 @@ function collectDescriptorCandidates(
   }
 }
 
+// Read-only inspection commands surfaced with the search/magnifying-glass icon in
+// the timeline (reads, searches, finds, listings), as opposed to commands that
+// mutate or execute, which keep the terminal icon. These sets are the single
+// source of truth for both the command labels below and the icon decision.
+const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
+const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
+const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);
+const LIST_COMMAND_TOOLS = new Set(["ls"]);
+
+function isInspectCommandTool(tool: string): boolean {
+  return (
+    READ_FILE_COMMAND_TOOLS.has(tool) ||
+    SEARCH_COMMAND_TOOLS.has(tool) ||
+    FIND_COMMAND_TOOLS.has(tool) ||
+    LIST_COMMAND_TOOLS.has(tool)
+  );
+}
+
 // Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
 export function deriveReadableCommandDisplay(
   rawCommand: string,
@@ -303,41 +321,36 @@ export function deriveReadableCommandDisplay(
   const primaryCommand = firstShellCommandSegment(command);
   const [tool, args] = splitToolAndArgs(primaryCommand);
 
+  if (READ_FILE_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Reading" : "Read",
+      target: lastPathComponents(args, "file"),
+      fullCommand: rawCommand,
+    };
+  }
+  if (SEARCH_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Searching" : "Searched",
+      target: searchSummary(args),
+      fullCommand: rawCommand,
+    };
+  }
+  if (LIST_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Listing" : "Listed",
+      target: lastPathComponents(args, "directory"),
+      fullCommand: rawCommand,
+    };
+  }
+  if (FIND_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Finding" : "Found",
+      target: findTarget(args, "files"),
+      fullCommand: rawCommand,
+    };
+  }
+
   switch (tool) {
-    case "cat":
-    case "nl":
-    case "head":
-    case "tail":
-    case "sed":
-    case "less":
-    case "more":
-      return {
-        verb: isRunning ? "Reading" : "Read",
-        target: lastPathComponents(args, "file"),
-        fullCommand: rawCommand,
-      };
-    case "rg":
-    case "grep":
-    case "ag":
-    case "ack":
-      return {
-        verb: isRunning ? "Searching" : "Searched",
-        target: searchSummary(args),
-        fullCommand: rawCommand,
-      };
-    case "ls":
-      return {
-        verb: isRunning ? "Listing" : "Listed",
-        target: lastPathComponents(args, "directory"),
-        fullCommand: rawCommand,
-      };
-    case "find":
-    case "fd":
-      return {
-        verb: isRunning ? "Finding" : "Found",
-        target: findTarget(args, "files"),
-        fullCommand: rawCommand,
-      };
     case "mkdir":
       return {
         verb: isRunning ? "Creating" : "Created",
@@ -390,6 +403,15 @@ export function deriveReadableCommandDisplay(
         fullCommand: rawCommand,
       };
   }
+}
+
+// Whether a shell command is a read-only inspection (read/search/find/list).
+// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
+// timeline search icon stays in sync with the derived command label.
+export function isInspectCommand(rawCommand: string): boolean {
+  const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+  const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
+  return isInspectCommandTool(tool);
 }
 
 export function deriveInlineCommandCall(rawCommand: string): string {

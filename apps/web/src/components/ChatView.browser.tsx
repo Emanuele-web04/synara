@@ -1843,7 +1843,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("re-sticks to the bottom after sending an optimistic user message", async () => {
+  it("smoothly re-sticks to the bottom after sending an optimistic user message", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -1851,15 +1851,36 @@ describe("ChatView timeline estimator parity (full app)", () => {
         targetText: "bottom stick target",
       }),
     });
+    let patchedScrollContainer: HTMLElement | null = null;
+    let originalScrollTo: HTMLElement["scrollTo"] | null = null;
 
     try {
       const scrollContainer = await waitForElement(
         () => document.querySelector<HTMLElement>("[data-chat-scroll-container='true']"),
         "Unable to find message scroll container.",
       );
-      scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      scrollContainer.scrollTop = 0;
       scrollContainer.dispatchEvent(new Event("scroll"));
       await waitForLayout();
+      expect(getScrollContainerDistanceFromBottom(scrollContainer)).toBeGreaterThan(
+        AUTO_SCROLL_BOTTOM_THRESHOLD_PX,
+      );
+
+      const scrollToCalls: ScrollToOptions[] = [];
+      patchedScrollContainer = scrollContainer;
+      originalScrollTo = scrollContainer.scrollTo;
+      scrollContainer.scrollTo = ((options?: ScrollToOptions | number, y?: number) => {
+        const normalized: ScrollToOptions =
+          typeof options === "object" && options !== null ? options : { left: options, top: y };
+        scrollToCalls.push(normalized);
+        if (typeof normalized.left === "number") {
+          scrollContainer.scrollLeft = normalized.left;
+        }
+        if (typeof normalized.top === "number") {
+          scrollContainer.scrollTop = normalized.top;
+        }
+        scrollContainer.dispatchEvent(new Event("scroll"));
+      }) as typeof scrollContainer.scrollTo;
 
       const prompt = "keep me pinned after send";
       useComposerDraftStore.getState().setPrompt(THREAD_ID, prompt);
@@ -1872,13 +1893,18 @@ describe("ChatView timeline estimator parity (full app)", () => {
         async () => {
           expect(document.body.textContent).toContain(prompt);
           expect(document.activeElement).toBe(await waitForComposerEditor());
+          expect(scrollToCalls.some((call) => call.behavior === "smooth")).toBe(true);
           const layout = await mounted.measureLayout();
           expect(layout.scrollHeightPx).toBeGreaterThan(layout.scrollClientHeightPx);
           expect(layout.distanceFromBottomPx).toBeLessThanOrEqual(AUTO_SCROLL_BOTTOM_THRESHOLD_PX);
         },
         { timeout: 8_000, interval: 16 },
       );
+      scrollContainer.scrollTo = originalScrollTo;
     } finally {
+      if (patchedScrollContainer && originalScrollTo) {
+        patchedScrollContainer.scrollTo = originalScrollTo;
+      }
       await mounted.cleanup();
     }
   });
@@ -4501,12 +4527,34 @@ describe("ChatView timeline estimator parity (full app)", () => {
         window.setTimeout(() => resolve(), 260);
       });
 
-      // Once the grace delay lapses the settled turn folds its inline tools into
-      // the closed "Worked for…" disclosure, so neither the live tail (Tool 6)
-      // nor the head (Tool 1) stays mounted until the user expands the group.
+      // Once the grace delay lapses the settled turn folds into "Worked for…",
+      // but the old details stay mounted briefly inside the shared disclosure
+      // close transition so the transcript height eases down instead of snapping.
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("Worked for");
+          const transitionClone = document.querySelector(
+            "[data-settled-turn-collapse-transition='true']",
+          );
+          expect(transitionClone).not.toBeNull();
+          expect(transitionClone?.hasAttribute("inert")).toBe(true);
+          expect(transitionClone?.querySelector("[aria-hidden='true'][inert]")).not.toBeNull();
+          expect(document.body.textContent).toContain("Tool 6");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await new Promise<void>((resolve) => {
+        window.setTimeout(() => resolve(), 320);
+      });
+
+      // After the close motion finishes, details are only available by opening
+      // the "Worked for…" disclosure.
+      await vi.waitFor(
+        () => {
+          expect(
+            document.querySelector("[data-settled-turn-collapse-transition='true']"),
+          ).toBeNull();
           expect(document.body.textContent).not.toContain("Tool 1");
           expect(document.body.textContent).not.toContain("Tool 6");
         },

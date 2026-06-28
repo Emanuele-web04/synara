@@ -56,7 +56,11 @@ import {
   normalizeGeminiCapabilityProbeResult,
   probeGeminiCapabilities,
 } from "../geminiAcpProbe";
-import { DEFAULT_CURSOR_AGENT_BINARY, resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand";
+import {
+  buildCursorAgentHeadlessEnv,
+  DEFAULT_CURSOR_AGENT_BINARY,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
@@ -793,7 +797,7 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
   );
 
 const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) =>
-  runProviderCommand(executable, args).pipe(
+  runProviderCommand(executable, args, buildCursorAgentHeadlessEnv()).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
         ? Effect.fail(new Error(`spawn ${executable} ENOENT`))

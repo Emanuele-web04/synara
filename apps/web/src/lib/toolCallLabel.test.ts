@@ -3,6 +3,7 @@ import {
   deriveInlineCommandCall,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
+  isInspectCommand,
   normalizeCompactToolLabel,
 } from "./toolCallLabel";
 
@@ -240,5 +241,25 @@ describe("deriveInlineCommandCall", () => {
     expect(deriveInlineCommandCall(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toBe(
       `rg -n "tool call" apps/web/src`,
     );
+  });
+});
+
+describe("isInspectCommand", () => {
+  it("detects read-only inspection commands (read/search/find/list)", () => {
+    expect(isInspectCommand("cat package.json")).toBe(true);
+    expect(isInspectCommand("sed -n 1,40p src/app.ts")).toBe(true);
+    expect(isInspectCommand("head -n 20 README.md")).toBe(true);
+    expect(isInspectCommand(`rg -n "tool call" apps/web/src`)).toBe(true);
+    expect(isInspectCommand("grep -R foo .")).toBe(true);
+    expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
+    expect(isInspectCommand("ls -la src")).toBe(true);
+    expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+  });
+
+  it("does not treat mutating or executing commands as inspections", () => {
+    expect(isInspectCommand("git status")).toBe(false);
+    expect(isInspectCommand("node build.js")).toBe(false);
+    expect(isInspectCommand("rm -rf dist")).toBe(false);
+    expect(isInspectCommand("mkdir foo")).toBe(false);
   });
 });

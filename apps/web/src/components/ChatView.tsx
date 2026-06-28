@@ -2673,6 +2673,10 @@ export default function ChatView({
       ),
     [activeThread?.proposedPlans, agentActivityTimelineState.timelineWorkEntries, timelineMessages],
   );
+  const enteringUserMessageIds = useMemo<ReadonlySet<MessageId>>(
+    () => new Set(optimisticUserMessages.map((message) => message.id)),
+    [optimisticUserMessages],
+  );
   // --- Pinned messages & notes (per-thread, server-synced through sidepanel commands) ---
   const pinnedMessages = activeThread?.pinnedMessages ?? EMPTY_PINNED_MESSAGES;
   const threadMarkers = activeThread?.threadMarkers ?? EMPTY_THREAD_MARKERS;
@@ -4536,18 +4540,22 @@ export default function ChatView({
   // Guards isAtEndRef from flipping during reflow-induced scroll events that
   // fire immediately after an explicit scrollToEnd.
   const programmaticScrollUntilRef = useRef(0);
+  // Smooth only the first auto-follow after a send; live stream re-sticks stay cheap.
+  const animateNextAutoFollowScrollRef = useRef(false);
   const scrollToEnd = useCallback((animated = false) => {
     programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
-  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId) => {
+  const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId, animated = false) => {
     autoFollowThreadIdRef.current = targetThreadId;
+    animateNextAutoFollowScrollRef.current = animated;
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
   }, []);
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
+    animateNextAutoFollowScrollRef.current = false;
   }, []);
   useLayoutEffect(() => {
     const previousHeight = previousComposerStackedChromeHeightRef.current;
@@ -4673,7 +4681,9 @@ export default function ChatView({
     // Re-apply the bottom stick only for real transcript messages; tool/work
     // rows can arrive quickly and should not churn scroll/layout work.
     const frameId = window.requestAnimationFrame(() => {
-      scrollToEnd(false);
+      const shouldAnimate = animateNextAutoFollowScrollRef.current;
+      animateNextAutoFollowScrollRef.current = false;
+      scrollToEnd(shouldAnimate);
     });
     return () => {
       window.cancelAnimationFrame(frameId);
@@ -6684,7 +6694,7 @@ export default function ChatView({
           setComposerDraftPrompt(activeThread.id, leftover);
           setComposerTrigger(null);
           // Bring the new question into view even if the user had scrolled up.
-          armTranscriptAutoFollow(activeThread.id);
+          armTranscriptAutoFollow(activeThread.id, true);
           setPendingAutomationConversation({
             threadId: activeThread.id,
             accumulatedMessage: automationRequest.automationMessage,
@@ -7102,7 +7112,7 @@ export default function ChatView({
     ]);
     // Mark the transcript as anchored before the optimistic row lands so the
     // re-snap effect on row count change pulls us to the new tail.
-    armTranscriptAutoFollow(threadIdForSend);
+    armTranscriptAutoFollow(threadIdForSend, true);
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -7647,7 +7657,7 @@ export default function ChatView({
         source: "native",
       },
     ]);
-    armTranscriptAutoFollow(threadIdForSend);
+    armTranscriptAutoFollow(threadIdForSend, true);
 
     try {
       await persistThreadSettingsForNextTurn({
@@ -10257,6 +10267,7 @@ export default function ChatView({
                     canPinMessage={(messageId) => !isPendingSetupBubbleId(messageId)}
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
+                    enteringUserMessageIds={enteringUserMessageIds}
                     timelineEntries={timelineEntries}
                     turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                     onOpenTurnDiff={onOpenTurnDiff}

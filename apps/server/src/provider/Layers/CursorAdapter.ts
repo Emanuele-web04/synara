@@ -87,7 +87,10 @@ import {
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
-import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
+import {
+  buildCursorAgentHeadlessEnv,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -1481,13 +1484,14 @@ export function makeCursorAdapter(
           ...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []),
           "models",
         ];
+        const env = buildCursorAgentHeadlessEnv();
         const prepared = prepareWindowsSafeProcess(effectiveBinaryPath, args, {
-          env: process.env,
+          env,
         });
         const child = yield* childProcessSpawner.spawn(
           ChildProcess.make(prepared.command, prepared.args, {
             shell: prepared.shell,
-            env: process.env,
+            env,
           }),
         );
         const [stdout, stderr, exitCode] = yield* Effect.all(

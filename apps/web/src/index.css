@@ -352,6 +352,31 @@
   }
 }
 
+/* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
+   so the transcript can stay lightweight while the row appears less abruptly. */
+@keyframes chat-message-send-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-message-send-enter {
+  animation: chat-message-send-enter 180ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-send-enter {
+    animation: none;
+  }
+}
+
 /* Suppress all transitions during theme changes */
 .no-transitions,
 .no-transitions *,

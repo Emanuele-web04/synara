@@ -6,13 +6,12 @@
 // Why: The transport coalesces deltas into one store update per ~100ms
 //      (apps/web/src/routes/__root.tsx Throttler), so rendering each clump verbatim looks
 //      choppy. This hook drains the already-delivered buffer on requestAnimationFrame at a
-//      velocity that adapts to the backlog — always keeping a small cushion so it never
-//      runs dry (an emptied buffer is what produces visible stalls) — and low-pass-smooths
-//      that velocity so there are no jarring speed jumps. It feeds the same text
-//      ChatMarkdown already defers, so the markdown re-parse stays coalesced by
+//      velocity that adapts to the backlog, low-pass-smooths that velocity so there are
+//      no jarring speed jumps, and sleeps between bursts once it catches up. It feeds the
+//      same text ChatMarkdown already defers, so the markdown re-parse stays coalesced by
 //      useDeferredValue: this hook governs *cadence*, not parse cost.
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery";
 
 // Drain the current backlog over this window. Kept above the ~100ms network flush so a
@@ -53,68 +52,82 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
   const emittedRef = useRef(text.length);
   const velocityRef = useRef(0);
   const rafRef = useRef<number | null>(null);
+  const tickRef = useRef<(now: number) => void>(() => undefined);
   const lastFrameRef = useRef(0);
 
-  useEffect(() => {
-    targetRef.current = text;
-  }, [text]);
+  const cancelFrame = useCallback(() => {
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = null;
+    }
+  }, []);
 
-  useEffect(() => {
-    if (!animate) {
-      // Idle / finished / reduced-motion: cancel any loop and snap to the exact text.
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
-      const full = targetRef.current;
-      shownRef.current = full.length;
-      emittedRef.current = full.length;
+  const scheduleFrame = useCallback(() => {
+    if (rafRef.current != null) {
+      return;
+    }
+    rafRef.current = requestAnimationFrame((now) => {
+      rafRef.current = null;
+      tickRef.current(now);
+    });
+  }, []);
+
+  tickRef.current = (now: number) => {
+    const previous = lastFrameRef.current;
+    const dt = previous ? Math.min((now - previous) / 1000, MAX_FRAME_SECONDS) : 0;
+    lastFrameRef.current = now;
+
+    const target = targetRef.current;
+    const len = target.length;
+    if (shownRef.current > len) shownRef.current = len;
+
+    const backlog = len - shownRef.current;
+    if (backlog <= 0) {
+      // Sleep while caught up; the text-update effect wakes the loop on the next flush.
       velocityRef.current = 0;
       lastFrameRef.current = 0;
-      setRevealed(full);
       return;
     }
 
-    // Entering the animating state: never re-reveal text already on screen.
-    emittedRef.current = Math.floor(shownRef.current);
+    const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
+    velocityRef.current += (targetVelocity - velocityRef.current) * VELOCITY_LERP;
+    shownRef.current = Math.min(len, shownRef.current + velocityRef.current * dt);
 
-    const tick = (now: number) => {
-      const previous = lastFrameRef.current;
-      const dt = previous ? Math.min((now - previous) / 1000, MAX_FRAME_SECONDS) : 0;
-      lastFrameRef.current = now;
+    const nextCount = Math.floor(shownRef.current);
+    if (nextCount !== emittedRef.current) {
+      emittedRef.current = nextCount;
+      setRevealed(nextCount >= len ? target : target.slice(0, nextCount));
+    }
 
-      const target = targetRef.current;
-      const len = target.length;
-      // Text can be replaced by something shorter (edit / resend); never reveal past it.
-      if (shownRef.current > len) shownRef.current = len;
-
-      const backlog = len - shownRef.current;
-      if (backlog > 0) {
-        const targetVelocity = Math.min(MAX_CHARS_PER_SECOND, backlog / DRAIN_WINDOW_SECONDS);
-        velocityRef.current += (targetVelocity - velocityRef.current) * VELOCITY_LERP;
-        shownRef.current = Math.min(len, shownRef.current + velocityRef.current * dt);
-      } else {
-        velocityRef.current = 0;
-      }
-
-      const nextCount = Math.floor(shownRef.current);
-      if (nextCount !== emittedRef.current) {
-        emittedRef.current = nextCount;
-        setRevealed(nextCount >= len ? target : target.slice(0, nextCount));
-      }
-
-      rafRef.current = requestAnimationFrame(tick);
-    };
-
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
-      }
+    if (len - shownRef.current > 0) {
+      scheduleFrame();
+    } else {
+      velocityRef.current = 0;
       lastFrameRef.current = 0;
-    };
-  }, [animate]);
+    }
+  };
+
+  useEffect(() => {
+    const previousTarget = targetRef.current;
+    const isAppendOnly = text.length >= previousTarget.length && text.startsWith(previousTarget);
+    targetRef.current = text;
+
+    if (!animate || !isAppendOnly) {
+      cancelFrame();
+      shownRef.current = text.length;
+      emittedRef.current = text.length;
+      velocityRef.current = 0;
+      lastFrameRef.current = 0;
+      setRevealed(text);
+      return;
+    }
+
+    if (text.length > shownRef.current) {
+      scheduleFrame();
+    }
+  }, [animate, cancelFrame, scheduleFrame, text]);
+
+  useEffect(() => () => cancelFrame(), [cancelFrame]);
 
   return animate ? revealed : text;
 }
