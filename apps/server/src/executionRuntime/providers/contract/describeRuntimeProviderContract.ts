@@ -120,6 +120,7 @@ const makeBareRemote = async (): Promise<string> => {
   await runProcess("git", ["-C", seed, "branch", "-M", "main"]);
   await runProcess("git", ["-C", seed, "remote", "add", "origin", remote]);
   await runProcess("git", ["-C", seed, "push", "origin", "main"]);
+  await runProcess("git", ["--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main"]);
   return remote;
 };
 

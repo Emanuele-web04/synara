@@ -1,10 +1,6 @@
 import "../../index.css";
 
-import type {
-  ReviewBoardLanesResult,
-  ReviewListPullRequestsInput,
-  ReviewPullRequestSummary,
-} from "@t3tools/contracts";
+import type { ReviewBoardLanesResult, ReviewPullRequestSummary } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -206,7 +202,7 @@ describe("review surface performance benchmark", () => {
 
       expect(nativeApiMock.getViewer).toHaveBeenCalledTimes(0);
       expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(1);
-      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo" });
+      expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledWith({ cwd: "/repo", limit: 50 });
       expect(nativeApiMock.listPullRequests).toHaveBeenCalledTimes(0);
       expect(naive.rows).toBe(pullRequests.length);
       expect(optimized.resultRows).toBe(REVIEW_BENCHMARK_INITIAL_LIMIT);

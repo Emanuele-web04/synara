@@ -20,25 +20,25 @@
  *
  * @module daytona/DaytonaPtyTransport.live.test
  */
-import { Effect, ManagedRuntime, Stream } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { daytonaCredentialsConfigured, resolveDaytonaCredentials } from "./DaytonaConfig.ts";
-import { liveDaytonaPtyConnect } from "./DaytonaPtyConnector.ts";
-import { makeDaytonaPtySession } from "./DaytonaPtyTransport.ts";
+import { resolveDaytonaCredentials } from "./DaytonaConfig.ts";
 
-const liveEnabled =
-  process.env.DAYTONA_PTY_LIVE === "1" && daytonaCredentialsConfigured(process.env);
+interface DisposableRuntime {
+  dispose(): Promise<void>;
+}
+
+const credentials = resolveDaytonaCredentials(process.env);
+const liveEnabled = process.env.DAYTONA_PTY_LIVE === "1" && credentials !== null;
 
 const describeLive = liveEnabled ? describe : describe.skip;
 
 const quoteArg = (value: string): string => `'${value.split("'").join("'\\''")}'`;
 
 describeLive("Daytona PTY transport (live)", () => {
-  const credentials = resolveDaytonaCredentials(process.env);
   if (credentials === null) {
-    throw new Error("live PTY test enabled without resolvable credentials");
+    it.skip("requires Daytona credentials", () => {});
+    return;
   }
   const apiUrl = credentials.apiUrl;
   const proxyBaseUrl = (() => {
@@ -51,7 +51,7 @@ describeLive("Daytona PTY transport (live)", () => {
   };
 
   let sandboxId: string | undefined;
-  let runtime: ManagedRuntime.ManagedRuntime<HttpClient.HttpClient, never> | undefined;
+  let runtime: DisposableRuntime | undefined;
 
   afterEach(async () => {
     if (runtime) {
@@ -72,6 +72,11 @@ describeLive("Daytona PTY transport (live)", () => {
   });
 
   it("launches over stdin, streams a JSON-RPC frame, and maps the WS close to exit", async () => {
+    const [{ Effect, ManagedRuntime, Stream }, { FetchHttpClient, HttpClient, HttpClientRequest }] =
+      await Promise.all([import("effect"), import("effect/unstable/http")]);
+    const { liveDaytonaPtyConnect } = await import("./DaytonaPtyConnector.ts");
+    const { makeDaytonaPtySession } = await import("./DaytonaPtyTransport.ts");
+
     const createRes = await fetch(`${apiUrl}/sandbox`, {
       method: "POST",
       headers: authHeaders,

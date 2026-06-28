@@ -154,6 +154,11 @@ describe("ReviewWalkthrough", () => {
         source: SOURCE,
         expectedPatchSignature: "sig123",
         expectedHeadSha: "abc123",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.4-mini",
+        },
+        textGenerationModel: "gpt-5.4-mini",
       });
 
       await page.getByText("Define the walkthrough contract").click();

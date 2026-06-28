@@ -960,7 +960,9 @@ describe("TerminalManager", () => {
   });
 
   it("evicts oldest inactive terminal sessions when retention limit is exceeded", async () => {
-    const { manager, ptyAdapter } = makeManager(5, { maxRetainedInactiveSessions: 1 });
+    const { manager, ptyAdapter, logsDir } = makeManager(5, {
+      maxRetainedInactiveSessions: 1,
+    });
 
     await manager.open(openInput({ threadId: "thread-1" }));
     await manager.open(openInput({ threadId: "thread-2" }));
@@ -983,6 +985,14 @@ describe("TerminalManager", () => {
     const sessions = (manager as unknown as { sessions: Map<string, unknown> }).sessions;
     const keys = [...sessions.keys()];
     expect(keys).toEqual(["thread-2\u0000default"]);
+
+    await waitFor(() => {
+      const entries = fs.readdirSync(logsDir);
+      return (
+        entries.includes(historyLogName("thread-1")) &&
+        entries.every((entry) => !entry.includes(".tmp-"))
+      );
+    });
 
     manager.dispose();
   });

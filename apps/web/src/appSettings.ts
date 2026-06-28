@@ -27,7 +27,6 @@ import {
   normalizeCustomModelSlugs,
   patchCustomModels,
   type ProviderCustomModelConfig,
-  PROVIDER_CUSTOM_MODEL_CONFIG,
   resolveAppModelSelection,
   resolveTextGenerationProvider,
 } from "./appSettings.helpers";
@@ -842,5 +841,6 @@ export function useAppSettings() {
     updateSettings,
     resetSettings,
     defaults,
+    settingsReady: !serverSettingsQuery.isPending,
   } as const;
 }

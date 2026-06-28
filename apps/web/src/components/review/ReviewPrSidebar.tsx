@@ -13,7 +13,10 @@ import { cn } from "~/lib/utils";
 import { ReviewPrSidebarInfoPanel, type ReviewSidebarDetail } from "./ReviewPrSidebarInfo";
 import { ReviewRailResizer } from "./reviewPrimitives";
 import { ReviewSidechat } from "./ReviewSidechat";
-import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
+import {
+  hasReviewSidechatAgentContext,
+  type ReviewSidechatContextPayload,
+} from "./reviewSidechatContext";
 import { useResizableReviewSidebar } from "./useResizableReviewSidebar";
 
 type ReviewSidebarTab = "info" | "chat";
@@ -44,10 +47,15 @@ function defaultSidebarTab(mode: "conversation" | "files"): ReviewSidebarTab {
 
 const SIDEBAR_ASSISTANT_LABEL = "Review assistant";
 
-function SidebarStatusDot(props: { ariaLabel?: string; title?: string }) {
+function SidebarStatusDot(props: { ready: boolean; ariaLabel?: string; title?: string }) {
   return (
     <span
-      className="size-2 rounded-full bg-success ring-1 ring-success/30"
+      className={cn(
+        "size-2 rounded-full ring-1",
+        props.ready
+          ? "bg-success ring-success/30"
+          : "bg-muted-foreground/45 ring-muted-foreground/20",
+      )}
       aria-label={props.ariaLabel}
       title={props.title}
     />
@@ -83,13 +91,13 @@ function CollapsedSidebarRail(props: {
   onCollapsedChange: ((collapsed: boolean) => void) | undefined;
 }) {
   return (
-    <aside className="hidden h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border/60 bg-background py-2 xl:flex">
+    <aside className="flex h-full min-h-0 w-12 shrink-0 flex-col items-center border-l border-border/60 bg-background py-2">
       <SidebarCollapseButton collapsed onCollapsedChange={props.onCollapsedChange} />
       <div className="mt-3 flex min-h-0 flex-1 flex-col items-center gap-2" aria-hidden="true">
         <span className="flex size-8 items-center justify-center rounded-lg bg-muted/40 text-primary ring-1 ring-border/40">
           <BotIcon className="size-4" />
         </span>
-        <SidebarStatusDot />
+        <SidebarStatusDot ready={false} />
         <span className="mt-1 [writing-mode:vertical-rl] text-[10px] font-semibold text-muted-foreground/75 uppercase tracking-wide">
           {SIDEBAR_ASSISTANT_LABEL}
         </span>
@@ -110,7 +118,6 @@ function SidebarTabButton(props: {
       type="button"
       role="tab"
       aria-selected={active}
-      tabIndex={active ? 0 : -1}
       onClick={() => props.onSelect(props.tab)}
       className={cn(
         "inline-flex h-8 min-w-0 items-center justify-center rounded-lg px-3 text-[12px] font-medium outline-none",
@@ -128,6 +135,7 @@ function SidebarTabButton(props: {
 
 function SidebarTabbedHeader(props: {
   activeTab: ReviewSidebarTab;
+  chatContextReady: boolean;
   onTabChange: (tab: ReviewSidebarTab) => void;
   collapsed: boolean;
   onCollapsedChange: ((collapsed: boolean) => void) | undefined;
@@ -147,7 +155,12 @@ function SidebarTabbedHeader(props: {
         </SidebarTabButton>
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
-        {props.activeTab === "chat" ? <SidebarStatusDot title="PR context loaded" /> : null}
+        {props.activeTab === "chat" ? (
+          <SidebarStatusDot
+            ready={props.chatContextReady}
+            title={props.chatContextReady ? "PR context loaded" : "Loading PR context"}
+          />
+        ) : null}
         <SidebarCollapseButton
           collapsed={props.collapsed}
           onCollapsedChange={props.onCollapsedChange}
@@ -176,6 +189,7 @@ export function ReviewPrSidebar(props: {
   const mode = props.mode ?? "conversation";
   const collapsed = props.collapsed ?? false;
   const [activeTab, setActiveTab] = useState<ReviewSidebarTab>(() => defaultSidebarTab(mode));
+  const chatContextReady = hasReviewSidechatAgentContext(props.sidechatContext);
   const sidebarRef = useRef<HTMLElement | null>(null);
   const [containerWidth, setContainerWidth] = useState<number | null>(null);
   const baseBounds = REVIEW_AGENT_SIDEBAR_WIDTH_BY_MODE[mode];
@@ -232,11 +246,12 @@ export function ReviewPrSidebar(props: {
       />
       <aside
         ref={sidebarRef}
-        className="hidden h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background xl:flex"
+        className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background max-xl:max-w-[min(420px,calc(100vw-48px))]"
         style={{ width: resize.width }}
       >
         <SidebarTabbedHeader
           activeTab={activeTab}
+          chatContextReady={chatContextReady}
           onTabChange={setActiveTab}
           collapsed={collapsed}
           onCollapsedChange={props.onCollapsedChange}

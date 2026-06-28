@@ -243,6 +243,103 @@ describe("applyReviewUpdatedPayload", () => {
     });
   });
 
+  it("keeps matching aggregate surface caches aligned with overview updates", () => {
+    const queryClient = new QueryClient();
+    const surfaceKey = reviewQueryKeys.pullRequestSurface(
+      "/repo",
+      "42",
+      reviewSourceKey(REVIEW_SOURCE),
+      false,
+      true,
+    );
+    const nextOverview = {
+      ...REVIEW_OVERVIEW,
+      detail: { ...REVIEW_OVERVIEW.detail, title: "Updated review title" },
+    } satisfies ReviewPullRequestOverview;
+    queryClient.setQueryData(surfaceKey, {
+      overview: REVIEW_OVERVIEW,
+      changeset: REVIEW_CHANGESET,
+    } satisfies ReviewPullRequestSurfaceResult);
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestOverview",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: nextOverview,
+      fetchedAt: 123,
+    });
+
+    expect(queryClient.getQueryData<ReviewPullRequestSurfaceResult>(surfaceKey)?.overview).toEqual(
+      nextOverview,
+    );
+    expect(queryClient.getQueryData<ReviewPullRequestSurfaceResult>(surfaceKey)?.changeset).toBe(
+      REVIEW_CHANGESET,
+    );
+  });
+
+  it("keeps aggregate surface caches aligned with requested conversation and changeset updates", () => {
+    const queryClient = new QueryClient();
+    const fullSurfaceKey = reviewQueryKeys.pullRequestSurface(
+      "/repo",
+      "42",
+      reviewSourceKey(REVIEW_SOURCE),
+      true,
+      true,
+    );
+    const overviewOnlySurfaceKey = reviewQueryKeys.pullRequestSurface(
+      "/repo",
+      "42",
+      reviewSourceKey(REVIEW_SOURCE),
+      false,
+      false,
+    );
+    const nextConversation = { events: [] } satisfies ReviewConversationResult;
+    const nextChangeset = {
+      ...REVIEW_CHANGESET,
+      patch: "diff --git a/b.ts b/b.ts\n",
+    } satisfies ReviewChangesetResult;
+    queryClient.setQueryData(fullSurfaceKey, {
+      overview: REVIEW_OVERVIEW,
+      conversation: REVIEW_CONVERSATION,
+      changeset: REVIEW_CHANGESET,
+    } satisfies ReviewPullRequestSurfaceResult);
+    queryClient.setQueryData(overviewOnlySurfaceKey, {
+      overview: REVIEW_OVERVIEW,
+    } satisfies ReviewPullRequestSurfaceResult);
+
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestConversation",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: nextConversation,
+      fetchedAt: 124,
+    });
+    applyReviewUpdatedPayload(queryClient, {
+      _tag: "pullRequestChangeset",
+      cwd: "/repo",
+      repositoryId: "repo",
+      reference: "42",
+      data: nextChangeset,
+      fetchedAt: 125,
+    });
+
+    expect(
+      queryClient.getQueryData<ReviewPullRequestSurfaceResult>(fullSurfaceKey)?.conversation,
+    ).toEqual(nextConversation);
+    expect(
+      queryClient.getQueryData<ReviewPullRequestSurfaceResult>(fullSurfaceKey)?.changeset,
+    ).toEqual(nextChangeset);
+    expect(
+      queryClient.getQueryData<ReviewPullRequestSurfaceResult>(overviewOnlySurfaceKey)
+        ?.conversation,
+    ).toBeUndefined();
+    expect(
+      queryClient.getQueryData<ReviewPullRequestSurfaceResult>(overviewOnlySurfaceKey)?.changeset,
+    ).toBeUndefined();
+  });
+
   it("invalidates board-lane and list queries for the repo on a boardLanes signal", () => {
     const queryClient = new QueryClient();
     const laneKey = reviewQueryKeys.boardLanes("/repo");

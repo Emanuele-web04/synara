@@ -13,8 +13,8 @@ import {
 // per-keystroke fetch by putting a search string back in the key.
 describe("provider discovery query keys are search-independent", () => {
   it("skills key does not vary with what the user types", () => {
-    const key = providerDiscoveryQueryKeys.skills("codex", "/repo", null);
-    expect(key).toEqual(["provider-discovery", "skills", "codex", "/repo", null]);
+    const key = providerDiscoveryQueryKeys.skills("codex", "/repo", null, null);
+    expect(key).toEqual(["provider-discovery", "skills", "codex", "/repo", null, null]);
     // No element is a free-text search term.
     expect(key).not.toContain("rea");
   });
@@ -32,15 +32,31 @@ describe("provider discovery query keys are search-independent", () => {
     expect(a.queryKey).toEqual(b.queryKey);
   });
 
+  it("separates thread-scoped skill discovery by thread id", () => {
+    const a = providerSkillsQueryOptions({
+      provider: "codex",
+      cwd: "/repo",
+      threadId: "thread-a",
+    });
+    const b = providerSkillsQueryOptions({
+      provider: "codex",
+      cwd: "/repo",
+      threadId: "thread-b",
+    });
+    expect(a.queryKey).not.toEqual(b.queryKey);
+  });
+
   it("can defer skill discovery while keeping the same cache key", () => {
     const deferred = providerSkillsQueryOptions({
       provider: "codex",
       cwd: "/repo",
+      threadId: "thread-a",
       enabled: false,
     });
     const enabled = providerSkillsQueryOptions({
       provider: "codex",
       cwd: "/repo",
+      threadId: "thread-a",
       enabled: true,
     });
     expect(deferred.queryKey).toEqual(enabled.queryKey);

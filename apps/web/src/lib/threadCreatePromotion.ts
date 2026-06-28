@@ -44,7 +44,7 @@ async function recoverPromotedThreadFromShellSnapshot(
   const snapshot = await api.orchestration.getShellSnapshot();
   useStore.getState().syncServerShellSnapshot(snapshot);
   markPromotedDraftThreads(new Set(snapshot.threads.map((thread) => thread.id)));
-  return getThreadFromState(useStore.getState(), threadId) !== null;
+  return getThreadFromState(useStore.getState(), threadId) !== undefined;
 }
 
 async function dispatchPromoteThreadCreate(

@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
-import { buildReviewSidechatInitialPrompt } from "./reviewSidechatContext";
+import {
+  buildReviewSidechatInitialPrompt,
+  hasReviewSidechatAgentContext,
+} from "./reviewSidechatContext";
 
 function makePayload(): ReviewSidechatContextPayload {
   return {
@@ -153,5 +156,25 @@ describe("buildReviewSidechatInitialPrompt", () => {
     expect(prompt).toContain("Changed files:");
     expect(prompt).toContain("src/risky.ts");
     expect(prompt).not.toContain("Pull request description:");
+  });
+});
+
+describe("hasReviewSidechatAgentContext", () => {
+  it("waits for changed-file context when the header reports changed files", () => {
+    expect(hasReviewSidechatAgentContext(makePayload())).toBe(false);
+  });
+
+  it("treats a loaded zero-file PR as ready for review chat", () => {
+    expect(
+      hasReviewSidechatAgentContext({
+        ...makePayload(),
+        stats: {
+          files: 0,
+          additions: 0,
+          deletions: 0,
+          commits: 1,
+        },
+      }),
+    ).toBe(true);
   });
 });

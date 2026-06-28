@@ -66,7 +66,10 @@ import { useStore } from "~/store";
 import { createReviewSidechatThreadSelector } from "~/storeSelectors";
 import { retainThreadDetailSubscription } from "~/threadDetailSubscriptionRetention";
 import type { ChatMessage, Thread } from "~/types";
-import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
+import {
+  hasReviewSidechatAgentContext,
+  type ReviewSidechatContextPayload,
+} from "./reviewSidechatContext";
 
 const ASK_SUGGESTIONS = [
   "Summarize this PR",
@@ -92,6 +95,15 @@ type PendingReviewTurn = {
 };
 
 const REVIEW_TURN_START_TIMEOUT_MS = 15_000;
+const REVIEW_CONTEXT_LOADING_TOAST = {
+  title: "PR chat is loading",
+  description: "Changed files are still loading. Try again in a moment.",
+} as const;
+
+type OpenedSidechatThread = {
+  readonly contextKey: string;
+  readonly threadId: ThreadId;
+};
 
 type ReviewSidechatComposerProps = {
   compact: boolean;
@@ -102,6 +114,7 @@ type ReviewSidechatComposerProps = {
   selectedModelSelection: ModelSelection;
   showSuggestions: boolean;
   suggestions: readonly string[];
+  isReviewContextReady: boolean;
   onModelSelectionChange: (modelSelection: ModelSelection) => void;
   onDraftSkillMentionChange: (hasSkillMention: boolean) => void;
   onResolveSkillsForQuestion: (question: string) => Promise<readonly ProviderSkillReference[]>;
@@ -116,14 +129,9 @@ function reviewSidechatPrewarmKey(input: {
   context: ReviewSidechatContextPayload;
   modelSelection: ModelSelection;
 }): string {
-  const contextState =
-    input.context.cwd !== null &&
-    input.context.repositoryId !== null &&
-    input.context.target !== null &&
-    input.context.headSha !== null &&
-    input.context.files.length > 0
-      ? `head:${input.context.headSha}`
-      : "incomplete";
+  const contextState = hasReviewSidechatAgentContext(input.context)
+    ? `head:${input.context.headSha}`
+    : "incomplete";
   return [
     input.context.cwd ?? "",
     input.context.repositoryId ?? "",
@@ -133,6 +141,16 @@ function reviewSidechatPrewarmKey(input: {
     input.modelSelection.provider,
     input.modelSelection.model,
     JSON.stringify(input.modelSelection.options ?? null),
+  ].join("\u001f");
+}
+
+function reviewSidechatContextKey(context: ReviewSidechatContextPayload): string {
+  return [
+    context.cwd ?? "",
+    context.repositoryId ?? "",
+    context.reference,
+    String(context.number),
+    context.headSha ?? "",
   ].join("\u001f");
 }
 
@@ -409,6 +427,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
   selectedModelSelection,
   showSuggestions,
   suggestions,
+  isReviewContextReady,
   onModelSelectionChange,
   onDraftSkillMentionChange,
   onResolveSkillsForQuestion,
@@ -418,7 +437,21 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
   const [cursor, setCursor] = useState(0);
   const [isResolvingSkills, setIsResolvingSkills] = useState(false);
   const hasPrompt = draft.trim().length > 0;
-  const isSendBlocked = isReviewChatWorking || isSkillDiscoveryPending || isResolvingSkills;
+  const isSendBlocked =
+    isReviewChatWorking || isSkillDiscoveryPending || isResolvingSkills || !isReviewContextReady;
+  const loadingHint = !isReviewContextReady
+    ? "Loading changed files before chat starts"
+    : isSkillDiscoveryPending
+      ? "Finding referenced skills"
+      : null;
+  const editorPlaceholder = isReviewContextReady
+    ? "Ask about this review"
+    : "Loading changed files...";
+  const sendButtonLabel = !isReviewContextReady
+    ? "Loading PR context"
+    : isStartingSidechat
+      ? "Starting PR chat"
+      : "Send PR chat question";
   const sendDraft = useCallback(
     async (rawQuestion: string) => {
       const question = rawQuestion.trim();
@@ -512,7 +545,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
               cursor={cursor}
               terminalContexts={[]}
               disabled={isStartingSidechat || isResolvingSkills}
-              placeholder="Ask about this review"
+              placeholder={editorPlaceholder}
               onRemoveTerminalContext={noopMessagesHandler}
               onChange={handleDraftChange}
               onCommandKeyDown={handleComposerCommandKey}
@@ -536,7 +569,7 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
               type="submit"
               disabled={!hasPrompt || isSendBlocked}
               className="inline-flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background opacity-95 transition-[opacity,transform] hover:opacity-100 active:scale-[0.96] disabled:pointer-events-none disabled:opacity-45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none motion-reduce:active:scale-100"
-              aria-label={isStartingSidechat ? "Starting PR chat" : "Send PR chat question"}
+              aria-label={sendButtonLabel}
             >
               {isStartingSidechat || isResolvingSkills ? (
                 <Loader2Icon className="size-3.5 animate-spin" aria-hidden="true" />
@@ -547,6 +580,11 @@ const ReviewSidechatComposer = memo(function ReviewSidechatComposer({
           </div>
         </div>
       </div>
+      {loadingHint !== null ? (
+        <p className="-mt-1 px-1 text-[11px] leading-4 text-muted-foreground" role="status">
+          {loadingHint}
+        </p>
+      ) : null}
     </form>
   );
 });
@@ -565,7 +603,9 @@ export function ReviewSidechat(props: {
   const [isStartingNewThread, setIsStartingNewThread] = useState(false);
   const [optimisticMessage, setOptimisticMessage] = useState<OptimisticReviewMessage | null>(null);
   const [pendingReviewTurn, setPendingReviewTurn] = useState<PendingReviewTurn | null>(null);
-  const [openedSidechatThreadId, setOpenedSidechatThreadId] = useState<ThreadId | null>(null);
+  const [openedSidechatThread, setOpenedSidechatThread] = useState<OpenedSidechatThread | null>(
+    null,
+  );
   const [draftHasSkillMention, setDraftHasSkillMention] = useState(false);
   const manualThreadIdRef = useRef<ThreadId | null>(null);
   const prewarmedKeyRef = useRef<string | null>(null);
@@ -575,8 +615,13 @@ export function ReviewSidechat(props: {
     defaultReviewChatModelSelection(),
   );
   const compact = props.mode === "files";
+  const isReviewContextReady = hasReviewSidechatAgentContext(props.context);
+  const contextKey = useMemo(() => reviewSidechatContextKey(props.context), [props.context]);
   const suggestions = ASK_SUGGESTIONS;
-  const activeThreadId = openedSidechatThreadId ?? props.reviewThreadId ?? null;
+  const activeThreadId =
+    openedSidechatThread?.contextKey === contextKey
+      ? openedSidechatThread.threadId
+      : (props.reviewThreadId ?? null);
   const selectActiveThread = useMemo(
     () => createReviewSidechatThreadSelector(activeThreadId),
     [activeThreadId],
@@ -771,18 +816,18 @@ export function ReviewSidechat(props: {
   );
   useEffect(() => {
     manualThreadIdRef.current = null;
-    setOpenedSidechatThreadId(props.reviewThreadId ?? null);
-  }, [props.context.number, props.context.reference, props.reviewThreadId]);
+    setOpenedSidechatThread(
+      props.reviewThreadId ? { contextKey, threadId: props.reviewThreadId } : null,
+    );
+  }, [contextKey, props.reviewThreadId]);
 
-  useEffect(() => {
-    latestContextRef.current = props.context;
-  }, [props.context]);
+  latestContextRef.current = props.context;
 
   useEffect(() => {
     if (props.ownsPrewarm === false) {
       return;
     }
-    if (!latestContextRef.current.cwd) {
+    if (!latestContextRef.current.cwd || !hasReviewSidechatAgentContext(latestContextRef.current)) {
       return;
     }
     if (prewarmedKeyRef.current === prewarmKey || prewarmingKeyRef.current === prewarmKey) {
@@ -795,7 +840,7 @@ export function ReviewSidechat(props: {
       modelSelection: selectedModelSelection,
       onThreadReady: (threadId) => {
         if (!cancelled && manualThreadIdRef.current === null) {
-          setOpenedSidechatThreadId(threadId);
+          setOpenedSidechatThread({ contextKey, threadId });
         }
       },
     })
@@ -813,7 +858,7 @@ export function ReviewSidechat(props: {
     return () => {
       cancelled = true;
     };
-  }, [prewarmKey, props.ownsPrewarm, selectedModelSelection]);
+  }, [contextKey, prewarmKey, props.ownsPrewarm, selectedModelSelection]);
 
   useEffect(() => {
     if (!activeThreadId) {
@@ -900,6 +945,15 @@ export function ReviewSidechat(props: {
       setOptimisticMessage(nextOptimisticMessage);
       setPendingReviewTurn(null);
       try {
+        if (!hasReviewSidechatAgentContext(latestContextRef.current)) {
+          toastManager.add({
+            type: "warning",
+            title: REVIEW_CONTEXT_LOADING_TOAST.title,
+            description: REVIEW_CONTEXT_LOADING_TOAST.description,
+          });
+          setOptimisticMessage(null);
+          return false;
+        }
         const result = await sendReviewChatQuestion({
           payload: latestContextRef.current,
           question,
@@ -907,16 +961,16 @@ export function ReviewSidechat(props: {
           modelSelection: selectedModelSelection,
           skills,
           onThreadReady: (threadId) => {
-            setOpenedSidechatThreadId(threadId);
+            setOpenedSidechatThread({ contextKey, threadId });
           },
           onQueuedProviderStartRequested: (threadId, startedAt) => {
-            setOpenedSidechatThreadId(threadId);
+            setOpenedSidechatThread({ contextKey, threadId });
             setPendingReviewTurn((current) =>
               current?.startedAt === startedAt ? { ...current, phase: "sent" } : current,
             );
           },
           onQueuedTurnStarted: (threadId, startedAt) => {
-            setOpenedSidechatThreadId(threadId);
+            setOpenedSidechatThread({ contextKey, threadId });
             setPendingReviewTurn((current) =>
               current?.startedAt === startedAt ? { ...current, phase: "sent" } : current,
             );
@@ -932,7 +986,7 @@ export function ReviewSidechat(props: {
           },
         });
         if (result.status === "sent" || result.status === "queued") {
-          setOpenedSidechatThreadId(result.threadId);
+          setOpenedSidechatThread({ contextKey, threadId: result.threadId });
           setPendingReviewTurn({
             startedAt: result.status === "sent" ? result.turnRequestedAt : result.queuedAt,
             phase: result.status,
@@ -963,11 +1017,19 @@ export function ReviewSidechat(props: {
         setIsStartingSidechat(false);
       }
     },
-    [activeThreadId, selectedModelSelection],
+    [activeThreadId, contextKey, selectedModelSelection],
   );
 
   const startFreshThread = async () => {
     if (isStartingNewThread) {
+      return;
+    }
+    if (!hasReviewSidechatAgentContext(latestContextRef.current)) {
+      toastManager.add({
+        type: "warning",
+        title: REVIEW_CONTEXT_LOADING_TOAST.title,
+        description: REVIEW_CONTEXT_LOADING_TOAST.description,
+      });
       return;
     }
     setIsStartingNewThread(true);
@@ -980,7 +1042,7 @@ export function ReviewSidechat(props: {
       });
       if (result.status === "ready") {
         manualThreadIdRef.current = result.threadId;
-        setOpenedSidechatThreadId(result.threadId);
+        setOpenedSidechatThread({ contextKey, threadId: result.threadId });
         return;
       }
       toastManager.add({
@@ -1071,6 +1133,7 @@ export function ReviewSidechat(props: {
         isReviewChatWorking={isReviewChatWorking}
         isSkillDiscoveryPending={isSkillDiscoveryPending}
         isStartingSidechat={isStartingSidechat}
+        isReviewContextReady={isReviewContextReady}
         modelOptionsByProvider={modelOptionsByProvider}
         selectedModelSelection={selectedModelSelection}
         showSuggestions={visibleMessages.length === 0 && optimisticMessage === null}

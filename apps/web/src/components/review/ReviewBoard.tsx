@@ -340,8 +340,8 @@ export function ReviewBoard(props: { cwd: string | null }) {
   }
 
   const handleSync = () => {
-    void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequestLists(cwd) });
-    void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.boardLanes(cwd) });
+    void boardLanesQuery.refetch();
+    void queryClient.refetchQueries({ queryKey: reviewQueryKeys.pullRequestLists(cwd) });
   };
 
   const openReference = (reference: string) => {

@@ -20,7 +20,6 @@ import {
   TerminalWriteInput,
 } from "@t3tools/contracts";
 import {
-  deriveTerminalTitleSignalIdentity,
   terminalCliKindFromValue,
   T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
@@ -50,6 +49,12 @@ export const DEFAULT_OPEN_ROWS = 30;
 export const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
 export const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
+const HOST_TERMINAL_ENV_BLOCKLIST = new Set([
+  "TERM_PROGRAM",
+  "TERM_PROGRAM_VERSION",
+  "TERMINFO",
+  "GHOSTTY_RESOURCES_DIR",
+]);
 export const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
 export const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
 export const WINDOWS_DEFAULT_TERMINAL_SHELL = "powershell.exe";
@@ -123,7 +128,7 @@ function shellCandidateFromCommand(
   if (!command || command.length === 0) return null;
   const shellName = path.basename(command).toLowerCase();
   if (platform !== "win32" && shellName === "zsh") {
-    return { shell: command, args: ["-o", "nopromptsp"] };
+    return { shell: command, args: ["-l", "-o", "nopromptsp"] };
   }
   return { shell: command };
 }
@@ -506,7 +511,9 @@ function shouldExcludeTerminalEnvKey(key: string): boolean {
   if (normalizedKey.startsWith("VITE_")) {
     return true;
   }
-  return TERMINAL_ENV_BLOCKLIST.has(normalizedKey);
+  return (
+    TERMINAL_ENV_BLOCKLIST.has(normalizedKey) || HOST_TERMINAL_ENV_BLOCKLIST.has(normalizedKey)
+  );
 }
 
 export function createTerminalSpawnEnv(
@@ -528,6 +535,7 @@ export function createTerminalSpawnEnv(
       spawnEnv[key] = value;
     }
   }
+  spawnEnv.TERM = process.platform === "win32" ? "xterm-color" : "xterm-256color";
   return managedWrapperOptions
     ? applyManagedTerminalAgentWrapperEnv(spawnEnv, managedWrapperOptions)
     : spawnEnv;

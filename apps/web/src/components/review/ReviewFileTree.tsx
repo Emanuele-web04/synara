@@ -450,7 +450,7 @@ function ReviewFileTreeItemRow(props: {
           />
         </TreeItemLabel>
       </TreeItem>
-      <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+      <div className="absolute right-1.5 top-1/2 z-20 -translate-y-1/2">
         <ViewedCheckbox viewed={isViewed} onToggle={() => props.onToggleViewed(file.path)} />
       </div>
     </div>

@@ -85,6 +85,7 @@ export type RemoteAgentTransportFactory = (
  */
 export interface ProviderSessionStartServerOptions {
   readonly remoteTransport?: RemoteAgentTransportFactory;
+  readonly reviewProfile?: "review-chat";
 }
 
 export interface ProviderAdapterCapabilities {

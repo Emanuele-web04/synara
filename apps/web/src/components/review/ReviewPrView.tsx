@@ -40,7 +40,10 @@ import { ReviewSubmitBar } from "./ReviewSubmitBar";
 import { ReviewSurface } from "./ReviewSurface";
 import { ReviewTabStrip, type ReviewTabItem } from "./ReviewTabStrip";
 import { EmptyState } from "./reviewPrimitives";
-import { buildReviewSidechatContextPayload } from "./reviewSidechatContext";
+import {
+  buildReviewSidechatContextPayload,
+  hasReviewSidechatAgentContext,
+} from "./reviewSidechatContext";
 import type { ReviewSidechatContextPayload } from "./reviewSidechatContext";
 import { ReviewWalkthrough } from "./walkthrough/ReviewWalkthrough";
 
@@ -87,17 +90,12 @@ function saveSidebarCollapsed(collapsed: boolean): void {
 function reviewChatPrewarmContextKey(
   context: Pick<
     ReviewSidechatContextPayload,
-    "cwd" | "repositoryId" | "reference" | "number" | "headSha" | "target" | "files"
+    "cwd" | "repositoryId" | "reference" | "number" | "headSha" | "target" | "files" | "stats"
   >,
 ): string {
-  const contextState =
-    context.cwd !== null &&
-    context.repositoryId !== null &&
-    context.target !== null &&
-    context.headSha !== null &&
-    context.files.length > 0
-      ? `head:${context.headSha}`
-      : "incomplete";
+  const contextState = hasReviewSidechatAgentContext(context)
+    ? `head:${context.headSha}`
+    : "incomplete";
   return [
     context.cwd ?? "",
     context.repositoryId ?? "",
@@ -152,9 +150,7 @@ export function ReviewPrView(props: {
   }, [conversationHydrationKey, headerDetail]);
   const isSurfaceHydrationReady =
     readySurfaceHydrationKey !== null && readySurfaceHydrationKey === conversationHydrationKey;
-  // The walkthrough tab needs the changeset too: ReviewWalkthrough takes patch +
-  // patchSignature, so widen the fetch gate beyond Files.
-  const needsChangeset = tab === "files" || tab === "walkthrough";
+  const needsChangeset = true;
   const surfaceQuery = useQuery({
     ...reviewLoadPullRequestSurfaceQueryOptions({
       cwd: props.cwd,
@@ -172,7 +168,8 @@ export function ReviewPrView(props: {
       cwd: props.cwd,
       reference: headerDetail ? props.reference : null,
     }),
-    enabled: props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady,
+    enabled:
+      props.cwd !== null && headerDetail !== null && isSurfaceHydrationReady && !needsChangeset,
   });
   const conversationQuery = useQuery({
     ...reviewLoadConversationQueryOptions({
@@ -278,7 +275,11 @@ export function ReviewPrView(props: {
   }, [sidechatContext]);
   useEffect(() => {
     const sidechatContext = latestSidechatContextRef.current;
-    if (!sidechatContext?.cwd || !reviewChatPrewarmKey) {
+    if (
+      !sidechatContext?.cwd ||
+      !reviewChatPrewarmKey ||
+      !hasReviewSidechatAgentContext(sidechatContext)
+    ) {
       return;
     }
     const modelSelection = defaultReviewChatModelSelection();

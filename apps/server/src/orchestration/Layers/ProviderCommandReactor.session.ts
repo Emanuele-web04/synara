@@ -368,31 +368,36 @@ export function makeReactorSession(deps: ReactorCoreDeps) {
     // untouched.
     const remoteInstanceId = resolvedTarget.instanceId;
     const sessionServerOptions: ProviderSessionStartServerOptions | undefined =
-      remoteInstanceId !== null
+      remoteInstanceId !== null || thread.reviewChatTarget
         ? {
-            remoteTransport: (spec) =>
-              Effect.runPromise(
-                executionRuntimeService
-                  .exec({
-                    threadId,
-                    instanceId: remoteInstanceId,
-                    role: "agent",
-                    command: spec.command,
-                    args: spec.args,
-                  })
-                  .pipe(Effect.map((handle) => handle.transport)),
-              ).catch((cause: unknown) => {
-                // The Effect→Promise boundary (the manager is a plain class, not
-                // an Effect service) flattens a typed failure/defect into an
-                // opaque rejection. Re-wrap with the instance so a failed remote
-                // start is diagnosable instead of a bare "transport failed".
-                throw new Error(
-                  `Remote runtime exec failed for instance ${remoteInstanceId}: ${
-                    cause instanceof Error ? cause.message : String(cause)
-                  }`,
-                  { cause },
-                );
-              }),
+            ...(thread.reviewChatTarget ? { reviewProfile: "review-chat" as const } : {}),
+            ...(remoteInstanceId !== null
+              ? {
+                  remoteTransport: (spec) =>
+                    Effect.runPromise(
+                      executionRuntimeService
+                        .exec({
+                          threadId,
+                          instanceId: remoteInstanceId,
+                          role: "agent",
+                          command: spec.command,
+                          args: spec.args,
+                        })
+                        .pipe(Effect.map((handle) => handle.transport)),
+                    ).catch((cause: unknown) => {
+                      // The Effect→Promise boundary (the manager is a plain class, not
+                      // an Effect service) flattens a typed failure/defect into an
+                      // opaque rejection. Re-wrap with the instance so a failed remote
+                      // start is diagnosable instead of a bare "transport failed".
+                      throw new Error(
+                        `Remote runtime exec failed for instance ${remoteInstanceId}: ${
+                          cause instanceof Error ? cause.message : String(cause)
+                        }`,
+                        { cause },
+                      );
+                    }),
+                }
+              : {}),
           }
         : undefined;
     const workspaceState = resolveThreadWorkspaceState({
