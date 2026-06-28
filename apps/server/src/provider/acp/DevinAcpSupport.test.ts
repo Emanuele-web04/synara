@@ -293,7 +293,7 @@ describe("resolveDevinAcpAuthMethodId", () => {
       assert.strictEqual(method, "windsurf-api-key");
     }));
 
-  it("returns windsurf-api-key when authMethods is undefined", () =>
+  it("fails with AcpRequestError when authMethods is undefined", () =>
     Effect.gen(function* () {
       // When authMethods is undefined, the set is empty, so this should fail.
       const error = yield* resolveDevinAcpAuthMethodId({
@@ -302,7 +302,7 @@ describe("resolveDevinAcpAuthMethodId", () => {
       assert.strictEqual(error._tag, "AcpRequestError");
     }));
 
-  it("returns windsurf-api-key when authMethods is empty array", () =>
+  it("fails with AcpRequestError when authMethods is empty array", () =>
     Effect.gen(function* () {
       const error = yield* resolveDevinAcpAuthMethodId({
         protocolVersion: 1,

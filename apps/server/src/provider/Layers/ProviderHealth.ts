@@ -1950,6 +1950,9 @@ export function parseDevinAuthStatusFromOutput(
     };
   }
   if (parsedAuth.attemptedJsonParse) {
+    if (options?.hasApiKeyEnv) {
+      return DEVIN_API_KEY_AUTHENTICATED_STATUS;
+    }
     return {
       status: "warning",
       authStatus: "unknown",
@@ -1959,6 +1962,10 @@ export function parseDevinAuthStatusFromOutput(
   }
   if (result.code === 0) {
     return { status: "ready", authStatus: "authenticated" };
+  }
+
+  if (options?.hasApiKeyEnv) {
+    return DEVIN_API_KEY_AUTHENTICATED_STATUS;
   }
 
   const detail = detailFromResult(result);
@@ -2024,6 +2031,7 @@ export const makeCheckDevinProviderStatus = (
     }
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
+    const hasApiKeyEnv = hasDevinApiKeyEnv();
     const authProbe = yield* runDevinCommand(["auth", "status"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
@@ -2031,6 +2039,15 @@ export const makeCheckDevinProviderStatus = (
 
     if (Result.isFailure(authProbe)) {
       const error = authProbe.failure;
+      if (hasApiKeyEnv) {
+        return {
+          provider: DEVIN_PROVIDER,
+          ...DEVIN_API_KEY_AUTHENTICATED_STATUS,
+          available: true,
+          version: parsedVersion,
+          checkedAt,
+        } satisfies ServerProviderStatus;
+      }
       return {
         provider: DEVIN_PROVIDER,
         status: "warning" as const,
@@ -2046,6 +2063,15 @@ export const makeCheckDevinProviderStatus = (
     }
 
     if (Option.isNone(authProbe.success)) {
+      if (hasApiKeyEnv) {
+        return {
+          provider: DEVIN_PROVIDER,
+          ...DEVIN_API_KEY_AUTHENTICATED_STATUS,
+          available: true,
+          version: parsedVersion,
+          checkedAt,
+        } satisfies ServerProviderStatus;
+      }
       return {
         provider: DEVIN_PROVIDER,
         status: "warning" as const,

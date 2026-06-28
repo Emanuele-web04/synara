@@ -70,7 +70,7 @@ describe("isAcpAuthRequiredError", () => {
     expect(isAcpAuthRequiredError(error)).toBe(false);
   });
 
-  it("returns true for AcpRequestError with code -32000 but undefined errorMessage", () => {
+  it("returns true for AcpRequestError with code -32000 and empty string errorMessage", () => {
     const error = new EffectAcpErrors.AcpRequestError({
       code: -32000,
       errorMessage: "",

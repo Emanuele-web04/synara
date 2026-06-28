@@ -65,7 +65,9 @@ export function resolveDevinModeId(input: {
       findDevinModeByAliases(input.modes, DEVIN_CODE_MODE_ALIASES)?.id
     );
   }
-  return findDevinModeByAliases(input.modes, DEVIN_CODE_MODE_ALIASES)?.id;
+  // approval-required: don't force accept-edits/code mode, which auto-approves
+  // file edits. Let Devin use its default (ask) mode for safe approval gating.
+  return undefined;
 }
 
 export function applyDevinModeSelection(input: {

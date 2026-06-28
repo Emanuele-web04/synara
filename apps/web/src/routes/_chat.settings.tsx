@@ -1015,6 +1015,7 @@ function SettingsRouteView() {
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
+    settings.customDevinModels.length > 0 ||
     settings.customGeminiModels.length > 0 ||
     settings.customGrokModels.length > 0 ||
     settings.customKiloModels.length > 0 ||
@@ -2435,6 +2436,7 @@ function SettingsRouteView() {
                     customCodexModels: defaults.customCodexModels,
                     customClaudeModels: defaults.customClaudeModels,
                     customCursorModels: defaults.customCursorModels,
+                    customDevinModels: defaults.customDevinModels,
                     customGeminiModels: defaults.customGeminiModels,
                     customGrokModels: defaults.customGrokModels,
                     customKiloModels: defaults.customKiloModels,
@@ -2457,6 +2459,7 @@ function SettingsRouteView() {
                     value !== "codex" &&
                     value !== "claudeAgent" &&
                     value !== "cursor" &&
+                    value !== "devin" &&
                     value !== "gemini" &&
                     value !== "grok" &&
                     value !== "kilo" &&

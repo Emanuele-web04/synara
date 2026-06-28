@@ -76,7 +76,7 @@ describe("resolveDevinModeId", () => {
     assert.strictEqual(result, "bypass");
   });
 
-  it("full-access falls back to code mode when no bypass mode exists", () => {
+  it("full-access falls back to accept-edits alias when no bypass mode exists", () => {
     const modes = [makeMode("ask", "Ask"), makeMode("edits", "Accept Edits")];
     const result = resolveDevinModeId({
       modes,
@@ -85,29 +85,29 @@ describe("resolveDevinModeId", () => {
     assert.strictEqual(result, "edits");
   });
 
-  it("default picks code/accept-edits mode", () => {
+  it("approval-required returns undefined to preserve safe approval gating", () => {
     const modes = [makeMode("ask", "Ask"), makeMode("code", "Code")];
     const result = resolveDevinModeId({
       modes,
       runtimeMode: "approval-required",
     });
-    assert.strictEqual(result, "code");
+    assert.strictEqual(result, undefined);
   });
 
-  it("default picks accept-edits alias", () => {
+  it("approval-required does not pick accept-edits alias", () => {
     const modes = [makeMode("ask", "Ask"), makeMode("edits", "Accept edits")];
     const result = resolveDevinModeId({
       modes,
       runtimeMode: "approval-required",
     });
-    assert.strictEqual(result, "edits");
+    assert.strictEqual(result, undefined);
   });
 
   it("alias matching is punctuation and case insensitive", () => {
     const modes = [makeMode("ask", "Ask"), makeMode("edits", "Accept Edits!")];
     const result = resolveDevinModeId({
       modes,
-      runtimeMode: "approval-required",
+      runtimeMode: "full-access",
     });
     assert.strictEqual(result, "edits");
   });
@@ -140,15 +140,6 @@ describe("resolveDevinModeId", () => {
     assert.strictEqual(result, "bypass");
   });
 
-  it("full-access falls back to accept-edits alias", () => {
-    const modes = [makeMode("ask", "Ask"), makeMode("edits", "Accept Edits")];
-    const result = resolveDevinModeId({
-      modes,
-      runtimeMode: "full-access",
-    });
-    assert.strictEqual(result, "edits");
-  });
-
   it("plan mode matches by id when id is 'plan'", () => {
     const modes = [makeMode("plan", "Planning Mode")];
     const result = resolveDevinModeId({
@@ -169,22 +160,22 @@ describe("resolveDevinModeId", () => {
     assert.strictEqual(result, "plan-mode");
   });
 
-  it("default mode matches 'code' by id", () => {
+  it("approval-required returns undefined even when code mode exists by id", () => {
     const modes = [makeMode("code", "Code Mode")];
     const result = resolveDevinModeId({
       modes,
       runtimeMode: "approval-required",
     });
-    assert.strictEqual(result, "code");
+    assert.strictEqual(result, undefined);
   });
 
-  it("default mode matches 'accept-edits' by id with hyphen", () => {
+  it("approval-required returns undefined even when accept-edits exists by id", () => {
     const modes = [makeMode("accept-edits", "Accept Edits")];
     const result = resolveDevinModeId({
       modes,
       runtimeMode: "approval-required",
     });
-    assert.strictEqual(result, "accept-edits");
+    assert.strictEqual(result, undefined);
   });
 
   it("full-access returns undefined when neither bypass nor code aliases match", () => {
@@ -304,7 +295,7 @@ describe("applyDevinModeSelection", () => {
       const error = yield* applyDevinModeSelection({
         runtime,
         threadId,
-        runtimeMode: "approval-required",
+        runtimeMode: "full-access",
       }).pipe(Effect.flip);
       assert.strictEqual(error._tag, "ProviderAdapterRequestError");
     }),

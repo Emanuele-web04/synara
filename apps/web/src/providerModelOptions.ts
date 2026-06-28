@@ -275,7 +275,7 @@ export function buildNextProviderOptions(
     return { ...(modelOptions as CursorModelOptions | undefined), ...patch } as CursorModelOptions;
   }
   if (provider === "devin") {
-    return { ...(modelOptions as DevinModelOptions | undefined), ...patch } as DevinModelOptions;
+    return {} as DevinModelOptions;
   }
   if (provider === "gemini") {
     return {
@@ -399,13 +399,7 @@ export function buildModelSelection(
           }
         : { provider, model };
     case "devin":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as DevinModelOptions,
-          }
-        : { provider, model };
+      return { provider, model };
     case "gemini":
       return options
         ? {

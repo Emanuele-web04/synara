@@ -695,6 +695,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
+    "customDevinModels",
     "customGeminiModels",
     "customGrokModels",
     "customKiloModels",

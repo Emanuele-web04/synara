@@ -57,6 +57,7 @@ export interface AcpPermissionRequest {
 export interface AcpAvailableCommand {
   readonly name: string;
   readonly description?: string;
+  readonly inputHint?: string;
 }
 
 export type AcpParsedSessionEvent =
@@ -183,12 +184,15 @@ export function parseAvailableCommands(
 ): ReadonlyArray<AcpAvailableCommand> {
   return (commands ?? [])
     .map((command) => {
-      const name = command.name.trim();
+      // Strip leading slash so callers consistently receive bare command names.
+      const name = command.name.trim().replace(/^\/+/, "");
       if (!name) return undefined;
       const description = command.description?.trim() || undefined;
-      return description !== undefined
-        ? ({ name, description } satisfies AcpAvailableCommand)
-        : ({ name } satisfies AcpAvailableCommand);
+      const inputHint = command.input?.hint?.trim() || undefined;
+      const result: AcpAvailableCommand = { name };
+      if (description !== undefined) result.description = description;
+      if (inputHint !== undefined) result.inputHint = inputHint;
+      return result;
     })
     .filter((command): command is AcpAvailableCommand => command !== undefined);
 }

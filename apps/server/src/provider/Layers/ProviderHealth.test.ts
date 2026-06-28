@@ -1,7 +1,7 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@t3tools/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
-import { describe, it, assert } from "@effect/vitest";
+import { describe, it, assert, beforeEach, afterEach } from "@effect/vitest";
 import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -1771,6 +1771,21 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   });
 
   describe("checkDevinProviderStatus", () => {
+    // hasDevinApiKeyEnv() reads WINDSURF_API_KEY from process.env; save/delete
+    // and restore so tests are deterministic regardless of the host environment.
+    let savedDevinApiKey: string | undefined;
+    beforeEach(() => {
+      savedDevinApiKey = process.env.WINDSURF_API_KEY;
+      delete process.env.WINDSURF_API_KEY;
+    });
+    afterEach(() => {
+      if (savedDevinApiKey === undefined) {
+        delete process.env.WINDSURF_API_KEY;
+      } else {
+        process.env.WINDSURF_API_KEY = savedDevinApiKey;
+      }
+    });
+
     it.effect("returns ready when Devin is installed and authenticated", () =>
       Effect.gen(function* () {
         const status = yield* checkDevinProviderStatus;

@@ -17,6 +17,7 @@ export function elicitationFormToUserInputQuestions(
   request: ElicitationForm,
 ): ReadonlyArray<UserInputQuestion> {
   const properties = request.requestedSchema.properties;
+  const requiredKeys = new Set(request.requestedSchema.required ?? []);
   if (!properties || Object.keys(properties).length === 0) {
     return [
       {
@@ -34,6 +35,7 @@ export function elicitationFormToUserInputQuestions(
     question: prop.description?.trim() || request.message,
     options: propertyOptions(prop),
     multiSelect: prop.type === "array",
+    optional: !requiredKeys.has(key),
   }));
 }
 
@@ -159,12 +161,18 @@ function validateAnswerValue(
 
     case "number":
     case "integer": {
-      const num = Number(value);
-      if (!Number.isFinite(num)) {
+      const num = normalizeNumericValue(value);
+      if (num === undefined) {
         return `Answer '${key}' must be a finite number.`;
       }
       if (prop.type === "integer" && !Number.isInteger(num)) {
         return `Answer '${key}' must be an integer.`;
+      }
+      if (prop.minimum !== undefined && prop.minimum !== null && num < prop.minimum) {
+        return `Answer '${key}' must be >= ${prop.minimum}.`;
+      }
+      if (prop.maximum !== undefined && prop.maximum !== null && num > prop.maximum) {
+        return `Answer '${key}' must be <= ${prop.maximum}.`;
       }
       return undefined;
     }
@@ -221,8 +229,8 @@ export function userInputAnswersToElicitationContent(
 
       case "number":
       case "integer": {
-        const num = Number(value);
-        if (Number.isFinite(num)) {
+        const num = normalizeNumericValue(value);
+        if (num !== undefined) {
           content[key] = num;
         }
         continue;
@@ -245,6 +253,14 @@ export function userInputAnswersToElicitationContent(
 function normalizeStringValue(value: string | ReadonlyArray<string>): string {
   if (typeof value === "string") return value;
   return value.join(", ");
+}
+
+function normalizeNumericValue(value: string | ReadonlyArray<string>): number | undefined {
+  const raw =
+    typeof value === "string" ? value.trim() : value.length === 1 ? (value[0]?.trim() ?? "") : "";
+  if (!raw) return undefined;
+  const num = Number(raw);
+  return Number.isFinite(num) ? num : undefined;
 }
 
 function normalizeBooleanValue(value: string | ReadonlyArray<string>): boolean | undefined {

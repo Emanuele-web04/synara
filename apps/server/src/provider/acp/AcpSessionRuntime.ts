@@ -256,7 +256,9 @@ const makeAcpSessionRuntime = (
         ),
       );
 
-    const env = options.spawn.env ? { ...process.env, ...options.spawn.env } : process.env;
+    // When spawn.env is provided, use it as the base (not an overlay) so callers
+    // can restrict the child's environment (e.g. security-sensitive providers).
+    const env = options.spawn.env ?? process.env;
     const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
       cwd: options.spawn.cwd,
       env,
@@ -455,12 +457,16 @@ const makeAcpSessionRuntime = (
         );
       }
 
+      // For on-demand auth, defer auth method resolution into runAuthenticate
+      // so stored-credential sessions can start without advertised auth.
       const authMethodId =
-        options.resolveAuthMethodId !== undefined
-          ? yield* options.resolveAuthMethodId(initializeResult)
-          : options.authMethodId;
+        options.authPolicy === "on-demand"
+          ? undefined
+          : options.resolveAuthMethodId !== undefined
+            ? yield* options.resolveAuthMethodId(initializeResult)
+            : options.authMethodId;
 
-      if (!authMethodId) {
+      if (options.authPolicy !== "on-demand" && !authMethodId) {
         return yield* new EffectAcpErrors.AcpRequestError({
           code: -32602,
           errorMessage: "ACP agent did not provide an authentication method.",
@@ -469,8 +475,21 @@ const makeAcpSessionRuntime = (
       }
 
       const runAuthenticate = Effect.gen(function* () {
+        // Resolve auth method lazily for on-demand auth.
+        const resolvedMethodId =
+          authMethodId ??
+          (options.resolveAuthMethodId !== undefined
+            ? yield* options.resolveAuthMethodId(initializeResult)
+            : options.authMethodId);
+        if (!resolvedMethodId) {
+          return yield* new EffectAcpErrors.AcpRequestError({
+            code: -32602,
+            errorMessage: "ACP agent did not provide an authentication method.",
+            data: { authMethods: initializeResult.authMethods ?? [] },
+          });
+        }
         const authenticatePayload = {
-          methodId: authMethodId,
+          methodId: resolvedMethodId,
           ...(options.authenticateMeta ? { _meta: options.authenticateMeta } : {}),
         } satisfies EffectAcpSchema.AuthenticateRequest;
 

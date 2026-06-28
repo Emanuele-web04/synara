@@ -1885,6 +1885,15 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const devinModelDiscoveryEnabled =
+    selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen;
+  const hasResolvedDevinModelDiscovery =
+    devinDynamicModelsQuery.data?.source === "devin.acp" &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    (devinDynamicModelsQuery.isLoading || devinDynamicModelsQuery.isFetching);
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
       kiloDynamicModelsQuery.data?.source === "kilo") &&
@@ -2111,31 +2120,36 @@ export default function ChatView({
   const providerModelsLoading =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : selectedProviderModelsQuery !== undefined &&
-              (selectedProviderModelsQuery.isLoading ||
-                (selectedProviderModelsQuery.isFetching &&
-                  selectedProviderModelsQuery.data === undefined));
+      : selectedProvider === "devin"
+        ? devinModelDiscoveryPending
+        : selectedProvider === "kilo"
+          ? kiloModelDiscoveryPending
+          : selectedProvider === "opencode"
+            ? openCodeModelDiscoveryPending
+            : selectedProvider === "pi"
+              ? piModelDiscoveryPending
+              : selectedProviderModelsQuery !== undefined &&
+                (selectedProviderModelsQuery.isLoading ||
+                  (selectedProviderModelsQuery.isFetching &&
+                    selectedProviderModelsQuery.data === undefined));
   const selectedProviderRequiresRuntimeModels =
     selectedProvider === "cursor" ||
+    selectedProvider === "devin" ||
     selectedProvider === "kilo" ||
     selectedProvider === "opencode" ||
     selectedProvider === "pi";
   const selectedProviderRuntimeModelDiscoveryPending =
     selectedProvider === "cursor"
       ? cursorModelDiscoveryPending
-      : selectedProvider === "kilo"
-        ? kiloModelDiscoveryPending
-        : selectedProvider === "opencode"
-          ? openCodeModelDiscoveryPending
-          : selectedProvider === "pi"
-            ? piModelDiscoveryPending
-            : false;
+      : selectedProvider === "devin"
+        ? devinModelDiscoveryPending
+        : selectedProvider === "kilo"
+          ? kiloModelDiscoveryPending
+          : selectedProvider === "opencode"
+            ? openCodeModelDiscoveryPending
+            : selectedProvider === "pi"
+              ? piModelDiscoveryPending
+              : false;
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
@@ -8246,6 +8260,7 @@ export default function ChatView({
         modelOptionsByProvider={modelOptionsByProvider}
         loadingModelProviders={{
           cursor: cursorModelDiscoveryPending,
+          devin: devinModelDiscoveryPending,
           kilo: kiloModelDiscoveryPending,
           opencode: openCodeModelDiscoveryPending,
           pi: piModelDiscoveryPending,
@@ -8287,6 +8302,7 @@ export default function ChatView({
       modelOptionsByProvider={modelOptionsByProvider}
       loadingModelProviders={{
         cursor: cursorModelDiscoveryPending,
+        devin: devinModelDiscoveryPending,
         kilo: kiloModelDiscoveryPending,
         opencode: openCodeModelDiscoveryPending,
         pi: piModelDiscoveryPending,

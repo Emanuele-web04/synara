@@ -134,6 +134,8 @@ interface DevinSessionContext {
   activeTurnFailedToolDetail: string | undefined;
   /** Cached model list extracted from config options, updated on session start. */
   cachedModels: ReadonlyArray<{ slug: string; name: string }> | undefined;
+  /** Binary path that produced cachedModels, for cache invalidation. */
+  cachedModelsBinaryPath: string | undefined;
   stopped: boolean;
 }
 
@@ -265,7 +267,10 @@ function makeProviderAdapter(
         ),
       );
 
-    const stopSessionInternal = (ctx: DevinSessionContext) =>
+    const stopSessionInternal = (
+      ctx: DevinSessionContext,
+      exitKind: "graceful" | "crashed" = "graceful",
+    ) =>
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
@@ -281,7 +286,7 @@ function makeProviderAdapter(
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
           threadId: ctx.threadId,
-          payload: { exitKind: "graceful" },
+          payload: { exitKind },
         });
       });
 
@@ -491,6 +496,7 @@ function makeProviderAdapter(
           activePromptFiber: undefined,
           activeTurnFailedToolDetail: undefined,
           cachedModels: undefined,
+          cachedModelsBinaryPath: undefined,
           stopped: false,
         };
 
@@ -590,8 +596,6 @@ function makeProviderAdapter(
         ).pipe(Effect.forkIn(sessionScope));
 
         ctx.notificationFiber = notificationFiber;
-        sessions.set(input.threadId, ctx);
-        sessionScopeTransferred = true;
 
         // Detect unexpected ACP process exits (crash, OOM-kill, segfault).
         yield* Effect.gen(function* () {
@@ -610,7 +614,7 @@ function makeProviderAdapter(
               reason: `Devin CLI process exited unexpectedly (exit code ${exitCode}). Please restart the session.`,
             },
           });
-          yield* stopSessionInternal(ctx);
+          yield* stopSessionInternal(ctx, "crashed");
         }).pipe(Effect.forkIn(sessionScope));
 
         yield* publish({
@@ -654,6 +658,12 @@ function makeProviderAdapter(
         // Eagerly populate model cache from initial config options.
         const initialConfigOptions = yield* acp.getConfigOptions;
         ctx.cachedModels = extractDevinModelsFromConfigOptions(initialConfigOptions);
+        ctx.cachedModelsBinaryPath = devinSettings.binaryPath;
+
+        // Transfer ownership to the sessions map only after all startup probes
+        // succeed, so a probe failure doesn't leave an orphaned session.
+        sessions.set(input.threadId, ctx);
+        sessionScopeTransferred = true;
 
         return session;
       }).pipe(Effect.scoped);
@@ -667,6 +677,14 @@ function makeProviderAdapter(
             provider: PROVIDER,
             operation: "sendTurn",
             issue: "Devin requires a non-empty prompt.",
+          });
+        }
+        // Devin ACP does not yet support file/image attachments in prompt parts.
+        if (input.attachments && input.attachments.length > 0) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Devin does not support attachments. Remove attachments and try again.",
           });
         }
         // Concurrency guard: at most one active prompt per session to avoid
@@ -736,8 +754,9 @@ function makeProviderAdapter(
               Effect.gen(function* () {
                 if (!clearActiveTurn(ctx, turnId)) return;
                 pushTurnCapped(ctx, { id: turnId, items: [{ prompt: promptParts, error }] });
+                const { activeTurnId: _activeTurnId, ...sessionRest } = ctx.session;
                 ctx.session = {
-                  ...ctx.session,
+                  ...sessionRest,
                   status: "error",
                   updatedAt: yield* nowIso(),
                   lastError: error.message,
@@ -957,9 +976,11 @@ function makeProviderAdapter(
         } satisfies ProviderComposerCapabilities),
       listModels: (input: ProviderListModelsInput) =>
         Effect.gen(function* () {
-          // Warm path: return cached models from running sessions.
+          const requestedBinaryPath = input?.binaryPath?.trim() || "devin";
+          // Warm path: return cached models from running sessions with matching binary.
           for (const ctx of sessions.values()) {
             if (ctx.stopped) continue;
+            if (ctx.cachedModelsBinaryPath !== requestedBinaryPath) continue;
             if (ctx.cachedModels && ctx.cachedModels.length > 0) {
               return {
                 models: ctx.cachedModels,
@@ -972,6 +993,7 @@ function makeProviderAdapter(
             const extractedModels = extractDevinModelsFromConfigOptions(configOptions);
             if (extractedModels.length > 0) {
               ctx.cachedModels = extractedModels;
+              ctx.cachedModelsBinaryPath = requestedBinaryPath;
               return {
                 models: extractedModels,
                 source: "devin.acp",
@@ -981,7 +1003,7 @@ function makeProviderAdapter(
           }
 
           // Cold path: no running session with models; attempt discovery.
-          const binaryPath = input?.binaryPath?.trim() || "devin";
+          const binaryPath = requestedBinaryPath;
 
           const discoveryEffect = Effect.gen(function* () {
             const discoveryThreadId = ThreadId.makeUnsafe("devin-model-discovery");
@@ -1067,6 +1089,13 @@ function makeProviderAdapter(
           return { commands: [], source: "devin.acp", cached: false };
         }),
     };
+
+    // Clean up all active sessions when the layer is torn down.
+    yield* Effect.addFinalizer(() =>
+      Effect.forEach(sessions.values(), (ctx) => stopSessionInternal(ctx), {
+        discard: true,
+      }).pipe(Effect.tap(() => PubSub.shutdown(events))),
+    );
 
     return adapter;
   });
