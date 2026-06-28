@@ -65,6 +65,63 @@ import type {
 // Exports: ProviderRuntimeIngestionLive
 // Depends on: ProviderRuntimeEvent contracts, OrchestrationEngine, Projection repositories
 
+const deliveryModeKey = (threadId: ThreadId, turnId: TurnId | string) => `${threadId}:${turnId}`;
+
+const toolOutputBufferKey = (threadId: ThreadId, itemId: string) => `${threadId}:${itemId}`;
+
+const isToolOutputDelta = (
+  event: ProviderRuntimeEvent,
+): event is Extract<ProviderRuntimeEvent, { type: "content.delta" }> =>
+  event.type === "content.delta" &&
+  event.itemId !== undefined &&
+  (event.payload.streamKind === "command_output" ||
+    event.payload.streamKind === "file_change_output" ||
+    event.payload.streamKind === "unknown");
+
+const mergeBufferedToolOutput = (
+  data: unknown,
+  bufferedOutput: string,
+): Record<string, unknown> => {
+  const dataRecord = asObject(data) ?? {};
+  const rawOutputRecord = asObject(dataRecord.rawOutput);
+  const rawOutput =
+    rawOutputRecord === undefined
+      ? { output: bufferedOutput }
+      : {
+          ...rawOutputRecord,
+          ...(typeof rawOutputRecord.output === "string" && rawOutputRecord.output.length > 0
+            ? {}
+            : { output: bufferedOutput }),
+        };
+  return {
+    ...dataRecord,
+    rawOutput,
+  };
+};
+
+const eventWithBufferedToolOutput = (
+  event: ProviderRuntimeEvent,
+  toolOutputBuffersByItem: Map<string, string>,
+): ProviderRuntimeEvent => {
+  if (event.type !== "item.completed" || event.itemId === undefined) {
+    return event;
+  }
+  const bufferedOutput = toolOutputBuffersByItem.get(
+    toolOutputBufferKey(event.threadId, event.itemId),
+  );
+  if (bufferedOutput === undefined || bufferedOutput.length === 0) {
+    return event;
+  }
+  toolOutputBuffersByItem.delete(toolOutputBufferKey(event.threadId, event.itemId));
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      data: mergeBufferedToolOutput(event.payload.data, bufferedOutput),
+    },
+  };
+};
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -77,6 +134,7 @@ const make = Effect.gen(function* () {
     string,
     { readonly checkpointRef: CheckpointRef; readonly checkpointTurnCount: number }
   >();
+  const toolOutputBuffersByItem = new Map<string, string>();
 
   const state = yield* makeIngestionState();
   const {
@@ -98,7 +156,6 @@ const make = Effect.gen(function* () {
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
   });
-  const deliveryModeKey = (threadId: ThreadId, turnId: TurnId | string) => `${threadId}:${turnId}`;
   const resolveAssistantDeliveryMode = (threadId: ThreadId, turnId: TurnId | string | undefined) =>
     turnId !== undefined
       ? (assistantDeliveryModesByTurn.get(deliveryModeKey(threadId, turnId)) ??
@@ -117,6 +174,11 @@ const make = Effect.gen(function* () {
     for (const key of providerDiffPlaceholdersByTurn.keys()) {
       if (key.startsWith(prefix)) {
         providerDiffPlaceholdersByTurn.delete(key);
+      }
+    }
+    for (const key of toolOutputBuffersByItem.keys()) {
+      if (key.startsWith(prefix)) {
+        toolOutputBuffersByItem.delete(key);
       }
     }
   };
@@ -490,6 +552,17 @@ const make = Effect.gen(function* () {
         yield* appendBufferedProposedPlan(planId, proposedPlanDelta, now);
       }
 
+      if (isToolOutputDelta(event)) {
+        const itemId = event.itemId;
+        if (itemId !== undefined) {
+          const key = toolOutputBufferKey(thread.id, itemId);
+          toolOutputBuffersByItem.set(
+            key,
+            `${toolOutputBuffersByItem.get(key) ?? ""}${event.payload.delta}`,
+          );
+        }
+      }
+
       const assistantCompletion =
         event.type === "item.completed" && event.payload.itemType === "assistant_message"
           ? {
@@ -721,7 +794,9 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event);
+      const activities = runtimeEventToActivities(
+        eventWithBufferedToolOutput(event, toolOutputBuffersByItem),
+      );
       yield* Effect.forEach(activities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",

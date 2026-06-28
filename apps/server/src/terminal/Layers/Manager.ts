@@ -21,7 +21,6 @@ import {
 } from "@t3tools/contracts";
 import {
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
   deriveTerminalTitleSignalIdentity,
   type TerminalCliKind,
 } from "@t3tools/shared/terminalThreads";
@@ -39,6 +38,7 @@ import {
   TerminalStartInput,
 } from "../Services/Manager";
 import { DEFAULT_HISTORY_BYTE_LIMIT } from "../terminalHistory";
+import { createTerminalModeReplayTracker } from "../terminalModeReplay";
 import {
   agentStateFromHookEvent,
   appendSessionHistory,
@@ -94,6 +94,39 @@ export {
 } from "./Manager.subprocess";
 
 const DEFAULT_SUBPROCESS_POLL_INTERVAL_MS = 1_000;
+const OUTPUT_ACK_PAUSE_THRESHOLD_BYTES = 64_000;
+
+function messageWithNestedCause(error: unknown, fallback: string): string {
+  const messages: string[] = [];
+  const seen = new Set<unknown>();
+  const queue: unknown[] = [error];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || seen.has(current)) continue;
+    seen.add(current);
+
+    if (typeof current === "string") {
+      messages.push(current);
+      continue;
+    }
+    if (current instanceof Error) {
+      messages.push(current.message);
+      const cause = (current as { cause?: unknown }).cause;
+      if (cause) queue.push(cause);
+      continue;
+    }
+    if (typeof current === "object") {
+      const record = current as { message?: unknown; cause?: unknown };
+      if (typeof record.message === "string") messages.push(record.message);
+      if (record.cause) queue.push(record.cause);
+    }
+  }
+
+  const [first, second] = messages.filter((message) => message.trim().length > 0);
+  if (first && second) return `${first}: ${second}`;
+  return first ?? fallback;
+}
 
 export const __terminalManagerShellTesting = {
   resolveShellCandidates,
@@ -236,8 +269,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const runtimeEnvChanged =
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
 
-      if (existing.cwd !== input.cwd || runtimeEnvChanged) {
-        this.stopProcess(existing);
+      if (existing.status === "exited" || existing.status === "error") {
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
         resetSessionHistory(existing);
@@ -246,15 +278,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           existing.terminalId,
           existing.history.toString(),
         );
-      } else if (existing.status === "exited" || existing.status === "error") {
-        existing.runtimeEnv = nextRuntimeEnv;
-        resetSessionHistory(existing);
-        await this.historyStore.persistHistory(
-          existing.threadId,
-          existing.terminalId,
-          existing.history.toString(),
-        );
-      } else if (currentRuntimeEnv !== nextRuntimeEnv) {
+      } else if (currentRuntimeEnv !== nextRuntimeEnv && !runtimeEnvChanged) {
         existing.runtimeEnv = nextRuntimeEnv;
       }
 
@@ -271,9 +295,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         existing.cols = targetCols;
         existing.rows = targetRows;
         existing.process.resize(targetCols, targetRows);
+        existing.modeReplayTracker?.resize(targetCols, targetRows);
         existing.updatedAt = new Date().toISOString();
       }
 
+      this.resetOutputAckBackpressure(existing);
       return this.snapshot(existing);
     });
   }
@@ -291,11 +317,15 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     const nextIdentityState = consumeTerminalIdentityInput(session.pendingInputBuffer, input.data);
     session.pendingInputBuffer = nextIdentityState.buffer;
-    if (nextIdentityState.identity?.cliKind && session.detectedCliKind === null) {
-      session.detectedCliKind = nextIdentityState.identity.cliKind;
+    const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
+    const submittedCliKind = nextIdentityState.identity?.cliKind ?? null;
+    if (submittedCliKind && session.detectedCliKind === null) {
+      session.detectedCliKind = submittedCliKind;
       this.emitActivityEvent(session);
     }
-    const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
+    if (submittedPrompt && submittedCliKind === null) {
+      this.clearProviderIdentity(session);
+    }
     if (submittedPrompt && session.detectedCliKind !== null && !session.hasRunningSubprocess) {
       session.hasRunningSubprocess = true;
       this.emitActivityEvent(session);
@@ -311,8 +341,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
     session.outputAckObserved = true;
     session.outputUnackedBytes = Math.max(0, session.outputUnackedBytes - input.bytes);
-    if (session.outputUnackedBytes === 0) {
+    if (session.outputUnackedBytes <= OUTPUT_ACK_PAUSE_THRESHOLD_BYTES) {
       session.outputAckPauseRequested = false;
+      this.resumeOutputIfReady(session);
     }
   }
 
@@ -467,7 +498,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
+    session.outputAckPauseRequested = false;
+    session.outputBufferPauseRequested = false;
+    session.outputUnackedBytes = 0;
     session.updatedAt = new Date().toISOString();
+    session.modeReplayTracker?.dispose();
+    session.modeReplayTracker = createTerminalModeReplayTracker(session.cols, session.rows);
 
     let ptyProcess: PtyProcess | null = null;
     let startedShell: string | null = null;
@@ -515,10 +551,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.managedAgentRunning = false;
       session.managedAgentState = null;
       session.managedAgentObserved = false;
+      session.modeReplayTracker?.dispose();
+      session.modeReplayTracker = null;
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
-      const message = error instanceof Error ? error.message : "Terminal start failed";
+      const message = messageWithNestedCause(error, "Terminal start failed");
       this.emitEvent({
         type: "error",
         threadId: session.threadId,
@@ -536,6 +574,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
   }
 
   private onProcessData(session: TerminalSessionState, data: string): void {
+    session.modeReplayTracker?.feed(data);
     const sanitized = sanitizeTerminalHistoryChunk(session.pendingHistoryControlSequence, data);
     session.pendingHistoryControlSequence = sanitized.pendingControlSequence;
     const latestHookEvent = sanitized.hookEvents.at(-1) ?? null;
@@ -557,8 +596,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       sanitized.titleSignals
         .map((titleSignal) => deriveTerminalTitleSignalIdentity(titleSignal)?.cliKind ?? null)
         .find((cliKind): cliKind is TerminalCliKind => cliKind !== null) ?? null;
-    const outputCliKind = deriveTerminalOutputIdentity(sanitized.visibleText)?.cliKind ?? null;
-    const detectedCliKind = outputCliKind ?? titleSignalCliKind;
+    const detectedCliKind = titleSignalCliKind;
     if (detectedCliKind && session.detectedCliKind === null) {
       session.detectedCliKind = detectedCliKind;
       this.emitActivityEvent(session);
@@ -590,6 +628,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     if (!session.outputPaused && session.pendingOutputLength >= OUTPUT_BUFFER_HIGH_WATERMARK) {
       session.process?.pause();
       session.outputPaused = true;
+      session.outputBufferPauseRequested = true;
     }
 
     if (session.pendingOutputLength >= OUTPUT_BATCH_SIZE_LIMIT) {
@@ -613,12 +652,10 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pendingOutputChunks = [];
     session.pendingOutputLength = 0;
 
-    // Backpressure: resume PTY reads now that the buffer is drained.
-    if (session.outputPaused) {
-      session.process?.resume();
-      session.outputPaused = false;
-    }
+    session.outputBufferPauseRequested = false;
+    this.resumeOutputIfReady(session);
 
+    const byteLength = Buffer.byteLength(data, "utf8");
     if (session.streamOutput) {
       this.emitEvent({
         type: "output",
@@ -626,10 +663,18 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         terminalId: session.terminalId,
         createdAt: new Date().toISOString(),
         data,
+        byteLength,
       });
     }
     if (session.outputAckObserved) {
-      session.outputUnackedBytes += Buffer.byteLength(data, "utf8");
+      session.outputUnackedBytes += byteLength;
+      if (session.outputUnackedBytes > OUTPUT_ACK_PAUSE_THRESHOLD_BYTES) {
+        session.outputAckPauseRequested = true;
+        if (!session.outputPaused) {
+          session.process?.pause();
+          session.outputPaused = true;
+        }
+      }
     }
   }
 
@@ -645,10 +690,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
+    session.modeReplayTracker?.dispose();
+    session.modeReplayTracker = null;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
     session.outputPaused = false;
+    session.outputAckPauseRequested = false;
+    session.outputBufferPauseRequested = false;
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.exitCode = Number.isInteger(event.exitCode) ? event.exitCode : null;
@@ -679,10 +728,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
+    session.modeReplayTracker?.dispose();
+    session.modeReplayTracker = null;
     session.lastInputAt = null;
     session.lastOutputAt = null;
     session.lastOutputSignature = null;
     session.outputPaused = false;
+    session.outputAckPauseRequested = false;
+    session.outputBufferPauseRequested = false;
     session.status = "exited";
     session.pendingHistoryControlSequence = "";
     session.updatedAt = new Date().toISOString();
@@ -856,7 +909,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
               sharedChildrenMap !== null
                 ? inspectSubprocessActivity(terminalPid, sharedChildrenMap)
                 : normalizeSubprocessActivity(await this.subprocessChecker(terminalPid));
-            terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
+            if (session.detectedCliKind !== null) {
+              const providerStillObserved =
+                subprocessActivity.hasProviderDescendant || subprocessActivity.cliKind !== null;
+              terminalCliKind = providerStillObserved ? session.detectedCliKind : null;
+            }
             if (session.managedAgentObserved) {
               // Hooks have fired — trust them as the sole source of truth (superset model).
               // Only override with non-provider subprocesses (e.g. user spawned a build).
@@ -864,6 +921,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
                 session.managedAgentRunning || subprocessActivity.hasNonProviderSubprocess;
             } else {
               // No hooks observed — fall back to process-tree + output heuristic.
+              if (session.detectedCliKind !== null && subprocessActivity.hasProviderDescendant) {
+                session.providerDescendantObserved = true;
+              }
               hasRunningSubprocess = subprocessActivity.hasProviderDescendant
                 ? subprocessActivity.hasNonProviderSubprocess ||
                   isProviderSessionBusy(session, Date.now())
@@ -954,6 +1014,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       status: session.status,
       pid: session.pid,
       history: session.history.toString(),
+      ...(session.modeReplayTracker
+        ? { replayPreamble: session.modeReplayTracker.buildPreamble() }
+        : {}),
       exitCode: session.exitCode,
       exitSignal: session.exitSignal,
       updatedAt: session.updatedAt,
@@ -974,6 +1037,28 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
 
   private emitEvent(event: TerminalEvent): void {
     this.emit("event", event);
+  }
+
+  private clearProviderIdentity(session: TerminalSessionState): void {
+    if (session.detectedCliKind === null) return;
+    session.detectedCliKind = null;
+    session.providerDescendantObserved = false;
+    session.managedAgentRunning = false;
+    session.managedAgentState = null;
+    this.emitActivityEvent(session);
+  }
+
+  private resetOutputAckBackpressure(session: TerminalSessionState): void {
+    session.outputUnackedBytes = 0;
+    session.outputAckPauseRequested = false;
+    this.resumeOutputIfReady(session);
+  }
+
+  private resumeOutputIfReady(session: TerminalSessionState): void {
+    if (!session.outputPaused) return;
+    if (session.outputBufferPauseRequested || session.outputAckPauseRequested) return;
+    session.process?.resume();
+    session.outputPaused = false;
   }
 
   private async runWithThreadLock<T>(threadId: string, task: () => Promise<T>): Promise<T> {

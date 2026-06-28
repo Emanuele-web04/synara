@@ -848,6 +848,45 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (event.method === "session/threadOpenRequested") {
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "session.state.changed",
+        payload: {
+          state: "starting",
+          reason: event.message ?? "Starting Codex thread.",
+        },
+      },
+    ];
+  }
+
+  if (event.method === "session/threadOpenResolved") {
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "session.state.changed",
+        payload: {
+          state: "ready",
+          reason: event.message ?? "Codex thread ready.",
+        },
+      },
+    ];
+  }
+
+  if (event.method === "warning") {
+    return [
+      {
+        ...runtimeEventBase(event, canonicalThreadId),
+        type: "runtime.warning",
+        payload: {
+          message: event.message ?? "Codex warning",
+          ...(event.payload !== undefined ? { detail: event.payload } : {}),
+        },
+      },
+    ];
+  }
+
   if (event.method === "item/requestApproval/decision" && event.requestId) {
     const decision = Schema.decodeUnknownSync(ProviderApprovalDecision)(payload?.decision);
     const requestType =
@@ -1174,6 +1213,8 @@ function mapToRuntimeEvents(
     if (!delta || delta.length === 0) {
       return [];
     }
+    const contentIndex = asNumber(payload?.contentIndex) ?? asNumber(payload?.content_index);
+    const summaryIndex = asNumber(payload?.summaryIndex) ?? asNumber(payload?.summary_index);
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1181,12 +1222,8 @@ function mapToRuntimeEvents(
         payload: {
           streamKind: contentStreamKindFromMethod(event.method),
           delta,
-          ...(typeof payload?.contentIndex === "number"
-            ? { contentIndex: payload.contentIndex }
-            : {}),
-          ...(typeof payload?.summaryIndex === "number"
-            ? { summaryIndex: payload.summaryIndex }
-            : {}),
+          ...(contentIndex !== undefined ? { contentIndex } : {}),
+          ...(summaryIndex !== undefined ? { summaryIndex } : {}),
         },
       },
     ];
@@ -1330,19 +1367,17 @@ function mapToRuntimeEvents(
     if (!delta) {
       return [];
     }
+    const contentIndex = asNumber(msg?.contentIndex) ?? asNumber(msg?.content_index);
+    const summaryIndex = asNumber(msg?.summaryIndex) ?? asNumber(msg?.summary_index);
     return [
       {
         ...codexEventBase(event, canonicalThreadId),
         type: "content.delta",
         payload: {
-          streamKind:
-            asNumber(msg?.summary_index) !== undefined
-              ? "reasoning_summary_text"
-              : "reasoning_text",
+          streamKind: summaryIndex !== undefined ? "reasoning_summary_text" : "reasoning_text",
           delta,
-          ...(asNumber(msg?.summary_index) !== undefined
-            ? { summaryIndex: asNumber(msg?.summary_index) }
-            : {}),
+          ...(contentIndex !== undefined ? { contentIndex } : {}),
+          ...(summaryIndex !== undefined ? { summaryIndex } : {}),
         },
       },
     ];
@@ -1409,6 +1444,32 @@ function mapToRuntimeEvents(
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           rateLimits: event.payload ?? {},
+        },
+      },
+    ];
+  }
+
+  if (event.method === "mcpServer/startupStatus/updated") {
+    return [
+      {
+        type: "mcp.status.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          status: event.payload ?? {},
+        },
+      },
+    ];
+  }
+
+  if (event.method === "thread/settings/updated") {
+    return [
+      {
+        type: "session.configured",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          config: {
+            ...(event.payload !== undefined ? event.payload : {}),
+          },
         },
       },
     ];
@@ -1552,7 +1613,17 @@ function mapToRuntimeEvents(
     ];
   }
 
-  return [];
+  return [
+    {
+      ...runtimeEventBase(event, canonicalThreadId),
+      type: "provider.unhandled",
+      payload: {
+        nativeEventName: event.method ?? event.kind,
+        reason: "no_mapper",
+        ...(event.message ? { redactedPayloadPreview: event.message } : {}),
+      },
+    },
+  ];
 }
 
 const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>

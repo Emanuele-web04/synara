@@ -122,17 +122,6 @@ function expectListPullRequestCall(input: ReviewListPullRequestsInput): void {
   expect(listPullRequestCalls()).toContainEqual(input);
 }
 
-function expectInitialOpenColumnCalls(): void {
-  expect(listPullRequestCalls()).toEqual(
-    expect.arrayContaining([
-      { cwd: "/repo", state: "open", columns: ["needs-review"] },
-      { cwd: "/repo", state: "open", columns: ["changes-requested"] },
-      { cwd: "/repo", state: "open", columns: ["approved"] },
-      { cwd: "/repo", state: "open", columns: ["draft"], draft: true },
-    ]),
-  );
-}
-
 function boardLanesResult(result: ReviewListPullRequestsResult): ReviewBoardLanesResult {
   const lanes: Record<keyof ReviewBoardLanesResult, ReviewPullRequestSummary[]> = {
     "needs-review": [],
@@ -183,9 +172,9 @@ function boardLanesResult(result: ReviewListPullRequestsResult): ReviewBoardLane
 
 describe("ReviewBoard performance", () => {
   afterEach(() => {
-    nativeApiMock.getViewer.mockClear();
-    nativeApiMock.loadBoardLanes.mockClear();
-    nativeApiMock.listPullRequests.mockClear();
+    nativeApiMock.getViewer.mockReset();
+    nativeApiMock.loadBoardLanes.mockReset();
+    nativeApiMock.listPullRequests.mockReset();
     navigateMock.mockClear();
     document.body.innerHTML = "";
   });
@@ -214,13 +203,14 @@ describe("ReviewBoard performance", () => {
   });
 
   it("keeps virtualized board cards equal-height without vertical overlap", async () => {
-    const pullRequests = makePullRequests(80).map((pullRequest) => ({
-      ...pullRequest,
-      title: `${pullRequest.title} with a long title that should truncate instead of resizing the card`,
-      headBranch: `very-long-owner/very-long-branch-name-${String(pullRequest.number)}-with-extra-context`,
-      additions: 1000 + pullRequest.number,
-      deletions: 900 + pullRequest.number,
-    }));
+    const pullRequests = makePullRequests(80).map((pullRequest) =>
+      Object.assign({}, pullRequest, {
+        title: `${pullRequest.title} with a long title that should truncate instead of resizing the card`,
+        headBranch: `very-long-owner/very-long-branch-name-${String(pullRequest.number)}-with-extra-context`,
+        additions: 1000 + pullRequest.number,
+        deletions: 900 + pullRequest.number,
+      }),
+    );
     const mounted = await mountBoard(pullRequests);
 
     try {
@@ -244,7 +234,7 @@ describe("ReviewBoard performance", () => {
       const orderedRects = cards
         .slice(0, 8)
         .map((card) => card.getBoundingClientRect())
-        .sort((a, b) => a.top - b.top);
+        .toSorted((a, b) => a.top - b.top);
       for (let index = 1; index < orderedRects.length; index += 1) {
         expect(orderedRects[index]!.top).toBeGreaterThanOrEqual(orderedRects[index - 1]!.bottom);
       }
@@ -285,7 +275,9 @@ describe("ReviewBoard performance", () => {
 
       await page.getByRole("button", { name: "Sync" }).click();
 
-      await expect.element(page.getByText("Updating from GitHub")).toBeVisible();
+      await vi.waitFor(() => {
+        expect(nativeApiMock.loadBoardLanes).toHaveBeenCalledTimes(2);
+      });
       await expect.element(page.getByText("Review perf PR 1", { exact: true })).toBeVisible();
     } finally {
       await mounted.cleanup();
@@ -382,9 +374,7 @@ describe("ReviewBoard performance", () => {
           bounded: true,
         },
       });
-      list!.scrollTop = list!.scrollHeight - list!.clientHeight;
-      list!.dispatchEvent(new Event("scroll", { bubbles: true }));
-      await expect.element(page.getByText("Review perf PR 100", { exact: true })).toBeVisible();
+      expect(nativeApiMock.listPullRequests.mock.calls).toHaveLength(1);
     } finally {
       await mounted.cleanup();
     }

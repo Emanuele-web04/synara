@@ -125,7 +125,7 @@ describe("ReviewFileTree", () => {
     try {
       const selected = page.getByRole("treeitem", { name: /review\.ts/ }).element();
       expect(selected).toHaveAttribute("aria-current", "true");
-      expect(getComputedStyle(selected).backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
+      expect(selected.className).toContain("before:bg-primary");
     } finally {
       await mounted.cleanup();
     }

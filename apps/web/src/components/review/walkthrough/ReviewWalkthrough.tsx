@@ -58,7 +58,7 @@ export function ReviewWalkthrough(props: ReviewWalkthroughProps): ReactElement {
 
 function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | null {
   const { resolvedTheme } = useTheme();
-  const { settings, updateSettings } = useAppSettings();
+  const { settings, settingsReady, updateSettings } = useAppSettings();
   const readerSectionRef = useRef<HTMLElement>(null);
   const outerScrollRef = useRef<HTMLDivElement>(null);
   const prevReadingRef = useRef<WalkthroughReading | null>(null);
@@ -92,7 +92,7 @@ function ReviewWalkthroughInner(props: ReviewWalkthroughProps): ReactElement | n
     reviewGenerateWalkthroughQueryOptions({
       cwd: props.cwd,
       reference: props.reference,
-      source: props.source,
+      source: settingsReady ? props.source : null,
       patchSignature: props.patchSignature,
       ...(props.expectedHeadSha !== null ? { expectedHeadSha: props.expectedHeadSha } : {}),
       ...(providerOptions ? { providerOptions } : {}),

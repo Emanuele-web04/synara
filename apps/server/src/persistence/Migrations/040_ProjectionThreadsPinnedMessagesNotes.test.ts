@@ -16,13 +16,13 @@ describe("040_ProjectionThreadsPinnedMessagesNotes", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 39 });
+      yield* runMigrations({ toMigrationInclusive: 42 });
 
       const beforeColumns = yield* projectionThreadsColumnNames(sql);
       assert.notInclude(beforeColumns, "pinned_messages_json");
       assert.notInclude(beforeColumns, "notes");
 
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
 
       const afterColumns = yield* projectionThreadsColumnNames(sql);
       assert.include(afterColumns, "pinned_messages_json");
@@ -34,13 +34,13 @@ describe("040_ProjectionThreadsPinnedMessagesNotes", () => {
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
 
-      yield* runMigrations({ toMigrationInclusive: 39 });
+      yield* runMigrations({ toMigrationInclusive: 42 });
       yield* sql`
         ALTER TABLE projection_threads
         ADD COLUMN pinned_messages_json TEXT
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 40 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
 
       const columns = yield* projectionThreadsColumnNames(sql);
       assert.include(columns, "pinned_messages_json");

@@ -1,11 +1,10 @@
 import { assert, it } from "@effect/vitest";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import { describe } from "vitest";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-
-const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
 const walkthroughRows = (sql: SqlClient.SqlClient) =>
   sql<{
@@ -27,7 +26,7 @@ const walkthroughRows = (sql: SqlClient.SqlClient) =>
     ORDER BY repository_id, reference, patch_signature, token_identity
   `;
 
-layer("049_ReviewWalkthroughCacheTokenIdentity", (it) => {
+describe("049_ReviewWalkthroughCacheTokenIdentity", () => {
   it.effect("preserves existing walkthrough rows when adding token identity", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
@@ -62,7 +61,7 @@ layer("049_ReviewWalkthroughCacheTokenIdentity", (it) => {
           fetchedAt: 123,
         },
       ]);
-    }),
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 
   it.effect("keeps walkthrough rows stable through the forward repair migration", () =>
@@ -101,6 +100,6 @@ layer("049_ReviewWalkthroughCacheTokenIdentity", (it) => {
           fetchedAt: 123,
         },
       ]);
-    }),
+    }).pipe(Effect.provide(NodeSqliteClient.layerMemory())),
   );
 });

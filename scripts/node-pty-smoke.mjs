@@ -4,7 +4,8 @@
 // Layer: Release/CI smoke check
 
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { chmodSync, existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
@@ -25,6 +26,26 @@ try {
   nodePty = requireFromTarget("node-pty");
 } catch (error) {
   fail("Failed to load node-pty.", error instanceof Error ? error.stack : String(error));
+}
+
+if (process.platform !== "win32") {
+  const packageJsonPath = requireFromTarget.resolve("node-pty/package.json");
+  const packageDir = dirname(packageJsonPath);
+  const helperCandidates = [
+    join(packageDir, "build", "Release", "spawn-helper"),
+    join(packageDir, "build", "Debug", "spawn-helper"),
+    join(packageDir, "prebuilds", `${process.platform}-${process.arch}`, "spawn-helper"),
+  ];
+  for (const helperPath of helperCandidates) {
+    if (existsSync(helperPath)) {
+      try {
+        chmodSync(helperPath, 0o755);
+      } catch {
+        // Best-effort: the spawn below reports the actionable failure if chmod did not work.
+      }
+      break;
+    }
+  }
 }
 
 const isWindows = process.platform === "win32";
