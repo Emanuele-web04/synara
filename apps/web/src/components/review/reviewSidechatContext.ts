@@ -63,7 +63,12 @@ export interface ReviewSidechatContextPayload {
   readonly selectedFilePath: string | null;
 }
 
-export function hasReviewSidechatAgentContext(payload: ReviewSidechatContextPayload): boolean {
+type ReviewSidechatAgentContextFields = Pick<
+  ReviewSidechatContextPayload,
+  "cwd" | "repositoryId" | "target" | "headSha" | "files" | "stats"
+>;
+
+export function hasReviewSidechatAgentContext(payload: ReviewSidechatAgentContextFields): boolean {
   return (
     payload.cwd !== null &&
     payload.repositoryId !== null &&

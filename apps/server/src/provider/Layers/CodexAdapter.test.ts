@@ -292,6 +292,9 @@ validationLayer("CodexAdapterLive validation", (it) => {
       const adapter = yield* CodexAdapter;
       const injectThreadItems = adapter.injectThreadItems;
       assert.notEqual(injectThreadItems, undefined);
+      if (injectThreadItems === undefined) {
+        return;
+      }
 
       yield* injectThreadItems({
         threadId: asThreadId("thread-review-chat"),

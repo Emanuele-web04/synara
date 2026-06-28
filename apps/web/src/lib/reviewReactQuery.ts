@@ -732,7 +732,9 @@ function invalidateReviewPullRequestCaches(
   reference: string,
 ): void {
   void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequest(cwd, reference) });
-  void queryClient.invalidateQueries({ queryKey: reviewQueryKeys.pullRequestHeader(cwd, reference) });
+  void queryClient.invalidateQueries({
+    queryKey: reviewQueryKeys.pullRequestHeader(cwd, reference),
+  });
   void queryClient.invalidateQueries({
     queryKey: reviewQueryKeys.pullRequestSurfaces(cwd, reference),
   });

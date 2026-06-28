@@ -3,6 +3,7 @@ import "../../index.css";
 import type {
   ReviewPullRequestDetail,
   ReviewPullRequestHeaderDetail,
+  ReviewPullRequestSurfaceResult,
   ReviewSourceRef,
 } from "@t3tools/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -72,43 +73,45 @@ const nativeApiMock = vi.hoisted(() => ({
     patch: "",
     target: null,
   })),
-  loadPullRequestSurface: vi.fn(async () => ({
-    overview: {
-      detail: {
-        number: 42,
-        title: "Speed up review loading",
-        url: "https://github.com/acme/repo/pull/42",
-        state: "open" as const,
-        isDraft: false,
-        author: "alice",
-        baseBranch: "main",
-        headBranch: "feature/review-loading",
-        body: "Review body",
-        createdAt: "2026-06-16T00:00:00.000Z",
-        updatedAt: "2026-06-16T00:00:00.000Z",
-        additions: 12,
-        deletions: 3,
-        changedFiles: 2,
-        commitsCount: 1,
-        reviewDecision: null,
-        mergeable: "MERGEABLE" as const,
-        checksStatus: "passing" as const,
-        milestone: null,
-        labels: [],
-        assignees: [],
-        reviewers: [],
+  loadPullRequestSurface: vi.fn(
+    async (): Promise<ReviewPullRequestSurfaceResult> => ({
+      overview: {
+        detail: {
+          number: 42,
+          title: "Speed up review loading",
+          url: "https://github.com/acme/repo/pull/42",
+          state: "open" as const,
+          isDraft: false,
+          author: "alice",
+          baseBranch: "main",
+          headBranch: "feature/review-loading",
+          body: "Review body",
+          createdAt: "2026-06-16T00:00:00.000Z",
+          updatedAt: "2026-06-16T00:00:00.000Z",
+          additions: 12,
+          deletions: 3,
+          changedFiles: 2,
+          commitsCount: 1,
+          reviewDecision: null,
+          mergeable: "MERGEABLE" as const,
+          checksStatus: "passing" as const,
+          milestone: null,
+          labels: [],
+          assignees: [],
+          reviewers: [],
+        },
+        commits: [],
+        checks: [],
       },
-      commits: [],
-      checks: [],
-    },
-    conversation: { events: [] },
-    changeset: {
-      files: [],
-      headSha: "abc123",
-      patch: "",
-      target: null,
-    },
-  })),
+      conversation: { events: [] },
+      changeset: {
+        files: [],
+        headSha: "abc123",
+        patch: "",
+        target: { _tag: "pullRequest", repositoryId: "acme/repo", number: 42 },
+      },
+    }),
+  ),
 }));
 
 const reviewChatThreadMock = vi.hoisted(() => ({
@@ -121,10 +124,18 @@ const reviewChatThreadMock = vi.hoisted(() => ({
   })),
   findProjectForReviewChat: vi.fn(() => null),
   findReviewChatThread: vi.fn(() => null),
-  prewarmReviewChatThread: vi.fn(async () => ({
-    status: "unavailable" as const,
-    reason: "No Synara project is open for this repository.",
-  })),
+  prewarmReviewChatThread: vi.fn(
+    async (_input: {
+      readonly payload: {
+        readonly headSha: string | null;
+        readonly files: ReadonlyArray<unknown>;
+        readonly stats: { readonly files: number };
+      };
+    }) => ({
+      status: "unavailable" as const,
+      reason: "No Synara project is open for this repository.",
+    }),
+  ),
   resolveOrCreateReviewChatThread: vi.fn(async () => ({
     status: "unavailable" as const,
     reason: "No Synara project is open for this repository.",
@@ -430,9 +441,9 @@ describe("ReviewPrView performance", () => {
       queuedFrame.current?.(performance.now());
 
       await expect.poll(() => nativeApiMock.loadPullRequestSurface.mock.calls.length).toBe(1);
-      await expect.poll(() => reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length).toBe(
-        1,
-      );
+      await expect
+        .poll(() => reviewChatThreadMock.prewarmReviewChatThread.mock.calls.length)
+        .toBe(1);
       expect(reviewChatThreadMock.prewarmReviewChatThread.mock.calls[0]?.[0].payload).toMatchObject(
         {
           headSha: "zero-file-head",

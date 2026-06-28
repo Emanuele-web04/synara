@@ -1622,8 +1622,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
                   command: transportInput.binaryPath,
                   args: ["app-server"],
                   cwd: transportInput.cwd,
-                }) ??
-                Promise.reject(new Error("Codex remote transport factory was unavailable.")),
+                }) ?? Promise.reject(new Error("Codex remote transport factory was unavailable.")),
             }
           : {}),
         runtimeMode: input.runtimeMode,

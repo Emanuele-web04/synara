@@ -253,7 +253,8 @@ function activeInfoOption(): HTMLElement {
 }
 
 function activeSidebar(): HTMLElement {
-  const sidebar = page.getByRole("tablist", { name: "Pull request sidebar" })
+  const sidebar = page
+    .getByRole("tablist", { name: "Pull request sidebar" })
     .element()
     .closest<HTMLElement>("aside");
   expect(sidebar).toBeTruthy();
