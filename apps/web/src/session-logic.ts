@@ -118,6 +118,8 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   collapseKey?: string;
   collapseCommand?: string;
   toolName?: string;
+  runtimeWarningRepeatCount?: number;
+  runtimeWarningMessage?: string;
 }
 
 export interface PendingApproval {
@@ -830,6 +832,8 @@ export function deriveWorkLogEntries(
       activityKind: _activityKind,
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
+      runtimeWarningMessage: _runtimeWarningMessage,
+      runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
       ...entry
     }) => entry,
   );
@@ -955,6 +959,16 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
   if (collabTaskOutputDetail) {
     entry.detail = collabTaskOutputDetail;
+  }
+  const runtimeWarningMessage =
+    activity.kind === "runtime.warning" &&
+    typeof payload?.message === "string" &&
+    payload.message.trim().length > 0
+      ? payload.message.trim()
+      : undefined;
+  if (runtimeWarningMessage) {
+    entry.detail = runtimeWarningMessage;
+    entry.runtimeWarningMessage = runtimeWarningMessage;
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
@@ -1132,6 +1146,10 @@ function collapseDerivedWorkLogEntries(
   const collapsed: DerivedWorkLogEntry[] = [];
   for (const entry of entries) {
     const previous = collapsed.at(-1);
+    if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
+      collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
+      continue;
+    }
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
@@ -1139,6 +1157,50 @@ function collapseDerivedWorkLogEntries(
     collapsed.push(entry);
   }
   return collapsed;
+}
+
+function shouldCollapseRuntimeWarningEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  if (previous.activityKind !== "runtime.warning" || next.activityKind !== "runtime.warning") {
+    return false;
+  }
+  return (
+    normalizeWorkLogTextForComparison(previous.label) ===
+      normalizeWorkLogTextForComparison(next.label) &&
+    normalizeWorkLogTextForComparison(
+      previous.runtimeWarningMessage ?? previous.detail ?? previous.preview ?? "",
+    ) ===
+      normalizeWorkLogTextForComparison(
+        next.runtimeWarningMessage ?? next.detail ?? next.preview ?? "",
+      )
+  );
+}
+
+function mergeRuntimeWarningEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): DerivedWorkLogEntry {
+  const repeatCount = (previous.runtimeWarningRepeatCount ?? 1) + 1;
+  const runtimeWarningMessage =
+    next.runtimeWarningMessage ??
+    previous.runtimeWarningMessage ??
+    next.detail ??
+    next.preview ??
+    previous.detail ??
+    previous.preview;
+  const repeatPreview = runtimeWarningMessage
+    ? `${repeatCount} notices - ${runtimeWarningMessage}`
+    : `${repeatCount} notices`;
+  return {
+    ...previous,
+    ...next,
+    runtimeWarningRepeatCount: repeatCount,
+    ...(runtimeWarningMessage ? { runtimeWarningMessage } : {}),
+    detail: repeatPreview,
+    preview: repeatPreview,
+  };
 }
 
 function shouldCollapseToolLifecycleEntries(

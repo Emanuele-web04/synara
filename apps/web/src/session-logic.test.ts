@@ -1013,6 +1013,50 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("shows runtime warning messages and collapses repeated identical warning rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-retry-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-3",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "opencode-retry-3",
+      label: "OpenCode retrying",
+      detail: "3 notices - Provider request failed; retrying.",
+      preview: "3 notices - Provider request failed; retrying.",
+    });
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
