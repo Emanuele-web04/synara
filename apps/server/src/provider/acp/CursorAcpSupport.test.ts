@@ -124,6 +124,7 @@ describe("buildCursorAcpSpawnInput", () => {
       args: ["acp"],
       cwd: "/tmp/project",
       env: {
+        ...process.env,
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
@@ -136,6 +137,7 @@ describe("buildCursorAcpSpawnInput", () => {
       args: ["acp"],
       cwd: "/tmp/project",
       env: {
+        ...process.env,
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
@@ -193,6 +195,7 @@ describe("buildCursorAcpSpawnInput", () => {
       args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
       env: {
+        ...process.env,
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },

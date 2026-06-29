@@ -80,7 +80,12 @@ export function buildCursorAcpSpawnInput(
     args: command.args,
     cwd,
     // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
-    env: CURSOR_AGENT_BROWSERLESS_ENV,
+    // Pass the full parent env as the base — AcpSessionRuntime uses spawn.env as the
+    // complete child environment when set, not as an overlay on process.env.
+    env: {
+      ...process.env,
+      ...CURSOR_AGENT_BROWSERLESS_ENV,
+    },
   };
 }
 
