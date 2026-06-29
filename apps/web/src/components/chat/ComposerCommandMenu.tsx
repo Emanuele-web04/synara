@@ -19,6 +19,7 @@ import {
   DeviceLaptopIcon,
   DisposableThreadIcon,
   EraserIcon,
+  FastModeIcon,
   GitBranchIcon,
   GitForkIcon,
   InfoIcon,
@@ -30,7 +31,6 @@ import {
   SkillCubeIcon,
   TerminalIcon,
   WorktreeIcon,
-  ZapIcon,
 } from "~/lib/icons";
 import { formatSkillScope } from "~/lib/providerDiscovery";
 import { cn } from "~/lib/utils";
@@ -415,7 +415,7 @@ const SLASH_COMMAND_ICONS: Record<string, LucideIcon> = {
   clear: EraserIcon,
   compact: Minimize2,
   model: BrainIcon,
-  fast: ZapIcon,
+  fast: FastModeIcon,
   plan: ListTodoIcon,
   default: MessageCircleIcon,
   review: BugIcon,

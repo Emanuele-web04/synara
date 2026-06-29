@@ -12,8 +12,7 @@ import {
 } from "@t3tools/contracts";
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { IoFlash } from "react-icons/io5";
-import { ChevronDownIcon, SettingsIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -542,7 +541,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           <>
             <span className="shrink-0 text-muted-foreground/45">·</span>
             <span className="inline-flex shrink-0 items-center gap-1">
-              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
             </span>
           </>
@@ -567,7 +566,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           <>
             <span className="text-muted-foreground/45">·</span>
             <span className="inline-flex items-center gap-1">
-              <IoFlash aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
+              <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
               <span>Fast</span>
             </span>
           </>

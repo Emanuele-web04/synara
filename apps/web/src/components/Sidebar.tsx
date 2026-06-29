@@ -206,7 +206,6 @@ import {
   getDesktopUpdateAlreadyCurrentNotice,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateButtonVariant,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -5788,24 +5787,12 @@ export default function Sidebar() {
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
     : "hover:brightness-110";
-  const desktopUpdateButtonVariant = getDesktopUpdateButtonVariant(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
-  const desktopUpdateButtonClasses =
-    desktopUpdateButtonVariant === "installing" || desktopUpdateButtonVariant === "progress"
-      ? "bg-sky-500 hover:bg-sky-600"
-      : desktopUpdateButtonVariant === "ready"
-        ? "bg-emerald-500 hover:bg-emerald-600"
-        : desktopUpdateButtonVariant === "error"
-          ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] font-medium leading-none text-white transition-colors",
-    desktopUpdateButtonHasSecondaryLabel && "min-h-7 py-1",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--accent)] px-2.5 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-medium leading-none text-[var(--accent-foreground)] transition-colors",
+    desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
-    desktopUpdateButtonClasses,
   );
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
@@ -6672,7 +6659,7 @@ export default function Sidebar() {
                     )}
                     onClick={() => void navigate({ to: "/settings" })}
                   >
-                    <SidebarLeadingIcon size="sm">
+                    <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
                       <SidebarGlyph icon={SettingsIcon} variant="leading" />
                     </SidebarLeadingIcon>
                     <span>Settings</span>
@@ -6700,11 +6687,6 @@ export default function Sidebar() {
                               </span>
                             ) : null}
                           </span>
-                          {desktopUpdateButtonPresentation.progressPercent !== null ? (
-                            <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
-                              {desktopUpdateButtonPresentation.progressPercent}%
-                            </span>
-                          ) : null}
                         </button>
                       }
                     />

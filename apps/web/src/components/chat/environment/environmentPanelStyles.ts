@@ -4,6 +4,7 @@
 //          secondary chrome reads consistently across the chat shell.
 // Layer: Environment panel design tokens
 
+import { COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME } from "~/components/chatMarkdownSpacing";
 import {
   COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
   COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME,
@@ -53,8 +54,5 @@ export const ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME = cn(
   `!${COMPOSER_PLACEHOLDER_TEXT_CLASS_NAME}`,
   "[&_strong]:font-medium [&_strong]:text-muted-foreground/40",
   "[&_:not(pre)>code]:!text-muted-foreground/45",
-  "[&_p]:my-1.5 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0",
-  "[&_ul]:my-1.5 [&_ol]:my-1.5",
-  "[&_li]:my-0.5",
-  "[&_pre]:my-2",
+  COMPACT_CHAT_MARKDOWN_COZY_CLASS_NAME,
 );

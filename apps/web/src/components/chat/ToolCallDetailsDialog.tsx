@@ -5,7 +5,7 @@
 // Depends on: WorkLogEntry.toolDetails and shared dialog chrome
 
 import type { ReactNode } from "react";
-import { ChangesIcon, TerminalIcon } from "~/lib/icons";
+import { PencilIcon, TerminalIcon } from "~/lib/icons";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
@@ -35,7 +35,10 @@ interface ToolCallDetailsDialogProps {
 
 export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
   const details = entry?.toolDetails;
-  const Icon = details?.kind === "file-change" ? ChangesIcon : TerminalIcon;
+  // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
+  // the central pencil, commands use the terminal — so the dialog header matches
+  // the row the user clicked.
+  const Icon = details?.kind === "file-change" ? PencilIcon : TerminalIcon;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup surface="solid" className="max-h-[min(86vh,760px)] max-w-4xl gap-0 p-0">

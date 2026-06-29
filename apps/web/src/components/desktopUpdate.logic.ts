@@ -67,18 +67,9 @@ export function isDesktopUpdateButtonDisabled(state: DesktopUpdateState | null):
   );
 }
 
-function formatDesktopUpdateDownloadPercent(percent: number | null): string | null {
-  if (typeof percent !== "number" || !Number.isFinite(percent)) {
-    return null;
-  }
-  const normalized = Math.max(0, Math.min(100, Math.floor(percent)));
-  return `${normalized}%`;
-}
-
 export interface DesktopUpdateButtonPresentation {
   label: string;
   secondaryLabel: string | null;
-  progressPercent: number | null;
 }
 
 export function getDesktopUpdateButtonPresentation(
@@ -89,7 +80,6 @@ export function getDesktopUpdateButtonPresentation(
     return {
       label: "Updating...",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
 
@@ -97,7 +87,6 @@ export function getDesktopUpdateButtonPresentation(
     return {
       label: "Update",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
 
@@ -105,16 +94,13 @@ export function getDesktopUpdateButtonPresentation(
     return {
       label: "Checking...",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
 
   if (state.status === "downloading") {
-    const percentText = formatDesktopUpdateDownloadPercent(state.downloadPercent);
     return {
-      label: "Preparing...",
+      label: "Preparing",
       secondaryLabel: null,
-      progressPercent: percentText ? Number.parseInt(percentText, 10) : null,
     };
   }
 
@@ -124,13 +110,11 @@ export function getDesktopUpdateButtonPresentation(
       return {
         label: "Retry",
         secondaryLabel: null,
-        progressPercent: null,
       };
     }
     return {
-      label: "Preparing...",
+      label: "Preparing",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
   if (action === "install") {
@@ -138,26 +122,22 @@ export function getDesktopUpdateButtonPresentation(
       return {
         label: "Retry",
         secondaryLabel: null,
-        progressPercent: null,
       };
     }
     return {
       label: "Update",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
   if (action === "check") {
     return {
       label: "Check updates",
       secondaryLabel: null,
-      progressPercent: null,
     };
   }
   return {
     label: "Update",
     secondaryLabel: null,
-    progressPercent: null,
   };
 }
 

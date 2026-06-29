@@ -73,7 +73,6 @@ import {
   IconStarFilled,
   IconSun,
   IconTextWrap,
-  IconTool,
   IconTrash,
   IconTrophy,
   IconWorld,
@@ -195,7 +194,10 @@ export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
 export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
-export const HammerIcon = adaptIcon(IconTool);
+// Single hammer/build glyph (tool-call rows, codex provider, "build" scripts).
+// Sourced from the Central set so it matches the other work-row icons (pencil,
+// terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
+export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
@@ -258,7 +260,10 @@ export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
-export const WrenchIcon = adaptIcon(IconTool);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);
+// Single source for the fast-mode glyph. Every fast-mode affordance (composer
+// trait badges, the Speed submenu, the /fast command) renders this one solid
+// lightning bolt from the Central fill set instead of mixing Tabler/Ionicons bolts.
+export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");

@@ -64,9 +64,9 @@ import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImage
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
 import { DiffStatLabel } from "./DiffStatLabel";
+import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
-import { CentralIcon } from "~/lib/central-icons";
 import { InlineMentionChip } from "./InlineMentionChip";
 import { InlineSkillChip } from "./InlineSkillChip";
 import { InlineAgentChip } from "./InlineAgentChip";
@@ -142,6 +142,19 @@ const MAX_VISIBLE_CHANGED_FILES = 5;
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
+// Shared interaction tone for a work row's leading glyph and labels: muted by
+// default, brightening to foreground when the enclosing row is hovered/focused.
+// This is the single source for that treatment so command, MCP, agent, and
+// "Edited <file>" rows stay visually coherent (they previously drifted in
+// opacity). The row's `group/<name>` token is baked into each literal — Tailwind
+// only generates classes it can see statically, so the group cannot be
+// interpolated. Add one entry per group token used by a work row.
+const WORK_ROW_MUTED_HOVER_TONE: Record<"tool-row" | "file-row", string> = {
+  "tool-row":
+    "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+  "file-row":
+    "text-muted-foreground/70 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+};
 // How long a jumped-to message keeps its highlight tint before fading back out.
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
 const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
@@ -199,6 +212,11 @@ function basename(value: string): string {
   const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
   return slash >= 0 ? value.slice(slash + 1) : value;
 }
+
+// Stable empty stat map so file-change rows without a parsable patch don't churn
+// referential identity on every render.
+const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, { additions: number; deletions: number }> =
+  new Map();
 
 function cssAttributeSelectorValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -2673,9 +2691,19 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
+  // Per-file +N/-M parsed from this tool call's own patch, used as a fallback when
+  // the turn-diff summary isn't in scope (e.g. standalone work rows) so every
+  // "Edited <file>" row can still show diff stats.
+  const toolDiffStatsByPath = useMemo(
+    () =>
+      isFileChangeWorkEntry(workEntry)
+        ? fileDiffStatsByPath(workEntry.toolDetails?.diff)
+        : EMPTY_FILE_DIFF_STATS,
+    [workEntry],
+  );
 
   // A created-automation row renders as its own card instead of a tool-call line.
-  // Kept after the lone hook above so the early return never changes hook order.
+  // Kept after the hooks above so the early return never changes hook order.
   const automation = workEntry.automation;
   if (automation) {
     return (
@@ -2713,7 +2741,18 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       {showEditedRows ? (
         <div className="space-y-0.5">
           {changedFiles.map((changedFilePath) => {
-            const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
+            // Prefer the turn-diff summary's per-file stat; fall back to the stat
+            // parsed from this tool call's own patch so the +N/-M shows even when
+            // no summary is in scope (standalone work rows) or it lacks the file.
+            const summaryStat = fileDiffStatByPath?.get(changedFilePath);
+            const changedFileStat =
+              summaryStat && summaryStat.additions + summaryStat.deletions > 0
+                ? summaryStat
+                : (resolveFileDiffStatByChangedPath(
+                    toolDiffStatsByPath,
+                    changedFilePath,
+                    changedFiles.length,
+                  ) ?? summaryStat);
             const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
             const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
             const editedRowClassName = cn(
@@ -2915,7 +2954,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <>
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+                  "flex shrink-0 items-center justify-center",
+                  WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                   compact ? "size-4" : "size-5",
                 )}
                 data-tool-icon={leftIconKind}
@@ -2958,7 +2998,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       compact ? "truncate leading-5" : "truncate leading-6",
                       // Match the leading icon's tone so the row reads as one muted unit, and
                       // brighten the whole row to foreground on hover/focus instead of a fill.
-                      "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+                      WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
@@ -3027,21 +3067,27 @@ function EditedFileRowContent(props: {
     <>
       <span
         className={cn(
-          "flex shrink-0 items-center justify-center text-muted-foreground/40 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+          "flex shrink-0 items-center justify-center",
+          WORK_ROW_MUTED_HOVER_TONE["file-row"],
           compact ? "size-4" : "size-5",
         )}
         data-tool-icon="edit"
       >
-        <CentralIcon name="pencil" className={compact ? "size-3.5" : "size-4"} />
+        <PencilIcon className={compact ? "size-3.5" : "size-4"} />
       </span>
       <span
-        className="font-system-ui shrink-0 text-muted-foreground/40 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground"
+        className={cn("font-system-ui shrink-0", WORK_ROW_MUTED_HOVER_TONE["file-row"])}
         style={{ fontSize: `${fontSizePx}px` }}
       >
         Edited
       </span>
       <span
-        className="font-system-ui max-w-[28rem] truncate text-muted-foreground/40 underline-offset-2 transition-colors group-hover/file-row:text-foreground group-hover/file-row:underline group-focus-visible/file-row:text-foreground group-focus-visible/file-row:underline"
+        className={cn(
+          "font-system-ui max-w-[28rem] truncate underline-offset-2",
+          WORK_ROW_MUTED_HOVER_TONE["file-row"],
+          // Filename doubles as a link affordance: underline on the same row hover/focus.
+          "group-hover/file-row:underline group-focus-visible/file-row:underline",
+        )}
         style={{ fontSize: `${fontSizePx}px` }}
       >
         {basename(filePath)}
