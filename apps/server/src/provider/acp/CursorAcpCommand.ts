@@ -46,7 +46,6 @@ interface CursorCommandPathParts {
 
 const CURSOR_EXECUTABLE_EXTENSION_PATTERN = /\.(?:bat|cmd|exe|ps1)$/iu;
 const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
-const WINDOWS_BATCH_EXECUTABLE_EXTENSION = ".cmd";
 
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const trimmed = command.trim();
@@ -96,12 +95,7 @@ function resolveCursorEditorLauncherCommand(
   if (siblingLegacyAgent) {
     return siblingLegacyAgent;
   }
-  return {
-    command: `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${cursorLegacyFallbackExtension(
-      parts,
-    )}`,
-    args: [],
-  };
+  return { command, args: [] };
 }
 
 function resolveCursorSiblingAgentCommand(
@@ -138,15 +132,6 @@ function cursorSiblingAgentExtensions(parts: CursorCommandPathParts): ReadonlyAr
     ? [...preferredExtension, ...WINDOWS_EXECUTABLE_EXTENSIONS, ""]
     : [parts.extension];
   return [...new Set(extensions)];
-}
-
-function cursorLegacyFallbackExtension(parts: CursorCommandPathParts): string {
-  if (!shouldProbeWindowsExtensionsForParts(parts)) {
-    return parts.extension;
-  }
-  return isWindowsSafeExecutableExtension(parts.extension)
-    ? parts.extension
-    : WINDOWS_BATCH_EXECUTABLE_EXTENSION;
 }
 
 function shouldProbeWindowsExtensionsForParts(parts: CursorCommandPathParts): boolean {

@@ -1552,7 +1552,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("maps Cursor editor launchers to top-level agent commands", () =>
+    it.effect("uses configured Cursor editor launchers when no agent command is resolved", () =>
       Effect.gen(function* () {
         const originalPath = process.env.PATH;
         yield* Effect.acquireRelease(
@@ -1573,10 +1573,10 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/agent");
+            assert.strictEqual(command, "/custom/bin/cursor");
             const joined = args.join(" ");
             if (joined === "--version") {
-              return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
+              return { stdout: "cursor 2026.04.27\n", stderr: "", code: 0 };
             }
             if (joined === "status") {
               return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
