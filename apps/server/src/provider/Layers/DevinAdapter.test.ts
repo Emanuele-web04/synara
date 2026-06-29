@@ -1458,6 +1458,36 @@ describe("DevinAdapterLive", () => {
     );
   });
 
+  it.effect("returns no commands when threadId and cwd are omitted", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project-a",
+        runtimeMode: "full-access",
+      });
+
+      const result = yield* adapter.listCommands!({
+        provider: "devin",
+      });
+
+      assert.deepStrictEqual(result.commands, []);
+      yield* adapter.stopSession(threadId);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                availableCommands: [{ name: "revert", description: "Revert changes" }],
+              }),
+            ),
+        }),
+      ),
+    ),
+  );
+
   // ── listCommands cwd matching when threadId is omitted ────────────
 
   it.effect(

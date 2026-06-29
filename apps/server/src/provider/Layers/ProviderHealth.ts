@@ -85,6 +85,14 @@ import {
 } from "../providerMaintenance";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  authProbeFailureMessage,
+  type CommandResult,
+  makeAuthProbeUnavailableStatus,
+  runCliVersionHealthProbe,
+} from "./cliProviderHealthProbe.ts";
+
+export type { CommandResult } from "./cliProviderHealthProbe.ts";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
@@ -209,12 +217,6 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
 };
 
 // ── Pure helpers ────────────────────────────────────────────────────
-
-export interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly code: number;
-}
 
 function nonEmptyTrimmed(value: string | undefined): string | undefined {
   if (!value) return undefined;
@@ -1396,51 +1398,24 @@ export const makeCheckGrokProviderStatus = (
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "grok";
 
-    const versionProbe = yield* runGrokCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: GROK_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Grok CLI (`grok`) is not installed or not on PATH."
-          : `Failed to execute Grok CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
+    const versionOutcome = yield* runCliVersionHealthProbe({
+      provider: GROK_PROVIDER,
+      executable,
+      checkedAt,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      isCommandMissingCause,
+      messages: {
+        notInstalled: "Grok CLI (`grok`) is not installed or not on PATH.",
+        failedToExecute: "Failed to execute Grok CLI health check: ",
+        timedOut: "Grok CLI is installed but failed to run. Timed out while running command.",
+        failedToRunPrefix: "Grok CLI is installed but failed to run.",
+      },
+      runVersionCommand: runGrokCommand(["--version"], executable),
+    });
+    if (!versionOutcome.ok) {
+      return versionOutcome.status;
     }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: GROK_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Grok CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: GROK_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Grok CLI is installed but failed to run. ${detail}`
-          : "Grok CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const parsedVersion = versionOutcome.parsedVersion;
     const hasApiKey = hasGrokApiKeyEnv();
 
     return {
@@ -1470,58 +1445,30 @@ export const makeCheckOpenCodeProviderStatus = (
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "opencode";
 
-    const versionProbe = yield* runOpenCodeCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(OPENCODE_HEALTH_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: OPENCODE_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "OpenCode CLI (`opencode`) is not installed or not on PATH."
-          : `Failed to execute OpenCode CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
+    const versionOutcome = yield* runCliVersionHealthProbe({
+      provider: OPENCODE_PROVIDER,
+      executable,
+      checkedAt,
+      timeoutMs: OPENCODE_HEALTH_TIMEOUT_MS,
+      isCommandMissingCause,
+      messages: {
+        notInstalled: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
+        failedToExecute: "Failed to execute OpenCode CLI health check: ",
+        timedOut: `OpenCode CLI is installed but failed to run. ${PROVIDER_COMMAND_TIMEOUT_DETAIL}`,
+        failedToRunPrefix: "OpenCode CLI is installed but failed to run.",
+      },
+      runVersionCommand: runOpenCodeCommand(["--version"], executable),
+    });
+    if (!versionOutcome.ok) {
+      return versionOutcome.status;
     }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: OPENCODE_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: `OpenCode CLI is installed but failed to run. ${PROVIDER_COMMAND_TIMEOUT_DETAIL}`,
-      } satisfies ServerProviderStatus;
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: OPENCODE_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `OpenCode CLI is installed but failed to run. ${detail}`
-          : "OpenCode CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
     return {
       provider: OPENCODE_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
-      version: parsedVersion,
+      version: versionOutcome.parsedVersion,
       checkedAt,
       message:
         "OpenCode CLI is installed. Configure provider credentials inside OpenCode as needed.",
@@ -1539,58 +1486,30 @@ export const makeCheckKiloProviderStatus = (
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "kilo";
 
-    const versionProbe = yield* runKiloCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Kilo CLI (`kilo`) is not installed or not on PATH."
-          : `Failed to execute Kilo CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
+    const versionOutcome = yield* runCliVersionHealthProbe({
+      provider: KILO_PROVIDER,
+      executable,
+      checkedAt,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      isCommandMissingCause,
+      messages: {
+        notInstalled: "Kilo CLI (`kilo`) is not installed or not on PATH.",
+        failedToExecute: "Failed to execute Kilo CLI health check: ",
+        timedOut: "Kilo CLI is installed but failed to run. Timed out while running command.",
+        failedToRunPrefix: "Kilo CLI is installed but failed to run.",
+      },
+      runVersionCommand: runKiloCommand(["--version"], executable),
+    });
+    if (!versionOutcome.ok) {
+      return versionOutcome.status;
     }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Kilo CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: KILO_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Kilo CLI is installed but failed to run. ${detail}`
-          : "Kilo CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
     return {
       provider: KILO_PROVIDER,
       status: "ready" as const,
       available: true,
       authStatus: "unknown" as const,
-      version: parsedVersion,
+      version: versionOutcome.parsedVersion,
       checkedAt,
       message: "Kilo CLI is installed. Configure provider credentials inside Kilo as needed.",
     } satisfies ServerProviderStatus;
@@ -1985,51 +1904,24 @@ export const makeCheckDevinProviderStatus = (
     const checkedAt = new Date().toISOString();
     const executable = nonEmptyTrimmed(binaryPath) ?? "devin";
 
-    const versionProbe = yield* runDevinCommand(["--version"], executable).pipe(
-      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
-      Effect.result,
-    );
-
-    if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Devin CLI (`devin`) is not installed or not on PATH."
-          : `Failed to execute Devin CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      } satisfies ServerProviderStatus;
+    const versionOutcome = yield* runCliVersionHealthProbe({
+      provider: DEVIN_PROVIDER,
+      executable,
+      checkedAt,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      isCommandMissingCause,
+      messages: {
+        notInstalled: "Devin CLI (`devin`) is not installed or not on PATH.",
+        failedToExecute: "Failed to execute Devin CLI health check: ",
+        timedOut: "Devin CLI is installed but failed to run. Timed out while running command.",
+        failedToRunPrefix: "Devin CLI is installed but failed to run.",
+      },
+      runVersionCommand: runDevinCommand(["--version"], executable),
+    });
+    if (!versionOutcome.ok) {
+      return versionOutcome.status;
     }
-
-    if (Option.isNone(versionProbe.success)) {
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: "Devin CLI is installed but failed to run. Timed out while running command.",
-      } satisfies ServerProviderStatus;
-    }
-
-    const version = versionProbe.success.value;
-    if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
-        provider: DEVIN_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
-        checkedAt,
-        message: detail
-          ? `Devin CLI is installed but failed to run. ${detail}`
-          : "Devin CLI is installed but failed to run.",
-      } satisfies ServerProviderStatus;
-    }
-    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const parsedVersion = versionOutcome.parsedVersion;
 
     const hasApiKeyEnv = hasDevinApiKeyEnv();
     const authProbe = yield* runDevinCommand(["auth", "status"], executable).pipe(
@@ -2038,7 +1930,6 @@ export const makeCheckDevinProviderStatus = (
     );
 
     if (Result.isFailure(authProbe)) {
-      const error = authProbe.failure;
       if (hasApiKeyEnv) {
         return {
           provider: DEVIN_PROVIDER,
@@ -2048,18 +1939,15 @@ export const makeCheckDevinProviderStatus = (
           checkedAt,
         } satisfies ServerProviderStatus;
       }
-      return {
+      return makeAuthProbeUnavailableStatus({
         provider: DEVIN_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
-        version: parsedVersion,
+        parsedVersion,
         checkedAt,
-        message:
-          error instanceof Error
-            ? `Could not verify Devin authentication status: ${error.message}.`
-            : "Could not verify Devin authentication status.",
-      } satisfies ServerProviderStatus;
+        message: authProbeFailureMessage(
+          "Could not verify Devin authentication status",
+          authProbe.failure,
+        ),
+      });
     }
 
     if (Option.isNone(authProbe.success)) {
@@ -2072,15 +1960,12 @@ export const makeCheckDevinProviderStatus = (
           checkedAt,
         } satisfies ServerProviderStatus;
       }
-      return {
+      return makeAuthProbeUnavailableStatus({
         provider: DEVIN_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
-        version: parsedVersion,
+        parsedVersion,
         checkedAt,
         message: "Could not verify Devin authentication status. Timed out while running command.",
-      } satisfies ServerProviderStatus;
+      });
     }
 
     const parsed = parseDevinAuthStatusFromOutput(authProbe.success.value, {

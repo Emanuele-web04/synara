@@ -27,7 +27,9 @@ import {
   Option,
   PubSub,
   Scope,
+  Semaphore,
   Stream,
+  SynchronizedRef,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
@@ -40,6 +42,15 @@ import {
   ProviderAdapterValidationError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import {
+  settlePendingApprovalsAsCancelled,
+  settlePendingUserInputsAsEmptyAnswers,
+  makeAcpThreadLock,
+} from "../acp/AcpAdapterSessionSupport.ts";
+import {
+  forkAcpTurnIdleWatchdog,
+  resolveAcpTurnIdleTimeoutMs,
+} from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
@@ -87,6 +98,13 @@ const MAX_TURNS_PER_SESSION = 200;
 const PENDING_DECISION_TIMEOUT_MS = 5 * 60 * 1000;
 /** Timeout for cold-start model discovery via ACP session. */
 const DEVIN_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+/** Reuse cold-start model discovery results to avoid repeated short-lived spawns. */
+const DEVIN_COLD_MODEL_DISCOVERY_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEVIN_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_DEVIN_TURN_IDLE_TIMEOUT_MS",
+  defaultMs: 10 * 60 * 1000,
+});
+const DEVIN_TURN_WATCHDOG_INTERVAL_MS = 5_000;
 
 export interface DevinAcpRuntimeFactoryInput {
   readonly devinSettings: DevinAcpRuntimeSettings;
@@ -132,6 +150,7 @@ interface DevinSessionContext {
   activeTurnId: TurnId | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
   activeTurnFailedToolDetail: string | undefined;
+  lastTurnActivityAt: number | undefined;
   /** Cached model list extracted from config options, updated on session start. */
   cachedModels: ReadonlyArray<{ slug: string; name: string }> | undefined;
   /** Binary path that produced cachedModels, for cache invalidation. */
@@ -175,27 +194,40 @@ function clearActiveTurn(ctx: DevinSessionContext, turnId: TurnId): boolean {
   ctx.activeTurnId = undefined;
   ctx.activePromptFiber = undefined;
   ctx.activeTurnFailedToolDetail = undefined;
+  ctx.lastTurnActivityAt = undefined;
   return true;
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: Map<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    [...pendingApprovals.values()],
-    (pending) => Deferred.succeed(pending.decision, "cancel" as const),
-    { discard: true },
-  ).pipe(Effect.andThen(Effect.sync(() => pendingApprovals.clear())));
+function readColdDiscoveredModels(
+  cache: Map<
+    string,
+    { readonly models: ReadonlyArray<{ slug: string; name: string }>; readonly cachedAt: number }
+  >,
+  binaryPath: string,
+) {
+  const cached = cache.get(binaryPath);
+  if (!cached) {
+    return undefined;
+  }
+  if (Date.now() - cached.cachedAt > DEVIN_COLD_MODEL_DISCOVERY_CACHE_TTL_MS) {
+    cache.delete(binaryPath);
+    return undefined;
+  }
+  return cached.models;
 }
 
-function settlePendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    [...pendingUserInputs.values()],
-    (pending) => Deferred.succeed(pending.answers, {}),
-    { discard: true },
-  ).pipe(Effect.andThen(Effect.sync(() => pendingUserInputs.clear())));
+function storeColdDiscoveredModels(
+  cache: Map<
+    string,
+    { readonly models: ReadonlyArray<{ slug: string; name: string }>; readonly cachedAt: number }
+  >,
+  binaryPath: string,
+  models: ReadonlyArray<{ slug: string; name: string }>,
+): void {
+  cache.set(binaryPath, {
+    models,
+    cachedAt: Date.now(),
+  });
 }
 
 function extractDevinModelsFromConfigOptions(
@@ -251,6 +283,12 @@ function makeProviderAdapter(
   return Effect.gen(function* () {
     const events = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const sessions = new Map<ThreadId, DevinSessionContext>();
+    const coldDiscoveredModelsByBinaryPath = new Map<
+      string,
+      { readonly models: ReadonlyArray<{ slug: string; name: string }>; readonly cachedAt: number }
+    >();
+    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const { withThreadLock } = makeAcpThreadLock(threadLocksRef);
     const makeRuntime = options?.makeRuntime ?? makeDefaultRuntimeFactory;
 
     const publish = (event: ProviderRuntimeEvent) =>
@@ -291,382 +329,428 @@ function makeProviderAdapter(
       });
 
     const startSession: DevinAdapterShape["startSession"] = (input) =>
-      Effect.gen(function* () {
-        if (input.provider !== undefined && input.provider !== PROVIDER) {
-          return yield* new ProviderAdapterValidationError({
-            provider: PROVIDER,
-            operation: "startSession",
-            issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
-          });
-        }
+      withThreadLock(
+        input.threadId,
+        Effect.gen(function* () {
+          if (input.provider !== undefined && input.provider !== PROVIDER) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "startSession",
+              issue: `Expected provider '${PROVIDER}' but received '${input.provider}'.`,
+            });
+          }
 
-        const cwd = input.cwd?.trim() || process.cwd();
-        const existing = sessions.get(input.threadId);
-        if (existing && !existing.stopped) {
-          yield* stopSessionInternal(existing);
-        }
+          const cwd = input.cwd?.trim() || process.cwd();
+          const existing = sessions.get(input.threadId);
+          if (existing && !existing.stopped) {
+            yield* stopSessionInternal(existing);
+          }
 
-        const devinSettings = {
-          binaryPath: input.providerOptions?.devin?.binaryPath?.trim() || "devin",
-        };
-        const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
-        const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
-        const sessionScope = yield* Scope.make("sequential");
-        let sessionScopeTransferred = false;
-        yield* Effect.addFinalizer(() =>
-          sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
-        );
-        let ctx!: DevinSessionContext;
+          const devinSettings = {
+            binaryPath: input.providerOptions?.devin?.binaryPath?.trim() || "devin",
+          };
+          const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
+          const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
+          const sessionScope = yield* Scope.make("sequential");
+          let sessionScopeTransferred = false;
+          yield* Effect.addFinalizer(() =>
+            sessionScopeTransferred ? Effect.void : Scope.close(sessionScope, Exit.void),
+          );
+          let ctx!: DevinSessionContext;
 
-        const resumeSessionId = readDevinResumeSessionId(input.resumeCursor);
-        const acp = yield* makeRuntime({
-          devinSettings,
-          cwd,
-          threadId: input.threadId,
-          ...(resumeSessionId ? { resumeSessionId } : {}),
-          ...(options?.nativeEventLogger ? { nativeEventLogger: options.nativeEventLogger } : {}),
-          ...(childProcessSpawner ? { childProcessSpawner } : {}),
-        }).pipe(Effect.provideService(Scope.Scope, sessionScope));
+          const resumeSessionId = readDevinResumeSessionId(input.resumeCursor);
+          const acp = yield* makeRuntime({
+            devinSettings,
+            cwd,
+            threadId: input.threadId,
+            ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(options?.nativeEventLogger ? { nativeEventLogger: options.nativeEventLogger } : {}),
+            ...(childProcessSpawner ? { childProcessSpawner } : {}),
+          }).pipe(Effect.provideService(Scope.Scope, sessionScope));
 
-        const started = yield* Effect.gen(function* () {
-          yield* acp.handleRequestPermission((params) =>
-            Effect.gen(function* () {
-              if (input.runtimeMode === "full-access") {
-                const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(params.options);
-                if (autoApprovedOptionId !== undefined) {
-                  return {
-                    outcome: {
-                      outcome: "selected" as const,
-                      optionId: autoApprovedOptionId,
-                    },
-                  };
-                }
-              }
-
-              const permissionRequest = parsePermissionRequest(params);
-              const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-              const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
-              const decision = yield* Deferred.make<ProviderApprovalDecision>();
-              pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
-              yield* publish(
-                makeAcpRequestOpenedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId: ctx?.activeTurnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
-                  args: params,
-                  source: "acp.jsonrpc",
-                  method: "session/request_permission",
-                  rawPayload: params,
-                }),
-              );
-
-              const maybeResolved = yield* Deferred.await(decision).pipe(
-                Effect.timeoutOption(Duration.millis(PENDING_DECISION_TIMEOUT_MS)),
-              );
-              pendingApprovals.delete(requestId);
-              const resolved = Option.getOrElse(maybeResolved, () => "cancel" as const);
-              yield* publish(
-                makeAcpRequestResolvedEvent({
-                  stamp: yield* makeEventStamp(),
-                  provider: PROVIDER,
-                  threadId: input.threadId,
-                  turnId: ctx?.activeTurnId,
-                  requestId: runtimeRequestId,
-                  permissionRequest,
-                  decision: resolved,
-                }),
-              );
-
-              const selectedOptionId = selectAcpPermissionOptionId(resolved, params.options);
-              return {
-                outcome:
-                  selectedOptionId === undefined
-                    ? ({ outcome: "cancelled" } as const)
-                    : ({
+          const started = yield* Effect.gen(function* () {
+            yield* acp.handleRequestPermission((params) =>
+              Effect.gen(function* () {
+                if (input.runtimeMode === "full-access") {
+                  const autoApprovedOptionId = selectAcpFullAccessPermissionOptionId(
+                    params.options,
+                  );
+                  if (autoApprovedOptionId !== undefined) {
+                    return {
+                      outcome: {
                         outcome: "selected" as const,
-                        optionId: selectedOptionId,
-                      } as const),
-              };
-            }),
-          );
-
-          yield* acp.handleElicitation((request) =>
-            Effect.gen(function* () {
-              if (request.mode !== "form") {
-                return { action: { action: "decline" as const } };
-              }
-              const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
-              const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
-              const answers = yield* Deferred.make<ProviderUserInputAnswers>();
-              pendingUserInputs.set(requestId, { request, answers });
-              yield* publish({
-                type: "user-input.requested",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                turnId: ctx?.activeTurnId,
-                requestId: runtimeRequestId,
-                payload: { questions: elicitationFormToUserInputQuestions(request) },
-                raw: {
-                  source: "acp.jsonrpc",
-                  method: "session/elicitation",
-                  payload: request,
-                },
-              });
-              const maybeAnswers = yield* Deferred.await(answers).pipe(
-                Effect.timeoutOption(Duration.millis(PENDING_DECISION_TIMEOUT_MS)),
-              );
-              pendingUserInputs.delete(requestId);
-              const resolved = Option.getOrElse(
-                maybeAnswers,
-                () => ({}) as ProviderUserInputAnswers,
-              );
-              yield* publish({
-                type: "user-input.resolved",
-                ...(yield* makeEventStamp()),
-                provider: PROVIDER,
-                threadId: input.threadId,
-                turnId: ctx?.activeTurnId,
-                requestId: runtimeRequestId,
-                payload: { answers: resolved },
-              });
-              const content = userInputAnswersToElicitationContent(request, resolved);
-              return Object.keys(content).length > 0
-                ? { action: { action: "accept" as const, content } }
-                : { action: { action: "cancel" as const } };
-            }),
-          );
-
-          return yield* acp.start();
-        }).pipe(
-          Effect.mapError((error: EffectAcpErrors.AcpError) =>
-            mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
-          ),
-        );
-
-        const selectedModel =
-          input.modelSelection?.provider === PROVIDER
-            ? normalizeDevinModelSlug(input.modelSelection.model)
-            : "";
-        yield* applyDevinModeSelection({
-          runtime: acp,
-          threadId: input.threadId,
-          runtimeMode: input.runtimeMode,
-        });
-        if (selectedModel) {
-          yield* acp
-            .setModel(selectedModel)
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
-              ),
-            );
-        }
-
-        const now = yield* nowIso();
-        const session: ProviderSession = {
-          provider: PROVIDER,
-          status: "ready",
-          runtimeMode: input.runtimeMode,
-          cwd,
-          ...(selectedModel ? { model: selectedModel } : {}),
-          threadId: input.threadId,
-          resumeCursor: {
-            schemaVersion: DEVIN_RESUME_VERSION,
-            sessionId: started.sessionId,
-          },
-          createdAt: now,
-          updatedAt: now,
-        };
-
-        ctx = {
-          threadId: input.threadId,
-          session,
-          scope: sessionScope,
-          acp,
-          notificationFiber: undefined,
-          pendingApprovals,
-          pendingUserInputs,
-          turns: [],
-          activeTurnId: undefined,
-          activePromptFiber: undefined,
-          activeTurnFailedToolDetail: undefined,
-          cachedModels: undefined,
-          cachedModelsBinaryPath: undefined,
-          stopped: false,
-        };
-
-        const notificationFiber = yield* Stream.runDrain(
-          Stream.mapEffect(acp.getEvents(), (event) =>
-            Effect.gen(function* () {
-              switch (event._tag) {
-                // Modes and commands are fetched on-demand (getModeState / getAvailableCommands);
-                // the notification-level updates are redundant and intentionally not surfaced.
-                case "ModeChanged":
-                case "AvailableCommandsUpdated":
-                  return;
-                case "AssistantItemStarted":
-                  yield* publish(
-                    makeAcpAssistantItemEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      itemId: event.itemId,
-                      lifecycle: "item.started",
-                    }),
-                  );
-                  return;
-                case "AssistantItemCompleted":
-                  yield* publish(
-                    makeAcpAssistantItemEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      itemId: event.itemId,
-                      lifecycle: "item.completed",
-                    }),
-                  );
-                  return;
-                case "PlanUpdated":
-                  yield* publish(
-                    makeAcpPlanUpdatedEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      payload: event.payload,
-                      source: "acp.jsonrpc",
-                      method: "session/update",
-                      rawPayload: event.rawPayload,
-                    }),
-                  );
-                  return;
-                case "ToolCallUpdated": {
-                  const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
-                  if (failedToolDetail !== undefined && ctx.activeTurnId !== undefined) {
-                    ctx.activeTurnFailedToolDetail = failedToolDetail;
+                        optionId: autoApprovedOptionId,
+                      },
+                    };
                   }
-                  yield* publish(
-                    makeAcpToolCallEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      toolCall: event.toolCall,
-                      rawPayload: event.rawPayload,
-                    }),
-                  );
-                  return;
                 }
-                case "ContentDelta":
-                  yield* publish(
-                    makeAcpContentDeltaEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      ...(event.itemId ? { itemId: event.itemId } : {}),
-                      text: event.text,
-                      ...(event.streamKind ? { streamKind: event.streamKind } : {}),
-                      rawPayload: event.rawPayload,
-                    }),
-                  );
-                  return;
-                case "UsageUpdated":
-                  yield* publish(
-                    makeAcpTokenUsageEvent({
-                      stamp: yield* makeEventStamp(),
-                      provider: PROVIDER,
-                      threadId: ctx.threadId,
-                      turnId: ctx.activeTurnId,
-                      usage: event.usage,
-                      rawPayload: event.rawPayload,
-                    }),
-                  );
-                  return;
-              }
-            }),
-          ),
-        ).pipe(Effect.forkIn(sessionScope));
 
-        ctx.notificationFiber = notificationFiber;
+                const permissionRequest = parsePermissionRequest(params);
+                const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+                const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+                const decision = yield* Deferred.make<ProviderApprovalDecision>();
+                pendingApprovals.set(requestId, { decision, kind: permissionRequest.kind });
+                yield* publish(
+                  makeAcpRequestOpenedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId: ctx?.activeTurnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    detail: permissionRequest.detail ?? JSON.stringify(params).slice(0, 2000),
+                    args: params,
+                    source: "acp.jsonrpc",
+                    method: "session/request_permission",
+                    rawPayload: params,
+                  }),
+                );
 
-        // Detect unexpected ACP process exits (crash, OOM-kill, segfault).
-        yield* Effect.gen(function* () {
-          const exitCode = yield* acp.exitCode;
-          if (ctx.stopped) return;
-          yield* Effect.logError(
-            `Devin ACP process exited unexpectedly (code=${exitCode}) for thread ${input.threadId}`,
+                const maybeResolved = yield* Deferred.await(decision).pipe(
+                  Effect.timeoutOption(Duration.millis(PENDING_DECISION_TIMEOUT_MS)),
+                );
+                pendingApprovals.delete(requestId);
+                const resolved = Option.getOrElse(maybeResolved, () => "cancel" as const);
+                yield* publish(
+                  makeAcpRequestResolvedEvent({
+                    stamp: yield* makeEventStamp(),
+                    provider: PROVIDER,
+                    threadId: input.threadId,
+                    turnId: ctx?.activeTurnId,
+                    requestId: runtimeRequestId,
+                    permissionRequest,
+                    decision: resolved,
+                  }),
+                );
+
+                const selectedOptionId = selectAcpPermissionOptionId(resolved, params.options);
+                return {
+                  outcome:
+                    selectedOptionId === undefined
+                      ? ({ outcome: "cancelled" } as const)
+                      : ({
+                          outcome: "selected" as const,
+                          optionId: selectedOptionId,
+                        } as const),
+                };
+              }),
+            );
+
+            yield* acp.handleElicitation((request) =>
+              Effect.gen(function* () {
+                if (request.mode !== "form") {
+                  return { action: { action: "decline" as const } };
+                }
+                const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+                const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+                const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+                pendingUserInputs.set(requestId, { request, answers });
+                yield* publish({
+                  type: "user-input.requested",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { questions: elicitationFormToUserInputQuestions(request) },
+                  raw: {
+                    source: "acp.jsonrpc",
+                    method: "session/elicitation",
+                    payload: request,
+                  },
+                });
+                const maybeAnswers = yield* Deferred.await(answers).pipe(
+                  Effect.timeoutOption(Duration.millis(PENDING_DECISION_TIMEOUT_MS)),
+                );
+                pendingUserInputs.delete(requestId);
+                const resolved = Option.getOrElse(
+                  maybeAnswers,
+                  () => ({}) as ProviderUserInputAnswers,
+                );
+                yield* publish({
+                  type: "user-input.resolved",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { answers: resolved },
+                });
+                const content = userInputAnswersToElicitationContent(request, resolved);
+                return Object.keys(content).length > 0
+                  ? { action: { action: "accept" as const, content } }
+                  : { action: { action: "cancel" as const } };
+              }),
+            );
+
+            return yield* acp.start();
+          }).pipe(
+            Effect.mapError((error: EffectAcpErrors.AcpError) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, "session/start", error),
+            ),
           );
+
+          const selectedModel =
+            input.modelSelection?.provider === PROVIDER
+              ? normalizeDevinModelSlug(input.modelSelection.model)
+              : "";
+          yield* applyDevinModeSelection({
+            runtime: acp,
+            threadId: input.threadId,
+            runtimeMode: input.runtimeMode,
+          });
+          if (selectedModel) {
+            yield* acp
+              .setModel(selectedModel)
+              .pipe(
+                Effect.mapError((error) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, "session/set_model", error),
+                ),
+              );
+          }
+
+          const now = yield* nowIso();
+          const session: ProviderSession = {
+            provider: PROVIDER,
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            cwd,
+            ...(selectedModel ? { model: selectedModel } : {}),
+            threadId: input.threadId,
+            resumeCursor: {
+              schemaVersion: DEVIN_RESUME_VERSION,
+              sessionId: started.sessionId,
+            },
+            createdAt: now,
+            updatedAt: now,
+          };
+
+          ctx = {
+            threadId: input.threadId,
+            session,
+            scope: sessionScope,
+            acp,
+            notificationFiber: undefined,
+            pendingApprovals,
+            pendingUserInputs,
+            turns: [],
+            activeTurnId: undefined,
+            activePromptFiber: undefined,
+            activeTurnFailedToolDetail: undefined,
+            lastTurnActivityAt: undefined,
+            cachedModels: undefined,
+            cachedModelsBinaryPath: undefined,
+            stopped: false,
+          };
+
+          const notificationFiber = yield* Stream.runDrain(
+            Stream.mapEffect(acp.getEvents(), (event) =>
+              Effect.gen(function* () {
+                ctx.lastTurnActivityAt = Date.now();
+                switch (event._tag) {
+                  // Modes and commands are fetched on-demand (getModeState / getAvailableCommands);
+                  // the notification-level updates are redundant and intentionally not surfaced.
+                  case "ModeChanged":
+                  case "AvailableCommandsUpdated":
+                    return;
+                  case "AssistantItemStarted":
+                    yield* publish(
+                      makeAcpAssistantItemEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        itemId: event.itemId,
+                        lifecycle: "item.started",
+                      }),
+                    );
+                    return;
+                  case "AssistantItemCompleted":
+                    yield* publish(
+                      makeAcpAssistantItemEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        itemId: event.itemId,
+                        lifecycle: "item.completed",
+                      }),
+                    );
+                    return;
+                  case "PlanUpdated":
+                    yield* publish(
+                      makeAcpPlanUpdatedEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        payload: event.payload,
+                        source: "acp.jsonrpc",
+                        method: "session/update",
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "ToolCallUpdated": {
+                    const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
+                    if (failedToolDetail !== undefined && ctx.activeTurnId !== undefined) {
+                      ctx.activeTurnFailedToolDetail = failedToolDetail;
+                    }
+                    yield* publish(
+                      makeAcpToolCallEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        toolCall: event.toolCall,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  }
+                  case "ContentDelta":
+                    yield* publish(
+                      makeAcpContentDeltaEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        ...(event.itemId ? { itemId: event.itemId } : {}),
+                        text: event.text,
+                        ...(event.streamKind ? { streamKind: event.streamKind } : {}),
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                  case "UsageUpdated":
+                    yield* publish(
+                      makeAcpTokenUsageEvent({
+                        stamp: yield* makeEventStamp(),
+                        provider: PROVIDER,
+                        threadId: ctx.threadId,
+                        turnId: ctx.activeTurnId,
+                        usage: event.usage,
+                        rawPayload: event.rawPayload,
+                      }),
+                    );
+                    return;
+                }
+              }),
+            ),
+          ).pipe(Effect.forkIn(sessionScope));
+
+          ctx.notificationFiber = notificationFiber;
+
+          // Detect unexpected ACP process exits (crash, OOM-kill, segfault).
+          yield* Effect.gen(function* () {
+            const exitCode = yield* acp.exitCode;
+            if (ctx.stopped) return;
+            yield* Effect.logError(
+              `Devin ACP process exited unexpectedly (code=${exitCode}) for thread ${input.threadId}`,
+            );
+            yield* publish({
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: {
+                state: "error",
+                reason: `Devin CLI process exited unexpectedly (exit code ${exitCode}). Please restart the session.`,
+              },
+            });
+            yield* stopSessionInternal(ctx, "crashed");
+          }).pipe(Effect.forkIn(sessionScope));
+
+          yield* publish({
+            type: "session.started",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: input.threadId,
+            payload: { resume: started.initializeResult },
+          });
+          if (started.resumeFailed) {
+            yield* Effect.logWarning(
+              `Devin session resume failed for thread ${input.threadId}, started fresh session ${started.sessionId}`,
+            );
+            yield* publish({
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: {
+                state: "ready",
+                reason:
+                  "Could not resume your previous Devin session. A new session was started — previous context was not carried over.",
+              },
+            });
+          }
           yield* publish({
             type: "session.state.changed",
             ...(yield* makeEventStamp()),
             provider: PROVIDER,
             threadId: input.threadId,
-            payload: {
-              state: "error",
-              reason: `Devin CLI process exited unexpectedly (exit code ${exitCode}). Please restart the session.`,
-            },
+            payload: { state: "ready", reason: "Devin ACP session ready" },
           });
-          yield* stopSessionInternal(ctx, "crashed");
-        }).pipe(Effect.forkIn(sessionScope));
-
-        yield* publish({
-          type: "session.started",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          payload: { resume: started.initializeResult },
-        });
-        if (started.resumeFailed) {
-          yield* Effect.logWarning(
-            `Devin session resume failed for thread ${input.threadId}, started fresh session ${started.sessionId}`,
-          );
           yield* publish({
-            type: "session.state.changed",
+            type: "thread.started",
             ...(yield* makeEventStamp()),
             provider: PROVIDER,
             threadId: input.threadId,
-            payload: {
-              state: "ready",
-              reason:
-                "Could not resume your previous Devin session. A new session was started — previous context was not carried over.",
-            },
+            payload: { providerThreadId: started.sessionId },
           });
+
+          // Eagerly populate model cache from initial config options.
+          const initialConfigOptions = yield* acp.getConfigOptions;
+          ctx.cachedModels = extractDevinModelsFromConfigOptions(initialConfigOptions);
+          ctx.cachedModelsBinaryPath = devinSettings.binaryPath;
+
+          // Transfer ownership to the sessions map only after all startup probes
+          // succeed, so a probe failure doesn't leave an orphaned session.
+          sessions.set(input.threadId, ctx);
+          sessionScopeTransferred = true;
+
+          return session;
+        }).pipe(Effect.scoped),
+      );
+
+    const failDevinTurnAsTimedOut = (ctx: DevinSessionContext, turnId: TurnId, idleMs: number) =>
+      Effect.gen(function* () {
+        const promptFiber = ctx.activePromptFiber;
+        if (!clearActiveTurn(ctx, turnId)) {
+          return;
         }
-        yield* publish({
-          type: "session.state.changed",
-          ...(yield* makeEventStamp()),
-          provider: PROVIDER,
-          threadId: input.threadId,
-          payload: { state: "ready", reason: "Devin ACP session ready" },
+        const idleSeconds = Math.round(idleMs / 1000);
+        const detail = `Devin stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
+        pushTurnCapped(ctx, { id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
+        const { activeTurnId: _activeTurnId, ...sessionRest } = ctx.session;
+        ctx.session = {
+          ...sessionRest,
+          status: "error",
+          updatedAt: yield* nowIso(),
+          lastError: detail,
+        };
+        yield* Effect.logWarning("devin.acp.turn_idle_timeout", {
+          threadId: ctx.threadId,
+          turnId,
+          idleMs,
         });
         yield* publish({
-          type: "thread.started",
+          type: "turn.completed",
           ...(yield* makeEventStamp()),
           provider: PROVIDER,
-          threadId: input.threadId,
-          payload: { providerThreadId: started.sessionId },
+          threadId: ctx.threadId,
+          turnId,
+          payload: {
+            state: "failed",
+            stopReason: null,
+            errorMessage: detail,
+          },
         });
-
-        // Eagerly populate model cache from initial config options.
-        const initialConfigOptions = yield* acp.getConfigOptions;
-        ctx.cachedModels = extractDevinModelsFromConfigOptions(initialConfigOptions);
-        ctx.cachedModelsBinaryPath = devinSettings.binaryPath;
-
-        // Transfer ownership to the sessions map only after all startup probes
-        // succeed, so a probe failure doesn't leave an orphaned session.
-        sessions.set(input.threadId, ctx);
-        sessionScopeTransferred = true;
-
-        return session;
-      }).pipe(Effect.scoped);
+        yield* Effect.ignore(ctx.acp.cancel);
+        if (promptFiber) {
+          yield* Fiber.interrupt(promptFiber);
+        }
+      });
 
     const sendTurn: DevinAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
@@ -698,6 +782,10 @@ function makeProviderAdapter(
         }
 
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+        ctx.activeTurnId = turnId;
+        ctx.activeTurnFailedToolDetail = undefined;
+        ctx.lastTurnActivityAt = Date.now();
+
         const turnModel =
           input.modelSelection?.provider === PROVIDER
             ? normalizeDevinModelSlug(input.modelSelection.model)
@@ -725,8 +813,6 @@ function makeProviderAdapter(
             text: promptText,
           },
         ];
-        ctx.activeTurnId = turnId;
-        ctx.activeTurnFailedToolDetail = undefined;
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
         ctx.session = {
           ...sessionWithoutLastError,
@@ -847,6 +933,19 @@ function makeProviderAdapter(
         );
         ctx.activePromptFiber = yield* runPrompt;
 
+        yield* forkAcpTurnIdleWatchdog({
+          idleTimeoutMs: DEVIN_TURN_IDLE_TIMEOUT_MS,
+          checkIntervalMs: DEVIN_TURN_WATCHDOG_INTERVAL_MS,
+          scope: ctx.scope,
+          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
+          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
+          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
+          touchActivity: () => {
+            ctx.lastTurnActivityAt = Date.now();
+          },
+          onIdleTimeout: (idleMs) => failDevinTurnAsTimedOut(ctx, turnId, idleMs),
+        });
+
         return {
           threadId: input.threadId,
           turnId,
@@ -917,10 +1016,13 @@ function makeProviderAdapter(
           yield* Deferred.succeed(pending.answers, answers);
         }),
       stopSession: (threadId) =>
-        Effect.gen(function* () {
-          const ctx = yield* requireSession(threadId);
-          yield* stopSessionInternal(ctx);
-        }),
+        withThreadLock(
+          threadId,
+          Effect.gen(function* () {
+            const ctx = yield* requireSession(threadId);
+            yield* stopSessionInternal(ctx);
+          }),
+        ),
       listSessions: () =>
         Effect.sync(() => Array.from(sessions.values(), (ctx) => ({ ...ctx.session }))),
       hasSession: (threadId) =>
@@ -1003,6 +1105,18 @@ function makeProviderAdapter(
           }
 
           // Cold path: no running session with models; attempt discovery.
+          const cachedColdModels = readColdDiscoveredModels(
+            coldDiscoveredModelsByBinaryPath,
+            requestedBinaryPath,
+          );
+          if (cachedColdModels && cachedColdModels.length > 0) {
+            return {
+              models: cachedColdModels,
+              source: "devin.acp",
+              cached: true,
+            } as ProviderListModelsResult;
+          }
+
           const binaryPath = requestedBinaryPath;
 
           const discoveryEffect = Effect.gen(function* () {
@@ -1053,6 +1167,15 @@ function makeProviderAdapter(
           );
 
           const result = yield* discoveryEffect.pipe(
+            Effect.tap((discovered) =>
+              Effect.sync(() =>
+                storeColdDiscoveredModels(
+                  coldDiscoveredModelsByBinaryPath,
+                  binaryPath,
+                  discovered.models,
+                ),
+              ),
+            ),
             Effect.catch(() =>
               Effect.succeed({
                 models: DEVIN_FALLBACK_MODELS,
@@ -1078,9 +1201,13 @@ function makeProviderAdapter(
           }
           // Without a threadId, only return commands from sessions sharing the same cwd
           // to avoid leaking workspace-specific commands across projects.
+          const cwd = input.cwd?.trim();
+          if (!cwd) {
+            return { commands: [], source: "devin.acp", cached: false };
+          }
           for (const candidate of sessions.values()) {
             if (candidate.stopped) continue;
-            if (input.cwd && candidate.session.cwd !== input.cwd) continue;
+            if (candidate.session.cwd !== cwd) continue;
             const commands = yield* candidate.acp.getAvailableCommands;
             if (commands.length > 0) {
               return { commands, source: "devin.acp", cached: false };

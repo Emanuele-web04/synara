@@ -76,6 +76,11 @@ import {
 } from "~/lib/gitReactQuery";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import {
+  providerRequiresRuntimeModelDiscovery,
+  resolveProviderModelsLoading,
+  resolveProviderRuntimeModelDiscoveryPending,
+} from "~/lib/providerRuntimeModelDiscovery";
+import {
   providerAgentsQueryOptions,
   providerComposerCapabilitiesQueryOptions,
   providerCommandsQueryOptions,
@@ -1841,11 +1846,15 @@ export default function ChatView({
       enabled: piModelDiscoveryEnabled,
     }),
   );
+  const devinModelDiscoveryEnabled =
+    isModelPickerOpen ||
+    lockedProvider === "devin" ||
+    (selectedProvider === "devin" && sessionProvider === "devin");
   const devinDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "devin",
       binaryPath: settings.devinBinaryPath || null,
-      enabled: selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen,
+      enabled: devinModelDiscoveryEnabled,
     }),
   );
   const claudeDynamicAgentsQuery = useQuery(
@@ -1885,8 +1894,6 @@ export default function ChatView({
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
-  const devinModelDiscoveryEnabled =
-    selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen;
   const hasResolvedDevinModelDiscovery =
     devinDynamicModelsQuery.data?.source === "devin.acp" &&
     (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
@@ -2117,39 +2124,25 @@ export default function ChatView({
         : null
       : (activeThread?.modelSelection ?? activeProject?.defaultModelSelection ?? null);
   const selectedProviderModelsQuery = providerModelsQueryByProvider[selectedProvider];
-  const providerModelsLoading =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "devin"
-        ? devinModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : selectedProviderModelsQuery !== undefined &&
-                (selectedProviderModelsQuery.isLoading ||
-                  (selectedProviderModelsQuery.isFetching &&
-                    selectedProviderModelsQuery.data === undefined));
+  const runtimeModelDiscoveryPendingByProvider = {
+    cursor: cursorModelDiscoveryPending,
+    devin: devinModelDiscoveryPending,
+    kilo: kiloModelDiscoveryPending,
+    opencode: openCodeModelDiscoveryPending,
+    pi: piModelDiscoveryPending,
+  } as const;
+  const providerModelsLoading = resolveProviderModelsLoading(
+    selectedProvider,
+    runtimeModelDiscoveryPendingByProvider,
+    selectedProviderModelsQuery,
+  );
   const selectedProviderRequiresRuntimeModels =
-    selectedProvider === "cursor" ||
-    selectedProvider === "devin" ||
-    selectedProvider === "kilo" ||
-    selectedProvider === "opencode" ||
-    selectedProvider === "pi";
-  const selectedProviderRuntimeModelDiscoveryPending =
-    selectedProvider === "cursor"
-      ? cursorModelDiscoveryPending
-      : selectedProvider === "devin"
-        ? devinModelDiscoveryPending
-        : selectedProvider === "kilo"
-          ? kiloModelDiscoveryPending
-          : selectedProvider === "opencode"
-            ? openCodeModelDiscoveryPending
-            : selectedProvider === "pi"
-              ? piModelDiscoveryPending
-              : false;
+    providerRequiresRuntimeModelDiscovery(selectedProvider);
+  const selectedProviderRuntimeModelDiscoveryPending = resolveProviderRuntimeModelDiscoveryPending(
+    selectedProvider,
+    runtimeModelDiscoveryPendingByProvider,
+    selectedProviderModelsQuery,
+  );
   const showComposerModelBootstrapSkeleton = shouldShowComposerModelBootstrapSkeleton({
     selectedProvider,
     selectedModel,
