@@ -314,9 +314,7 @@ export function summarizePatchTotals(
 // "Edited <file>" rows surface diff stats from a tool call's own patch when no
 // turn-diff summary is in scope (e.g. standalone work rows). Empty map when the
 // patch is missing or unparsable, so callers can fall back gracefully.
-export function fileDiffStatsByPath(
-  patch: string | undefined,
-): Map<string, FileDiffStat> {
+export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
   const stats = new Map<string, FileDiffStat>();
   const renderable = getRenderablePatch(patch, "tool-row:stats");
   if (!renderable || renderable.kind !== "files") {
@@ -333,7 +331,10 @@ export function fileDiffStatsByPath(
 }
 
 function normalizeDiffStatPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/^\.\/+/, "").replace(/\/+/g, "/");
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/");
 }
 
 function diffStatPathsReferToSameFile(left: string, right: string): boolean {

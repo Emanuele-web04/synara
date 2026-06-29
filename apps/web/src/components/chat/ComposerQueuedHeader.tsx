@@ -27,11 +27,13 @@ import {
 import { QueuedComposerActions } from "./QueuedComposerActions";
 
 function firstNonEmptyLine(value: string): string {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .find((line) => line.length > 0)
-    ?.trim() ?? "";
+  return (
+    value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0)
+      ?.trim() ?? ""
+  );
 }
 
 // Queue previews use the shared markdown renderer for inline chips/emphasis, but
