@@ -27,7 +27,7 @@ export interface CursorAgentCommand {
   readonly args: ReadonlyArray<string>;
 }
 
-interface CursorAgentCommandOptions {
+export interface CursorAgentCommandOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly pathExists?: (path: string) => boolean;
 }
@@ -88,6 +88,9 @@ function resolveCursorEditorLauncherCommand(
   if (siblingAgent) {
     return siblingAgent;
   }
+  if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
+    return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
+  }
   return {
     command: `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${parts.extension}`,
     args: [],
@@ -99,15 +102,28 @@ function resolveCursorSiblingAgentCommand(
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
   // Cursor editor launchers do not host `cursor agent`; agent commands are top-level binaries.
-  const siblingAgent = `${parts.directory}${DEFAULT_CURSOR_AGENT_BINARY}${parts.extension}`;
-  if (options.pathExists(siblingAgent)) {
-    return { command: siblingAgent, args: [] };
+  for (const extension of cursorSiblingAgentExtensions(parts)) {
+    const siblingAgent = `${parts.directory}${DEFAULT_CURSOR_AGENT_BINARY}${extension}`;
+    if (options.pathExists(siblingAgent)) {
+      return { command: siblingAgent, args: [] };
+    }
   }
-  const siblingLegacyAgent = `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${parts.extension}`;
-  if (options.pathExists(siblingLegacyAgent)) {
-    return { command: siblingLegacyAgent, args: [] };
+  for (const extension of cursorSiblingAgentExtensions(parts)) {
+    const siblingLegacyAgent = `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${extension}`;
+    if (options.pathExists(siblingLegacyAgent)) {
+      return { command: siblingLegacyAgent, args: [] };
+    }
   }
   return undefined;
+}
+
+function cursorSiblingAgentExtensions(parts: CursorCommandPathParts): ReadonlyArray<string> {
+  const shouldProbeWindowsExtensions =
+    process.platform === "win32" || parts.directory.includes("\\") || parts.extension.length > 0;
+  const extensions = shouldProbeWindowsExtensions
+    ? [parts.extension, ...WINDOWS_EXECUTABLE_EXTENSIONS, ""]
+    : [parts.extension];
+  return [...new Set(extensions)];
 }
 
 function findCommandOnPath(

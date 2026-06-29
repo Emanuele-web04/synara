@@ -75,6 +75,19 @@ describe("buildCursorAgentCommand", () => {
       command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.cmd",
       args: ["--version"],
     });
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
+        ["--version"],
+        {
+          pathExists: (path) =>
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.exe",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.exe",
+      args: ["--version"],
+    });
   });
 
   it("uses a sibling Cursor agent command when bare cursor has no cursor-agent peer", () => {
@@ -85,6 +98,18 @@ describe("buildCursorAgentCommand", () => {
       }),
     ).toEqual({
       command: "/tools/agent",
+      args: ["acp"],
+    });
+  });
+
+  it("falls back to PATH cursor-agent before inventing an agent sibling", () => {
+    expect(
+      buildCursorAgentCommand("/missing/bin/cursor", ["acp"], {
+        env: { PATH: "/tools" },
+        pathExists: (path) => path === "/tools/cursor-agent",
+      }),
+    ).toEqual({
+      command: "cursor-agent",
       args: ["acp"],
     });
   });

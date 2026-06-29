@@ -112,6 +112,11 @@ const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.Ses
     },
   ];
 
+const noCursorAgentCommandOptions = {
+  env: { PATH: "" },
+  pathExists: () => false,
+};
+
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
     expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
@@ -138,16 +143,21 @@ describe("buildCursorAcpSpawnInput", () => {
   });
 
   it("maps Cursor editor launchers to the sibling agent command", () => {
-    expect(buildCursorAcpSpawnInput({ binaryPath: "/not-real/bin/cursor" }, "/tmp/project"))
-      .toEqual({
-        command: "/not-real/bin/agent",
-        args: ["acp"],
-        cwd: "/tmp/project",
-        env: {
-          NO_BROWSER: "true",
-          BROWSER: "www-browser",
-        },
-      });
+    expect(
+      buildCursorAcpSpawnInput(
+        { binaryPath: "/not-real/bin/cursor" },
+        "/tmp/project",
+        noCursorAgentCommandOptions,
+      ),
+    ).toEqual({
+      command: "/not-real/bin/agent",
+      args: ["acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
   });
 
   it("includes the configured api endpoint when present", () => {
@@ -178,6 +188,7 @@ describe("buildCursorAcpSpawnInput", () => {
           apiEndpoint: "http://localhost:3000",
         },
         "/tmp/project",
+        noCursorAgentCommandOptions,
       ),
     ).toEqual({
       command: "/not-real/bin/agent",
@@ -201,10 +212,13 @@ describe("buildCursorCliModelListCommand", () => {
 
   it("uses mapped Cursor agent commands for model discovery", () => {
     expect(
-      buildCursorCliModelListCommand({
-        binaryPath: "/not-real/bin/cursor",
-        apiEndpoint: "http://localhost:3000",
-      }),
+      buildCursorCliModelListCommand(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        noCursorAgentCommandOptions,
+      ),
     ).toEqual({
       command: "/not-real/bin/agent",
       args: ["-e", "http://localhost:3000", "models"],

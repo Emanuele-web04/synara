@@ -23,6 +23,7 @@ import {
   CURSOR_AGENT_BROWSERLESS_ENV,
   buildCursorAgentCommand,
   type CursorAgentCommand,
+  type CursorAgentCommandOptions,
 } from "./CursorAcpCommand.ts";
 
 export interface CursorAcpRuntimeCursorSettings {
@@ -67,11 +68,16 @@ interface CursorAcpSelectOption {
 export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
+  commandOptions?: CursorAgentCommandOptions,
 ): AcpSpawnInput {
-  const command = buildCursorAgentCommand(cursorSettings?.binaryPath, [
-    ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
-    "acp",
-  ]);
+  const command = buildCursorAgentCommand(
+    cursorSettings?.binaryPath,
+    [
+      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
+      "acp",
+    ],
+    commandOptions,
+  );
   return {
     command: command.command,
     args: command.args,
@@ -83,11 +89,16 @@ export function buildCursorAcpSpawnInput(
 
 export function buildCursorCliModelListCommand(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
+  commandOptions?: CursorAgentCommandOptions,
 ): CursorAgentCommand {
-  return buildCursorAgentCommand(cursorSettings?.binaryPath, [
-    ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
-    "models",
-  ]);
+  return buildCursorAgentCommand(
+    cursorSettings?.binaryPath,
+    [
+      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
+      "models",
+    ],
+    commandOptions,
+  );
 }
 
 export const makeCursorAcpRuntime = (

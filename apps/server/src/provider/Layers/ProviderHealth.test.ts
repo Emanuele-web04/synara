@@ -1554,6 +1554,20 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it.effect("maps Cursor editor launchers to top-level agent commands", () =>
       Effect.gen(function* () {
+        const originalPath = process.env.PATH;
+        yield* Effect.acquireRelease(
+          Effect.sync(() => {
+            process.env.PATH = "";
+          }),
+          () =>
+            Effect.sync(() => {
+              if (originalPath !== undefined) {
+                process.env.PATH = originalPath;
+              } else {
+                delete process.env.PATH;
+              }
+            }),
+        );
         const status = yield* makeCheckCursorProviderStatus("/custom/bin/cursor");
         assert.strictEqual(status.status, "ready");
       }).pipe(
