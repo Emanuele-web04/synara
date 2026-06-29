@@ -84,6 +84,7 @@ const STATE_TO_LOADER: Record<ActionStateName, ComponentType<DotMatrixCommonProp
 // Full original text is available via the `title` attribute on hover in the UI.
 function sanitizeLabel(value: string): string {
   const stripped = value.replace(
+    // eslint-disable-next-line no-control-regex
     /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069]/g,
     "",
   );

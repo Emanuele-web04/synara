@@ -66,6 +66,6 @@ export function selectIdleIslandThread(threads: ReadonlyArray<Thread>): Thread |
 export function selectRecentIslandThreads(threads: ReadonlyArray<Thread>, limit = 5): Thread[] {
   const visible = threads.filter((t) => !t.archivedAt);
   return visible
-    .sort((a, b) => threadActivityTimestamp(b).localeCompare(threadActivityTimestamp(a)))
+    .toSorted((a, b) => threadActivityTimestamp(b).localeCompare(threadActivityTimestamp(a)))
     .slice(0, limit);
 }

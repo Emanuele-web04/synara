@@ -16,12 +16,10 @@ const MODEL_DIR_NAME = "whisper-models";
 
 // SHA256 hashes for verified models. These are the trust anchor — hardcoded
 // in source, not downloadable config. If a model fails verification, refuse it.
-// ponytail: hashes filled during implementation step 6 (download + sha256sum).
-//   These are the known-good hashes for ggml-base-q5_1.bin and ggml-base.en-q5_1.bin
-//   from the official ggerganov/whisper.cpp HuggingFace repo.
+// Hashes from HuggingFace LFS metadata for ggerganov/whisper.cpp.
 const MODEL_SHA256: Record<string, string> = {
-  "base-q5_1": "5b2b8f3b6c4d4e8f9a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a",
-  "base.en-q5_1": "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3",
+  "base-q5_1": "422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+  "base.en-q5_1": "4baf70dd0d7c4247ba2b81fafd9c01005ac77c2f9ef064e00dcf195d0e2fdd2f",
 };
 
 const MODEL_URLS: Record<string, string> = {
@@ -294,7 +292,7 @@ export async function transcribeViaWhisper(options: WhisperTranscribeOptions): P
         maxBuffer: 1024 * 1024,
         windowsHide: true,
       },
-      (error, stdout, stderr) => {
+      (error, stdout, _stderr) => {
         if (error) {
           const message = error.message.includes("TIMED_OUT")
             ? "Transcription timed out. Please try again."

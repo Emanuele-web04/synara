@@ -123,21 +123,15 @@ export function VoiceDictationPopup() {
         toastManager.add({ type: "warning", title: "No audio was captured." });
         return;
       }
-      // Determine provider from the focused element's context — default to the
-      // app's default provider for the popup (the popup doesn't know which thread
-      // the user is in). Uses whisper for non-Codex, ChatGPT for Codex.
-      const provider = settings.defaultProvider;
+      // The popup always uses local whisper — it's for dictating into any text
+      // field, not tied to a specific thread/provider. No auth needed.
       const result = await api.server.transcribeVoice({
-        provider,
+        provider: "claudeAgent",
         cwd: ".",
         ...payload,
-        ...(provider !== "codex"
-          ? {
-              voiceDictationModel: settings.voiceDictationModel,
-              ...(settings.voiceDictionary.length > 0
-                ? { voiceDictionary: settings.voiceDictionary }
-                : {}),
-            }
+        voiceDictationModel: settings.voiceDictationModel,
+        ...(settings.voiceDictionary.length > 0
+          ? { voiceDictionary: settings.voiceDictionary }
           : {}),
       });
       insertTextAtCursor(result.text);
@@ -184,6 +178,7 @@ export function VoiceDictationPopup() {
           </div>
           {isRecording && waveformLevels.length > 0 && (
             <div className="flex h-6 items-center gap-0.5">
+              {/* eslint-disable react/no-array-index-key -- waveform bars are transient, index keys are correct */}
               {waveformLevels.slice(0, 32).map((level, i) => (
                 <div
                   key={i}
@@ -191,6 +186,7 @@ export function VoiceDictationPopup() {
                   style={{ height: `${Math.max(2, level * 24)}px` }}
                 />
               ))}
+              {/* eslint-enable react/no-array-index-key */}
             </div>
           )}
           <div className="flex gap-2">
