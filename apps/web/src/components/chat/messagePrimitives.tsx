@@ -21,16 +21,18 @@ export function AssistantMarkdownBody(props: {
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onContentReflow?: (() => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
 }): ReactNode {
   return (
     <ChatMarkdown
       text={props.text}
       cwd={props.cwd}
-      isStreaming={props.isStreaming}
+      isStreaming={props.isStreaming ?? false}
       className={props.className}
       style={props.style}
       onImageExpand={props.onImageExpand}
+      onContentReflow={props.onContentReflow}
       markers={props.markers}
     />
   );

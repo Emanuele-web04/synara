@@ -27,6 +27,42 @@ const VELOCITY_LERP = 0.15;
 // the whole backlog in a single frame.
 const MAX_FRAME_SECONDS = 0.05;
 
+const GRAPHEME_SEGMENTER =
+  typeof Intl !== "undefined" && "Segmenter" in Intl
+    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
+    : null;
+
+export function sliceGraphemeSafe(text: string, endCodeUnitCount: number): string {
+  if (endCodeUnitCount <= 0) {
+    return "";
+  }
+  if (endCodeUnitCount >= text.length) {
+    return text;
+  }
+
+  if (GRAPHEME_SEGMENTER) {
+    let safeEndIndex = 0;
+    for (const segment of GRAPHEME_SEGMENTER.segment(text)) {
+      const nextEndIndex = segment.index + segment.segment.length;
+      if (nextEndIndex > endCodeUnitCount) {
+        break;
+      }
+      safeEndIndex = nextEndIndex;
+    }
+    return text.slice(0, safeEndIndex);
+  }
+
+  let safeEndIndex = 0;
+  for (const codePoint of text) {
+    const nextEndIndex = safeEndIndex + codePoint.length;
+    if (nextEndIndex > endCodeUnitCount) {
+      break;
+    }
+    safeEndIndex = nextEndIndex;
+  }
+  return text.slice(0, safeEndIndex);
+}
+
 /**
  * Smoothly reveal `text` while `isStreaming` is true.
  *
@@ -96,7 +132,7 @@ export function useSmoothStreamedText(text: string, isStreaming: boolean): strin
     const nextCount = Math.floor(shownRef.current);
     if (nextCount !== emittedRef.current) {
       emittedRef.current = nextCount;
-      setRevealed(nextCount >= len ? target : target.slice(0, nextCount));
+      setRevealed(nextCount >= len ? target : sliceGraphemeSafe(target, nextCount));
     }
 
     if (len - shownRef.current > 0) {

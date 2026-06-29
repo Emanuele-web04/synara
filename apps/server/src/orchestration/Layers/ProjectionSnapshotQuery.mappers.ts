@@ -7,6 +7,7 @@ import type {
   OrchestrationLatestTurn,
   OrchestrationMessage,
   OrchestrationProjectShell,
+  OrchestrationProviderItem,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThread,
@@ -26,6 +27,7 @@ import {
   type ProjectionThreadActivityDbRow,
   type ProjectionThreadDbRow,
   type ProjectionThreadMessageDbRow,
+  type ProjectionThreadProviderItemDbRow,
   type ProjectionThreadProposedPlanDbRow,
   type ProjectionThreadSessionDbRow,
   REQUIRED_SNAPSHOT_PROJECTORS,
@@ -67,6 +69,12 @@ export function toProjectedProposedPlan(
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+export function toProjectedProviderItem(
+  row: ProjectionThreadProviderItemDbRow,
+): OrchestrationProviderItem {
+  return row.item;
 }
 
 export function toProjectedActivity(
@@ -267,6 +275,7 @@ export function toProjectedThread(input: {
   readonly latestTurn: OrchestrationLatestTurn | null;
   readonly messages: ReadonlyArray<OrchestrationMessage>;
   readonly proposedPlans: ReadonlyArray<OrchestrationProposedPlan>;
+  readonly providerItems: ReadonlyArray<OrchestrationProviderItem>;
   readonly activities: ReadonlyArray<OrchestrationThreadActivity>;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
   readonly session: OrchestrationSession | null;
@@ -313,6 +322,7 @@ export function toProjectedThread(input: {
     hasActionableProposedPlan: summary.hasActionableProposedPlan,
     messages: input.messages,
     proposedPlans: input.proposedPlans,
+    providerItems: input.providerItems,
     activities: input.activities,
     checkpoints: input.checkpoints,
     session: input.session,

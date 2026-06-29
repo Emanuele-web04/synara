@@ -4,7 +4,7 @@
 // Exports: every *Payload schema/type, RuntimeTaskListItem, ItemLifecyclePayload,
 //   UserInputQuestion(Option), CodexGeneratedImageArtifact, and the CODEX_GENERATED_IMAGE_ARTIFACT_KIND const.
 import { Option, Schema } from "effect";
-import { RuntimeTaskId } from "./baseSchemas";
+import { NonNegativeInt, RuntimeTaskId } from "./baseSchemas";
 import {
   CanonicalItemType,
   CanonicalRequestType,
@@ -163,8 +163,8 @@ export type CodexGeneratedImageArtifact = typeof CodexGeneratedImageArtifact.Typ
 export const ContentDeltaPayload = Schema.Struct({
   streamKind: RuntimeContentStreamKind,
   delta: Schema.String,
-  contentIndex: Schema.optional(Schema.Int),
-  summaryIndex: Schema.optional(Schema.Int),
+  contentIndex: Schema.optional(NonNegativeInt),
+  summaryIndex: Schema.optional(NonNegativeInt),
 });
 export type ContentDeltaPayload = typeof ContentDeltaPayload.Type;
 

@@ -220,6 +220,31 @@ export function resolveActiveTurnLiveDiffState(input: {
   };
 }
 
+export function deriveTranscriptTailFollowKey(input: {
+  latestMessage:
+    | Pick<ChatMessage, "id" | "role" | "streaming" | "text" | "completedAt">
+    | null
+    | undefined;
+}): string {
+  const message = input.latestMessage;
+  if (!message) {
+    return "empty";
+  }
+  return [message.id, message.text.length].join(":");
+}
+
+export function shouldMaintainTranscriptTailFollow(input: {
+  previousTailKey: string | null | undefined;
+  nextTailKey: string;
+  hasStreamingAssistantText: boolean;
+}): boolean {
+  return (
+    input.hasStreamingAssistantText &&
+    input.previousTailKey != null &&
+    input.previousTailKey !== input.nextTailKey
+  );
+}
+
 export function buildLocalDraftThread(
   threadId: ThreadId,
   draftThread: DraftThreadState,
@@ -236,6 +261,7 @@ export function buildLocalDraftThread(
     interactionMode: draftThread.interactionMode,
     session: null,
     messages: [],
+    providerItems: [],
     error,
     createdAt: draftThread.createdAt,
     latestTurn: null,
@@ -742,6 +768,14 @@ export function deriveComposerSendState(options: {
       sendableTerminalContexts.length > 0 ||
       sendablePastedTexts.length > 0,
   };
+}
+
+export function resolveComposerEnterDispatchMode(input: {
+  hasLiveTurn: boolean;
+  metaKey: boolean;
+  ctrlKey: boolean;
+}): "queue" | "steer" {
+  return input.hasLiveTurn && (input.metaKey || input.ctrlKey) ? "steer" : "queue";
 }
 
 export function collectUserMessageAssistantSelections(

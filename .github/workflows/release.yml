@@ -171,6 +171,7 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
@@ -204,7 +205,7 @@ jobs:
               echo "macOS signing enabled."
               args+=(--signed)
             else
-              echo "macOS signing disabled (missing one or more Apple signing secrets)."
+              echo "macOS signing disabled; publishing an intentionally unsigned release artifact."
             fi
           elif [[ "${{ matrix.platform }}" == "win" ]]; then
             if has_all \
@@ -245,6 +246,50 @@ jobs:
           else
             bun run dist:desktop:artifact -- "${args[@]}"
           fi
+
+      - name: Verify macOS release artifacts
+        if: ${{ matrix.platform == 'mac' }}
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          has_all() {
+            for value in "$@"; do
+              if [[ -z "$value" ]]; then
+                return 1
+              fi
+            done
+            return 0
+          }
+
+          dmg_files=(release/*.dmg)
+          if [[ "${#dmg_files[@]}" -eq 0 ]]; then
+            echo "::error::No macOS DMG artifact was produced."
+            exit 1
+          fi
+
+          for dmg_file in "${dmg_files[@]}"; do
+            hdiutil verify "$dmg_file"
+          done
+
+          node scripts/smoke-mac-update-artifact.ts --artifact-dir release
+
+          if ! has_all "$CSC_LINK" "$CSC_KEY_PASSWORD" "$APPLE_API_KEY" "$APPLE_API_KEY_ID" "$APPLE_API_ISSUER"; then
+            echo "Skipping Gatekeeper assessment for intentionally unsigned macOS artifacts."
+            exit 0
+          fi
+
+          for dmg_file in "${dmg_files[@]}"; do
+            spctl --assess --type install --verbose=4 "$dmg_file"
+          done
 
       - name: Collect release assets
         shell: bash

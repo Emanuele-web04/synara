@@ -2,7 +2,7 @@
 // Purpose: Rebuild stable Thread objects from normalized shell/detail slices.
 // Exports: cached collection helpers and thread derivation for the web store hot path.
 
-import type { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
+import type { MessageId, OrchestrationProviderItem, ThreadId, TurnId } from "@t3tools/contracts";
 import type { AppState } from "./store";
 import type {
   ChatMessage,
@@ -16,10 +16,12 @@ import type {
 
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
+const EMPTY_PROVIDER_ITEMS: OrchestrationProviderItem[] = [];
 const EMPTY_PROPOSED_PLANS: ProposedPlan[] = [];
 const EMPTY_TURN_DIFF_SUMMARIES: TurnDiffSummary[] = [];
 const EMPTY_MESSAGE_MAP: Record<MessageId, ChatMessage> = {};
 const EMPTY_ACTIVITY_MAP: Record<string, Thread["activities"][number]> = {};
+const EMPTY_PROVIDER_ITEM_MAP: Record<string, OrchestrationProviderItem> = {};
 const EMPTY_PROPOSED_PLAN_MAP: Record<string, ProposedPlan> = {};
 const EMPTY_TURN_DIFF_MAP: Record<TurnId, TurnDiffSummary> = {};
 const EMPTY_THREAD_IDS: ThreadId[] = [];
@@ -28,6 +30,7 @@ const EMPTY_THREAD_SESSION_MAP: Record<ThreadId, ThreadSession | null> = {};
 const EMPTY_THREAD_TURN_STATE_MAP: Record<ThreadId, ThreadTurnState> = {};
 const EMPTY_MESSAGE_IDS_BY_THREAD: Record<ThreadId, MessageId[]> = {};
 const EMPTY_ACTIVITY_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
+const EMPTY_PROVIDER_ITEM_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 const EMPTY_PROPOSED_PLAN_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 const EMPTY_TURN_DIFF_IDS_BY_THREAD: Record<ThreadId, TurnId[]> = {};
 
@@ -39,6 +42,7 @@ const threadCache = new WeakMap<
     turnState: ThreadTurnState | undefined;
     messages: Thread["messages"];
     activities: Thread["activities"];
+    providerItems: Thread["providerItems"];
     proposedPlans: Thread["proposedPlans"];
     turnDiffSummaries: Thread["turnDiffSummaries"];
     thread: Thread;
@@ -88,6 +92,14 @@ function selectThreadActivities(state: AppState, threadId: ThreadId): Thread["ac
   );
 }
 
+function selectThreadProviderItems(state: AppState, threadId: ThreadId): Thread["providerItems"] {
+  return collectByIds(
+    state.providerItemIdsByThreadId?.[threadId] ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD[threadId],
+    state.providerItemByThreadId?.[threadId] ?? EMPTY_PROVIDER_ITEM_MAP,
+    EMPTY_PROVIDER_ITEMS,
+  );
+}
+
 function selectThreadProposedPlans(state: AppState, threadId: ThreadId): Thread["proposedPlans"] {
   return collectByIds(
     state.proposedPlanIdsByThreadId?.[threadId] ?? EMPTY_PROPOSED_PLAN_IDS_BY_THREAD[threadId],
@@ -117,6 +129,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
   const turnState = state.threadTurnStateById?.[threadId] ?? EMPTY_THREAD_TURN_STATE_MAP[threadId];
   const messages = selectThreadMessages(state, threadId);
   const activities = selectThreadActivities(state, threadId);
+  const providerItems = selectThreadProviderItems(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
   const cached = threadCache.get(shell);
@@ -127,6 +140,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     cached.turnState === turnState &&
     cached.messages === messages &&
     cached.activities === activities &&
+    cached.providerItems === providerItems &&
     cached.proposedPlans === proposedPlans &&
     cached.turnDiffSummaries === turnDiffSummaries
   ) {
@@ -140,6 +154,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     pendingSourceProposedPlan: turnState?.pendingSourceProposedPlan,
     messages,
     activities,
+    providerItems,
     proposedPlans,
     turnDiffSummaries,
   };
@@ -149,6 +164,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     turnState,
     messages,
     activities,
+    providerItems,
     proposedPlans,
     turnDiffSummaries,
     thread,

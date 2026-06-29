@@ -25,6 +25,11 @@ import type { Components } from "react-markdown";
 import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize, {
+  defaultSchema,
+  type Options as RehypeSanitizeOptions,
+} from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -39,6 +44,7 @@ import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/works
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
+import { isMermaidFence, MarkdownMermaidDiagram } from "./chat/MarkdownMermaidDiagram";
 import {
   COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME,
   COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
@@ -84,9 +90,11 @@ interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   isStreaming?: boolean;
+  allowHtml?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onContentReflow?: (() => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
   /**
    * Makes GFM task-list checkboxes interactive. Receives the 1-based line of
@@ -174,6 +182,15 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
+const MARKDOWN_ALLOWED_HTML_SCHEMA: RehypeSanitizeOptions = {
+  ...defaultSchema,
+  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
+  attributes: {
+    ...defaultSchema.attributes,
+    details: [...(defaultSchema.attributes?.details ?? []), "open"],
+    summary: defaultSchema.attributes?.summary ?? [],
+  },
+};
 type MarkdownTextNode = {
   type: "text";
   value: string;
@@ -699,6 +716,35 @@ function extractCodeBlock(
   };
 }
 
+function isMarkdownTableFenceLanguage(language: string): boolean {
+  const normalizedLanguage = language.trim().toLowerCase();
+  return normalizedLanguage === "md" || normalizedLanguage === "markdown";
+}
+
+function isMarkdownTableFenceContent(code: string): boolean {
+  const lines = code
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^>\s?/, ""));
+  let previousLine: string | null = null;
+  for (const line of lines) {
+    if (line.length === 0) {
+      previousLine = null;
+      continue;
+    }
+    if (
+      previousLine?.includes("|") &&
+      line.includes("|") &&
+      /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line)
+    ) {
+      return true;
+    }
+    previousLine = line;
+  }
+  return false;
+}
+
 const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
 
 // Decides whether an inline code span names a file/path that should render as a
@@ -951,9 +997,11 @@ function ChatMarkdown({
   text,
   cwd,
   isStreaming = false,
+  allowHtml = false,
   className = "text-sm leading-relaxed",
   style,
   onImageExpand,
+  onContentReflow,
   markers,
   onTaskToggle,
 }: ChatMarkdownProps) {
@@ -982,6 +1030,13 @@ function ChatMarkdown({
         ? [...MARKDOWN_REMARK_PLUGINS, threadMarkerRemarkPlugin]
         : MARKDOWN_REMARK_PLUGINS,
     [threadMarkerRemarkPlugin],
+  );
+  const rehypePlugins = useMemo<MarkdownRehypePlugins>(
+    () =>
+      allowHtml
+        ? [rehypeRaw, [rehypeSanitize, MARKDOWN_ALLOWED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS]
+        : MARKDOWN_REHYPE_PLUGINS,
+    [allowHtml],
   );
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
@@ -1020,7 +1075,6 @@ function ChatMarkdown({
           <OpenableFileChip
             targetPath={targetPath}
             theme={resolvedTheme}
-            label={nodeToPlainText(children)}
             {...(restoredHref ? { href: restoredHref } : {})}
           />
         );
@@ -1033,8 +1087,35 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
+        if (
+          !isStreaming &&
+          isMarkdownTableFenceLanguage(fence.language) &&
+          isMarkdownTableFenceContent(code)
+        ) {
+          return (
+            <ChatMarkdown
+              text={code}
+              cwd={cwd}
+              isStreaming={isStreaming}
+              className="text-[inherit] leading-[inherit]"
+              onImageExpand={onImageExpand}
+              markers={undefined}
+              onTaskToggle={undefined}
+            />
+          );
+        }
 
-        return (
+        if (isStreaming) {
+          return (
+            <MarkdownCodeBlock code={code} fence={fence}>
+              <pre {...props}>
+                <code className={codeBlock.className}>{code}</code>
+              </pre>
+            </MarkdownCodeBlock>
+          );
+        }
+
+        const fallback = (
           <MarkdownCodeBlock code={code} fence={fence}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
@@ -1048,6 +1129,14 @@ function ChatMarkdown({
             </CodeHighlightErrorBoundary>
           </MarkdownCodeBlock>
         );
+
+        if (isMermaidFence(fence)) {
+          return (
+            <MarkdownMermaidDiagram code={code} themeName={diffThemeName} fallback={fallback} />
+          );
+        }
+
+        return fallback;
       },
       code({ node: _node, className, children, ...props }) {
         // Fenced blocks carry a `language-*` class and are rendered by `pre`;
@@ -1076,10 +1165,22 @@ function ChatMarkdown({
               alt={alt}
               cwd={cwd}
               onImageExpand={onImageExpand}
+              onImageLoad={onContentReflow}
             />
           );
         }
-        return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+        return (
+          <img
+            {...props}
+            src={restoredSrc}
+            alt={alt}
+            loading="lazy"
+            onLoad={(event) => {
+              props.onLoad?.(event);
+              onContentReflow?.();
+            }}
+          />
+        );
       },
       li({ node, children, ...props }) {
         // Task items carry their source line down to the checkbox via context.
@@ -1105,15 +1206,22 @@ function ChatMarkdown({
         }
         return <input {...props} />;
       },
+      table({ node: _node, children, ...props }) {
+        return (
+          <div className="chat-markdown-table-scroll">
+            <table {...props}>{children}</table>
+          </div>
+        );
+      },
     }),
-    [cwd, diffThemeName, isStreaming, onImageExpand, onTaskToggle, resolvedTheme],
+    [cwd, diffThemeName, isStreaming, onContentReflow, onImageExpand, onTaskToggle, resolvedTheme],
   );
 
   return (
     <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >

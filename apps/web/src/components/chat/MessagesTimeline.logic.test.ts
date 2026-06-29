@@ -328,6 +328,47 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(second).not.toBe(first);
     expect(second.result[0]).toBe(enrichedRows[0]);
   });
+
+  it("preserves unchanged visible row objects when only the streaming tail assistant text grows", () => {
+    const firstRows: MessageTimelineRow[] = Array.from({ length: 80 }, (_, index) => {
+      const id = index === 79 ? "assistant-tail" : `assistant-history-${index}`;
+      return {
+        kind: "message",
+        id,
+        createdAt: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        message: {
+          id: MessageId.makeUnsafe(id),
+          role: "assistant",
+          text: index === 79 ? "Streaming token 0" : `History row ${index}`,
+          createdAt: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+          streaming: index === 79,
+        },
+        durationStart: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        showAssistantCopyButton: index !== 79,
+        assistantCopyStreaming: index === 79,
+      };
+    });
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+    const nextRows: MessageTimelineRow[] = firstRows.map((row, index) =>
+      index === 79
+        ? {
+            ...row,
+            message: {
+              ...row.message,
+              text: "Streaming token 0 Streaming token 1",
+            },
+          }
+        : row,
+    );
+
+    const second = computeStableMessagesTimelineRows(nextRows, first);
+
+    expect(second).not.toBe(first);
+    for (let index = 0; index < 79; index += 1) {
+      expect(second.result[index]).toBe(first.result[index]);
+    }
+    expect(second.result[79]).toBe(nextRows[79]);
+  });
 });
 
 describe("deriveTerminalAssistantMessageIds", () => {

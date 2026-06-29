@@ -11,7 +11,7 @@ import {
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("adds explicit microphone entitlements to macOS builds", () => {
+  it("skips signing for unsigned macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
@@ -22,10 +22,28 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
     assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
+    assert.equal(mac.identity, null);
+    assert.equal(mac.hardenedRuntime, undefined);
+    assert.equal(mac.notarize, undefined);
+    assert.equal(mac.entitlements, undefined);
+    assert.equal(mac.entitlementsInherit, undefined);
+    assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
+  });
+
+  it("enables notarization for signed macOS builds", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "mac",
+      target: "dmg",
+      macSigned: true,
+      macNotarize: true,
+    });
+    const mac = config.mac as Record<string, unknown>;
+
+    assert.equal(mac.identity, undefined);
     assert.equal(mac.hardenedRuntime, true);
     assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
     assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
-    assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
+    assert.equal(mac.notarize, true);
   });
 
   it("leaves non-macOS platform configs unchanged", () => {

@@ -142,6 +142,7 @@ export const Route = createRootRouteWithContext<{
   errorComponent: RootRouteErrorView,
   head: () => ({
     meta: [{ name: "title", content: APP_DISPLAY_NAME }],
+    scripts: import.meta.env.DEV ? [{ src: "https://ui.sh/ui-picker.js" }] : [],
   }),
 });
 
@@ -738,6 +739,7 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
   }
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.provider-item-upserted" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||

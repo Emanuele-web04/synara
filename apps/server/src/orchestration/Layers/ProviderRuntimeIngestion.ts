@@ -51,6 +51,10 @@ import {
   subagentThreadTitle,
   toTurnId,
 } from "./ProviderRuntimeIngestion.mapping.ts";
+import {
+  providerItemFromRuntimeEvent,
+  providerItemIdFromRuntimeEvent,
+} from "./ProviderRuntimeIngestion.mapping.items.ts";
 import { makeIngestionState } from "./ProviderRuntimeIngestion.state.ts";
 import { makeIngestionMessages } from "./ProviderRuntimeIngestion.messages.ts";
 import type {
@@ -308,6 +312,7 @@ const make = Effect.gen(function* () {
                 latestTurn: null,
                 messages: [],
                 proposedPlans: [],
+                providerItems: [],
                 activities: [],
                 checkpoints: [],
                 session: null,
@@ -359,6 +364,23 @@ const make = Effect.gen(function* () {
       const thread = targetThreadResolution.thread;
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const eventTurnId = resolveTerminalTurnId(event, activeTurnId);
+      const mappedEvent = eventWithBufferedToolOutput(event, toolOutputBuffersByItem);
+      const providerItemId = providerItemIdFromRuntimeEvent(mappedEvent);
+      const providerItem = providerItemFromRuntimeEvent({
+        event: mappedEvent,
+        existing: thread.providerItems.find((item) => item.id === providerItemId),
+        turnId: eventTurnId ?? toTurnId(event.turnId) ?? activeTurnId,
+        createdAt: now,
+      });
+      if (providerItem !== undefined) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.provider-item.upsert",
+          commandId: providerCommandId(event, "provider-item-upsert"),
+          threadId: thread.id,
+          providerItem,
+          createdAt: now,
+        });
+      }
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
       if (event.type === "turn.started" && eventTurnId !== undefined) {
         const pendingMode =
@@ -794,9 +816,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(
-        eventWithBufferedToolOutput(event, toolOutputBuffersByItem),
-      );
+      const activities = runtimeEventToActivities(mappedEvent);
       yield* Effect.forEach(activities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",

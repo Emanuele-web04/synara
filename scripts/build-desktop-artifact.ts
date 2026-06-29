@@ -569,6 +569,8 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const platformBuildConfigInput = {
     platform,
     target,
+    ...(platform === "mac" ? { macSigned: signed } : {}),
+    ...(platform === "mac" && signed ? { macNotarize: true } : {}),
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -791,6 +793,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     delete buildEnv.APPLE_API_KEY;
     delete buildEnv.APPLE_API_KEY_ID;
     delete buildEnv.APPLE_API_ISSUER;
+    delete buildEnv.APPLE_TEAM_ID;
   }
 
   if (process.platform === "win32") {

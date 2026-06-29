@@ -27,6 +27,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     branch: null,
     worktreePath: null,
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 

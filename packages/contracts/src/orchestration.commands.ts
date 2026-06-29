@@ -45,6 +45,7 @@ import {
   OrchestrationCheckpointStatus,
   OrchestrationMessageSource,
   OrchestrationProposedPlan,
+  OrchestrationProviderItem,
   OrchestrationReviewChatTarget,
   OrchestrationSession,
   OrchestrationThreadActivity,
@@ -646,6 +647,14 @@ const ThreadProposedPlanUpsertCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadProviderItemUpsertCommand = Schema.Struct({
+  type: Schema.Literal("thread.provider-item.upsert"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  providerItem: OrchestrationProviderItem,
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnDiffCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.turn.diff.complete"),
   commandId: CommandId,
@@ -831,6 +840,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
+  ThreadProviderItemUpsertCommand,
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,

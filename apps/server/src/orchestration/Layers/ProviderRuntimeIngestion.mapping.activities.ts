@@ -557,7 +557,9 @@ export function runtimeEventToActivities(
           payload: toActivityPayload({
             message: copy.message,
             ...(copy.detail !== undefined ? { detail: copy.detail } : {}),
-            ...(copy.nativeEventType !== undefined ? { nativeEventType: copy.nativeEventType } : {}),
+            ...(copy.nativeEventType !== undefined
+              ? { nativeEventType: copy.nativeEventType }
+              : {}),
             ...(copy.data !== undefined ? { data: copy.data } : {}),
             ...(event.payload.detail !== undefined ? { rawDetail: event.payload.detail } : {}),
           }),

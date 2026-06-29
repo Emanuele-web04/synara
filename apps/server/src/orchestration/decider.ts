@@ -62,6 +62,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     case "thread.message.assistant.delta":
     case "thread.message.assistant.complete":
     case "thread.proposed-plan.upsert":
+    case "thread.provider-item.upsert":
     case "thread.turn.diff.complete":
     case "thread.revert.complete":
     case "thread.conversation.rollback.complete":

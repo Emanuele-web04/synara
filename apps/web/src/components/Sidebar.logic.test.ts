@@ -482,6 +482,7 @@ describe("pin helpers", () => {
       activities: [],
       branch: null,
       worktreePath: null,
+      providerItems: [],
     }) satisfies Thread;
 
   it("returns pinned threads in persisted pin order", () => {
@@ -1373,6 +1374,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     turnDiffSummaries: [],
     activities: [],
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 

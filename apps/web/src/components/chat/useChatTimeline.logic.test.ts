@@ -2,6 +2,7 @@ import { MessageId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ChatMessage } from "../../types";
+import { deriveTranscriptRows } from "../../session-logic";
 import { deriveTimelineMessages } from "./useChatTimeline.logic";
 
 function message(overrides: Omit<Partial<ChatMessage>, "id"> & { id: string }): ChatMessage {
@@ -141,5 +142,15 @@ describe("deriveTimelineMessages", () => {
     });
 
     expect(result).toBe(messages);
+  });
+
+  it("keeps transcript row keys and labels stable across composer draft-only churn", () => {
+    const messages = [message({ id: "user" }), message({ id: "assistant", role: "assistant" })];
+    const firstRows = deriveTranscriptRows({ messages });
+    const secondRows = deriveTranscriptRows({ messages });
+
+    expect(firstRows.map((row) => [row.key, row.label, row.ariaLabel])).toEqual(
+      secondRows.map((row) => [row.key, row.label, row.ariaLabel]),
+    );
   });
 });

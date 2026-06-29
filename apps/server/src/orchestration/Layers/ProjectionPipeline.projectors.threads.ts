@@ -22,6 +22,8 @@ import {
   retainProjectionActivitiesAfterConversationRollback,
   retainProjectionActivitiesAfterRevert,
   retainProjectionMessagesAfterRevert,
+  retainProjectionProviderItemsAfterConversationRollback,
+  retainProjectionProviderItemsAfterRevert,
   retainProjectionProposedPlansAfterConversationRollback,
   retainProjectionProposedPlansAfterRevert,
   rollbackProjectionMessagesFromMessage,
@@ -38,6 +40,7 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
     projectionThreadRepository,
     projectionThreadMessageRepository,
     projectionThreadProposedPlanRepository,
+    projectionThreadProviderItemRepository,
     projectionThreadActivityRepository,
     projectionThreadSessionRepository,
     projectionTurnRepository,
@@ -345,6 +348,7 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
       switch (event.type) {
         case "thread.message-sent":
         case "thread.proposed-plan-upserted":
+        case "thread.provider-item-upserted":
         case "thread.activity-appended":
         case "thread.approval-response-requested":
         case "thread.user-input-response-requested":
@@ -689,6 +693,79 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
       }
     });
 
+  const applyThreadProviderItemsProjection: ProjectorDefinition["apply"] = (
+    event,
+    _attachmentSideEffects,
+  ) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "thread.provider-item-upserted":
+          yield* projectionThreadProviderItemRepository.upsert({
+            providerItemId: event.payload.providerItem.id,
+            threadId: event.payload.threadId,
+            turnId: event.payload.providerItem.turnId,
+            item: event.payload.providerItem,
+            createdAt: event.payload.providerItem.createdAt,
+            updatedAt: event.payload.providerItem.updatedAt,
+          });
+          return;
+
+        case "thread.reverted": {
+          const existingRows = yield* projectionThreadProviderItemRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const existingTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const keptRows = retainProjectionProviderItemsAfterRevert(
+            existingRows,
+            existingTurns,
+            event.payload.turnCount,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+          yield* projectionThreadProviderItemRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadProviderItemRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
+        case "thread.conversation-rolled-back": {
+          const existingRows = yield* projectionThreadProviderItemRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const removedTurnIds = new Set(event.payload.removedTurnIds ?? []);
+          const keptRows = retainProjectionProviderItemsAfterConversationRollback(
+            existingRows,
+            removedTurnIds,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+          yield* projectionThreadProviderItemRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadProviderItemRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
   const applyThreadSessionsProjection: ProjectorDefinition["apply"] = (
     event,
     _attachmentSideEffects,
@@ -713,6 +790,7 @@ export const makeThreadProjectors = (deps: ProjectionProjectorDeps) => {
     applyThreadShellSummariesProjection,
     applyThreadMessagesProjection,
     applyThreadProposedPlansProjection,
+    applyThreadProviderItemsProjection,
     applyThreadActivitiesProjection,
     applyThreadSessionsProjection,
   };

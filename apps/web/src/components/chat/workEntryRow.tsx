@@ -1,386 +1,47 @@
 // FILE: workEntryRow.tsx
 // Purpose: Renders a single transcript work-log entry (tool call, file change, subagent card) and its derivation helpers.
 // Layer: Web chat presentation component
-// Exports: SimpleWorkEntryRow, AgentTaskIcon, basename, workEntryIcon, isFileChangeWorkEntry, isGitHubMcpToolCall, prefersCompactWorkEntryRow
+// Exports: SimpleWorkEntryRow, isFileChangeWorkEntry, prefersCompactWorkEntryRow
 
 import { ThreadId, type TurnId } from "@t3tools/contracts";
 import { memo } from "react";
-import { type ReactNode } from "react";
-import {
-  BotIcon,
-  CheckIcon,
-  CircleAlertIcon,
-  EyeIcon,
-  GitHubIcon,
-  GlobeIcon,
-  HammerIcon,
-  type LucideIcon,
-  McpIcon,
-  SkillCubeIcon,
-  SquarePenIcon,
-  TerminalIcon,
-  ZapIcon,
-} from "~/lib/icons";
+import { GitHubIcon, HammerIcon, McpIcon, TerminalIcon, WebSearchIcon } from "~/lib/icons";
 import { DiffStatLabel } from "./DiffStatLabel";
 import ChatMarkdown from "../ChatMarkdown";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { cn } from "~/lib/utils";
-import {
-  formatSubagentModelLabel,
-  humanizeSubagentStatus,
-  normalizeSubagentStatusKind,
-  resolveSubagentPresentation,
-} from "../../lib/subagentPresentation";
-import { normalizeCompactToolLabel } from "./MessagesTimeline.logic";
-import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import { basenameOfPath } from "../../file-icons";
+import { humanizeSubagentStatus } from "../../lib/subagentPresentation";
 import { type WorkLogEntry } from "~/session-logic";
-import { RiRobot3Line } from "react-icons/ri";
+import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
+import { isAgentActivityWorkEntry } from "./agentActivity.logic";
+import { AutomationCreatedCard } from "./AutomationCreatedCard";
+import {
+  AgentTaskIcon,
+  commandTooltipContent,
+  extractFilePathFromDetail,
+  isFileChangeWorkEntry,
+  isFileReadToolEntry,
+  isGitHubMcpToolCall,
+  prefersCompactWorkEntryRow,
+  shouldRenderAgentTaskMarkdown,
+  splitWorkEntryActionText,
+  streamBodyText,
+  subagentCardMeta,
+  subagentCardSummary,
+  subagentPrimaryLabel,
+  subagentSecondaryLabel,
+  subagentStatusClasses,
+  toolWorkEntryHeading,
+  workEntryStatusDotClassName,
+  workEntryStatusLabel,
+  workEntryIcon,
+  workEntryPreview,
+} from "./workEntryRowModel";
+import { OpenableWorkRowSurface, ToolDetailsDisclosure } from "./workEntryRowSurfaces";
 
-export const AgentTaskIcon: LucideIcon = (props) => (
-  <RiRobot3Line className={props.className} style={props.style} />
-);
-
-export function basename(value: string): string {
-  const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
-  return slash >= 0 ? value.slice(slash + 1) : value;
-}
-
-function workToneIcon(tone: WorkLogEntry["tone"]): {
-  icon: LucideIcon;
-  className: string;
-} {
-  if (tone === "error") {
-    return {
-      icon: CircleAlertIcon,
-      className: "text-muted-foreground/70",
-    };
-  }
-  if (tone === "thinking") {
-    return {
-      icon: BotIcon,
-      className: "text-muted-foreground/70",
-    };
-  }
-  if (tone === "info") {
-    return {
-      icon: CheckIcon,
-      className: "text-muted-foreground/70",
-    };
-  }
-  return {
-    icon: ZapIcon,
-    className: "text-muted-foreground/70",
-  };
-}
-
-/**
- * Try to extract a clean file path from a detail string that may contain JSON.
- * Handles patterns like:
- *   Read {"file_path":"/Users/foo/bar.ts","offset":10}
- *   {"file_path":"/path/to/file.ts"}
- */
-function extractFilePathFromDetail(detail: string): string | null {
-  const plainPathMatch = /^(.+?\.[A-Za-z0-9][A-Za-z0-9._-]*)(?::\d+)?(?::\d+)?$/u.exec(
-    detail.trim(),
-  );
-  if (plainPathMatch?.[1]?.includes("/")) {
-    return plainPathMatch[1].trim();
-  }
-
-  // Try to find a JSON-like object in the detail
-  const jsonStart = detail.indexOf("{");
-  if (jsonStart < 0) return null;
-  const jsonEnd = detail.lastIndexOf("}");
-  if (jsonEnd <= jsonStart) return null;
-  try {
-    const parsed = JSON.parse(detail.slice(jsonStart, jsonEnd + 1));
-    const filePath = parsed.file_path ?? parsed.filePath ?? parsed.path ?? parsed.filename ?? null;
-    if (typeof filePath === "string" && filePath.trim().length > 0) {
-      return filePath.trim();
-    }
-  } catch {
-    // Not valid JSON — try regex fallback
-    const match = /"(?:file_path|filePath|path|filename)"\s*:\s*"([^"]+)"/i.exec(detail);
-    if (match?.[1]) return match[1];
-  }
-  return null;
-}
-
-function workEntryPreview(
-  workEntry: Pick<
-    WorkLogEntry,
-    | "detail"
-    | "command"
-    | "rawCommand"
-    | "preview"
-    | "changedFiles"
-    | "requestKind"
-    | "itemType"
-    | "streamKind"
-    | "subagents"
-    | "subagentAction"
-  >,
-): string | null {
-  const streamBody = streamBodyText(workEntry);
-  if (streamBody && workEntry.detail && workEntry.detail.trim().length > 0) {
-    return null;
-  }
-  if (shouldRenderAgentTaskMarkdown(workEntry)) {
-    return null;
-  }
-
-  const isFileRelated =
-    workEntry.requestKind === "file-read" ||
-    workEntry.requestKind === "file-change" ||
-    workEntry.itemType === "file_change";
-
-  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
-    const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveInlineCommandCall(command);
-  }
-
-  if (workEntry.preview) return workEntry.preview;
-
-  // Prefer clean basenames from changedFiles
-  if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
-    const names = workEntry.changedFiles.map((p) => basename(p));
-    if (names.length === 1) return names[0]!;
-    return `${names.length} files`;
-  }
-
-  if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
-    if (workEntry.subagentAction?.summaryText) {
-      return workEntry.subagentAction.summaryText;
-    }
-    const labels = workEntry.subagents!.map((subagent) => {
-      const presentation = subagentPrimaryLabel(subagent);
-      return presentation.nickname ?? presentation.primaryLabel ?? basename(subagent.threadId);
-    });
-    return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
-  }
-
-  // For detail, try to extract a clean file path first
-  if (workEntry.detail) {
-    const filePath = extractFilePathFromDetail(workEntry.detail);
-    if (filePath) return basename(filePath);
-
-    // For file-related entries, the heading alone is enough — don't show raw JSON
-    if (isFileRelated) return null;
-
-    // For other entries, if the detail looks like raw JSON, skip it
-    const trimmedDetail = workEntry.detail.trim();
-    if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
-
-    const readLinesMatch = /^Read\s+(\d+\s+lines?)$/i.exec(trimmedDetail);
-    if (readLinesMatch?.[1]) return readLinesMatch[1];
-
-    // Clean, non-JSON detail — show it
-    return trimmedDetail;
-  }
-
-  return null;
-}
-
-function shouldRenderAgentTaskMarkdown(
-  workEntry: Pick<WorkLogEntry, "detail" | "itemType">,
-): boolean {
-  if (workEntry.itemType !== "collab_agent_tool_call") {
-    return false;
-  }
-  const detail = workEntry.detail?.trim() ?? "";
-  return /(^|\n)(#{1,6}\s|```|[-*]\s|\d+\.\s)/u.test(detail);
-}
-
-function shouldRenderStreamBody(workEntry: Pick<WorkLogEntry, "detail" | "streamKind">): boolean {
-  if (workEntry.detail === undefined || workEntry.detail.length === 0) {
-    return false;
-  }
-  switch (workEntry.streamKind) {
-    case "reasoning_text":
-    case "reasoning_summary_text":
-    case "plan_text":
-    case "command_output":
-    case "file_change_output":
-    case "unknown":
-      return true;
-    default:
-      return false;
-  }
-}
-
-function visibleWhitespace(value: string): string {
-  return value
-    .replace(/\r/g, "\\r")
-    .replace(/\n/g, "\\n\n")
-    .replace(/\t/g, "\\t")
-    .replace(/ /g, "\u00b7");
-}
-
-function streamBodyText(workEntry: Pick<WorkLogEntry, "detail" | "streamKind">): string | null {
-  if (!shouldRenderStreamBody(workEntry)) {
-    return null;
-  }
-  const detail = workEntry.detail ?? "";
-  return detail.trim().length > 0 ? detail : visibleWhitespace(detail);
-}
-
-export function workEntryIcon(workEntry: WorkLogEntry): LucideIcon {
-  if (workEntry.requestKind === "command") return TerminalIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
-  if (workEntry.requestKind === "file-change") return SquarePenIcon;
-
-  if (workEntry.itemType === "command_execution" || workEntry.command) {
-    return TerminalIcon;
-  }
-  if (workEntry.itemType === "file_change") {
-    return SquarePenIcon;
-  }
-  if (workEntry.itemType === "web_search") return GlobeIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
-  if (workEntry.itemType === "image_generation") return ZapIcon;
-  if (workEntry.itemType === "image_view") return EyeIcon;
-
-  switch (workEntry.itemType) {
-    case "mcp_tool_call":
-      return SkillCubeIcon;
-    case "dynamic_tool_call":
-      return HammerIcon;
-    case "collab_agent_tool_call":
-      return AgentTaskIcon;
-  }
-
-  return workToneIcon(workEntry.tone).icon;
-}
-
-export function isGitHubMcpToolCall(workEntry: WorkLogEntry): boolean {
-  const toolName = workEntry.toolName?.trim().toLowerCase();
-  return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
-}
-
-// Keep command, agent-task, and file-change rows visually compact so their icon can trail the label.
-export function prefersCompactWorkEntryRow(workEntry: WorkLogEntry): boolean {
-  const EntryIcon = workEntryIcon(workEntry);
-  return (
-    EntryIcon === TerminalIcon ||
-    EntryIcon === HammerIcon ||
-    EntryIcon === AgentTaskIcon ||
-    EntryIcon === SquarePenIcon ||
-    EntryIcon === SkillCubeIcon
-  );
-}
-
-function capitalizePhrase(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return value;
-  }
-  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
-}
-
-function toolWorkEntryHeading(workEntry: WorkLogEntry): string {
-  if (!workEntry.toolTitle) {
-    return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
-  }
-  return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
-}
-
-// Splits compact work labels so the action verb can carry visual emphasis.
-export function splitWorkEntryActionText(value: string): { action: string; rest: string } | null {
-  const match = /^(\S+)([\s\S]*)$/.exec(value.trim());
-  if (!match?.[1]) {
-    return null;
-  }
-  return { action: match[1], rest: match[2] ?? "" };
-}
-
-export function isFileChangeWorkEntry(workEntry: WorkLogEntry): boolean {
-  return workEntry.requestKind === "file-change" || workEntry.itemType === "file_change";
-}
-
-function subagentPrimaryLabel(
-  subagent: NonNullable<WorkLogEntry["subagents"]>[number],
-): ReturnType<typeof resolveSubagentPresentation> {
-  return resolveSubagentPresentation({
-    nickname: subagent.nickname,
-    role: subagent.role,
-    title: subagent.title,
-    fallbackId: subagent.threadId,
-  });
-}
-
-function subagentSecondaryLabel(
-  subagent: NonNullable<WorkLogEntry["subagents"]>[number],
-  primaryLabel: string,
-): string | null {
-  const parts = [subagent.title, formatSubagentModelLabel(subagent.model)]
-    .filter((value): value is string => Boolean(value))
-    .filter((value) => value !== primaryLabel);
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join(" • ");
-}
-
-function subagentStatusClasses(
-  statusLabel: string | undefined,
-  rawStatus: string | undefined,
-  isActive: boolean | undefined,
-): string {
-  switch (normalizeSubagentStatusKind(statusLabel ?? rawStatus, isActive)) {
-    case "running":
-      return "border-sky-500/18 bg-sky-500/8 text-sky-200/90";
-    case "completed":
-      return "border-emerald-500/18 bg-emerald-500/8 text-emerald-200/90";
-    case "failed":
-      return "border-rose-500/18 bg-rose-500/8 text-rose-200/90";
-    case "stopped":
-      return "border-amber-500/18 bg-amber-500/8 text-amber-200/90";
-    case "queued":
-      return "border-violet-500/18 bg-violet-500/8 text-violet-200/90";
-    case "idle":
-    default:
-      return "border-border/45 bg-background/85 text-muted-foreground/68";
-  }
-}
-
-function subagentCardSummary(workEntry: WorkLogEntry): string {
-  return (
-    workEntry.subagentAction?.summaryText ??
-    workEntryPreview(workEntry) ??
-    toolWorkEntryHeading(workEntry)
-  );
-}
-
-function subagentCardMeta(workEntry: WorkLogEntry): string | null {
-  const modelLabel = formatSubagentModelLabel(workEntry.subagentAction?.model);
-  if (modelLabel && workEntry.subagentAction?.prompt) {
-    return `${modelLabel} • ${workEntry.subagentAction.prompt}`;
-  }
-  return modelLabel ?? workEntry.subagentAction?.prompt ?? null;
-}
-
-function commandTooltipContent(command: string, displayText: string): ReactNode {
-  return (
-    <div className="max-w-96 whitespace-pre-wrap leading-tight">
-      <div className="space-y-2">
-        <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Summary
-          </div>
-          <div>{displayText}</div>
-        </div>
-        <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Raw call
-          </div>
-          <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
-            {command}
-          </code>
-        </div>
-      </div>
-    </div>
-  );
-}
+export { isFileChangeWorkEntry, prefersCompactWorkEntryRow } from "./workEntryRowModel";
 
 export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: WorkLogEntry;
@@ -390,8 +51,13 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
   turnId?: TurnId;
   markdownCwd?: string | undefined;
+  onImageExpand?: (preview: ExpandedImagePreview) => void;
+  onMarkdownContentReflow?: (() => void) | undefined;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
+  onOpenToolDetails?: (workEntry: WorkLogEntry) => void;
+  onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenAutomation?: (automationId: string) => void;
 }) {
   const {
     workEntry,
@@ -401,8 +67,13 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     fileDiffStatByPath,
     turnId,
     markdownCwd,
+    onImageExpand,
+    onMarkdownContentReflow,
     onOpenTurnDiff,
+    onOpenToolDetails,
+    onOpenAgentActivity,
     onOpenThread,
+    onOpenAutomation,
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
@@ -418,6 +89,16 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const preview = workEntryPreview(workEntry);
   const displayText = preview ? `${heading} ${preview}` : heading;
   const displayTextParts = splitWorkEntryActionText(displayText);
+  const statusLabel = workEntryStatusLabel(workEntry.status);
+  const renderStatusDot = () =>
+    statusLabel ? (
+      <span
+        aria-label={`Status: ${statusLabel}`}
+        className={workEntryStatusDotClassName(workEntry.status)}
+        data-work-entry-status-dot="true"
+        title={statusLabel}
+      />
+    ) : null;
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
   const hoverText = rawCommand ?? displayText;
   const changedFiles = workEntry.changedFiles ?? [];
@@ -433,38 +114,69 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const subagentSummary = subagentCardSummary(workEntry);
   const subagentMeta = subagentCardMeta(workEntry);
   const streamBody = streamBodyText(workEntry);
+  const streamBodyUsesMarkdown =
+    workEntry.streamKind === "reasoning_text" ||
+    workEntry.streamKind === "reasoning_summary_text" ||
+    workEntry.streamKind === "plan_text";
   const agentTaskMarkdown =
     shouldRenderAgentTaskMarkdown(workEntry) && workEntry.detail ? workEntry.detail.trim() : null;
+  const canOpenToolDetails = Boolean(onOpenToolDetails) && Boolean(workEntry.toolDetails);
+  const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
+  const openAgentActivity = canOpenAgentActivity
+    ? () => onOpenAgentActivity?.(workEntry.id)
+    : undefined;
+  const opener = useWorkspaceFileOpener();
+  const readFilePath =
+    opener !== null &&
+    !canOpenAgentActivity &&
+    workEntry.detail &&
+    (workEntry.requestKind === "file-read" || isFileReadToolEntry(workEntry))
+      ? extractFilePathFromDetail(workEntry.detail)
+      : null;
+  const openReadFile =
+    readFilePath && opener ? () => openWorkspaceFileReference(opener, readFilePath) : undefined;
+  const prefetchReadFile =
+    readFilePath && opener?.prefetchFile ? () => opener.prefetchFile?.(readFilePath) : undefined;
 
   // Use the text font size (matching the UI settings) for tool call rows
   const rowFontSizePx = textFontSizePx;
+  const automation = workEntry.automation;
+
+  if (automation) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <AutomationCreatedCard
+          name={automation.name}
+          cadenceLabel={automation.cadenceLabel}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
+    <div
+      className={cn(compact ? "py-0.5" : "rounded-lg py-1")}
+      data-work-entry-status={workEntry.status}
+    >
       {showEditedRows ? (
         <div className="space-y-0.5">
           {changedFiles.map((changedFilePath) => {
             const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
             const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
-            return (
-              <button
-                key={`${workEntry.id}:${changedFilePath}`}
-                type="button"
-                data-file-change-row="true"
-                className={cn(
-                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
-                  compact
-                    ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
-                  canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
-                )}
-                title={changedFilePath}
-                disabled={!canOpenEditedDiff}
-                onClick={() => {
-                  if (!turnId || !onOpenTurnDiff) return;
-                  onOpenTurnDiff(turnId, changedFilePath);
-                }}
-              >
+            const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
+            const editedRowClassName = cn(
+              "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
+              compact
+                ? "px-0 py-[1px] hover:opacity-95"
+                : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
+              canOpenEditedRow ? "cursor-pointer" : "cursor-default",
+            );
+            const editedRowChildren = (
+              <>
+                {renderStatusDot()}
                 <span
                   className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
                   style={{ fontSize: `${rowFontSizePx}px` }}
@@ -477,7 +189,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     fontSize: `${rowFontSizePx}px`,
                   }}
                 >
-                  {basename(changedFilePath)}
+                  {basenameOfPath(changedFilePath)}
                 </span>
                 {changedFileStat ? (
                   <span
@@ -490,48 +202,98 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                     />
                   </span>
                 ) : null}
+              </>
+            );
+            if (canOpenToolDetails && workEntry.toolDetails) {
+              return (
+                <ToolDetailsDisclosure
+                  key={`${workEntry.id}:${changedFilePath}`}
+                  compact={compact}
+                  dataFileChangeRow
+                  details={workEntry.toolDetails}
+                  summaryClassName={editedRowClassName}
+                  title="View tool details"
+                >
+                  {editedRowChildren}
+                </ToolDetailsDisclosure>
+              );
+            }
+            return (
+              <button
+                key={`${workEntry.id}:${changedFilePath}`}
+                type="button"
+                data-file-change-row="true"
+                className={editedRowClassName}
+                title={changedFilePath}
+                disabled={!canOpenEditedRow}
+                onClick={() => {
+                  if (!turnId || !onOpenTurnDiff) return;
+                  onOpenTurnDiff(turnId, changedFilePath);
+                }}
+              >
+                {editedRowChildren}
               </button>
             );
           })}
         </div>
       ) : showSubagentRows ? (
         <div className="space-y-1.5">
-          <div
-            className={cn(
-              "flex items-center transition-[opacity,translate] duration-200",
-              compact ? "gap-1.5" : "gap-2",
-            )}
-          >
-            <span
-              className={cn(
-                "flex shrink-0 items-center justify-center text-muted-foreground/70",
-                compact ? "size-4" : "size-5",
-              )}
-            >
-              <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-            </span>
-            <div className="min-w-0 flex-1 overflow-hidden">
-              <p
-                className={cn(
-                  compact ? "truncate leading-5" : "truncate leading-6",
-                  "font-medium text-foreground/72",
-                )}
-                style={{ fontSize: `${rowFontSizePx}px` }}
+          {(() => {
+            const subagentHeader = (
+              <OpenableWorkRowSurface
+                canOpen={!canOpenToolDetails && canOpenAgentActivity}
+                onOpen={openAgentActivity}
                 title={hoverText}
+                className={cn(
+                  "flex items-center transition-[opacity,translate] duration-200",
+                  compact ? "gap-1.5" : "gap-2",
+                )}
               >
-                <span>{subagentSummary}</span>
-              </p>
-              {subagentMeta ? (
-                <p
-                  className="truncate leading-4 text-muted-foreground/70"
-                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
-                  title={subagentMeta}
+                <span
+                  className={cn(
+                    "flex shrink-0 items-center justify-center text-muted-foreground/70",
+                    compact ? "size-4" : "size-5",
+                  )}
                 >
-                  {subagentMeta}
-                </p>
-              ) : null}
-            </div>
-          </div>
+                  <EntryIcon className={compact ? "size-2.5" : "size-3"} />
+                </span>
+                {renderStatusDot()}
+                <div className="min-w-0 flex-1 overflow-hidden">
+                  <p
+                    className={cn(
+                      compact ? "truncate leading-5" : "truncate leading-6",
+                      "font-medium text-foreground/72",
+                    )}
+                    style={{ fontSize: `${rowFontSizePx}px` }}
+                    title={hoverText}
+                  >
+                    <span>{subagentSummary}</span>
+                  </p>
+                  {subagentMeta ? (
+                    <p
+                      className="truncate leading-4 text-muted-foreground/70"
+                      style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
+                      title={subagentMeta}
+                    >
+                      {subagentMeta}
+                    </p>
+                  ) : null}
+                </div>
+              </OpenableWorkRowSurface>
+            );
+
+            return canOpenToolDetails && workEntry.toolDetails ? (
+              <ToolDetailsDisclosure
+                compact={compact}
+                details={workEntry.toolDetails}
+                title={rawCommand ?? displayText}
+              >
+                {subagentHeader}
+              </ToolDetailsDisclosure>
+            ) : (
+              subagentHeader
+            );
+          })()}
           {visibleSubagents.length > 0 || hiddenSubagentCount > 0 ? (
             <div
               className={cn(
@@ -642,12 +404,15 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ) : (
         (() => {
           const rowContent = (
-            <div
+            <OpenableWorkRowSurface
+              canOpen={!canOpenToolDetails && Boolean(openAgentActivity ?? openReadFile)}
+              onHover={prefetchReadFile}
+              onOpen={openAgentActivity ?? openReadFile}
               className={cn(
                 "flex items-center transition-[opacity,translate] duration-200",
                 compact ? "gap-1.5" : "gap-2",
               )}
-              title={hoverText}
+              title={readFilePath ?? hoverText}
             >
               {showIconLeft && (
                 <span
@@ -659,6 +424,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <EntryIcon className={compact ? "size-2.5" : "size-3"} />
                 </span>
               )}
+              {renderStatusDot()}
               <div className="min-w-0 flex-1 overflow-hidden">
                 <p
                   className={cn(
@@ -670,7 +436,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   {showInlineWebSearchIcon || showInlineGitHubIcon || showInlineMcpIcon ? (
                     <span
                       className="mr-1 inline-flex align-[-0.125em] text-muted-foreground/70"
-                      data-inline-tool-icon={
+                      data-tool-icon={
                         showInlineGitHubIcon ? "github" : showInlineMcpIcon ? "mcp" : "web-search"
                       }
                     >
@@ -691,7 +457,7 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                         />
                       ) : null}
                       {showInlineWebSearchIcon ? (
-                        <GlobeIcon
+                        <WebSearchIcon
                           style={{
                             width: `${rowFontSizePx}px`,
                             height: `${rowFontSizePx}px`,
@@ -725,19 +491,33 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <EntryIcon style={{ width: rowFontSizePx, height: rowFontSizePx }} />
                 </span>
               )}
-            </div>
+            </OpenableWorkRowSurface>
           );
 
-          const renderedRow = rawCommand ? (
-            <Tooltip>
-              <TooltipTrigger render={rowContent} />
-              <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
-                {commandTooltipContent(rawCommand, displayText)}
-              </TooltipPopup>
-            </Tooltip>
-          ) : (
-            rowContent
-          );
+          const renderedRowContent =
+            canOpenToolDetails && workEntry.toolDetails ? (
+              <ToolDetailsDisclosure
+                compact={compact}
+                details={workEntry.toolDetails}
+                title={rawCommand ?? displayText}
+              >
+                {rowContent}
+              </ToolDetailsDisclosure>
+            ) : (
+              rowContent
+            );
+
+          const renderedRow =
+            rawCommand && !canOpenToolDetails ? (
+              <Tooltip>
+                <TooltipTrigger render={renderedRowContent} />
+                <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
+                  {commandTooltipContent(rawCommand, displayText)}
+                </TooltipPopup>
+              </Tooltip>
+            ) : (
+              renderedRowContent
+            );
 
           if (!streamBody && !agentTaskMarkdown) {
             return renderedRow;
@@ -751,16 +531,34 @@ export const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <ChatMarkdown
                     text={agentTaskMarkdown}
                     cwd={markdownCwd}
-                    isStreaming={false}
+                    isStreaming={workEntry.status === "inProgress"}
                     className="text-sm leading-relaxed"
                     style={{
                       fontSize: `${rowFontSizePx}px`,
                       lineHeight: `${Math.round(rowFontSizePx * 1.5)}px`,
                     }}
+                    onImageExpand={onImageExpand}
+                    onContentReflow={onMarkdownContentReflow}
                   />
                 </div>
               ) : null}
-              {streamBody ? (
+              {streamBody && streamBodyUsesMarkdown ? (
+                <div className="min-w-0 pl-0.5 text-foreground/90">
+                  <ChatMarkdown
+                    text={streamBody}
+                    cwd={markdownCwd}
+                    isStreaming={workEntry.status === "inProgress"}
+                    className="text-sm leading-relaxed"
+                    style={{
+                      fontSize: `${rowFontSizePx}px`,
+                      lineHeight: `${Math.round(rowFontSizePx * 1.5)}px`,
+                    }}
+                    onImageExpand={onImageExpand}
+                    onContentReflow={onMarkdownContentReflow}
+                  />
+                </div>
+              ) : null}
+              {streamBody && !streamBodyUsesMarkdown ? (
                 <pre
                   aria-live="off"
                   className={cn(

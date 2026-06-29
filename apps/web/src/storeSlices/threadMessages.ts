@@ -62,42 +62,76 @@ export function normalizeChatAttachments(
 
   const previousById = new Map(previous?.map((attachment) => [attachment.id, attachment] as const));
   const nextAttachments = incoming.map((attachment) => {
-    const nextAttachment: ChatAttachment =
-      attachment.type === "assistant-selection"
-        ? {
-            type: "assistant-selection",
-            id: attachment.id,
-            assistantMessageId: attachment.assistantMessageId,
-            text: attachment.text,
-          }
-        : {
-            type: "image",
-            id: attachment.id,
-            name: attachment.name,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-            previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
-          };
+    const nextAttachment: ChatAttachment = normalizeChatAttachment(attachment);
     const existing = previousById.get(attachment.id);
-    if (
-      existing &&
-      ((existing.type === "assistant-selection" &&
-        nextAttachment.type === "assistant-selection" &&
-        existing.assistantMessageId === nextAttachment.assistantMessageId &&
-        existing.text === nextAttachment.text) ||
-        (existing.type === "image" &&
-          nextAttachment.type === "image" &&
-          existing.name === nextAttachment.name &&
-          existing.mimeType === nextAttachment.mimeType &&
-          existing.sizeBytes === nextAttachment.sizeBytes &&
-          existing.previewUrl === nextAttachment.previewUrl))
-    ) {
+    if (existing && chatAttachmentsEqual(existing, nextAttachment)) {
       return existing;
     }
     return nextAttachment;
   });
 
   return arraysShallowEqual(previous, nextAttachments) ? previous : nextAttachments;
+}
+
+function normalizeChatAttachment(
+  attachment: NonNullable<ReadModelMessage["attachments"]>[number],
+): ChatAttachment {
+  if (attachment.type === "assistant-selection") {
+    return {
+      type: "assistant-selection",
+      id: attachment.id,
+      assistantMessageId: attachment.assistantMessageId,
+      text: attachment.text,
+    } satisfies ChatAttachment;
+  }
+
+  if (attachment.type === "file") {
+    return {
+      type: "file",
+      id: attachment.id,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    } satisfies ChatAttachment;
+  }
+
+  return {
+    type: "image",
+    id: attachment.id,
+    name: attachment.name,
+    mimeType: attachment.mimeType,
+    sizeBytes: attachment.sizeBytes,
+    previewUrl: toAttachmentPreviewUrl(attachmentPreviewRoutePath(attachment.id)),
+  } satisfies ChatAttachment;
+}
+
+function chatAttachmentsEqual(left: ChatAttachment, right: ChatAttachment): boolean {
+  if (left.type !== right.type || left.id !== right.id) {
+    return false;
+  }
+  switch (left.type) {
+    case "assistant-selection":
+      return (
+        right.type === "assistant-selection" &&
+        left.assistantMessageId === right.assistantMessageId &&
+        left.text === right.text
+      );
+    case "file":
+      return (
+        right.type === "file" &&
+        left.name === right.name &&
+        left.mimeType === right.mimeType &&
+        left.sizeBytes === right.sizeBytes
+      );
+    case "image":
+      return (
+        right.type === "image" &&
+        left.name === right.name &&
+        left.mimeType === right.mimeType &&
+        left.sizeBytes === right.sizeBytes &&
+        left.previewUrl === right.previewUrl
+      );
+  }
 }
 
 export function normalizeChatMessage(
@@ -164,13 +198,21 @@ export function readModelAttachmentsFromChatMessage(
             assistantMessageId: MessageId.makeUnsafe(attachment.assistantMessageId),
             text: attachment.text,
           }
-        : {
-            id: attachment.id,
-            name: attachment.name,
-            type: "image" as const,
-            mimeType: attachment.mimeType,
-            sizeBytes: attachment.sizeBytes,
-          },
+        : attachment.type === "file"
+          ? {
+              id: attachment.id,
+              name: attachment.name,
+              type: "file" as const,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            }
+          : {
+              id: attachment.id,
+              name: attachment.name,
+              type: "image" as const,
+              mimeType: attachment.mimeType,
+              sizeBytes: attachment.sizeBytes,
+            },
     ) ?? []
   );
 }

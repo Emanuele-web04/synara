@@ -61,6 +61,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type KeyboardEvent,
   type MouseEvent,
 } from "react";
 import { GoTasklist } from "react-icons/go";
@@ -491,12 +492,15 @@ import {
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
+  deriveTranscriptTailFollowKey,
   filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
+  resolveComposerEnterDispatchMode,
+  shouldMaintainTranscriptTailFollow,
   shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
@@ -1180,10 +1184,15 @@ export default function ChatView({
   );
   const [isModelPickerOpen, setIsModelPickerOpen] = useState(false);
   const [isTraitsPickerOpen, setIsTraitsPickerOpen] = useState(false);
+  const [interruptInFlight, setInterruptInFlight] = useState(false);
+  const interruptInFlightRef = useRef(false);
   const legendListRef = useRef<LegendListRef | null>(null);
   const timelineControllerRef = useRef<MessagesTimelineController | null>(null);
+  const transcriptContainerRef = useRef<HTMLDivElement | null>(null);
   const isAtEndRef = useRef(true);
   const autoFollowThreadIdRef = useRef<ThreadId | null>(null);
+  const previousTranscriptTailKeyRef = useRef<string | null>(null);
+  const pendingTailFollowFrameRef = useRef<number | null>(null);
   const pendingInteractionAnchorRef = useRef<{
     element: HTMLElement;
     top: number;
@@ -1205,6 +1214,11 @@ export default function ChatView({
       const pendingFrame = pendingInteractionAnchorFrameRef.current;
       if (pendingFrame !== null) {
         window.cancelAnimationFrame(pendingFrame);
+      }
+      const pendingTailFollowFrame = pendingTailFollowFrameRef.current;
+      if (pendingTailFollowFrame !== null) {
+        window.cancelAnimationFrame(pendingTailFollowFrame);
+        pendingTailFollowFrameRef.current = null;
       }
     };
   }, []);
@@ -2427,8 +2441,9 @@ export default function ChatView({
   hasLiveTurnRef.current = hasLiveTurn;
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
   const hasStreamingAssistantText =
-    activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
-    false;
+    hasLiveTurn &&
+    (activeThread?.messages.some((message) => message.role === "assistant" && message.streaming) ??
+      false);
   const activeTurnLayoutLive = isWorking || !latestTurnSettled;
   const [keepSettledActiveTurnLayout, setKeepSettledActiveTurnLayout] = useState(false);
   const previousActiveTurnLayoutLiveRef = useRef(activeTurnLayoutLive);
@@ -4547,6 +4562,12 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     legendListRef.current?.scrollToEnd?.({ animated });
   }, []);
+  const cancelPendingTailFollowScroll = useCallback(() => {
+    const pendingFrame = pendingTailFollowFrameRef.current;
+    if (pendingFrame === null) return;
+    pendingTailFollowFrameRef.current = null;
+    window.cancelAnimationFrame(pendingFrame);
+  }, []);
   const armTranscriptAutoFollow = useCallback((targetThreadId: ThreadId, animated = false) => {
     autoFollowThreadIdRef.current = targetThreadId;
     animateNextAutoFollowScrollRef.current = animated;
@@ -4557,7 +4578,8 @@ export default function ChatView({
   const clearTranscriptAutoFollow = useCallback(() => {
     autoFollowThreadIdRef.current = null;
     animateNextAutoFollowScrollRef.current = false;
-  }, []);
+    cancelPendingTailFollowScroll();
+  }, [cancelPendingTailFollowScroll]);
   useLayoutEffect(() => {
     const previousHeight = previousComposerStackedChromeHeightRef.current;
     previousComposerStackedChromeHeightRef.current = composerStackedChromeHeight;
@@ -4582,28 +4604,26 @@ export default function ChatView({
     programmaticScrollUntilRef.current = performance.now() + 200;
     scrollContainer.scrollTop += delta;
   }, [composerStackedChromeHeight]);
-  const transcriptMessageCount = useMemo(
-    () => timelineEntries.filter((entry) => entry.kind === "message").length,
-    [timelineEntries],
-  );
-  const latestTranscriptMessage = useMemo(() => {
+  const latestAssistantTranscriptMessage = useMemo(() => {
     for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
       const entry = timelineEntries[index];
-      if (entry?.kind === "message") {
+      if (entry?.kind === "message" && entry.message.role === "assistant") {
         return entry.message;
       }
     }
     return null;
   }, [timelineEntries]);
-  const transcriptTailKey = latestTranscriptMessage
-    ? [
-        latestTranscriptMessage.id,
-        latestTranscriptMessage.role,
-        latestTranscriptMessage.streaming ? "streaming" : "settled",
-        latestTranscriptMessage.text.length > 0 ? "content" : "empty",
-        latestTranscriptMessage.completedAt ?? "",
-      ].join(":")
+  const transcriptTailKey = latestAssistantTranscriptMessage
+    ? deriveTranscriptTailFollowKey({ latestMessage: latestAssistantTranscriptMessage })
     : "empty";
+  const maintainTranscriptTailFollow = shouldMaintainTranscriptTailFollow({
+    previousTailKey: previousTranscriptTailKeyRef.current,
+    nextTailKey: transcriptTailKey,
+    hasStreamingAssistantText,
+  });
+  useLayoutEffect(() => {
+    previousTranscriptTailKeyRef.current = transcriptTailKey;
+  }, [transcriptTailKey]);
   const onIsAtEndChange = useCallback((isAtEnd: boolean) => {
     if (isAtEndRef.current === isAtEnd) return;
     if (!isAtEnd && performance.now() < programmaticScrollUntilRef.current) return;
@@ -4673,6 +4693,28 @@ export default function ChatView({
   const onMessagesWheelBase = useCallback(() => {
     clearTranscriptAutoFollow();
   }, [clearTranscriptAutoFollow]);
+  const onMessagesKeyDownBase = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("input, textarea, [contenteditable='true']")
+      ) {
+        return;
+      }
+      if (
+        event.key === "ArrowUp" ||
+        event.key === "ArrowDown" ||
+        event.key === "PageUp" ||
+        event.key === "PageDown" ||
+        event.key === "Home" ||
+        event.key === "End" ||
+        event.key === " "
+      ) {
+        clearTranscriptAutoFollow();
+      }
+    },
+    [clearTranscriptAutoFollow],
+  );
   useLayoutEffect(() => {
     const shouldFollowPendingTurn =
       activeThread?.id !== undefined && autoFollowThreadIdRef.current === activeThread.id;
@@ -4681,21 +4723,17 @@ export default function ChatView({
     }
     // Re-apply the bottom stick only for real transcript messages; tool/work
     // rows can arrive quickly and should not churn scroll/layout work.
-    const frameId = window.requestAnimationFrame(() => {
+    cancelPendingTailFollowScroll();
+    pendingTailFollowFrameRef.current = window.requestAnimationFrame(() => {
+      pendingTailFollowFrameRef.current = null;
       const shouldAnimate = animateNextAutoFollowScrollRef.current;
       animateNextAutoFollowScrollRef.current = false;
       scrollToEnd(shouldAnimate);
     });
     return () => {
-      window.cancelAnimationFrame(frameId);
+      cancelPendingTailFollowScroll();
     };
-  }, [
-    activeThread?.id,
-    activeTurnInProgress,
-    scrollToEnd,
-    transcriptMessageCount,
-    transcriptTailKey,
-  ]);
+  }, [activeThread?.id, cancelPendingTailFollowScroll, scrollToEnd, transcriptTailKey]);
   const {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
@@ -4717,6 +4755,7 @@ export default function ChatView({
       !isInactiveSplitPane &&
       pendingUserInputs.length === 0 &&
       !isComposerApprovalState,
+    transcriptContainerRef,
     composerImagesRef,
     composerFilesRef,
     composerAssistantSelectionsRef,
@@ -4892,7 +4931,9 @@ export default function ChatView({
       if (!isAtEndRef.current) {
         return;
       }
-      window.requestAnimationFrame(() => {
+      cancelPendingTailFollowScroll();
+      pendingTailFollowFrameRef.current = window.requestAnimationFrame(() => {
+        pendingTailFollowFrameRef.current = null;
         scrollToEnd(false);
       });
     });
@@ -4901,7 +4942,13 @@ export default function ChatView({
     return () => {
       observer.disconnect();
     };
-  }, [activeThread?.id, composerFooterHasWideActions, isInactiveSplitPane, scrollToEnd]);
+  }, [
+    activeThread?.id,
+    cancelPendingTailFollowScroll,
+    composerFooterHasWideActions,
+    isInactiveSplitPane,
+    scrollToEnd,
+  ]);
 
   useEffect(() => {
     setPullRequestDialogState(null);
@@ -5332,14 +5379,33 @@ export default function ChatView({
 
   const onInterrupt = useCallback(async () => {
     const api = readNativeApi();
-    if (!api || !activeThread) return;
-    await api.orchestration.dispatchCommand({
-      type: "thread.turn.interrupt",
-      commandId: newCommandId(),
-      threadId: activeThread.id,
-      createdAt: new Date().toISOString(),
-    });
-  }, [activeThread]);
+    if (!api || !activeThread || interruptInFlightRef.current) return;
+    interruptInFlightRef.current = true;
+    setInterruptInFlight(true);
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.interrupt",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      setThreadError(
+        activeThread.id,
+        err instanceof Error ? err.message : "Failed to stop generation.",
+      );
+      interruptInFlightRef.current = false;
+      setInterruptInFlight(false);
+    }
+  }, [activeThread, setThreadError]);
+
+  useEffect(() => {
+    if (phase === "running") {
+      return;
+    }
+    interruptInFlightRef.current = false;
+    setInterruptInFlight(false);
+  }, [phase]);
 
   useEffect(() => {
     if (surfaceMode === "split" && !isFocusedPane) {
@@ -7401,9 +7467,7 @@ export default function ChatView({
       // idle-stop or runtime restart) keeps full-access instead of asking again.
       // The server's session override only covers the current live turn.
       const durableRuntimeMode = resolveRuntimeModeAfterApprovalDecision(runtimeMode, decision);
-      if (durableRuntimeMode) {
-        setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
-      }
+      let approvalResponseAccepted = true;
       await api.orchestration
         .dispatchCommand({
           type: "thread.approval.respond",
@@ -7414,14 +7478,25 @@ export default function ChatView({
           createdAt: new Date().toISOString(),
         })
         .catch((err: unknown) => {
+          approvalResponseAccepted = false;
           setStoreThreadError(
             activeThreadId,
             err instanceof Error ? err.message : "Failed to submit approval decision.",
           );
         });
+      if (approvalResponseAccepted && durableRuntimeMode) {
+        setComposerDraftRuntimeMode(activeThreadId, durableRuntimeMode);
+      }
       setRespondingRequestIds((existing) => existing.filter((id) => id !== requestId));
+      scheduleComposerFocus();
     },
-    [activeThreadId, runtimeMode, setComposerDraftRuntimeMode, setStoreThreadError],
+    [
+      activeThreadId,
+      runtimeMode,
+      scheduleComposerFocus,
+      setComposerDraftRuntimeMode,
+      setStoreThreadError,
+    ],
   );
 
   const onRespondToUserInput = useCallback(
@@ -7451,8 +7526,9 @@ export default function ChatView({
           );
         });
       setRespondingUserInputRequestIds((existing) => existing.filter((id) => id !== requestId));
+      scheduleComposerFocus();
     },
-    [activeThreadId, setStoreThreadError],
+    [activeThreadId, scheduleComposerFocus, setStoreThreadError],
   );
 
   const onCancelActivePendingUserInput = useCallback(() => {
@@ -9021,7 +9097,7 @@ export default function ChatView({
 
   const onComposerCommandKey = (
     key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash",
-    event: KeyboardEvent,
+    event: globalThis.KeyboardEvent,
   ) => {
     if (key === "Slash" && !event.metaKey && !event.ctrlKey && !event.altKey) {
       const { snapshot, trigger } = resolveActiveComposerTrigger();
@@ -9056,7 +9132,14 @@ export default function ChatView({
       !menuIsActive &&
       extractChatAutomationInvocation(snapshot.value) !== null
     ) {
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveComposerEnterDispatchMode({
+          hasLiveTurn,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+        }),
+      );
       return true;
     }
 
@@ -9095,7 +9178,14 @@ export default function ChatView({
     }
 
     if (key === "Enter" && !event.shiftKey) {
-      void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
+      void onSend(
+        undefined,
+        resolveComposerEnterDispatchMode({
+          hasLiveTurn,
+          metaKey: event.metaKey,
+          ctrlKey: event.ctrlKey,
+        }),
+      );
       return true;
     }
     return false;
@@ -9110,6 +9200,16 @@ export default function ChatView({
     setShowScrollToBottom(false);
     scrollToEnd(true);
   }, [scrollToEnd]);
+  const shouldTailReflow = useCallback(
+    () => isAtEndRef.current || autoFollowThreadIdRef.current === activeThread?.id,
+    [activeThread?.id],
+  );
+  const onMarkdownContentReflow = useCallback(() => {
+    if (!shouldTailReflow()) {
+      return;
+    }
+    scrollToEnd(false);
+  }, [scrollToEnd, shouldTailReflow]);
   const onOpenTurnDiff = useCallback(
     (turnId: TurnId, filePath?: string) => {
       if (diffEnvironmentPending) {
@@ -9874,8 +9974,13 @@ export default function ChatView({
                           size="icon-xs"
                           className="sm:size-[26px]"
                           onClick={() => void onInterrupt()}
-                          aria-label="Stop generation"
-                          title="Stop the current response. On Mac, press Ctrl+C to interrupt."
+                          disabled={interruptInFlight}
+                          aria-label={interruptInFlight ? "Stopping generation" : "Stop generation"}
+                          title={
+                            interruptInFlight
+                              ? "Stopping the current response..."
+                              : "Stop the current response. On Mac, press Ctrl+C to interrupt."
+                          }
                         >
                           <span
                             aria-hidden="true"
@@ -10270,6 +10375,7 @@ export default function ChatView({
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}
                     timelineControllerRef={timelineControllerRef}
+                    transcriptContainerRef={transcriptContainerRef}
                     pinnedMessageIds={pinnedMessageIds}
                     canPinMessage={(messageId) => !isPendingSetupBubbleId(messageId)}
                     onTogglePinMessage={handleTogglePinMessageGuarded}
@@ -10285,7 +10391,9 @@ export default function ChatView({
                     onEditUserMessage={onEditUserMessage}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
-                    followLiveOutput={hasStreamingAssistantText}
+                    onMarkdownContentReflow={onMarkdownContentReflow}
+                    shouldTailReflow={shouldTailReflow}
+                    followLiveOutput={maintainTranscriptTailFollow}
                     onIsAtEndChange={onIsAtEndChange}
                     markdownCwd={threadWorkspaceCwd ?? undefined}
                     resolvedTheme={resolvedTheme}
@@ -10302,6 +10410,7 @@ export default function ChatView({
                     onMessagesPointerDown={onMessagesPointerDown}
                     onMessagesPointerUp={onMessagesPointerUp}
                     onMessagesPointerCancel={onMessagesPointerCancel}
+                    onMessagesKeyDown={onMessagesKeyDownBase}
                     onMessagesTouchStart={onMessagesTouchStart}
                     onMessagesTouchMove={onMessagesTouchMove}
                     onMessagesTouchEnd={onMessagesTouchEnd}

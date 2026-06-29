@@ -24,10 +24,11 @@ export interface GeneratedMarkdownImageProps {
   alt: string;
   cwd: string | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onImageLoad?: (() => void) | undefined;
 }
 
 export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
-  const { src, alt, cwd, onImageExpand } = props;
+  const { src, alt, cwd, onImageExpand, onImageLoad } = props;
   const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
     useLocalImagePreview({ src, cwd });
   const accessibleName = alt?.trim() || "Generated image";
@@ -80,7 +81,19 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
             <Loader2Icon className="size-4 animate-spin opacity-60" />
           </span>
         ) : null}
-        <img {...imgProps} alt={accessibleName} className="chat-generated-image__img" />
+        <img
+          {...imgProps}
+          alt={accessibleName}
+          className="chat-generated-image__img"
+          onError={(event) => {
+            imgProps.onError?.(event);
+            onImageLoad?.();
+          }}
+          onLoad={(event) => {
+            imgProps.onLoad?.(event);
+            onImageLoad?.();
+          }}
+        />
         <span className="chat-generated-image__overlay" aria-hidden="true">
           <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
             <Maximize2 className="size-3.5" />

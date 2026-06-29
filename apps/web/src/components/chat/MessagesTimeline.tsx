@@ -6,7 +6,7 @@
 import {
   type MessageId,
   type ProviderMentionReference,
-  ThreadId,
+  type ThreadId,
   type ThreadMarker,
   type TurnId,
 } from "@t3tools/contracts";
@@ -24,45 +24,22 @@ import {
   type CSSProperties,
   type ComponentProps,
   type KeyboardEvent,
+  type PointerEvent,
   type RefObject,
   type ReactNode,
+  type TouchEvent,
+  type WheelEvent,
 } from "react";
-import {
-  deriveTimelineEntries,
-  formatClockElapsed,
-  isFileChangeWorkLogEntry,
-  type WorkLogEntry,
-} from "../../session-logic";
+import { deriveTimelineEntries, formatClockElapsed, type WorkLogEntry } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
-import {
-  BotIcon,
-  CheckIcon,
-  ChangesIcon,
-  CircleAlertIcon,
-  EyeIcon,
-  GitHubIcon,
-  HammerIcon,
-  type LucideIcon,
-  McpIcon,
-  NewThreadIcon,
-  PencilIcon,
-  PinIcon,
-  SearchIcon,
-  SkillCubeIcon,
-  SteerIcon,
-  TerminalIcon,
-  Undo2Icon,
-  WebSearchIcon,
-  ZapIcon,
-} from "~/lib/icons";
+import { ChangesIcon, NewThreadIcon, PinIcon, SteerIcon, Undo2Icon } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
-import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
-import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
+import { ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
 import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -82,14 +59,9 @@ import {
   MAX_VISIBLE_WORK_LOG_ENTRIES,
   type CollapsedTurnItem,
   type MessagesTimelineRow,
-  normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveReadableCommandDisplay, isInspectCommand } from "../../lib/toolCallLabel";
-import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
-import { isAgentActivityWorkEntry } from "./agentActivity.logic";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
@@ -125,14 +97,12 @@ import { DisclosureRegion } from "../ui/DisclosureRegion";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { disclosureContentClassName } from "~/lib/disclosureMotion";
 import { getAppTypographyScale } from "../../lib/appTypography";
-import {
-  formatSubagentModelLabel,
-  humanizeSubagentStatus,
-  normalizeSubagentStatusKind,
-  resolveSubagentPresentation,
-} from "../../lib/subagentPresentation";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
-import { splitWorkEntryActionText } from "./workEntryRow";
+import {
+  SimpleWorkEntryRow as CanonicalWorkEntryRow,
+  isFileChangeWorkEntry,
+  prefersCompactWorkEntryRow,
+} from "./workEntryRow";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -166,10 +136,6 @@ export interface MessagesTimelineController {
   scrollToMessage: (messageId: MessageId) => void;
   scrollToMarker: (marker: ThreadMarker) => void;
 }
-
-// Distinct component identity from BotIcon so prefersCompactWorkEntryRow can
-// target agent-task rows specifically; both render the shared central robot glyph.
-const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
 // Keeps the steer marker visually attached to the whole sent-message stack.
 function UserDispatchModeChip({
@@ -269,6 +235,8 @@ interface MessagesTimelineProps {
   activeTurnId?: TurnId | null;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
+  onMarkdownContentReflow?: (() => void) | undefined;
+  shouldTailReflow?: (() => boolean) | undefined;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
   onMessagesMouseUp?: ComponentProps<typeof LegendList>["onMouseUp"];
@@ -276,6 +244,7 @@ interface MessagesTimelineProps {
   onMessagesPointerDown?: ComponentProps<typeof LegendList>["onPointerDown"];
   onMessagesPointerUp?: ComponentProps<typeof LegendList>["onPointerUp"];
   onMessagesScroll?: ComponentProps<typeof LegendList>["onScroll"];
+  onMessagesKeyDown?: ComponentProps<typeof LegendList>["onKeyDown"];
   onMessagesTouchEnd?: ComponentProps<typeof LegendList>["onTouchEnd"];
   onMessagesTouchMove?: ComponentProps<typeof LegendList>["onTouchMove"];
   onMessagesTouchStart?: ComponentProps<typeof LegendList>["onTouchStart"];
@@ -299,7 +268,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
-  followLiveOutput = false,
   listRef,
   controllerRef,
   pinnedMessageIds,
@@ -322,6 +290,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   activeTurnId,
   isRevertingCheckpoint,
   onImageExpand,
+  onMarkdownContentReflow,
+  shouldTailReflow,
   onIsAtEndChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
@@ -329,6 +299,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onMessagesPointerDown,
   onMessagesPointerUp,
   onMessagesScroll,
+  onMessagesKeyDown,
   onMessagesTouchEnd,
   onMessagesTouchMove,
   onMessagesTouchStart,
@@ -473,6 +444,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedUserMessagesById,
       expandedWorkGroupsState,
       highlightedMessageId,
+      nowIso,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
@@ -487,6 +459,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedUserMessagesById,
       expandedWorkGroupsState,
       highlightedMessageId,
+      nowIso,
       pinnedMessageIds,
       settledTurnCollapseTransitions,
       submittingEditedUserMessageId,
@@ -637,6 +610,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     tailScrollTimeoutsRef.current = [];
   }, []);
   const scrollTailExpansionToEnd = useCallback(() => {
+    if (shouldTailReflow && !shouldTailReflow()) {
+      return;
+    }
     clearTailExpansionScrollTimers();
     const scrollToEnd = () => {
       void resolvedListRef.current?.scrollToEnd?.({ animated: false });
@@ -649,8 +625,64 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       const timeoutId = window.setTimeout(scrollToEnd, delay);
       tailScrollTimeoutsRef.current.push(timeoutId);
     }
-  }, [clearTailExpansionScrollTimers, resolvedListRef]);
+  }, [clearTailExpansionScrollTimers, resolvedListRef, shouldTailReflow]);
   useEffect(() => clearTailExpansionScrollTimers, [clearTailExpansionScrollTimers]);
+  const handleMessagesPointerCancel = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesPointerCancel?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesPointerCancel],
+  );
+  const handleMessagesPointerDown = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesPointerDown?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesPointerDown],
+  );
+  const handleMessagesPointerUp = useCallback(
+    (event: PointerEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesPointerUp?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesPointerUp],
+  );
+  const handleMessagesTouchMove = useCallback(
+    (event: TouchEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesTouchMove?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesTouchMove],
+  );
+  const handleMessagesTouchEnd = useCallback(
+    (event: TouchEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesTouchEnd?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesTouchEnd],
+  );
+  const handleMessagesTouchStart = useCallback(
+    (event: TouchEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesTouchStart?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesTouchStart],
+  );
+  const handleMessagesWheel = useCallback(
+    (event: WheelEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesWheel?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesWheel],
+  );
+  const handleMessagesKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      clearTailExpansionScrollTimers();
+      onMessagesKeyDown?.(event);
+    },
+    [clearTailExpansionScrollTimers, onMessagesKeyDown],
+  );
   const ignoreTimelineImageLoad = useCallback(() => {}, []);
   const latestEditableUserMessageId = useMemo(() => {
     const messages = rows.flatMap((row) => (row.kind === "message" ? [row.message] : []));
@@ -773,7 +805,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div>
               <div className="space-y-0.5">
                 {visibleEntries.map((workEntry) => (
-                  <SimpleWorkEntryRow
+                  <CanonicalWorkEntryRow
                     key={`work-row:${workEntry.id}`}
                     workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
@@ -781,6 +813,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     markdownCwd={markdownCwd}
                     onImageExpand={onImageExpand}
+                    onMarkdownContentReflow={onMarkdownContentReflow}
                     onOpenToolDetails={openToolDetails}
                     {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
@@ -1133,6 +1166,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
+          const assistantMarkdownStreaming =
+            Boolean(row.message.streaming) &&
+            activeTurnInProgress &&
+            (activeTurnId == null || row.message.turnId === activeTurnId);
           const settledCollapseTransition = isCollapsedWorkExpanded
             ? undefined
             : settledTurnCollapseTransitions[row.message.id];
@@ -1146,7 +1183,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
                   <div className="space-y-px">
                     {display.visibleRenderableToolEntries.map((workEntry) => (
-                      <SimpleWorkEntryRow
+                      <CanonicalWorkEntryRow
                         key={`${placement}-tool-row:${row.message.id}:${workEntry.id}`}
                         workEntry={workEntry}
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
@@ -1155,6 +1192,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         fileDiffStatByPath={fileDiffStatByPath}
                         markdownCwd={markdownCwd}
                         onImageExpand={onImageExpand}
+                        onMarkdownContentReflow={onMarkdownContentReflow}
                         onOpenTurnDiff={onOpenTurnDiff}
                         onOpenToolDetails={openToolDetails}
                         {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
@@ -1184,7 +1222,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               {!hasCollapsedWork && display.statusEntries.length > 0 && (
                 <div className={cn("space-y-0.5", placement === "leading" ? "mb-2" : "mt-2")}>
                   {display.statusEntries.map((workEntry) => (
-                    <SimpleWorkEntryRow
+                    <CanonicalWorkEntryRow
                       key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
                       workEntry={workEntry}
                       chatMetaFontSizePx={appTypographyScale.chatMetaPx}
@@ -1192,6 +1230,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                       markdownCwd={markdownCwd}
                       onImageExpand={onImageExpand}
+                      onMarkdownContentReflow={onMarkdownContentReflow}
                       onOpenToolDetails={openToolDetails}
                       {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                       {...(onOpenThread ? { onOpenThread } : {})}
@@ -1204,7 +1243,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
           const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) =>
             item.kind === "work" ? (
-              <SimpleWorkEntryRow
+              <CanonicalWorkEntryRow
                 key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
                 workEntry={item.entry}
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
@@ -1212,6 +1251,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
                 markdownCwd={markdownCwd}
                 onImageExpand={onImageExpand}
+                onMarkdownContentReflow={onMarkdownContentReflow}
                 onOpenToolDetails={openToolDetails}
                 {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                 {...(onOpenThread ? { onOpenThread } : {})}
@@ -1221,6 +1261,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <div
                 key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
                 className="text-muted-foreground/80"
+                data-assistant-message-id={item.message.id}
               >
                 <ChatMarkdown
                   text={item.message.text}
@@ -1228,6 +1269,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   isStreaming={false}
                   style={chatTypographyStyle}
                   onImageExpand={onImageExpand}
+                  onContentReflow={onMarkdownContentReflow}
+                  markers={threadMarkersByMessageId.get(item.message.id) ?? EMPTY_MESSAGE_MARKERS}
                 />
               </div>
             );
@@ -1303,9 +1346,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   <ChatMarkdown
                     text={messageText}
                     cwd={markdownCwd}
-                    isStreaming={Boolean(row.message.streaming)}
+                    isStreaming={assistantMarkdownStreaming}
                     style={chatTypographyStyle}
                     onImageExpand={onImageExpand}
+                    onContentReflow={onMarkdownContentReflow}
                     markers={messageMarkers}
                   />
                 </div>
@@ -1606,19 +1650,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         // has to be surfaced through extraData.
         extraData={timelineExtraData}
         initialScrollAtEnd
-        maintainScrollAtEnd={followLiveOutput}
-        maintainScrollAtEndThreshold={0.1}
-        {...(!followLiveOutput ? { maintainVisibleContentPosition: true } : {})}
+        maintainVisibleContentPosition
         onClickCapture={onMessagesClickCapture}
         onMouseUp={onMessagesMouseUp}
-        onPointerCancel={onMessagesPointerCancel}
-        onPointerDown={onMessagesPointerDown}
-        onPointerUp={onMessagesPointerUp}
+        onPointerCancel={handleMessagesPointerCancel}
+        onPointerDown={handleMessagesPointerDown}
+        onPointerUp={handleMessagesPointerUp}
         onScroll={handleListScroll}
-        onTouchEnd={onMessagesTouchEnd}
-        onTouchMove={onMessagesTouchMove}
-        onTouchStart={onMessagesTouchStart}
-        onWheel={onMessagesWheel}
+        onKeyDown={handleMessagesKeyDown}
+        onTouchEnd={handleMessagesTouchEnd}
+        onTouchMove={handleMessagesTouchMove}
+        onTouchStart={handleMessagesTouchStart}
+        onWheel={handleMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
         // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
@@ -2296,737 +2339,6 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   );
 });
 
-function workToneIcon(tone: TimelineWorkEntry["tone"]): {
-  icon: LucideIcon;
-  className: string;
-} {
-  if (tone === "error") {
-    return {
-      icon: CircleAlertIcon,
-      className: "text-muted-foreground/50",
-    };
-  }
-  if (tone === "thinking") {
-    return {
-      icon: BotIcon,
-      className: "text-muted-foreground/40",
-    };
-  }
-  if (tone === "info") {
-    return {
-      icon: CheckIcon,
-      className: "text-muted-foreground/50",
-    };
-  }
-  return {
-    icon: ZapIcon,
-    className: "text-muted-foreground/45",
-  };
-}
-
-/**
- * Try to extract a clean file path from a detail string that may contain JSON.
- * Handles patterns like:
- *   Read {"file_path":"/Users/foo/bar.ts","offset":10}
- *   {"file_path":"/path/to/file.ts"}
- */
-function extractFilePathFromDetail(detail: string): string | null {
-  const plainPathMatch = /^(.+?\.[A-Za-z0-9][A-Za-z0-9._-]*)(?::\d+)?(?::\d+)?$/u.exec(
-    detail.trim(),
-  );
-  if (plainPathMatch?.[1]?.includes("/")) {
-    return plainPathMatch[1].trim();
-  }
-
-  // Try to find a JSON-like object in the detail
-  const jsonStart = detail.indexOf("{");
-  if (jsonStart < 0) return null;
-  const jsonEnd = detail.lastIndexOf("}");
-  if (jsonEnd <= jsonStart) return null;
-  try {
-    const parsed = JSON.parse(detail.slice(jsonStart, jsonEnd + 1));
-    const filePath = parsed.file_path ?? parsed.filePath ?? parsed.path ?? parsed.filename ?? null;
-    if (typeof filePath === "string" && filePath.trim().length > 0) {
-      return filePath.trim();
-    }
-  } catch {
-    // Not valid JSON — try regex fallback
-    const match = /"(?:file_path|filePath|path|filename)"\s*:\s*"([^"]+)"/i.exec(detail);
-    if (match?.[1]) return match[1];
-  }
-  return null;
-}
-
-function workEntryPreview(
-  workEntry: Pick<
-    TimelineWorkEntry,
-    | "detail"
-    | "command"
-    | "rawCommand"
-    | "preview"
-    | "changedFiles"
-    | "requestKind"
-    | "itemType"
-    | "subagents"
-    | "subagentAction"
-  >,
-): string | null {
-  const isFileRelated =
-    workEntry.requestKind === "file-read" ||
-    workEntry.requestKind === "file-change" ||
-    workEntry.itemType === "file_change";
-
-  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
-    const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveReadableCommandDisplay(command).target;
-  }
-
-  if (workEntry.preview) return workEntry.preview;
-
-  // Prefer clean basenames from changedFiles
-  if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
-    const names = workEntry.changedFiles.map((p) => basename(p));
-    if (names.length === 1) return names[0]!;
-    return `${names.length} files`;
-  }
-
-  if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
-    if (workEntry.subagentAction?.summaryText) {
-      return workEntry.subagentAction.summaryText;
-    }
-    const labels = workEntry.subagents!.map((subagent) => {
-      const presentation = subagentPrimaryLabel(subagent);
-      return presentation.nickname ?? presentation.primaryLabel ?? basename(subagent.threadId);
-    });
-    return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
-  }
-
-  if (workEntry.itemType === "collab_agent_tool_call") {
-    return workEntry.detail ?? workEntry.subagentAction?.prompt ?? null;
-  }
-
-  // For detail, try to extract a clean file path first
-  if (workEntry.detail) {
-    const filePath = extractFilePathFromDetail(workEntry.detail);
-    if (filePath) return basename(filePath);
-
-    // For file-related entries, the heading alone is enough — don't show raw JSON
-    if (isFileRelated) return null;
-
-    // For other entries, if the detail looks like raw JSON, skip it
-    const trimmedDetail = workEntry.detail.trim();
-    if (trimmedDetail.startsWith("{") || trimmedDetail.startsWith("[")) return null;
-
-    const readLinesMatch = /^Read\s+(\d+\s+lines?)$/i.exec(trimmedDetail);
-    if (readLinesMatch?.[1]) return readLinesMatch[1];
-
-    // Clean, non-JSON detail — show it
-    return trimmedDetail;
-  }
-
-  return null;
-}
-
-// Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the search icon
-// instead of the generic tool/wrench fallback.
-function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
-  const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
-  return name === "read" || name === "readfile" || name === "viewfile";
-}
-
-// Read-only inspection commands (read/search/find/list) share the search icon so
-// every inspection row looks the same; other shell commands keep the terminal icon.
-function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
-  const command = workEntry.command ?? workEntry.rawCommand;
-  return command && isInspectCommand(command) ? SearchIcon : TerminalIcon;
-}
-
-function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
-  if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
-  if (workEntry.requestKind === "file-read") return SearchIcon;
-  if (workEntry.requestKind === "file-change") return PencilIcon;
-
-  if (workEntry.itemType === "command_execution" || workEntry.command) {
-    return commandWorkEntryIcon(workEntry);
-  }
-  if (workEntry.itemType === "file_change") {
-    return PencilIcon;
-  }
-  if (workEntry.itemType === "web_search") return WebSearchIcon;
-  if (workEntry.itemType === "image_generation") return ZapIcon;
-  if (workEntry.itemType === "image_view") return EyeIcon;
-  if (isFileReadToolEntry(workEntry)) return SearchIcon;
-
-  switch (workEntry.itemType) {
-    case "mcp_tool_call":
-      return SkillCubeIcon;
-    case "dynamic_tool_call":
-      return HammerIcon;
-    case "collab_agent_tool_call":
-      return AgentTaskIcon;
-  }
-
-  return workToneIcon(workEntry.tone).icon;
-}
-
-function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
-  const toolName = workEntry.toolName?.trim().toLowerCase();
-  return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
-}
-
-// Render command, agent-task, and file-change rows at the tighter compact density.
-function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
-  // Commands stay compact even when surfaced with a non-terminal icon (read-only
-  // inspections like `cat` now use the file-read search icon).
-  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
-    return true;
-  }
-  const EntryIcon = workEntryIcon(workEntry);
-  return (
-    EntryIcon === TerminalIcon ||
-    EntryIcon === HammerIcon ||
-    EntryIcon === AgentTaskIcon ||
-    EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon
-  );
-}
-
-function capitalizePhrase(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return value;
-  }
-  return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
-}
-
-function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
-  if (!workEntry.toolTitle) {
-    return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
-  }
-  return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
-}
-
-function normalizeWorkDisplayText(value: string): string {
-  return normalizeCompactToolLabel(value).toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function combineWorkEntryDisplayText(heading: string, preview: string | null): string {
-  if (!preview) {
-    return heading;
-  }
-  return normalizeWorkDisplayText(heading) === normalizeWorkDisplayText(preview)
-    ? heading
-    : `${heading} ${preview}`;
-}
-
-function isFileChangeWorkEntry(workEntry: TimelineWorkEntry): boolean {
-  return isFileChangeWorkLogEntry(workEntry);
-}
-
-function subagentPrimaryLabel(
-  subagent: NonNullable<TimelineWorkEntry["subagents"]>[number],
-): ReturnType<typeof resolveSubagentPresentation> {
-  return resolveSubagentPresentation({
-    nickname: subagent.nickname,
-    role: subagent.role,
-    title: subagent.title,
-    fallbackId: subagent.threadId,
-  });
-}
-
-function subagentSecondaryLabel(
-  subagent: NonNullable<TimelineWorkEntry["subagents"]>[number],
-  primaryLabel: string,
-): string | null {
-  const parts = [subagent.title, formatSubagentModelLabel(subagent.model)]
-    .filter((value): value is string => Boolean(value))
-    .filter((value) => value !== primaryLabel);
-  if (parts.length === 0) {
-    return null;
-  }
-  return parts.join(" • ");
-}
-
-function subagentStatusClasses(
-  statusLabel: string | undefined,
-  rawStatus: string | undefined,
-  isActive: boolean | undefined,
-): string {
-  switch (normalizeSubagentStatusKind(statusLabel ?? rawStatus, isActive)) {
-    case "running":
-      return "border-sky-500/18 bg-sky-500/8 text-sky-200/90";
-    case "completed":
-      return "border-emerald-500/18 bg-emerald-500/8 text-emerald-200/90";
-    case "failed":
-      return "border-rose-500/18 bg-rose-500/8 text-rose-200/90";
-    case "stopped":
-      return "border-amber-500/18 bg-amber-500/8 text-amber-200/90";
-    case "queued":
-      return "border-violet-500/18 bg-violet-500/8 text-violet-200/90";
-    case "idle":
-    default:
-      return "border-border/45 bg-background/85 text-muted-foreground/68";
-  }
-}
-
-function subagentCardSummary(workEntry: TimelineWorkEntry): string {
-  return (
-    workEntry.subagentAction?.summaryText ??
-    workEntryPreview(workEntry) ??
-    toolWorkEntryHeading(workEntry)
-  );
-}
-
-function subagentCardMeta(workEntry: TimelineWorkEntry): string | null {
-  const modelLabel = formatSubagentModelLabel(workEntry.subagentAction?.model);
-  if (modelLabel && workEntry.subagentAction?.prompt) {
-    return `${modelLabel} • ${workEntry.subagentAction.prompt}`;
-  }
-  return modelLabel ?? workEntry.subagentAction?.prompt ?? null;
-}
-
-function commandTooltipContent(command: string, displayText: string) {
-  return (
-    <div className="max-w-96 whitespace-pre-wrap leading-tight">
-      <div className="space-y-2">
-        <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Summary
-          </div>
-          <div>{displayText}</div>
-        </div>
-        <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Raw call
-          </div>
-          <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
-            {command}
-          </code>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
-  workEntry: TimelineWorkEntry;
-  chatMetaFontSizePx: number;
-  textFontSizePx?: number;
-  density?: "default" | "compact";
-  fileDiffStatByPath?: ReadonlyMap<string, { additions: number; deletions: number }>;
-  markdownCwd: string | undefined;
-  onImageExpand: (preview: ExpandedImagePreview) => void;
-  turnId?: TurnId;
-  onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
-  onOpenToolDetails?: (workEntry: TimelineWorkEntry) => void;
-  onOpenAgentActivity?: (activityId: string) => void;
-  onOpenThread?: (threadId: ThreadId) => void;
-  onOpenAutomation?: (automationId: string) => void;
-}) {
-  const {
-    workEntry,
-    chatMetaFontSizePx,
-    textFontSizePx = chatMetaFontSizePx,
-    density = "default",
-    fileDiffStatByPath,
-    markdownCwd,
-    onImageExpand,
-    turnId,
-    onOpenTurnDiff,
-    onOpenToolDetails,
-    onOpenAgentActivity,
-    onOpenThread,
-    onOpenAutomation,
-  } = props;
-  const compact = density === "compact";
-  const EntryIcon = workEntryIcon(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
-  const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
-  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
-  const leftIconKind = isGitHubToolRow ? "github" : isMcpToolRow ? "mcp" : undefined;
-  const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
-  const displayText = combineWorkEntryDisplayText(heading, preview);
-  const displayTextParts = splitWorkEntryActionText(displayText);
-  const showInlineAgentTaskPreview =
-    workEntry.itemType === "collab_agent_tool_call" &&
-    (workEntry.subagents?.length ?? 0) === 0 &&
-    Boolean(preview) &&
-    normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
-  const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText = rawCommand ?? (showInlineAgentTaskPreview ? heading : displayText);
-  const changedFiles = workEntry.changedFiles ?? [];
-  const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
-  const showSubagentRows =
-    workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0;
-  const visibleSubagents = workEntry.subagents?.slice(0, 3) ?? [];
-  const hiddenSubagentCount = Math.max(
-    0,
-    (workEntry.subagents?.length ?? 0) - visibleSubagents.length,
-  );
-  const subagentSummary = subagentCardSummary(workEntry);
-  const subagentMeta = subagentCardMeta(workEntry);
-  const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
-  const openAgentActivity = canOpenAgentActivity
-    ? () => onOpenAgentActivity?.(workEntry.id)
-    : undefined;
-  const canOpenToolDetails = Boolean(onOpenToolDetails) && Boolean(workEntry.toolDetails);
-  // File-read rows open the referenced file in the in-app viewer when the
-  // hosting surface provides an opener (right-dock file pane / editor pane).
-  const opener = useWorkspaceFileOpener();
-
-  // A created-automation row renders as its own card instead of a tool-call line.
-  // Kept after the lone hook above so the early return never changes hook order.
-  const automation = workEntry.automation;
-  if (automation) {
-    return (
-      <div className={cn(compact ? "py-0.5" : "py-1")}>
-        <AutomationCreatedCard
-          name={automation.name}
-          cadenceLabel={automation.cadenceLabel}
-          textFontSizePx={textFontSizePx}
-          metaFontSizePx={chatMetaFontSizePx}
-          {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
-        />
-      </div>
-    );
-  }
-
-  const readFilePath =
-    opener !== null &&
-    !canOpenAgentActivity &&
-    workEntry.detail &&
-    (workEntry.requestKind === "file-read" || isFileReadToolEntry(workEntry))
-      ? extractFilePathFromDetail(workEntry.detail)
-      : null;
-  const canOpenReadFile = readFilePath !== null;
-  const openReadFile = readFilePath
-    ? () => openWorkspaceFileReference(opener, readFilePath)
-    : undefined;
-  const prefetchReadFile =
-    readFilePath && opener?.prefetchFile ? () => opener.prefetchFile?.(readFilePath) : undefined;
-
-  // Use the text font size (matching the UI settings) for tool call rows
-  const rowFontSizePx = textFontSizePx;
-
-  return (
-    <div className={cn(compact ? "py-0.5" : "rounded-lg py-1")}>
-      {showEditedRows ? (
-        <div className="space-y-0.5">
-          {changedFiles.map((changedFilePath) => {
-            const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
-            const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
-            const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
-            const editedRowClassName = cn(
-              "group/file-row flex w-full max-w-full items-center text-left transition-colors duration-150",
-              compact ? "gap-1.5" : "gap-2",
-              canOpenEditedRow ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
-            );
-            const editedRowChildren = (
-              <EditedFileRowContent
-                filePath={changedFilePath}
-                additions={changedFileStat?.additions}
-                deletions={changedFileStat?.deletions}
-                fontSizePx={rowFontSizePx}
-                compact={compact}
-              />
-            );
-            if (canOpenToolDetails && workEntry.toolDetails) {
-              return (
-                <ToolDetailsDisclosure
-                  key={`${workEntry.id}:${changedFilePath}`}
-                  details={workEntry.toolDetails}
-                  compact={compact}
-                  title="View tool details"
-                  summaryClassName={editedRowClassName}
-                  dataFileChangeRow
-                >
-                  {editedRowChildren}
-                </ToolDetailsDisclosure>
-              );
-            }
-            return (
-              <button
-                key={`${workEntry.id}:${changedFilePath}`}
-                type="button"
-                data-file-change-row="true"
-                className={editedRowClassName}
-                title={changedFilePath}
-                disabled={!canOpenEditedRow}
-                onClick={() => {
-                  if (!turnId || !onOpenTurnDiff) {
-                    return;
-                  }
-                  onOpenTurnDiff(turnId, changedFilePath);
-                }}
-              >
-                {editedRowChildren}
-              </button>
-            );
-          })}
-        </div>
-      ) : showSubagentRows ? (
-        <div className="space-y-1.5">
-          <AgentActivityOpenSurface
-            canOpen={canOpenAgentActivity}
-            compact={compact}
-            title={hoverText}
-            onOpen={openAgentActivity}
-          >
-            <span
-              className={cn(
-                "flex shrink-0 items-center justify-center text-muted-foreground/40",
-                compact ? "size-4" : "size-5",
-              )}
-            >
-              <EntryIcon className={compact ? "size-2.5" : "size-3"} />
-            </span>
-            <div className="min-w-0 flex-1 overflow-hidden">
-              <p
-                className={cn(
-                  compact ? "truncate leading-5" : "truncate leading-6",
-                  "font-medium text-foreground/72",
-                )}
-                style={{ fontSize: `${rowFontSizePx}px` }}
-                title={hoverText}
-              >
-                <span>{subagentSummary}</span>
-              </p>
-              {subagentMeta ? (
-                <p
-                  className="truncate leading-4 text-muted-foreground/32"
-                  style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
-                  title={subagentMeta}
-                >
-                  {subagentMeta}
-                </p>
-              ) : null}
-            </div>
-          </AgentActivityOpenSurface>
-          {visibleSubagents.length > 0 || hiddenSubagentCount > 0 ? (
-            <div
-              className={cn(
-                "space-y-[5px] rounded-[14px] border border-border/45 bg-background/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]",
-                compact ? "px-2.5 py-2" : "px-3 py-[9px]",
-              )}
-            >
-              {visibleSubagents.map((subagent) => {
-                const presentation = subagentPrimaryLabel(subagent);
-                const primaryLabel = presentation.primaryLabel;
-                const secondaryLabel = subagentSecondaryLabel(subagent, primaryLabel);
-                const displayStatusLabel =
-                  subagent.statusLabel ??
-                  humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
-                const canOpenThread = Boolean(onOpenThread);
-                return (
-                  <div
-                    key={`${workEntry.id}:${subagent.threadId}`}
-                    className="flex items-start gap-2.5 rounded-xl border border-border/28 bg-background/82 px-[11px] py-2"
-                  >
-                    <span
-                      className={cn(
-                        "mt-1.5 size-1.5 shrink-0 rounded-full",
-                        subagent.isActive ? "bg-sky-300/95" : "bg-muted-foreground/22",
-                      )}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div
-                        className="truncate font-semibold leading-[18px] text-foreground/90"
-                        style={{ fontSize: `${rowFontSizePx}px` }}
-                        title={presentation.fullLabel}
-                      >
-                        <span style={{ color: presentation.accentColor }}>
-                          {presentation.nickname ?? primaryLabel}
-                        </span>
-                        {presentation.role ? (
-                          <span className="ml-1 text-[11px] font-medium text-muted-foreground/48">
-                            ({presentation.role})
-                          </span>
-                        ) : null}
-                      </div>
-                      {secondaryLabel ? (
-                        <div
-                          className="truncate pt-0.5 leading-4 text-muted-foreground/56"
-                          style={{ fontSize: `${Math.max(11, rowFontSizePx - 1)}px` }}
-                          title={secondaryLabel}
-                        >
-                          {secondaryLabel}
-                        </div>
-                      ) : null}
-                      {subagent.latestUpdate ? (
-                        <div
-                          className="flex items-baseline gap-1.5 pt-1 text-muted-foreground/42"
-                          style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
-                          title={subagent.latestUpdate}
-                        >
-                          <span className="shrink-0 uppercase tracking-[0.14em] text-muted-foreground/30">
-                            Latest
-                          </span>
-                          <span className="truncate">{subagent.latestUpdate}</span>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="flex shrink-0 flex-col items-end gap-1">
-                      {displayStatusLabel ? (
-                        <span
-                          className={cn(
-                            "shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-medium tracking-[0.08em]",
-                            subagentStatusClasses(
-                              displayStatusLabel,
-                              subagent.rawStatus,
-                              subagent.isActive,
-                            ),
-                          )}
-                        >
-                          {displayStatusLabel}
-                        </span>
-                      ) : null}
-                      <button
-                        type="button"
-                        className={cn(
-                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/62 transition-colors",
-                          canOpenThread
-                            ? "hover:border-foreground/15 hover:text-foreground/84"
-                            : "cursor-default opacity-50",
-                        )}
-                        disabled={!canOpenThread}
-                        onClick={() =>
-                          onOpenThread?.(
-                            ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId),
-                          )
-                        }
-                      >
-                        Open thread
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-              {hiddenSubagentCount > 0 ? (
-                <div className="pl-4 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/46">
-                  +{hiddenSubagentCount} more
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        (() => {
-          const rowContentChildren = (
-            <>
-              <span
-                className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
-                  compact ? "size-4" : "size-5",
-                )}
-                data-tool-icon={leftIconKind}
-              >
-                <LeftIcon className={compact ? "size-3.5" : "size-4"} />
-              </span>
-              <div
-                className={cn(
-                  "min-w-0 overflow-hidden",
-                  // Single-line tool labels size to their content so the disclosure
-                  // chevron can sit right after the name; the multi-line markdown
-                  // preview still needs the full row width.
-                  showInlineAgentTaskPreview && "flex-1",
-                )}
-              >
-                {showInlineAgentTaskPreview ? (
-                  <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
-                    <p
-                      className="truncate font-medium leading-5 text-muted-foreground/72"
-                      style={{ fontSize: `${rowFontSizePx}px` }}
-                    >
-                      {heading}
-                    </p>
-                    <ChatMarkdown
-                      text={preview ?? ""}
-                      cwd={markdownCwd}
-                      isStreaming={false}
-                      className="leading-relaxed"
-                      style={{
-                        color: "color-mix(in srgb, var(--muted-foreground) 72%, transparent)",
-                        fontSize: `${Math.max(11, rowFontSizePx - 1)}px`,
-                        lineHeight: compact ? "18px" : "19px",
-                      }}
-                      onImageExpand={onImageExpand}
-                    />
-                  </div>
-                ) : (
-                  <p
-                    className={cn(
-                      compact ? "truncate leading-5" : "truncate leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit, and
-                      // brighten the whole row to foreground on hover/focus instead of a fill.
-                      "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
-                    )}
-                    style={{ fontSize: `${rowFontSizePx}px` }}
-                  >
-                    <span data-work-entry-display-text="true">
-                      {displayTextParts ? (
-                        <>
-                          <span
-                            className="font-medium text-muted-foreground/42"
-                            data-work-entry-action-word="true"
-                          >
-                            {displayTextParts.action}
-                          </span>
-                          {displayTextParts.rest}
-                        </>
-                      ) : (
-                        displayText
-                      )}
-                    </span>
-                  </p>
-                )}
-              </div>
-            </>
-          );
-          if (canOpenToolDetails && workEntry.toolDetails) {
-            return (
-              <ToolDetailsDisclosure
-                details={workEntry.toolDetails}
-                compact={compact}
-                title={rawCommand ?? displayText}
-              >
-                {rowContentChildren}
-              </ToolDetailsDisclosure>
-            );
-          }
-
-          const rowContent = (
-            <AgentActivityOpenSurface
-              canOpen={canOpenAgentActivity || canOpenReadFile}
-              compact={compact}
-              title={canOpenReadFile ? (readFilePath ?? hoverText) : hoverText}
-              onOpen={openAgentActivity ?? openReadFile}
-              onHover={prefetchReadFile}
-            >
-              {rowContentChildren}
-            </AgentActivityOpenSurface>
-          );
-
-          if (!rawCommand) {
-            return rowContent;
-          }
-
-          return (
-            <Tooltip>
-              <TooltipTrigger render={rowContent} />
-              <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
-                {commandTooltipContent(rawCommand, displayText)}
-              </TooltipPopup>
-            </Tooltip>
-          );
-        })()
-      )}
-    </div>
-  );
-});
-
 // Inner content for an "Edited <file> +n/-m" row. Mirrors the tool-call row treatment
 // (muted leading icon + label that brightens to foreground on hover/focus, same font
 // size) so edited rows read as the same visual unit. Callers own the interactive wrapper
@@ -3072,134 +2384,5 @@ function EditedFileRowContent(props: {
         </span>
       ) : null}
     </>
-  );
-}
-
-function AgentActivityOpenSurface(props: {
-  canOpen: boolean;
-  children: ReactNode;
-  compact: boolean;
-  /** Warm-up hook fired on hover/focus so opening feels instant. */
-  onHover?: (() => void) | undefined;
-  onOpen?: (() => void) | undefined;
-  title?: string | undefined;
-  dataToolDetailTrigger?: boolean | undefined;
-}) {
-  const className = cn(
-    "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
-    props.compact ? "gap-1.5" : "gap-2",
-    props.canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
-  );
-
-  if (props.canOpen) {
-    return (
-      <button
-        type="button"
-        className={className}
-        title={props.title}
-        onClick={props.onOpen}
-        data-tool-detail-trigger={props.dataToolDetailTrigger ? "true" : undefined}
-        {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
-      >
-        {props.children}
-      </button>
-    );
-  }
-
-  return (
-    <div className={className} title={props.title}>
-      {props.children}
-    </div>
-  );
-}
-
-function ToolDetailsDisclosure(props: {
-  children: ReactNode;
-  compact: boolean;
-  dataFileChangeRow?: boolean | undefined;
-  details: NonNullable<TimelineWorkEntry["toolDetails"]>;
-  summaryClassName?: string | undefined;
-  title?: string | undefined;
-}) {
-  const summaryClassName =
-    props.summaryClassName ??
-    cn(
-      "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
-      props.compact ? "gap-1.5" : "gap-2",
-      "cursor-pointer focus-visible:outline-none",
-    );
-  const [open, setOpen] = useState(false);
-  const [renderDetails, setRenderDetails] = useState(false);
-  const [motionOpen, setMotionOpen] = useState(false);
-  const openFrameRef = useRef<number | null>(null);
-  const cleanupTimeoutRef = useRef<number | null>(null);
-
-  const clearMotionTimers = useCallback(() => {
-    if (openFrameRef.current !== null) {
-      window.cancelAnimationFrame(openFrameRef.current);
-      openFrameRef.current = null;
-    }
-    if (cleanupTimeoutRef.current !== null) {
-      window.clearTimeout(cleanupTimeoutRef.current);
-      cleanupTimeoutRef.current = null;
-    }
-  }, []);
-
-  const setDetailsOpen = useCallback(
-    (nextOpen: boolean) => {
-      clearMotionTimers();
-      setOpen(nextOpen);
-
-      if (nextOpen) {
-        setRenderDetails(true);
-        setMotionOpen(false);
-        openFrameRef.current = window.requestAnimationFrame(() => {
-          openFrameRef.current = null;
-          setMotionOpen(true);
-        });
-        return;
-      }
-
-      setMotionOpen(false);
-      cleanupTimeoutRef.current = window.setTimeout(() => {
-        cleanupTimeoutRef.current = null;
-        setRenderDetails(false);
-      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
-    },
-    [clearMotionTimers],
-  );
-
-  useEffect(() => () => clearMotionTimers(), [clearMotionTimers]);
-
-  return (
-    <div className="group/tool-details min-w-0">
-      <button
-        type="button"
-        className={summaryClassName}
-        title={props.title ?? "View tool details"}
-        aria-expanded={open}
-        data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
-        data-tool-detail-trigger="true"
-        onClick={() => {
-          setDetailsOpen(!open);
-        }}
-      >
-        {props.children}
-        <DisclosureChevron
-          open={open}
-          className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
-        />
-      </button>
-      {renderDetails ? (
-        <DisclosureRegion
-          open={motionOpen}
-          contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
-        >
-          <div data-tool-details-inline="true">
-            <ToolCallDetailsContent details={props.details} />
-          </div>
-        </DisclosureRegion>
-      ) : null}
-    </div>
   );
 }

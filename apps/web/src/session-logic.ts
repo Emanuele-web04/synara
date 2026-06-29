@@ -36,6 +36,22 @@ export {
 export type { CompactChatTimelineEntry, TimelineEntry } from "./session-logic.timeline";
 export { deriveCompactChatTimelineEntries, deriveTimelineEntries } from "./session-logic.timeline";
 
+export type {
+  DeriveTranscriptComposerStateInput,
+  DeriveTranscriptRowsInput,
+  TranscriptComposerBlockerKind,
+  TranscriptComposerState,
+  TranscriptRow,
+  TranscriptRowKind,
+  TranscriptRowSource,
+} from "./session-logic.transcript";
+export {
+  TRANSCRIPT_COMPOSER_BLOCKER_PRIORITY,
+  TRANSCRIPT_STATE_TABLE,
+  deriveTranscriptComposerState,
+  deriveTranscriptRows,
+} from "./session-logic.transcript";
+
 export type ProviderPickerKind = ProviderKind;
 
 export const PROVIDER_OPTIONS: Array<{

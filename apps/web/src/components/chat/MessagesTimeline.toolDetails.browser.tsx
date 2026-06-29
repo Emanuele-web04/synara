@@ -74,7 +74,11 @@ describe("MessagesTimeline tool details", () => {
       );
       expect(trigger).not.toBeNull();
       expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+      const controlledRegionId = trigger?.getAttribute("aria-controls");
+      expect(controlledRegionId).toBeTruthy();
       expect(document.querySelector("[data-tool-details-inline='true']")).toBeNull();
+      trigger?.focus();
+      expect(document.activeElement).toBe(trigger);
 
       window.requestAnimationFrame = (callback: FrameRequestCallback) => {
         pendingFrames.push(callback);
@@ -90,6 +94,12 @@ describe("MessagesTimeline tool details", () => {
       await expect
         .poll(() => document.querySelector("[data-tool-details-inline='true']") !== null)
         .toBe(true);
+      const detailsRegion = document.querySelector<HTMLElement>(
+        "[data-tool-details-inline='true']",
+      );
+      expect(detailsRegion?.id).toBe(controlledRegionId);
+      expect(detailsRegion?.getAttribute("role")).toBe("region");
+      expect(detailsRegion?.getAttribute("aria-label")).toBe("Tool details");
       const openingHiddenRegion = document
         .querySelector("[data-tool-details-inline='true']")
         ?.closest("[aria-hidden='true']");

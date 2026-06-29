@@ -610,6 +610,58 @@ describe("MessagesTimeline", { timeout: 30_000 }, () => {
     expect(markup).toContain("mb-3");
   });
 
+  it("renders persisted file-only user messages as file chips", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-file-only-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-file-only-user"),
+              role: "user",
+              text: "",
+              attachments: [
+                {
+                  id: "file-1",
+                  type: "file",
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  sizeBytes: 42,
+                },
+              ],
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("notes.txt");
+    expect(markup).toContain("42 B");
+    expect(markup).not.toContain("Preview notes.txt");
+  });
+
   it("renders plain user text without preformatted shrink-wrap markup", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

@@ -1192,6 +1192,7 @@ function makeReviewChatThread(input: {
     },
     runtime: null,
     turnDiffSummaries: [],
+    providerItems: [],
     activities: input.liveActivity
       ? [
           {

@@ -7,6 +7,7 @@ import {
   EventId,
   MessageId,
   type OrchestrationEvent,
+  type OrchestrationProviderItem,
   type ProviderKind,
   ThreadId,
   type OrchestrationReadModel,
@@ -52,6 +53,12 @@ import {
   resolveThreadSummaryAfterUserInputResponseRequested,
   withDerivedThreadStateSignals,
 } from "./storeSlices/sidebarSummaries";
+import {
+  buildProviderItemSlice,
+  mergeReadModelProviderItemsWithLiveHotPath,
+  normalizeProviderItems,
+  upsertProviderItem,
+} from "./storeSlices/threadProviderItems";
 
 // ── State ────────────────────────────────────────────────────────────
 
@@ -68,6 +75,8 @@ export interface AppState {
   messageByThreadId?: Record<ThreadId, Record<MessageId, ChatMessage>>;
   activityIdsByThreadId?: Record<ThreadId, string[]>;
   activityByThreadId?: Record<ThreadId, Record<string, Thread["activities"][number]>>;
+  providerItemIdsByThreadId?: Record<ThreadId, string[]>;
+  providerItemByThreadId?: Record<ThreadId, Record<string, OrchestrationProviderItem>>;
   proposedPlanIdsByThreadId?: Record<ThreadId, string[]>;
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
@@ -84,6 +93,10 @@ type ThreadMessageSentEvent = Extract<OrchestrationEvent, { type: "thread.messag
 type ThreadActivityAppendedEvent = Extract<
   OrchestrationEvent,
   { type: "thread.activity-appended" }
+>;
+type ThreadProviderItemUpsertedEvent = Extract<
+  OrchestrationEvent,
+  { type: "thread.provider-item-upserted" }
 >;
 
 const PERSISTED_STATE_KEY = "synara:renderer-state:v8";
@@ -115,6 +128,11 @@ const EMPTY_MESSAGE_IDS_BY_THREAD: Record<ThreadId, MessageId[]> = {};
 const EMPTY_MESSAGE_BY_THREAD: Record<ThreadId, Record<MessageId, ChatMessage>> = {};
 const EMPTY_ACTIVITY_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 const EMPTY_ACTIVITY_BY_THREAD: Record<ThreadId, Record<string, Thread["activities"][number]>> = {};
+const EMPTY_PROVIDER_ITEM_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
+const EMPTY_PROVIDER_ITEM_BY_THREAD: Record<
+  ThreadId,
+  Record<string, OrchestrationProviderItem>
+> = {};
 const EMPTY_PROPOSED_PLAN_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 const EMPTY_PROPOSED_PLAN_BY_THREAD: Record<
   ThreadId,
@@ -1231,6 +1249,26 @@ function mergeReadModelLatestTurnWithLiveHotPath(
   };
 }
 
+function shouldPreserveLiveProviderItems(
+  previousThread: Thread | undefined,
+  incoming: ReadModelThread,
+): boolean {
+  const previousTurnId = previousThread?.latestTurn?.turnId;
+  if (!previousTurnId) {
+    return false;
+  }
+  const hasLiveProviderItem = previousThread.providerItems.some(
+    (item) => item.turnId === previousTurnId && item.status === "inProgress",
+  );
+  if (!hasLiveProviderItem) {
+    return false;
+  }
+  if (incoming.latestTurn === null) {
+    return true;
+  }
+  return incoming.latestTurn.turnId === previousTurnId && incoming.latestTurn.completedAt === null;
+}
+
 function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
@@ -1241,6 +1279,14 @@ function mergeReadModelThreadDetailWithLiveHotPath(
 
   const preserveRunningTurn = shouldPreserveRunningTurn(previousThread, incoming);
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
+  const providerItems = mergeReadModelProviderItemsWithLiveHotPath(
+    incoming.providerItems,
+    previousThread,
+    {
+      preserveRunningTurn:
+        preserveRunningTurn || shouldPreserveLiveProviderItems(previousThread, incoming),
+    },
+  );
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
   });
@@ -1249,6 +1295,7 @@ function mergeReadModelThreadDetailWithLiveHotPath(
   });
   if (
     messages === incoming.messages &&
+    providerItems === incoming.providerItems &&
     session === incoming.session &&
     latestTurn === incoming.latestTurn
   ) {
@@ -1257,6 +1304,7 @@ function mergeReadModelThreadDetailWithLiveHotPath(
   return {
     ...incoming,
     messages,
+    providerItems,
     session,
     latestTurn,
   };
@@ -1621,6 +1669,7 @@ function normalizeThreadFromReadModel(
   const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
   const session = normalizeThreadSession(incoming.session, previous?.session);
   const messages = normalizeChatMessages(incoming.messages, previous?.messages);
+  const providerItems = normalizeProviderItems(incoming.providerItems, previous?.providerItems);
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
@@ -1707,6 +1756,7 @@ function normalizeThreadFromReadModel(
     previous.interactionMode === incoming.interactionMode &&
     previous.session === session &&
     previous.messages === messages &&
+    previous.providerItems === providerItems &&
     previous.proposedPlans === proposedPlans &&
     previous.error === error &&
     previous.createdAt === incoming.createdAt &&
@@ -1756,6 +1806,7 @@ function normalizeThreadFromReadModel(
     interactionMode: incoming.interactionMode,
     session,
     messages,
+    providerItems,
     proposedPlans,
     error,
     createdAt: incoming.createdAt,
@@ -2214,6 +2265,25 @@ function writeThreadState(state: AppState, nextThread: Thread, previousThread?: 
     };
   }
 
+  if (
+    previousThread?.providerItems !== nextThread.providerItems ||
+    (nextState.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD)[nextThread.id] ===
+      undefined
+  ) {
+    const nextProviderItemSlice = buildProviderItemSlice(nextThread);
+    nextState = {
+      ...nextState,
+      providerItemIdsByThreadId: {
+        ...(nextState.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD),
+        [nextThread.id]: nextProviderItemSlice.ids,
+      },
+      providerItemByThreadId: {
+        ...(nextState.providerItemByThreadId ?? EMPTY_PROVIDER_ITEM_BY_THREAD),
+        [nextThread.id]: nextProviderItemSlice.byId,
+      },
+    };
+  }
+
   if (previousThread?.proposedPlans !== nextThread.proposedPlans) {
     const nextProposedPlanSlice = buildProposedPlanSlice(nextThread);
     nextState = {
@@ -2262,6 +2332,10 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     state.activityIdsByThreadId ?? EMPTY_ACTIVITY_IDS_BY_THREAD;
   const { [threadId]: _removedActivities, ...activityByThreadId } =
     state.activityByThreadId ?? EMPTY_ACTIVITY_BY_THREAD;
+  const { [threadId]: _removedProviderItemIds, ...providerItemIdsByThreadId } =
+    state.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD;
+  const { [threadId]: _removedProviderItems, ...providerItemByThreadId } =
+    state.providerItemByThreadId ?? EMPTY_PROVIDER_ITEM_BY_THREAD;
   const { [threadId]: _removedPlanIds, ...proposedPlanIdsByThreadId } =
     state.proposedPlanIdsByThreadId ?? EMPTY_PROPOSED_PLAN_IDS_BY_THREAD;
   const { [threadId]: _removedPlans, ...proposedPlanByThreadId } =
@@ -2293,6 +2367,8 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
     messageByThreadId,
     activityIdsByThreadId,
     activityByThreadId,
+    providerItemIdsByThreadId,
+    providerItemByThreadId,
     proposedPlanIdsByThreadId,
     proposedPlanByThreadId,
     turnDiffIdsByThreadId,
@@ -2911,6 +2987,25 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
   };
 }
 
+function applyThreadProviderItemUpsertedEvent(
+  thread: Thread,
+  event: ThreadProviderItemUpsertedEvent,
+): Thread {
+  const providerItems = upsertProviderItem(thread.providerItems, event.payload.providerItem);
+  const updatedAt =
+    thread.updatedAt && thread.updatedAt > event.payload.providerItem.updatedAt
+      ? thread.updatedAt
+      : event.payload.providerItem.updatedAt;
+  if (providerItems === thread.providerItems && updatedAt === thread.updatedAt) {
+    return thread;
+  }
+  return {
+    ...thread,
+    providerItems,
+    updatedAt,
+  };
+}
+
 function applyOrchestrationEvent(
   state: AppState,
   event: OrchestrationEvent,
@@ -3302,6 +3397,18 @@ function applyOrchestrationEvent(
         },
       );
 
+    case "thread.provider-item-upserted":
+      return applyThreadUpdate(
+        state,
+        event.payload.threadId,
+        (thread) => applyThreadProviderItemUpsertedEvent(thread, event),
+        {
+          ...options,
+          recomputeSummarySignals: false,
+          updateSidebarSummary: false,
+        },
+      );
+
     case "thread.session-set":
       return applyThreadUpdate(
         state,
@@ -3607,6 +3714,9 @@ function applyOrchestrationEvent(
             retainedTurnIds,
           );
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
+          const providerItems = thread.providerItems.filter(
+            (item) => item.turnId === null || retainedTurnIds.has(item.turnId),
+          );
           const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
 
           return {
@@ -3614,6 +3724,7 @@ function applyOrchestrationEvent(
             turnDiffSummaries,
             messages,
             proposedPlans,
+            providerItems,
             activities,
             pendingSourceProposedPlan: undefined,
             latestTurn:
@@ -3672,6 +3783,9 @@ function applyOrchestrationEvent(
           const activities = thread.activities.filter(
             (activity) => activity.turnId === null || !removedTurnIds.has(activity.turnId),
           );
+          const providerItems = thread.providerItems.filter(
+            (item) => item.turnId === null || !removedTurnIds.has(item.turnId),
+          );
           const latestCheckpoint = turnDiffSummaries.at(-1) ?? null;
 
           return {
@@ -3680,6 +3794,7 @@ function applyOrchestrationEvent(
             messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
             proposedPlans,
             activities,
+            providerItems,
             pendingSourceProposedPlan: undefined,
             latestTurn:
               latestCheckpoint === null
@@ -3793,6 +3908,11 @@ export function syncServerShellSnapshot(
     messageByThreadId: retainThreadScopedRecord(state.messageByThreadId, nextThreadIds),
     activityIdsByThreadId: retainThreadScopedRecord(state.activityIdsByThreadId, nextThreadIds),
     activityByThreadId: retainThreadScopedRecord(state.activityByThreadId, nextThreadIds),
+    providerItemIdsByThreadId: retainThreadScopedRecord(
+      state.providerItemIdsByThreadId,
+      nextThreadIds,
+    ),
+    providerItemByThreadId: retainThreadScopedRecord(state.providerItemByThreadId, nextThreadIds),
     proposedPlanIdsByThreadId: retainThreadScopedRecord(
       state.proposedPlanIdsByThreadId,
       nextThreadIds,

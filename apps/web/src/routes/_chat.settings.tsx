@@ -42,6 +42,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
   DEFAULT_UI_DENSITY,
+  type ReviewWalkthroughDiffStyle,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
@@ -189,6 +190,19 @@ const UI_DENSITY_OPTIONS = [
   label: string;
   description: string;
 }>;
+
+const REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "unified", label: "Unified" },
+  { value: "split", label: "Split" },
+] as const satisfies ReadonlyArray<{
+  value: ReviewWalkthroughDiffStyle;
+  label: string;
+}>;
+
+function isReviewWalkthroughDiffStyle(value: string): value is ReviewWalkthroughDiffStyle {
+  return value === "auto" || value === "unified" || value === "split";
+}
 
 const THEME_OPTIONS = [
   {
@@ -2102,6 +2116,34 @@ function SettingsRouteView() {
           resetLabel: "diff line wrapping",
           ariaLabel: "Wrap diff lines by default",
         })}
+
+        <SettingsRow
+          title="Walkthrough diff view"
+          description="Choose the default diff layout for PR walkthrough chapters."
+          resetAction={
+            settings.reviewWalkthroughDiffStyle !== defaults.reviewWalkthroughDiffStyle ? (
+              <SettingResetButton
+                label="walkthrough diff view"
+                onClick={() =>
+                  updateSettings({
+                    reviewWalkthroughDiffStyle: defaults.reviewWalkthroughDiffStyle,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.reviewWalkthroughDiffStyle}
+              onValueChange={(value) => {
+                if (!isReviewWalkthroughDiffStyle(value)) return;
+                updateSettings({ reviewWalkthroughDiffStyle: value });
+              }}
+              ariaLabel="Walkthrough diff view preference"
+              options={REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">

@@ -731,8 +731,44 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown ol,
 .chat-markdown blockquote,
 .chat-markdown pre,
-.chat-markdown table {
+.chat-markdown .chat-markdown-table-scroll {
   margin: 0.65rem 0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 0.85rem 0 0.35rem;
+  color: var(--foreground);
+  font-weight: 590;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.chat-markdown h1 {
+  font-size: 1.18em;
+}
+
+.chat-markdown h2 {
+  font-size: 1.1em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.04em;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 1em;
+}
+
+.chat-markdown h5,
+.chat-markdown h6 {
+  color: color-mix(in srgb, var(--foreground) 82%, var(--muted-foreground));
 }
 
 .chat-markdown ul {
@@ -871,9 +907,11 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown blockquote {
-  border-left: 2px solid var(--border);
-  padding-left: 0.8rem;
-  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+  padding: 0.45rem 0.65rem;
+  color: color-mix(in srgb, var(--foreground) 88%, var(--muted-foreground));
 }
 
 .chat-markdown :not(pre) > code {
@@ -934,17 +972,22 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-codeblock {
   margin: 0.65rem 0;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  border-radius: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 0.5rem;
   background: var(--app-chat-code-surface);
 }
 
 .chat-markdown .chat-markdown-codeblock__header {
-  display: flex;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.1rem 0.4rem 0.1rem 0.6rem;
+  padding: 0.2rem 0.4rem 0.2rem 0.55rem;
 }
 
 .chat-markdown .chat-markdown-codeblock__lang {
@@ -964,7 +1007,7 @@ label:has(> select#reasoning-effort) select {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.325rem;
   font-size: 0.72rem;
   line-height: 1.4;
   user-select: none;
@@ -978,10 +1021,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-codeblock__file-name {
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-chat-code-family);
   font-weight: 500;
   color: var(--foreground);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1006,16 +1051,29 @@ label:has(> select#reasoning-effort) select {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 0.125rem;
+  gap: 0.0625rem;
 }
 
 .chat-markdown .chat-markdown-codeblock__action {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.25rem;
   color: var(--muted-foreground);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
 }
 
 .chat-markdown .chat-markdown-codeblock__action:hover,
 .chat-markdown .chat-markdown-codeblock__action[data-active="true"] {
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
   color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-markdown-codeblock__action {
+    transition: none;
+  }
 }
 
 .chat-markdown .chat-markdown-codeblock__body pre {
@@ -2299,16 +2357,35 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
+.chat-markdown .chat-markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
 .chat-markdown table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
+  font-size: 0.8125em;
+  line-height: 1.45;
 }
 
 .chat-markdown th,
 .chat-markdown td {
   border: 1px solid var(--border);
-  padding: 0.35rem 0.45rem;
+  padding: 0.25rem 0.5rem;
   text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */

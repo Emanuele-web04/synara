@@ -130,5 +130,6 @@ function makeThread(overrides: Partial<Thread>): Thread {
     turnDiffSummaries: [],
     activities: [],
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }

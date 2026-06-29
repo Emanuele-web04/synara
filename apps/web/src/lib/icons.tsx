@@ -221,6 +221,7 @@ export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
 export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
+export const SquarePenIcon: LucideIcon = centralIconWrapper("compose-pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
 // Solid pin from the fill set — used wherever a pin reflects "pinned" status
 // (project + thread rows and their hover cards) rather than a neutral action.

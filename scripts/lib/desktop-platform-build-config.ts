@@ -19,6 +19,8 @@ export interface DesktopPlatformBuildConfig {
 }
 
 export interface CreateDesktopPlatformBuildConfigInput {
+  readonly macNotarize?: boolean;
+  readonly macSigned?: boolean;
   readonly platform: "linux" | "mac" | "win";
   readonly target: string;
   readonly windowsAzureSignOptions?: Record<string, string>;
@@ -55,9 +57,14 @@ export function createDesktopPlatformBuildConfig(
       target: input.target === "dmg" ? [input.target, "zip"] : [input.target],
       icon: MAC_DMG_ICON_PATH,
       category: "public.app-category.developer-tools",
-      hardenedRuntime: true,
-      entitlements: MAC_ENTITLEMENTS_PATH,
-      entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+      ...(input.macSigned === true
+        ? {
+            hardenedRuntime: true,
+            entitlements: MAC_ENTITLEMENTS_PATH,
+            entitlementsInherit: MAC_INHERITED_ENTITLEMENTS_PATH,
+            ...(input.macNotarize === true ? { notarize: true } : {}),
+          }
+        : { identity: null }),
       extendInfo: {
         NSMicrophoneUsageDescription: MICROPHONE_USAGE_DESCRIPTION,
       },

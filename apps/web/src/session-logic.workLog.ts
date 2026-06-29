@@ -6,6 +6,7 @@
 import {
   type OrchestrationThreadActivity,
   type RuntimeContentStreamKind,
+  type RuntimeItemStatus,
   type ToolLifecycleItemType,
   type TurnId,
 } from "@t3tools/contracts";
@@ -43,6 +44,7 @@ export interface WorkLogEntry {
   streamKind?: RuntimeContentStreamKind;
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
+  status?: RuntimeItemStatus;
   toolTitle?: string;
   toolName?: string;
   toolCallId?: string;
@@ -179,7 +181,6 @@ export function deriveWorkLogEntries(
       activityKind: _activityKind,
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
-      toolName: _toolName,
       ...entry
     }) => entry,
   );
@@ -253,6 +254,27 @@ function extractWorkLogAutomation(
   return { id, name, cadenceLabel };
 }
 
+function deriveWorkLogStatus(activity: OrchestrationThreadActivity): RuntimeItemStatus | undefined {
+  switch (activity.kind) {
+    case "tool.started":
+    case "tool.updated":
+    case "tool.output.delta":
+    case "reasoning.delta":
+    case "reasoning.progress":
+    case "plan.delta":
+    case "provider.content.delta":
+      return "inProgress";
+    case "tool.completed":
+      return activity.tone === "error" ? "failed" : "completed";
+    case "turn.aborted":
+      return "declined";
+    case "runtime.warning":
+      return "failed";
+    default:
+      return undefined;
+  }
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload = asRecord(activity.payload);
   const commandAction = extractPrimaryCommandAction(payload);
@@ -278,6 +300,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     ...(toolCallId ? { toolCallId } : {}),
     ...(streamKind ? { streamKind } : {}),
   };
+  const status = deriveWorkLogStatus(activity);
+  if (status) {
+    entry.status = status;
+  }
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const outputDetail = extractToolPayloadOutput(payload);
@@ -314,6 +340,14 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (activity.kind === "mcp.status.updated") {
     const provider = asTrimmedString(payload?.provider);
     entry.collapseKey = provider ? `mcp-status:${provider}` : "mcp-status";
+  }
+  if (activity.kind === "runtime.warning") {
+    const message = asTrimmedString(payload?.message);
+    if (message) {
+      entry.detail = message;
+      entry.preview = message;
+      entry.collapseKey = `runtime-warning:${activity.turnId ?? "turnless"}:${message}`;
+    }
   }
   if (outputDetail && (!entry.detail || itemType === "collab_agent_tool_call")) {
     entry.detail = outputDetail.detail;
@@ -494,7 +528,8 @@ function shouldCollapseToolLifecycleEntries(
 ): boolean {
   if (
     (previous.activityKind === "mcp.status.updated" ||
-      previous.activityKind === "provider.unhandled") &&
+      previous.activityKind === "provider.unhandled" ||
+      previous.activityKind === "runtime.warning") &&
     previous.activityKind === next.activityKind &&
     previous.collapseKey !== undefined &&
     previous.collapseKey === next.collapseKey
@@ -530,6 +565,15 @@ function shouldCollapseToolLifecycleEntries(
   );
 }
 
+function countCollapsedRuntimeWarnings(entry: DerivedWorkLogEntry): number {
+  const match = /^(\d+) notices - /.exec(entry.detail ?? "");
+  if (!match) {
+    return 1;
+  }
+  const count = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(count) && count > 0 ? count : 1;
+}
+
 function mergeDerivedWorkLogEntries(
   previous: DerivedWorkLogEntry,
   next: DerivedWorkLogEntry,
@@ -544,6 +588,10 @@ function mergeDerivedWorkLogEntries(
   const preview = appendsStreamDetail
     ? streamDetailPreview(detail)
     : (next.preview ?? previous.preview);
+  const noticeDetail =
+    next.activityKind === "runtime.warning" && previous.collapseKey === next.collapseKey && detail
+      ? `${countCollapsedRuntimeWarnings(previous) + 1} notices - ${detail}`
+      : null;
   const toolTitle = mergeToolTitle(previous.toolTitle, next.toolTitle);
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
@@ -554,13 +602,14 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolDetails = mergeWorkLogToolDetails(previous.toolDetails, next.toolDetails);
   const streamKind = next.streamKind ?? previous.streamKind;
+  const status = next.status ?? previous.status;
   return {
     ...previous,
     ...next,
-    ...(detail ? { detail } : {}),
+    ...(noticeDetail ? { detail: noticeDetail } : detail ? { detail } : {}),
     ...(command ? { command } : {}),
     ...(rawCommand ? { rawCommand } : {}),
-    ...(preview ? { preview } : {}),
+    ...(noticeDetail ? { preview: noticeDetail } : preview ? { preview } : {}),
     ...(changedFiles.length > 0 ? { changedFiles } : {}),
     ...(toolTitle ? { toolTitle } : {}),
     ...(itemType ? { itemType } : {}),
@@ -572,6 +621,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolDetails ? { toolDetails } : {}),
     ...(streamKind ? { streamKind } : {}),
+    ...(status ? { status } : {}),
   };
 }
 

@@ -143,6 +143,7 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
           updatedAt: NOW_ISO,
         },
         ...overrides,
+        providerItems: overrides?.providerItems ?? [],
       },
     ],
     updatedAt: NOW_ISO,

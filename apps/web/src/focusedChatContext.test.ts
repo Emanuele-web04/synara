@@ -55,6 +55,7 @@ function makeThread(threadId: ThreadId, overrides: Partial<Thread> = {}): Thread
     turnDiffSummaries: [],
     activities: [],
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 

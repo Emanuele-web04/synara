@@ -14,6 +14,7 @@ const APPROVAL_PRIMARY_BUTTON_CLASS_NAME =
 interface ComposerPendingApprovalActionsProps {
   requestId: ApprovalRequestId;
   isResponding: boolean;
+  describedById?: string | undefined;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
@@ -23,6 +24,7 @@ interface ComposerPendingApprovalActionsProps {
 export const ComposerPendingApprovalActions = memo(function ComposerPendingApprovalActions({
   requestId,
   isResponding,
+  describedById,
   onRespondToApproval,
 }: ComposerPendingApprovalActionsProps) {
   return (
@@ -31,6 +33,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         size="sm"
         variant="ghost"
         disabled={isResponding}
+        aria-describedby={describedById}
         onClick={() => void onRespondToApproval(requestId, "cancel")}
       >
         Cancel turn
@@ -40,6 +43,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         variant="destructive-outline"
         className={APPROVAL_DECLINE_BUTTON_CLASS_NAME}
         disabled={isResponding}
+        aria-describedby={describedById}
         onClick={() => void onRespondToApproval(requestId, "decline")}
       >
         Decline
@@ -49,6 +53,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         variant="outline"
         className={APPROVAL_SECONDARY_BUTTON_CLASS_NAME}
         disabled={isResponding}
+        aria-describedby={describedById}
         onClick={() => void onRespondToApproval(requestId, "acceptForSession")}
       >
         Always allow this session
@@ -58,6 +63,7 @@ export const ComposerPendingApprovalActions = memo(function ComposerPendingAppro
         variant="default"
         className={APPROVAL_PRIMARY_BUTTON_CLASS_NAME}
         disabled={isResponding}
+        aria-describedby={describedById}
         onClick={() => void onRespondToApproval(requestId, "accept")}
       >
         Approve once

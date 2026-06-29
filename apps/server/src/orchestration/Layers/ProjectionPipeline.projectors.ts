@@ -1,4 +1,4 @@
-// Purpose: Composes the eleven orchestration projector `apply` closures from the
+// Purpose: Composes the orchestration projector `apply` closures from the
 //   thread, turn, and misc sub-factories into one record.
 // Layer: dependency-parameterized projector composition; built once per pipeline via makeProjectionProjectors(deps).
 // Exports: ProjectionProjectorDeps, ProjectionProjectors, makeProjectionProjectors.
@@ -8,6 +8,7 @@ import { ProjectionProjectRepository } from "../../persistence/Services/Projecti
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepository } from "../../persistence/Services/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepository } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadProviderItemRepository } from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -21,6 +22,7 @@ export interface ProjectionProjectorDeps {
   readonly projectionThreadRepository: typeof ProjectionThreadRepository.Service;
   readonly projectionThreadMessageRepository: typeof ProjectionThreadMessageRepository.Service;
   readonly projectionThreadProposedPlanRepository: typeof ProjectionThreadProposedPlanRepository.Service;
+  readonly projectionThreadProviderItemRepository: typeof ProjectionThreadProviderItemRepository.Service;
   readonly projectionThreadActivityRepository: typeof ProjectionThreadActivityRepository.Service;
   readonly projectionThreadSessionRepository: typeof ProjectionThreadSessionRepository.Service;
   readonly projectionThreadRuntimeRepository: typeof ProjectionThreadRuntimeRepository.Service;
@@ -41,6 +43,7 @@ export const makeProjectionProjectors = (deps: ProjectionProjectorDeps) => {
     applyThreadShellSummariesProjection: threadProjectors.applyThreadShellSummariesProjection,
     applyThreadMessagesProjection: threadProjectors.applyThreadMessagesProjection,
     applyThreadProposedPlansProjection: threadProjectors.applyThreadProposedPlansProjection,
+    applyThreadProviderItemsProjection: threadProjectors.applyThreadProviderItemsProjection,
     applyThreadActivitiesProjection: threadProjectors.applyThreadActivitiesProjection,
     applyThreadSessionsProjection: threadProjectors.applyThreadSessionsProjection,
     applyThreadTurnsProjection: turnProjectors.applyThreadTurnsProjection,

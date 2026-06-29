@@ -278,6 +278,16 @@ export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): 
   );
 }
 
+export function summarizeRenderablePatchStats(
+  renderablePatch: RenderablePatch | null,
+): { additions: number; deletions: number; fileCount: number } | null {
+  if (renderablePatch?.kind !== "files") return null;
+  return {
+    ...summarizeFileDiffStats(renderablePatch.files),
+    fileCount: renderablePatch.files.length,
+  };
+}
+
 export function summarizePatchStats(
   patch: string | undefined,
 ): { additions: number; deletions: number } | null {
@@ -290,6 +300,5 @@ export function summarizePatchTotals(
   patch: string | undefined,
 ): { additions: number; deletions: number; fileCount: number } | null {
   const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  if (renderable?.kind !== "files") return null;
-  return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
+  return summarizeRenderablePatchStats(renderable);
 }

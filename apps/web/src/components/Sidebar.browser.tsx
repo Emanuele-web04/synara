@@ -109,6 +109,7 @@ function baseThread(
       updatedAt: NOW_ISO,
     },
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 

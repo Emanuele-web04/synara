@@ -15,6 +15,7 @@ import type {
   ThreadMarker,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
+  OrchestrationProviderItem,
   ThreadHandoff,
   ProjectScript as ContractProjectScript,
   ThreadId,
@@ -189,6 +190,7 @@ export interface Thread extends ThreadWorkspaceState {
   session: ThreadSession | null;
   messages: ChatMessage[];
   proposedPlans: ProposedPlan[];
+  providerItems: OrchestrationProviderItem[];
   error: string | null;
   createdAt: string;
   archivedAt?: string | null;

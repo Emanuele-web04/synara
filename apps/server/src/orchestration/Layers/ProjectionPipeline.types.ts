@@ -10,6 +10,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadShellSummaries: "projection.thread-shell-summaries",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
+  threadProviderItems: "projection.thread-provider-items",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadTurns: "projection.thread-turns",
