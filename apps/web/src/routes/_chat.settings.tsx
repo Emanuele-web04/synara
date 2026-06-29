@@ -2188,7 +2188,7 @@ function SettingsRouteView() {
                       </div>
 
                       <div className="space-y-1">
-                        <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                        <div className="text-[11px] font-medium text-muted-foreground">
                           Conversations
                         </div>
                         {worktree.linkedThreads.length > 0 ? (

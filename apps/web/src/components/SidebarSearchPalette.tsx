@@ -619,9 +619,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Provider
-                </p>
+                <p className="text-xs font-medium text-muted-foreground">Provider</p>
                 <div className="flex gap-2">
                   {props.importProviders.map((provider) => (
                     <Button
@@ -654,9 +652,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 ) : null}
               </div>
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {importFieldLabel}
-                </p>
+                <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
                 <Input
                   autoFocus
                   nativeInput

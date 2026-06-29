@@ -45,6 +45,14 @@ import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness"
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import {
+  LSREGISTER_PATH,
+  parseLastLaunchVersion,
+  resolveLaunchVersionRecordPath,
+  resolveMacAppBundlePath,
+  serializeLaunchVersionRecord,
+  shouldRefreshIconCache,
+} from "./macIconCacheRefresh";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
@@ -1297,6 +1305,79 @@ function applyLegacyMacDockIcon(): void {
     return;
   }
   app.dock.setIcon(image);
+}
+
+function readLaunchVersionRecordContents(): string | null {
+  try {
+    return FS.readFileSync(resolveLaunchVersionRecordPath(app.getPath("userData")), "utf8");
+  } catch {
+    // No prior record (fresh profile) or an unreadable file.
+    return null;
+  }
+}
+
+function persistLastLaunchVersion(version: string): void {
+  const recordPath = resolveLaunchVersionRecordPath(app.getPath("userData"));
+  try {
+    // The userData directory is not guaranteed to exist this early on a clean
+    // first launch, so ensure it before writing or the record silently fails to
+    // persist and the refresh re-runs on every launch.
+    FS.mkdirSync(Path.dirname(recordPath), { recursive: true });
+    FS.writeFileSync(recordPath, serializeLaunchVersionRecord(version));
+  } catch (error) {
+    console.warn("[desktop] Failed to persist last launch version", error);
+  }
+}
+
+// macOS keeps an aggressive Launch Services / IconServices cache keyed by bundle
+// path + identifier. electron-updater swaps the bundle in place, so after an
+// update the refreshed icon.icns is already on disk while the dock and Finder
+// keep painting the previous icon — most visibly on Tahoe, where we no longer
+// apply a runtime dock icon (see applyLegacyMacDockIcon). When the version
+// changes across launches, force Launch Services to re-read the bundle so the
+// new icon shows on every surface. Best-effort: never blocks startup.
+function refreshMacIconCacheOnVersionChange(): void {
+  if (process.platform !== "darwin" || !app.isPackaged) {
+    return;
+  }
+
+  const currentVersion = app.getVersion();
+  const previousVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+  if (!shouldRefreshIconCache(previousVersion, currentVersion)) {
+    return;
+  }
+
+  // Record the new version before refreshing so a failed re-registration is not
+  // retried on every launch; the icon then heals on the next version bump
+  // instead of spawning lsregister each time.
+  persistLastLaunchVersion(currentVersion);
+
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath || !FS.existsSync(LSREGISTER_PATH)) {
+    return;
+  }
+
+  // Bump the bundle mtime so Launch Services notices the swap, then re-register
+  // it. The codesign signature covers Contents, not the bundle directory mtime,
+  // so this is signature-safe; the bundle may be read-only for this user, in
+  // which case the re-registration below still nudges the cache.
+  try {
+    const now = new Date();
+    FS.utimesSync(bundlePath, now, now);
+  } catch {
+    // Read-only bundle: fall through to lsregister.
+  }
+
+  const child = ChildProcess.spawn(LSREGISTER_PATH, ["-f", bundlePath], { stdio: "ignore" });
+  child.unref();
+  child.once("error", (error) => {
+    console.warn("[desktop] Failed to refresh macOS icon cache after update", error);
+  });
+  child.once("exit", (code) => {
+    console.info(
+      `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
+    );
+  });
 }
 
 function clearUpdatePollTimer(): void {
@@ -2671,6 +2752,7 @@ if (hasSingleInstanceLock) {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
       applyLegacyMacDockIcon();
+      refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();

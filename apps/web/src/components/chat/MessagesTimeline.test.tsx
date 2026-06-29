@@ -1,8 +1,15 @@
+// FILE: MessagesTimeline.test.tsx
+// Purpose: Covers transcript row rendering and SSR-safe presentation contracts.
+// Layer: Web chat component tests
+// Depends on: renderToStaticMarkup and a mocked LegendList.
+
 import { MessageId, TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+
+const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -1676,13 +1683,13 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('data-tool-detail-trigger="true"');
-    expect(markup).toContain('title="View tool details"');
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain('data-tool-details-inline="true"');
     expect(markup).not.toContain("Diff");
     expect(markup).not.toContain("Details");
   });
 
-  it("renders command rows with a readable summary and keeps the full command on hover", async () => {
+  it("renders command rows with a readable summary and styled hover tooltip trigger", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1726,8 +1733,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Searched");
     expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
-    expect(markup).toContain(
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
@@ -1923,7 +1930,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Listed");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("apps/web/src");
+    expect(markup).toContain("web/src");
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain(">Listed web<");
   });
 

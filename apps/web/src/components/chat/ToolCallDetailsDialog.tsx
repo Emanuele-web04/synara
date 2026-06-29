@@ -20,8 +20,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 
-const DETAIL_HEADER_CLASS_NAME =
-  "border-b border-border/45 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em]";
+const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
 const DETAIL_CODE_BLOCK_CLASS_NAME =
   "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-[11px] leading-relaxed text-foreground/88";
 const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
@@ -167,9 +166,7 @@ function MarkdownToolCodeBlock(props: { language: string; children: string }) {
 function ToolDetailSection(props: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/56">
-        {props.title}
-      </h3>
+      <h3 className="text-[11px] font-medium text-muted-foreground/56">{props.title}</h3>
       {props.children}
     </section>
   );

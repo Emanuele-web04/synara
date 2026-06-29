@@ -25,6 +25,7 @@ import {
   type ComponentProps,
   type KeyboardEvent,
   type RefObject,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
@@ -2614,21 +2615,49 @@ function commandTooltipContent(command: string, displayText: string) {
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
       <div className="space-y-2">
         <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Summary
-          </div>
+          <div className="text-muted-foreground/70">Summary</div>
           <div>{displayText}</div>
         </div>
         <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Raw call
-          </div>
+          <div className="text-muted-foreground/70">Raw call</div>
           <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
             {command}
           </code>
         </div>
       </div>
     </div>
+  );
+}
+
+// Hover content for a tool-call row: the rich command card when a raw command is
+// present, otherwise the plain label (used to reveal truncated text / file paths).
+// Returns null when there's nothing worth showing so the row renders untouched.
+function toolRowTooltipContent(
+  rawCommand: string | null | undefined,
+  displayText: string,
+  fallback: string | undefined,
+): ReactNode {
+  if (rawCommand) {
+    return commandTooltipContent(rawCommand, displayText);
+  }
+  return fallback ? <span className="whitespace-pre-wrap">{fallback}</span> : null;
+}
+
+// Frosted hover tooltip for tool-call rows — the same surface (via the `default`
+// variant) as the sidebar thread/project hover cards, so the rows read as one
+// system. Replaces the native `title` tooltip; renders the trigger untouched when
+// there's no content to show.
+function ToolRowTooltip(props: { content: ReactNode; children: ReactElement }) {
+  if (!props.content) {
+    return props.children;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={props.children} />
+      <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
+        {props.content}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -2782,7 +2811,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   key={`${workEntry.id}:${changedFilePath}`}
                   details={workEntry.toolDetails}
                   compact={compact}
-                  title="View tool details"
+                  tooltip={<span className="whitespace-pre-wrap">{changedFilePath}</span>}
                   summaryClassName={editedRowClassName}
                   dataFileChangeRow
                 >
@@ -2904,9 +2933,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                           style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
                           title={subagent.latestUpdate}
                         >
-                          <span className="shrink-0 uppercase tracking-[0.14em] text-muted-foreground/30">
-                            Latest
-                          </span>
+                          <span className="shrink-0 text-muted-foreground/30">Latest</span>
                           <span className="truncate">{subagent.latestUpdate}</span>
                         </div>
                       ) : null}
@@ -2929,7 +2956,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       <button
                         type="button"
                         className={cn(
-                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/62 transition-colors",
+                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium text-muted-foreground/62 transition-colors",
                           canOpenThread
                             ? "hover:border-foreground/15 hover:text-foreground/84"
                             : "cursor-default opacity-50",
@@ -2948,7 +2975,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 );
               })}
               {hiddenSubagentCount > 0 ? (
-                <div className="pl-4 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/46">
+                <div className="pl-4 text-[10px] text-muted-foreground/46">
                   +{hiddenSubagentCount} more
                 </div>
               ) : null}
@@ -3020,7 +3047,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               <ToolDetailsDisclosure
                 details={workEntry.toolDetails}
                 compact={compact}
-                title={rawCommand ?? displayText}
+                tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
               >
                 {rowContentChildren}
               </ToolDetailsDisclosure>
@@ -3031,26 +3058,19 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <AgentActivityOpenSurface
               canOpen={canOpenAgentActivity || canOpenReadFile}
               compact={compact}
-              title={canOpenReadFile ? (readFilePath ?? hoverText) : hoverText}
               onOpen={openAgentActivity ?? openReadFile}
               onHover={prefetchReadFile}
+              tooltip={toolRowTooltipContent(
+                rawCommand,
+                displayText,
+                canOpenReadFile ? (readFilePath ?? hoverText) : hoverText,
+              )}
             >
               {rowContentChildren}
             </AgentActivityOpenSurface>
           );
 
-          if (!rawCommand) {
-            return rowContent;
-          }
-
-          return (
-            <Tooltip>
-              <TooltipTrigger render={rowContent} />
-              <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
-                {commandTooltipContent(rawCommand, displayText)}
-              </TooltipPopup>
-            </Tooltip>
-          );
+          return rowContent;
         })()
       )}
     </div>
@@ -3119,6 +3139,8 @@ function AgentActivityOpenSurface(props: {
   onHover?: (() => void) | undefined;
   onOpen?: (() => void) | undefined;
   title?: string | undefined;
+  /** Styled frosted hover tooltip (preferred over the native `title`). */
+  tooltip?: ReactNode;
   dataToolDetailTrigger?: boolean | undefined;
 }) {
   const className = cn(
@@ -3127,26 +3149,26 @@ function AgentActivityOpenSurface(props: {
     props.canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
   );
 
-  if (props.canOpen) {
-    return (
-      <button
-        type="button"
-        className={className}
-        title={props.title}
-        onClick={props.onOpen}
-        data-tool-detail-trigger={props.dataToolDetailTrigger ? "true" : undefined}
-        {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
-      >
-        {props.children}
-      </button>
-    );
-  }
-
-  return (
+  // Wrap the real DOM element (not this component) so Base UI's tooltip trigger
+  // can attach its hover handlers and compose with our own onClick/onPointerEnter.
+  const surface = props.canOpen ? (
+    <button
+      type="button"
+      className={className}
+      title={props.title}
+      onClick={props.onOpen}
+      data-tool-detail-trigger={props.dataToolDetailTrigger ? "true" : undefined}
+      {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
+    >
+      {props.children}
+    </button>
+  ) : (
     <div className={className} title={props.title}>
       {props.children}
     </div>
   );
+
+  return <ToolRowTooltip content={props.tooltip}>{surface}</ToolRowTooltip>;
 }
 
 function ToolDetailsDisclosure(props: {
@@ -3155,7 +3177,7 @@ function ToolDetailsDisclosure(props: {
   dataFileChangeRow?: boolean | undefined;
   details: NonNullable<TimelineWorkEntry["toolDetails"]>;
   summaryClassName?: string | undefined;
-  title?: string | undefined;
+  tooltip?: ReactNode;
 }) {
   const summaryClassName =
     props.summaryClassName ??
@@ -3207,25 +3229,28 @@ function ToolDetailsDisclosure(props: {
 
   useEffect(() => () => clearMotionTimers(), [clearMotionTimers]);
 
+  const summaryButton = (
+    <button
+      type="button"
+      className={summaryClassName}
+      aria-expanded={open}
+      data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
+      data-tool-detail-trigger="true"
+      onClick={() => {
+        setDetailsOpen(!open);
+      }}
+    >
+      {props.children}
+      <DisclosureChevron
+        open={open}
+        className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
+      />
+    </button>
+  );
+
   return (
     <div className="group/tool-details min-w-0">
-      <button
-        type="button"
-        className={summaryClassName}
-        title={props.title ?? "View tool details"}
-        aria-expanded={open}
-        data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
-        data-tool-detail-trigger="true"
-        onClick={() => {
-          setDetailsOpen(!open);
-        }}
-      >
-        {props.children}
-        <DisclosureChevron
-          open={open}
-          className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
-        />
-      </button>
+      <ToolRowTooltip content={props.tooltip}>{summaryButton}</ToolRowTooltip>
       {renderDetails ? (
         <DisclosureRegion
           open={motionOpen}

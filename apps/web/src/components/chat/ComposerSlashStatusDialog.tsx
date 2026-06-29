@@ -88,33 +88,31 @@ export function ComposerSlashStatusDialog(props: {
         <DialogPanel className="space-y-4">
           <div className="grid gap-3 rounded-lg border border-border/60 bg-muted/20 p-4 text-sm sm:grid-cols-2">
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Model</p>
+              <p className="text-xs text-muted-foreground">Model</p>
               <p className="font-medium text-foreground">{selectedModel}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Fast Mode</p>
+              <p className="text-xs text-muted-foreground">Fast Mode</p>
               <p className="font-medium text-foreground">{fastModeEnabled ? "On" : "Off"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Reasoning</p>
+              <p className="text-xs text-muted-foreground">Reasoning</p>
               <p className="font-medium text-foreground">{selectedPromptEffort ?? "Default"}</p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Mode</p>
+              <p className="text-xs text-muted-foreground">Mode</p>
               <p className="font-medium text-foreground">
                 {interactionMode === "plan" ? "Plan" : "Default"}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                Environment
-              </p>
+              <p className="text-xs text-muted-foreground">Environment</p>
               <p className="font-medium text-foreground">
                 {formatEnvironmentLabel(envMode, envState)}
               </p>
             </div>
             <div className="space-y-1">
-              <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Branch</p>
+              <p className="text-xs text-muted-foreground">Branch</p>
               <p className="font-medium text-foreground">{branch ?? "Unknown"}</p>
             </div>
           </div>
@@ -122,9 +120,7 @@ export function ComposerSlashStatusDialog(props: {
           <div className="space-y-3 rounded-lg border border-border/60 bg-card p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">
-                  Context Window
-                </p>
+                <p className="text-xs text-muted-foreground">Context Window</p>
                 <p className="text-sm text-muted-foreground">
                   Latest usage reported by the active thread.
                 </p>
@@ -181,7 +177,7 @@ export function ComposerSlashStatusDialog(props: {
           </div>
 
           <div className="space-y-2 rounded-lg border border-border/60 bg-card p-4">
-            <p className="text-xs uppercase tracking-[0.08em] text-muted-foreground">Rate Limits</p>
+            <p className="text-xs text-muted-foreground">Rate Limits</p>
             {rateLimitStatus ? (
               <p className="text-sm text-foreground">{formatRateLimitMessage(rateLimitStatus)}</p>
             ) : (

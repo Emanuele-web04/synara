@@ -44,7 +44,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
         {image.previewUrl ? (
           <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
         ) : (
-          <span className="flex size-full items-center justify-center text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground/70">
+          <span className="flex size-full items-center justify-center text-[10px] font-medium text-muted-foreground/70">
             IMG
           </span>
         )}

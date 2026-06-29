@@ -128,7 +128,7 @@ export function RecentViewSwitcher(props: {
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium leading-5">{entry.title}</span>
                     {entry.isCurrent ? (
-                      <span className="shrink-0 rounded-full border border-border/60 bg-muted/70 px-1.5 py-px text-[10px] font-medium uppercase leading-4 tracking-wide text-muted-foreground">
+                      <span className="shrink-0 rounded-full border border-border/60 bg-muted/70 px-1.5 py-px text-[10px] font-medium leading-4 text-muted-foreground">
                         Current
                       </span>
                     ) : null}
