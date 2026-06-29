@@ -45,7 +45,8 @@ interface CursorCommandPathParts {
 }
 
 const CURSOR_EXECUTABLE_EXTENSION_PATTERN = /\.(?:bat|cmd|exe|ps1)$/iu;
-const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat", ".ps1"] as const;
+const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
+const WINDOWS_BATCH_EXECUTABLE_EXTENSION = ".cmd";
 
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
   const trimmed = command.trim();
@@ -84,15 +85,21 @@ function resolveCursorEditorLauncherCommand(
     return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
 
-  const siblingAgent = resolveCursorSiblingAgentCommand(parts, options);
+  const siblingAgent = resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
   if (siblingAgent) {
     return siblingAgent;
   }
   if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
     return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
+  const siblingLegacyAgent = resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options);
+  if (siblingLegacyAgent) {
+    return siblingLegacyAgent;
+  }
   return {
-    command: `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${parts.extension}`,
+    command: `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${cursorLegacyFallbackExtension(
+      parts,
+    )}`,
     args: [],
   };
 }
@@ -102,28 +109,56 @@ function resolveCursorSiblingAgentCommand(
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
   // Cursor editor launchers do not host `cursor agent`; agent commands are top-level binaries.
+  return (
+    resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options) ??
+    resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options)
+  );
+}
+
+function resolveCursorSiblingCommand(
+  parts: CursorCommandPathParts,
+  binary: string,
+  options: ResolvedCursorAgentCommandOptions,
+): CursorAgentCommand | undefined {
   for (const extension of cursorSiblingAgentExtensions(parts)) {
-    const siblingAgent = `${parts.directory}${DEFAULT_CURSOR_AGENT_BINARY}${extension}`;
+    const siblingAgent = `${parts.directory}${binary}${extension}`;
     if (options.pathExists(siblingAgent)) {
       return { command: siblingAgent, args: [] };
-    }
-  }
-  for (const extension of cursorSiblingAgentExtensions(parts)) {
-    const siblingLegacyAgent = `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${extension}`;
-    if (options.pathExists(siblingLegacyAgent)) {
-      return { command: siblingLegacyAgent, args: [] };
     }
   }
   return undefined;
 }
 
 function cursorSiblingAgentExtensions(parts: CursorCommandPathParts): ReadonlyArray<string> {
-  const shouldProbeWindowsExtensions =
-    process.platform === "win32" || parts.directory.includes("\\") || parts.extension.length > 0;
+  const shouldProbeWindowsExtensions = shouldProbeWindowsExtensionsForParts(parts);
+  const preferredExtension = isWindowsSafeExecutableExtension(parts.extension)
+    ? [parts.extension]
+    : [];
   const extensions = shouldProbeWindowsExtensions
-    ? [parts.extension, ...WINDOWS_EXECUTABLE_EXTENSIONS, ""]
+    ? [...preferredExtension, ...WINDOWS_EXECUTABLE_EXTENSIONS, ""]
     : [parts.extension];
   return [...new Set(extensions)];
+}
+
+function cursorLegacyFallbackExtension(parts: CursorCommandPathParts): string {
+  if (!shouldProbeWindowsExtensionsForParts(parts)) {
+    return parts.extension;
+  }
+  return isWindowsSafeExecutableExtension(parts.extension)
+    ? parts.extension
+    : WINDOWS_BATCH_EXECUTABLE_EXTENSION;
+}
+
+function shouldProbeWindowsExtensionsForParts(parts: CursorCommandPathParts): boolean {
+  return (
+    process.platform === "win32" || parts.directory.includes("\\") || parts.extension.length > 0
+  );
+}
+
+function isWindowsSafeExecutableExtension(extension: string): boolean {
+  return WINDOWS_EXECUTABLE_EXTENSIONS.includes(
+    extension as (typeof WINDOWS_EXECUTABLE_EXTENSIONS)[number],
+  );
 }
 
 function findCommandOnPath(

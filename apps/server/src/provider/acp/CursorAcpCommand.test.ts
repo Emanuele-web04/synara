@@ -114,6 +114,45 @@ describe("buildCursorAgentCommand", () => {
     });
   });
 
+  it("prefers PATH cursor-agent over sibling legacy agent commands", () => {
+    expect(
+      buildCursorAgentCommand("/usr/local/bin/cursor", ["acp"], {
+        env: { PATH: "/tools" },
+        pathExists: (path) => path === "/usr/local/bin/agent" || path === "/tools/cursor-agent",
+      }),
+    ).toEqual({
+      command: "cursor-agent",
+      args: ["acp"],
+    });
+  });
+
+  it("skips PowerShell sibling agent shims for Windows editor launchers", () => {
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
+        ["acp"],
+        {
+          pathExists: (path) =>
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.ps1" ||
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.cmd",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.cmd",
+      args: ["acp"],
+    });
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
+        ["status"],
+        { pathExists: () => false },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.cmd",
+      args: ["status"],
+    });
+  });
+
   it("prefers a sibling cursor-agent when a Cursor shim path is configured", () => {
     expect(
       buildCursorAgentCommand("/Users/me/.local/bin/cursor", ["acp"], {
