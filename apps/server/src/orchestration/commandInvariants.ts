@@ -6,6 +6,7 @@ import type {
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
+import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@t3tools/shared/errorMessages";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { Effect } from "effect";
 
@@ -179,7 +180,7 @@ export function requireThreadArchived(input: {
         : Effect.fail(
             invariantError(
               input.command.type,
-              `Thread '${input.threadId}' is not archived for command '${input.command.type}'.`,
+              `Thread '${input.threadId}' ${THREAD_NOT_ARCHIVED_INVARIANT_MARKER} '${input.command.type}'.`,
             ),
           ),
     ),
