@@ -70,24 +70,53 @@ function resolveCursorEditorLauncherCommand(
   }
 
   if (!parts.hasDirectory) {
-    return commandExistsOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)
-      ? { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] }
-      : { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
+    if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
+      return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
+    }
+    const cursorPath = findCommandOnPath(command, options);
+    if (cursorPath) {
+      const cursorPathParts = splitCursorCommandPath(cursorPath);
+      const siblingAgent = resolveCursorSiblingAgentCommand(cursorPathParts, options);
+      if (siblingAgent) {
+        return siblingAgent;
+      }
+    }
+    return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
 
-  const siblingAgent = `${parts.directory}${DEFAULT_CURSOR_AGENT_BINARY}${parts.extension}`;
-  return options.pathExists(siblingAgent)
-    ? { command: siblingAgent, args: [] }
-    : { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
+  const siblingAgent = resolveCursorSiblingAgentCommand(parts, options);
+  if (siblingAgent) {
+    return siblingAgent;
+  }
+  return {
+    command: `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${parts.extension}`,
+    args: [],
+  };
 }
 
-function commandExistsOnPath(
+function resolveCursorSiblingAgentCommand(
+  parts: CursorCommandPathParts,
+  options: ResolvedCursorAgentCommandOptions,
+): CursorAgentCommand | undefined {
+  // Cursor editor launchers do not host `cursor agent`; agent commands are top-level binaries.
+  const siblingAgent = `${parts.directory}${DEFAULT_CURSOR_AGENT_BINARY}${parts.extension}`;
+  if (options.pathExists(siblingAgent)) {
+    return { command: siblingAgent, args: [] };
+  }
+  const siblingLegacyAgent = `${parts.directory}${LEGACY_CURSOR_AGENT_BINARY}${parts.extension}`;
+  if (options.pathExists(siblingLegacyAgent)) {
+    return { command: siblingLegacyAgent, args: [] };
+  }
+  return undefined;
+}
+
+function findCommandOnPath(
   command: string,
   options: ResolvedCursorAgentCommandOptions,
-): boolean {
+): string | undefined {
   const searchPath = options.env.PATH ?? options.env.Path ?? "";
   if (!searchPath.trim()) {
-    return false;
+    return undefined;
   }
   const separator =
     options.env.Path !== undefined && options.env.PATH === undefined ? ";" : path.delimiter;
@@ -100,12 +129,13 @@ function commandExistsOnPath(
       continue;
     }
     for (const extension of extensions) {
-      if (options.pathExists(path.join(directory, `${command}${extension}`))) {
-        return true;
+      const candidate = path.join(directory, `${command}${extension}`);
+      if (options.pathExists(candidate)) {
+        return candidate;
       }
     }
   }
-  return false;
+  return undefined;
 }
 
 // Resolves persisted/default Cursor binary settings into the executable Synara should spawn.

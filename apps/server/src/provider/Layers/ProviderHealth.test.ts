@@ -1552,22 +1552,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("uses Cursor editor launchers through the agent subcommand", () =>
+    it.effect("maps Cursor editor launchers to top-level agent commands", () =>
       Effect.gen(function* () {
         const status = yield* makeCheckCursorProviderStatus("/custom/bin/cursor");
         assert.strictEqual(status.status, "ready");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/cursor");
+            assert.strictEqual(command, "/custom/bin/agent");
             const joined = args.join(" ");
-            if (joined === "agent --version") {
+            if (joined === "--version") {
               return { stdout: "agent 2026.04.27\n", stderr: "", code: 0 };
             }
-            if (joined === "agent status") {
+            if (joined === "status") {
               return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
             }
-            if (joined === "agent models") {
+            if (joined === "models") {
               return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
