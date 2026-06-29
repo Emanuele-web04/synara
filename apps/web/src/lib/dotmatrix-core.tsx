@@ -659,7 +659,7 @@ function getMatrix5Layout(
 }
 
 function resolveDmxBoxOuterDim(
-  options: { boxSize?: number; minSize?: number } | null | undefined
+  options: { boxSize?: number | undefined; minSize?: number | undefined } | null | undefined
 ): { outerDim: number; useWrapper: boolean } {
   const b = options?.boxSize;
   const hasBox = b != null && b > 0 && Number.isFinite(b);

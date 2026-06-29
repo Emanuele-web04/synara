@@ -4,8 +4,44 @@
 // Exports: ThreadRunningSpinner
 
 import { cn } from "~/lib/utils";
+import type { ActionStateName } from "~/lib/actionStates";
+import { DotmSquare11 } from "~/components/ui/dotm-square-11";
 
-export function ThreadRunningSpinner({ className }: { className?: string }) {
+const DOTMATRIX_SIZE = 12;
+
+// Sidebar dotmatrix uses Echo Ring (thinking state) for all running threads.
+// At 12px sidebar size, per-state distinction is invisible — the island shows
+// per-state loaders where the expanded view has room for the full 5 states.
+const DOTMATRIX_ACTION_COLOR: Record<ActionStateName, string> = {
+  thinking: "var(--accent)",
+  reading: "var(--accent)",
+  editing: "var(--accent)",
+  "running-command": "var(--accent)",
+  error: "var(--destructive)",
+};
+
+export interface ThreadRunningSpinnerProps {
+  className?: string;
+  loaderStyle?: "spinner" | "dotmatrix";
+  actionState?: ActionStateName;
+}
+
+export function ThreadRunningSpinner({
+  className,
+  loaderStyle = "spinner",
+  actionState = "thinking",
+}: ThreadRunningSpinnerProps) {
+  if (loaderStyle === "dotmatrix") {
+    return (
+      <DotmSquare11
+        aria-hidden="true"
+        size={DOTMATRIX_SIZE}
+        color={DOTMATRIX_ACTION_COLOR[actionState]}
+        className={cn("shrink-0", className)}
+      />
+    );
+  }
+
   return (
     <span
       aria-hidden="true"
