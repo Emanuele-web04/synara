@@ -20,6 +20,42 @@ describe("classifyWorkEntry", () => {
     expect(classifyWorkEntry(entry)).toBe("running-command");
   });
 
+  it("classifies inspect commands (ls/cat/grep) as reading", () => {
+    const ls = makeEntry({
+      label: "ls -la",
+      tone: "tool",
+      requestKind: "command",
+      command: "ls -la",
+    });
+    expect(classifyWorkEntry(ls)).toBe("reading");
+
+    const cat = makeEntry({
+      label: "cat foo.ts",
+      tone: "tool",
+      requestKind: "command",
+      command: "cat foo.ts",
+    });
+    expect(classifyWorkEntry(cat)).toBe("reading");
+
+    const grep = makeEntry({
+      label: "grep -r foo",
+      tone: "tool",
+      requestKind: "command",
+      command: "grep -r foo .",
+    });
+    expect(classifyWorkEntry(grep)).toBe("reading");
+  });
+
+  it("classifies non-inspect commands as running-command", () => {
+    const npm = makeEntry({
+      label: "npm test",
+      tone: "tool",
+      requestKind: "command",
+      command: "npm test",
+    });
+    expect(classifyWorkEntry(npm)).toBe("running-command");
+  });
+
   it("classifies file-read requestKind as reading", () => {
     const entry = makeEntry({ label: "read foo", tone: "tool", requestKind: "file-read" });
     expect(classifyWorkEntry(entry)).toBe("reading");

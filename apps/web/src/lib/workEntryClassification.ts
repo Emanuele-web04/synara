@@ -5,6 +5,7 @@
 //      loader state mapping (actionStates) need the same classification. Extracting it
 //      here keeps the two consumers DRY without coupling them to each other.
 
+import { isInspectCommand } from "~/lib/toolCallLabel";
 import type { WorkLogEntry } from "~/session-logic";
 import { isFileChangeWorkLogEntry } from "~/session-logic";
 
@@ -22,17 +23,18 @@ export function isFileReadToolEntry(workEntry: Pick<WorkLogEntry, "toolName">): 
 // activity the agent was performing) rather than a generic "error". Error tone is the
 // fallback for entries that don't map to a specific activity.
 //
-// ponytail: no isInspectCommand distinction (upstream-only). All commands map to
-// "running-command". Add isInspectCommand import from toolCallLabel.ts after merging
-// upstream/main to split inspect commands (ls/cat/git status) into "reading".
+// Inspect commands (ls/cat/grep/find/rg) are classified as "reading" — they inspect
+// the filesystem without modifying it, matching the timeline icon mapping.
 export function classifyWorkEntry(
   workEntry: Pick<WorkLogEntry, "requestKind" | "itemType" | "command" | "toolName" | "tone">,
 ): WorkEntryCategory {
-  if (workEntry.requestKind === "command") return "running-command";
+  if (workEntry.requestKind === "command") {
+    return workEntry.command && isInspectCommand(workEntry.command) ? "reading" : "running-command";
+  }
   if (workEntry.requestKind === "file-read") return "reading";
   if (isFileChangeWorkLogEntry(workEntry)) return "editing";
   if (workEntry.itemType === "command_execution" || workEntry.command) {
-    return "running-command";
+    return workEntry.command && isInspectCommand(workEntry.command) ? "reading" : "running-command";
   }
   if (isFileReadToolEntry(workEntry)) return "reading";
   if (workEntry.tone === "error") return "error";
