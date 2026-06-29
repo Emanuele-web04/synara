@@ -1,8 +1,13 @@
+// FILE: useTemporaryThreadLifecycle.ts
+// Purpose: Deletes temporary threads when focus leaves them.
+// Layer: Web route lifecycle hook
+// Exports: useTemporaryThreadLifecycle
+
 import type { ThreadId } from "@t3tools/contracts";
 import { useEffect, useRef } from "react";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { reconcileDeletedThreadFromClient } from "../lib/deletedThreadClientReconciliation";
-import { resolveDisposableThreadIdToDispose } from "../lib/disposableThread";
+import { resolveTemporaryThreadIdToDelete } from "../lib/temporaryThread";
 import { newCommandId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useSplitViewStore } from "../splitViewStore";
@@ -11,7 +16,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 
-export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): void {
+export function useTemporaryThreadLifecycle(activeThreadId: ThreadId | null): void {
   const clearDraftThread = useComposerDraftStore((store) => store.clearDraftThread);
   const clearTerminalState = useTerminalStateStore((store) => store.clearTerminalState);
   const removeThreadFromSplitViews = useSplitViewStore((store) => store.removeThreadFromSplitViews);
@@ -43,22 +48,22 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
         : false,
     };
 
-    const disposableThreadId = resolveDisposableThreadIdToDispose({
+    const temporaryThreadId = resolveTemporaryThreadIdToDelete({
       previousThreadId: previousThreadState.threadId,
       nextThreadId: activeThreadId,
       previousThreadWasTemporary: previousThreadState.wasTemporary,
       draftThreadsByThreadId,
     });
-    if (!disposableThreadId || disposingThreadIdsRef.current.has(disposableThreadId)) {
+    if (!temporaryThreadId || disposingThreadIdsRef.current.has(temporaryThreadId)) {
       return;
     }
 
-    disposingThreadIdsRef.current.add(disposableThreadId);
+    disposingThreadIdsRef.current.add(temporaryThreadId);
     void (async () => {
       try {
         const api = readNativeApi();
         const storeState = useStore.getState();
-        const serverThread = getThreadFromState(storeState, disposableThreadId) ?? null;
+        const serverThread = getThreadFromState(storeState, temporaryThreadId) ?? null;
 
         if (api) {
           if (serverThread?.session && serverThread.session.status !== "closed") {
@@ -66,14 +71,14 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
               .dispatchCommand({
                 type: "thread.session.stop",
                 commandId: newCommandId(),
-                threadId: disposableThreadId,
+                threadId: temporaryThreadId,
                 createdAt: new Date().toISOString(),
               })
               .catch(() => undefined);
           }
 
           await api.terminal
-            .close({ threadId: disposableThreadId, deleteHistory: true })
+            .close({ threadId: temporaryThreadId, deleteHistory: true })
             .catch(() => undefined);
 
           if (serverThread) {
@@ -81,13 +86,13 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
               .dispatchCommand({
                 type: "thread.delete",
                 commandId: newCommandId(),
-                threadId: disposableThreadId,
+                threadId: temporaryThreadId,
               })
               .then(() => true)
               .catch(() => false);
             if (deletedOnServer) {
               void reconcileDeletedThreadFromClient({
-                threadId: disposableThreadId,
+                threadId: temporaryThreadId,
                 removeDeletedThreadFromClientState:
                   useStore.getState().removeDeletedThreadFromClientState,
               });
@@ -95,12 +100,12 @@ export function useDisposableThreadLifecycle(activeThreadId: ThreadId | null): v
           }
         }
 
-        clearDraftThread(disposableThreadId);
-        clearTerminalState(disposableThreadId);
-        removeThreadFromSplitViews(disposableThreadId);
-        clearTemporaryThread(disposableThreadId);
+        clearDraftThread(temporaryThreadId);
+        clearTerminalState(temporaryThreadId);
+        removeThreadFromSplitViews(temporaryThreadId);
+        clearTemporaryThread(temporaryThreadId);
       } finally {
-        disposingThreadIdsRef.current.delete(disposableThreadId);
+        disposingThreadIdsRef.current.delete(temporaryThreadId);
       }
     })();
   }, [

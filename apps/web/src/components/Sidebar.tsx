@@ -8,7 +8,6 @@ import {
   ChevronRightIcon,
   ClockIcon,
   CopyIcon,
-  DisposableThreadIcon,
   ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -23,6 +22,7 @@ import {
   SearchIcon,
   SettingsIcon,
   StopFilledIcon,
+  TemporaryThreadIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
@@ -595,7 +595,7 @@ type ThreadMetaChip = {
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/disposable
+ * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/temporary
  * badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {
@@ -4960,7 +4960,7 @@ export default function Sidebar() {
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
     });
     const terminalCount = threadTerminalState.terminalIds.length;
-    const isDisposableThread =
+    const isTemporaryThread =
       temporaryThreadIds[thread.id] === true ||
       draftThreadsByThreadId[thread.id]?.isTemporary === true;
     const secondaryMetaClass = isHighlighted
@@ -4968,7 +4968,7 @@ export default function Sidebar() {
       : "text-muted-foreground/34";
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
-      includeHandoffBadge: !isDisposableThread,
+      includeHandoffBadge: !isTemporaryThread,
       handoffShownInAvatar:
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&
@@ -5191,16 +5191,16 @@ export default function Sidebar() {
                   )}
                 </button>
               ) : null}
-              {showCompactMeta && isDisposableThread && !thread.sidechatSourceThreadId ? (
+              {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                        <DisposableThreadIcon />
+                        <TemporaryThreadIcon />
                       </span>
                     }
                   />
-                  <TooltipPopup side="top">Disposable chat</TooltipPopup>
+                  <TooltipPopup side="top">Temporary chat</TooltipPopup>
                 </Tooltip>
               ) : null}
             </div>
@@ -5401,23 +5401,6 @@ export default function Sidebar() {
                       defaultEnvMode: appSettings.defaultThreadEnvMode,
                     }),
                     entryPoint: "terminal",
-                  });
-                }}
-              />
-              <SidebarIconButton
-                icon={DisposableThreadIcon}
-                glyph="chromeLu"
-                label={`Create disposable thread in ${project.name}`}
-                tooltip="New disposable thread"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                    temporary: true,
                   });
                 }}
               />

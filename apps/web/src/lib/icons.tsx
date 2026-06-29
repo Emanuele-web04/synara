@@ -3,7 +3,6 @@ import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
-import { LuMessageSquareDashed } from "react-icons/lu";
 import { cn } from "./utils";
 import { CentralIcon, type CentralIconVariant } from "./central-icons";
 import {
@@ -142,6 +141,11 @@ export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
+// User-input rows: a question-mark circle while the agent waits for an answer,
+// and an up-arrow circle once the answer is submitted. Sourced from the Central
+// set so they sit visually beside the other timeline glyphs (robot, search, …).
+export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questionmark");
+export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudUploadIcon = centralIconWrapper("cloud-upload");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
@@ -248,10 +252,11 @@ export const SquareSplitHorizontal: LucideIcon = (props) => (
 export const SquareSplitVertical: LucideIcon = (props) => (
   <PiSquareSplitVertical className={props.className} style={props.style} />
 );
-// react-icons/lu glyphs occupy more of the 24×24 viewBox than Tabler/Central icons at
-// the same Tailwind size — use `chromeLu` in sidebarGlyphs beside `chrome` controls.
-export const DisposableThreadIcon: LucideIcon = (props) => (
-  <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
+const TemporaryThreadGlyph = centralIconWrapper("bubble-annotation-5");
+// Dotted "annotation" chat bubble — the temporary thread marker shown on the
+// composer toggle and beside temporary threads in the sidebar.
+export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
+  <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
 );
 export const TerminalIcon = centralIconWrapper("console");
 export const TerminalSquare = centralIconWrapper("console");

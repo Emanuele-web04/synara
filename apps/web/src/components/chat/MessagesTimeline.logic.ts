@@ -627,6 +627,7 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.tone === b.tone &&
     a.itemType === b.itemType &&
     a.requestKind === b.requestKind &&
+    a.activityKind === b.activityKind &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
     stringArraysEqual(a.changedFiles, b.changedFiles) &&

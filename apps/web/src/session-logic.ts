@@ -77,6 +77,10 @@ export interface WorkLogEntry {
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
+  // Source activity kind, kept so the timeline can pick a kind-specific icon
+  // (e.g. user-input.requested -> question glyph) instead of the generic
+  // tone fallback. Same rationale as `toolName` below.
+  activityKind?: OrchestrationThreadActivity["kind"];
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -823,13 +827,14 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
   // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
-  // `toolName` is intentionally kept: it is a public WorkLogEntry field that the
-  // timeline relies on to pick the right tool icon (e.g. file-read tools like
-  // Claude's `Read` -> search icon, GitHub MCP rows -> GitHub icon). Stripping it
-  // here previously made those icon checks dead code, leaving the generic wrench.
+  // `toolName` and `activityKind` are intentionally kept: they are public
+  // WorkLogEntry fields that the timeline relies on to pick the right icon (e.g.
+  // file-read tools like Claude's `Read` -> search icon, GitHub MCP rows ->
+  // GitHub icon, user-input rows -> question / submit glyphs). Stripping
+  // `toolName` here previously made those icon checks dead code, leaving the
+  // generic wrench.
   return collapseDerivedWorkLogEntries(entries).map(
     ({
-      activityKind: _activityKind,
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
       runtimeWarningMessage: _runtimeWarningMessage,

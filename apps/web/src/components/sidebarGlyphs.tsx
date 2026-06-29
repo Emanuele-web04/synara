@@ -17,7 +17,7 @@ export const SIDEBAR_GLYPH = {
   chrome: "size-3.5 shrink-0",
   /** Same 20px buttons when the glyph is react-icons/lu (denser viewBox). */
   chromeLu: "size-3 shrink-0",
-  /** Thread row meta badges (handoff, fork, disposable, worktree). */
+  /** Thread row meta badges (handoff, fork, temporary, worktree). */
   meta: "size-3 shrink-0",
   /** Subagent expand control chevrons. */
   chevron: "size-3 shrink-0",

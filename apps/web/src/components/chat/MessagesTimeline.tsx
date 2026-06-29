@@ -37,10 +37,12 @@ import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
+  ArrowUpCircleIcon,
   BotIcon,
   CheckIcon,
   ChangesIcon,
   CircleAlertIcon,
+  CircleQuestionIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
@@ -2459,6 +2461,11 @@ function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  // User-input rows read as a question (awaiting an answer) and an upload
+  // (answer submitted) rather than the generic "info" checkmark.
+  if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
+  if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
+
   if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
   if (workEntry.requestKind === "file-read") return SearchIcon;
   if (workEntry.requestKind === "file-change") return PencilIcon;

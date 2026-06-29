@@ -175,6 +175,7 @@ describe("normalizeCompactToolLabel", () => {
 
 describe("computeStableMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+  type WorkTimelineRow = Extract<MessagesTimelineRow, { kind: "work" }>;
 
   const emptyStableRows = (): StableMessagesTimelineRowsState => ({
     byId: new Map(),
@@ -216,6 +217,41 @@ describe("computeStableMessagesTimelineRows", () => {
             toolTitle: "Read",
             detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
             changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces work rows when the activity kind changes", () => {
+    const firstRow: WorkTimelineRow = {
+      kind: "work",
+      id: "work-group-user-input",
+      createdAt: "2026-05-09T10:00:00.000Z",
+      groupedEntries: [
+        {
+          id: "activity-user-input",
+          createdAt: "2026-05-09T10:00:00.000Z",
+          label: "Needs input",
+          tone: "info",
+        },
+      ],
+    };
+    const firstRows: MessagesTimelineRow[] = [firstRow];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        ...firstRow,
+        groupedEntries: [
+          {
+            ...firstRow.groupedEntries[0]!,
+            activityKind: "user-input.requested",
           },
         ],
       },

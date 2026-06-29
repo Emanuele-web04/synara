@@ -1,12 +1,12 @@
-// FILE: disposableThread.ts
-// Purpose: Isolates temporary-thread auto-disposal decisions from route lifecycle effects.
+// FILE: temporaryThread.ts
+// Purpose: Isolates temporary-thread auto-delete decisions from route lifecycle effects.
 // Layer: Web route/domain helpers
-// Exports: switch-aware resolver for disposable thread cleanup
+// Exports: switch-aware resolver for temporary thread cleanup
 
 import type { ThreadId } from "@t3tools/contracts";
 import type { DraftThreadState } from "../composerDraftStore";
 
-export function resolveDisposableThreadIdToDispose(input: {
+export function resolveTemporaryThreadIdToDelete(input: {
   previousThreadId: ThreadId | null;
   nextThreadId: ThreadId | null;
   previousThreadWasTemporary?: boolean;
