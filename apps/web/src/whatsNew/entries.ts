@@ -22,6 +22,36 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.4.0",
+    date: "Jul 2026",
+    features: [
+      {
+        id: "dynamic-island",
+        title: "Dynamic Island shows active thread status at a glance",
+        description:
+          "A compact pill below the top bar tracks what your agent is doing — thinking, reading, editing, or running a command — without switching tabs. Hover to expand with the last 4 activities and a mini chat. Auto-expands on approvals, user input, and proposed plans so you can respond without leaving your current view.",
+        details:
+          "The island uses 150ms hysteresis to prevent flicker between turns, hides when the app loses focus, and shows a tiny idle pill you can hover to see recent threads. Activity states are derived from work log entries via a shared classifier (5-state expanded, 4-state compact with thinking+reading merged into processing). Three color presets (synara, spectrum, mono) are available in Settings > Appearance.",
+      },
+      {
+        id: "dotmatrix-loaders",
+        title: "Dotmatrix loaders replace the classic spinner",
+        description:
+          "Sidebar thread status and the dynamic island now use animated dot-matrix loaders (Echo Ring) when you choose the dotmatrix style in Settings. The classic CSS spinner remains the default — switch in Settings > Appearance > Activity indicators.",
+        details:
+          "Loaders are vendored from the @dotmatrix registry via shadcn CLI. Sidebar uses Echo Ring at 12px (per-state distinction is invisible at that size; the island shows the full 5-state loaders where expanded view has room). Attribution comments preserved in all vendored files.",
+      },
+      {
+        id: "universal-voice-dictation",
+        title: "Voice dictation works with every provider",
+        description:
+          "The in-composer mic button is now universal across all 8 providers. Non-Codex providers use a local whisper.cpp sidecar for offline transcription — your audio never leaves your machine. Hold right-Option anywhere to open a floating dictation popup that inserts text at your cursor.",
+        details:
+          "Codex continues to use the existing ChatGPT transcription endpoint. Non-Codex providers route through whisper-cli (per-request spawn, no persistent process). Audio is resampled from 24kHz to 16kHz for whisper. Models are downloaded on first use (~75MB) and verified via SHA256. Mac users install whisper-cli via Homebrew; Windows/Linux bundling is a follow-up CI task. Enable in Settings > Behavior > Voice dictation.",
+      },
+    ],
+  },
+  {
     version: "0.3.6",
     date: "Jun 30",
     features: [
