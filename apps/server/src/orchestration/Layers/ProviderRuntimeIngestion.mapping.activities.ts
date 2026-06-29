@@ -33,11 +33,34 @@ import type { ActivityPayload } from "./ProviderRuntimeIngestion.types.ts";
 // Layer: Server orchestration ingestion
 // Exports: boundActivityData/activityDataField, payload builders, runtimeEventToActivities.
 
-export function runtimeWarningActivityCopy(message: string): {
+type RuntimeWarningEvent = Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>;
+
+function rawRuntimeEventPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+  const raw = asObject((event as { raw?: unknown }).raw);
+  return asObject(raw?.payload);
+}
+
+export function runtimeWarningActivityCopy(event: RuntimeWarningEvent): {
   readonly summary: string;
   readonly message: string;
   readonly detail?: string;
+  readonly nativeEventType?: string;
+  readonly data?: unknown;
 } {
+  const message = event.payload.message;
+  const nativeEventType = asString(rawRuntimeEventPayload(event)?.type);
+  if (
+    (event.provider === "opencode" || event.provider === "kilo") &&
+    (nativeEventType === "session.next.retried" || nativeEventType === "session.status")
+  ) {
+    return {
+      summary: event.provider === "opencode" ? "OpenCode retrying" : "Kilo retrying",
+      message: truncateDetail(message),
+      detail: truncateDetail(message),
+      nativeEventType,
+      data: event.payload.detail,
+    };
+  }
   if (
     message.includes("rmcp::transport::worker") &&
     message.includes("AuthRequired") &&
@@ -523,7 +546,7 @@ export function runtimeEventToActivities(
     }
 
     case "runtime.warning": {
-      const copy = runtimeWarningActivityCopy(event.payload.message);
+      const copy = runtimeWarningActivityCopy(event);
       return [
         {
           id: event.eventId,
@@ -534,6 +557,10 @@ export function runtimeEventToActivities(
           payload: toActivityPayload({
             message: copy.message,
             ...(copy.detail !== undefined ? { detail: copy.detail } : {}),
+            ...(copy.nativeEventType !== undefined
+              ? { nativeEventType: copy.nativeEventType }
+              : {}),
+            ...(copy.data !== undefined ? { data: copy.data } : {}),
             ...(event.payload.detail !== undefined ? { rawDetail: event.payload.detail } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,

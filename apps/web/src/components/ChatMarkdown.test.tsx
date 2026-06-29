@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@pierre/diffs", () => ({
+  parsePatchFiles: () => [],
   getSharedHighlighter: () =>
     Promise.resolve({
       codeToHtml(code: string) {
@@ -90,6 +91,17 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("CHATMARKDOWNLITERALDOLLARPLACEHOLDER");
   });
 
+  it("renders local file-link chips from the resolved target instead of arbitrary labels", async () => {
+    const markup = await renderMarkdown(
+      "Read [not the path](./src/components/ChatMarkdown.tsx:12).",
+      "/Users/tylersheffield/code/synara/apps/web",
+    );
+
+    expect(markup).toContain("ChatMarkdown.tsx");
+    expect(markup).not.toContain("not the path");
+    expect(markup).toContain('href="./src/components/ChatMarkdown.tsx:12"');
+  });
+
   it("does not turn ordinary dollar text or escaped dollars into math", async () => {
     const markup = await renderMarkdown(
       "It costs $5 to $10 per seat. Escape \\$E=mc^2\\$ when you want literal TeX.",
@@ -155,6 +167,26 @@ describe("ChatMarkdown", () => {
     expect(markup).toContain('href="https://example.com"');
   });
 
+  it("sanitizes unsafe HTML protocols, style attributes, and SVG script content", async () => {
+    const markup = await renderMarkdownWithHtml(
+      [
+        '<a href="javascript:alert(1)">bad protocol</a>',
+        '<img src="x" onerror="steal()" style="width:999px">',
+        '<span style="color:red">styled</span>',
+        "<svg><script>evil()</script><foreignObject>bad</foreignObject></svg>",
+      ].join(""),
+    );
+
+    expect(markup).not.toContain("javascript:");
+    expect(markup).not.toContain("onerror");
+    expect(markup).not.toContain("style=");
+    expect(markup).not.toContain("<script>");
+    expect(markup).not.toContain("foreignObject");
+    expect(markup).not.toContain("evil()");
+    expect(markup).toContain("bad protocol");
+    expect(markup).toContain("styled");
+  });
+
   it("keeps KaTeX math working alongside sanitized HTML", async () => {
     const markup = await renderMarkdownWithHtml(
       ["<details><summary>Notes</summary>collapsible</details>", "", "Inline $x^2$ renders."].join(
@@ -167,19 +199,104 @@ describe("ChatMarkdown", () => {
     expect(markup).not.toContain("$x^2$");
   });
 
-  it("keeps plan and diff surfaces routed through the shared renderer", () => {
+  it("renders markdown-fenced tables as contained tables", async () => {
+    const markup = await renderMarkdown(
+      ["```markdown", "| File | Status |", "| --- | --- |", "| app.tsx | changed |", "```"].join(
+        "\n",
+      ),
+    );
+
+    expect(markup).toContain('class="chat-markdown-table-scroll"');
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<td>app.tsx</td>");
+    expect(markup).not.toContain("chat-markdown-codeblock");
+  });
+
+  it("renders markdown-fenced tables after intro text", async () => {
+    const markup = await renderMarkdown(
+      [
+        "```md",
+        "Here is the table:",
+        "",
+        "| File | Status |",
+        "| --- | --- |",
+        "| app.tsx | changed |",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain('class="chat-markdown-table-scroll"');
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<td>app.tsx</td>");
+    expect(markup).not.toContain("chat-markdown-codeblock");
+  });
+
+  it("detects blockquoted markdown-fenced tables", async () => {
+    const markup = await renderMarkdown(
+      [
+        "```markdown",
+        "> | File | Status |",
+        "> | --- | --- |",
+        "> | app.tsx | changed |",
+        "```",
+      ].join("\n"),
+    );
+
+    expect(markup).toContain('class="chat-markdown-table-scroll"');
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<td>app.tsx</td>");
+  });
+
+  it("wraps regular markdown tables in the transcript overflow shell", async () => {
+    const markup = await renderMarkdown(
+      ["| Package | Version |", "| --- | --- |", "| @t3tools/web | 1.0.0 |"].join("\n"),
+    );
+
+    expect(markup).toContain('class="chat-markdown-table-scroll"');
+    expect(markup).toContain("<table>");
+    expect(markup).toContain("<td>@t3tools/web</td>");
+  });
+
+  it("routes local markdown images through generated-image chrome", async () => {
+    const markup = await renderMarkdown("![local alt](./image.png)", "/Users/julius/project");
+
+    expect(markup).toContain('class="chat-generated-image"');
+    expect(markup).toContain('alt="local alt"');
+    expect(markup).toContain("/local-image?");
+    expect(markup).toContain("path=.%2Fimage.png");
+    expect(markup).toContain("cwd=%2FUsers%2Fjulius%2Fproject");
+  });
+
+  it("keeps external markdown images as lazy img elements", async () => {
+    const markup = await renderMarkdown("![external alt](https://example.com/a.png)");
+
+    expect(markup).toContain('<img src="https://example.com/a.png"');
+    expect(markup).toContain('alt="external alt"');
+    expect(markup).toContain('loading="lazy"');
+    expect(markup).not.toContain("chat-generated-image");
+  });
+
+  it("defines compact chat heading, quote, table, and code-control selectors", () => {
+    const cssSource = readFileSync(new URL("../index.css", import.meta.url), "utf8");
+
+    expect(cssSource).toContain(".chat-markdown h1,");
+    expect(cssSource).toContain(".chat-markdown h6");
+    expect(cssSource).toContain(".chat-markdown blockquote");
+    expect(cssSource).toContain("color-mix(in srgb, var(--foreground) 88%");
+    expect(cssSource).toContain(".chat-markdown .chat-markdown-table-scroll");
+    expect(cssSource).toContain(".chat-markdown .chat-markdown-codeblock__action");
+  });
+
+  it("keeps plan surfaces routed through the shared renderer", () => {
     const planSidebarSource = readFileSync(new URL("./PlanSidebar.tsx", import.meta.url), "utf8");
     const proposedPlanCardSource = readFileSync(
       new URL("./chat/ProposedPlanCard.tsx", import.meta.url),
       "utf8",
     );
-    const diffPanelSource = readFileSync(new URL("./DiffPanel.tsx", import.meta.url), "utf8");
 
     expect(planSidebarSource).toContain('import ChatMarkdown from "./ChatMarkdown"');
     expect(planSidebarSource).toContain("<ChatMarkdown");
     expect(proposedPlanCardSource).toContain('import ChatMarkdown from "../ChatMarkdown"');
     expect(proposedPlanCardSource).toContain("<ChatMarkdown");
-    expect(diffPanelSource).toContain('import ChatMarkdown from "./ChatMarkdown"');
-    expect(diffPanelSource).toContain("<ChatMarkdown");
   });
 });

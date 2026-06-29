@@ -43,6 +43,7 @@ type TurnCommand = Extract<
       | "thread.message.assistant.delta"
       | "thread.message.assistant.complete"
       | "thread.proposed-plan.upsert"
+      | "thread.provider-item.upsert"
       | "thread.turn.diff.complete"
       | "thread.revert.complete"
       | "thread.conversation.rollback.complete"
@@ -609,6 +610,30 @@ export const decideTurnCommand = Effect.fn("decideTurnCommand")(function* ({
         payload: {
           threadId: command.threadId,
           proposedPlan: command.proposedPlan,
+        },
+      };
+    }
+
+    case "thread.provider-item.upsert": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+          metadata: {
+            providerItemId: command.providerItem.providerItemId ?? undefined,
+          },
+        }),
+        type: "thread.provider-item-upserted",
+        payload: {
+          threadId: command.threadId,
+          providerItem: command.providerItem,
         },
       };
     }

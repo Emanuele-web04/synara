@@ -309,6 +309,7 @@ export function ChatComposer({
                 <div
                   key={queuedTurn.id}
                   data-testid="queued-follow-up-row"
+                  data-composer-blocker="queued-follow-up"
                   className={cn(
                     "chat-composer-surface flex items-center gap-2 border border-b-0 px-3 pt-2.5 pb-2.5 text-[12px]",
                     COMPOSER_SURFACE_BORDER_CLASS_NAME,
@@ -317,6 +318,9 @@ export function ChatComposer({
                       : "rounded-none",
                   )}
                 >
+                  <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+                    Queued follow-up: {queuedTurn.previewText}
+                  </span>
                   <div className="flex min-w-0 flex-1 items-center gap-1.5">
                     <QueueArrow className="size-3 shrink-0 text-[var(--color-text-foreground-secondary)]" />
                     <span className="truncate text-[12px] font-medium text-foreground/85">
@@ -493,6 +497,7 @@ export function ChatComposer({
                   <ComposerPendingApprovalActions
                     requestId={activePendingApproval.requestId}
                     isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                    describedById={`pending-approval-status-${activePendingApproval.requestId}`}
                     onRespondToApproval={onRespondToApproval}
                   />
                 </div>

@@ -10,10 +10,12 @@ import {
   MessageId,
   OrchestrationProposedPlanId,
   ProjectId,
+  RuntimeItemId,
   ThreadId,
   ThreadMarkerId,
   TurnId,
   type OrchestrationEvent,
+  type OrchestrationProviderItem,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
@@ -39,6 +41,7 @@ import {
   type AppState,
 } from "./store";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import { getThreadFromState } from "./threadDerivation";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -71,6 +74,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     sidechatSourceThreadId: null,
     handoff: null,
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 
@@ -115,6 +119,27 @@ function makeActivity(overrides: {
     payload: overrides.payload ?? {},
     turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
+  };
+}
+
+function makeProviderItem(
+  overrides: Partial<OrchestrationProviderItem> & { id: RuntimeItemId },
+): OrchestrationProviderItem {
+  const createdAt = overrides.createdAt ?? "2026-02-27T00:00:00.000Z";
+  return {
+    providerItemId: null,
+    provider: "codex",
+    turnId: null,
+    itemType: "command_execution",
+    status: "completed",
+    title: "Tool call",
+    detail: null,
+    data: null,
+    content: [],
+    sourceRef: null,
+    createdAt,
+    updatedAt: overrides.updatedAt ?? createdAt,
+    ...overrides,
   };
 }
 
@@ -175,6 +200,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     checkpoints: [],
     session: null,
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   } satisfies OrchestrationReadModel["threads"][number];
 }
 
@@ -1725,6 +1751,20 @@ describe("store pure functions", () => {
           makeActivity({ id: "activity-1", turnId: "turn-1" }),
           makeActivity({ id: "activity-2", turnId: "turn-2" }),
         ],
+        providerItems: [
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turnless"),
+            turnId: null,
+          }),
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turn-1"),
+            turnId: TurnId.makeUnsafe("turn-1"),
+          }),
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turn-2"),
+            turnId: TurnId.makeUnsafe("turn-2"),
+          }),
+        ],
         turnDiffSummaries: [
           {
             turnId: TurnId.makeUnsafe("turn-1"),
@@ -1761,6 +1801,10 @@ describe("store pure functions", () => {
     ]);
     expect(next.threads[0]?.activities.map((activity) => activity.id)).toEqual([
       EventId.makeUnsafe("activity-1"),
+    ]);
+    expect(next.threads[0]?.providerItems.map((item) => item.id)).toEqual([
+      RuntimeItemId.makeUnsafe("provider-turnless"),
+      RuntimeItemId.makeUnsafe("provider-turn-1"),
     ]);
     expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
@@ -1826,6 +1870,20 @@ describe("store pure functions", () => {
           },
         ],
         activities: [makeActivity({ id: "activity-2", turnId: "turn-2" })],
+        providerItems: [
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turnless"),
+            turnId: null,
+          }),
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turn-1"),
+            turnId: TurnId.makeUnsafe("turn-1"),
+          }),
+          makeProviderItem({
+            id: RuntimeItemId.makeUnsafe("provider-turn-2"),
+            turnId: TurnId.makeUnsafe("turn-2"),
+          }),
+        ],
         turnDiffSummaries: [
           {
             turnId: TurnId.makeUnsafe("turn-1"),
@@ -1863,6 +1921,10 @@ describe("store pure functions", () => {
     ]);
     expect(next.threads[0]?.proposedPlans).toEqual([]);
     expect(next.threads[0]?.activities).toEqual([]);
+    expect(next.threads[0]?.providerItems.map((item) => item.id)).toEqual([
+      RuntimeItemId.makeUnsafe("provider-turnless"),
+      RuntimeItemId.makeUnsafe("provider-turn-1"),
+    ]);
     expect(next.threads[0]?.pendingSourceProposedPlan).toBeUndefined();
     expect(next.threads[0]?.latestTurn?.turnId).toBe(TurnId.makeUnsafe("turn-1"));
   });
@@ -2368,6 +2430,154 @@ describe("store read model sync", () => {
     expect(nextThread?.latestTurn?.completedAt).toBeNull();
     expect(nextThread?.session?.orchestrationStatus).toBe("running");
     expect(nextThread?.session?.activeTurnId).toBe(turnId);
+  });
+
+  it("applies provider item upserts into thread state", () => {
+    const threadId = ThreadId.makeUnsafe("thread-provider-event");
+    const providerItem = makeProviderItem({
+      id: RuntimeItemId.makeUnsafe("provider-event-item"),
+      status: "inProgress",
+      updatedAt: "2026-02-27T00:00:03.000Z",
+    });
+    const initialState = makeState(
+      makeThread({ id: threadId, updatedAt: "2026-02-27T00:00:00.000Z" }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.provider-item-upserted", {
+        threadId,
+        providerItem,
+      }),
+    ]);
+
+    expect(next.threads[0]?.providerItems).toEqual([providerItem]);
+    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:00:03.000Z");
+  });
+
+  it("dedupes provider item upserts without a second normalization pass", () => {
+    const threadId = ThreadId.makeUnsafe("thread-provider-event-dedupe");
+    const providerItemId = RuntimeItemId.makeUnsafe("provider-event-item-dedupe");
+    const staleProviderItem = makeProviderItem({
+      id: providerItemId,
+      status: "inProgress",
+      updatedAt: "2026-02-27T00:00:01.000Z",
+    });
+    const providerItem = makeProviderItem({
+      id: providerItemId,
+      status: "completed",
+      updatedAt: "2026-02-27T00:00:03.000Z",
+    });
+    const initialState = makeState(
+      makeThread({
+        id: threadId,
+        providerItems: [staleProviderItem, staleProviderItem],
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      }),
+    );
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.provider-item-upserted", {
+        threadId,
+        providerItem,
+      }),
+    ]);
+
+    expect(next.threads[0]?.providerItems).toEqual([providerItem]);
+  });
+
+  it("preserves live provider items when a hot-path snapshot lags behind a running turn", () => {
+    const threadId = ThreadId.makeUnsafe("thread-provider-hot-path");
+    const turnId = TurnId.makeUnsafe("turn-provider-hot-path");
+    const liveItem = makeProviderItem({
+      id: RuntimeItemId.makeUnsafe("provider-hot-path-live"),
+      turnId,
+      status: "inProgress",
+      createdAt: "2026-02-27T00:00:02.000Z",
+      updatedAt: "2026-02-27T00:00:02.000Z",
+    });
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        providerItems: [liveItem],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        providerItems: [],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    expect(getThreadFromState(next, threadId)?.providerItems).toEqual([liveItem]);
+  });
+
+  it("drops stale live provider items once a hot-path snapshot settles the turn", () => {
+    const threadId = ThreadId.makeUnsafe("thread-provider-hot-path-settled");
+    const turnId = TurnId.makeUnsafe("turn-provider-hot-path-settled");
+    const staleLiveItem = makeProviderItem({
+      id: RuntimeItemId.makeUnsafe("provider-hot-path-stale"),
+      turnId,
+      status: "inProgress",
+      createdAt: "2026-02-27T00:00:02.000Z",
+      updatedAt: "2026-02-27T00:00:02.000Z",
+    });
+    const authoritativeItem = makeProviderItem({
+      id: RuntimeItemId.makeUnsafe("provider-hot-path-authoritative"),
+      turnId,
+      status: "completed",
+      createdAt: "2026-02-27T00:00:03.000Z",
+      updatedAt: "2026-02-27T00:00:05.000Z",
+    });
+    const liveState = makeState(
+      makeThread({
+        id: threadId,
+        providerItems: [staleLiveItem],
+        latestTurn: {
+          turnId,
+          state: "running",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    const next = syncServerThreadDetailHotPath(
+      liveState,
+      makeReadModelThread({
+        id: threadId,
+        providerItems: [authoritativeItem],
+        latestTurn: {
+          turnId,
+          state: "completed",
+          requestedAt: "2026-02-27T00:00:00.000Z",
+          startedAt: "2026-02-27T00:00:01.000Z",
+          completedAt: "2026-02-27T00:00:05.000Z",
+          assistantMessageId: null,
+        },
+      }),
+    );
+
+    expect(getThreadFromState(next, threadId)?.providerItems).toEqual([authoritativeItem]);
   });
 
   it("stops preserving a live assistant intro once the read model settles the same turn", () => {

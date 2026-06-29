@@ -28,12 +28,20 @@ import {
   NonNegativeInt,
   PositiveInt,
   ProjectId,
+  ProviderItemId,
+  RuntimeItemId,
   ThreadMarkerId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas";
 import { ProviderKind } from "./providerKind";
+import {
+  CanonicalItemType,
+  ProviderRuntimeSourceRef,
+  RuntimeContentStreamKind,
+  RuntimeItemStatus,
+} from "./providerRuntime.shared";
 
 export const CodexModelSelection = Schema.Struct({
   provider: Schema.Literal("codex"),
@@ -460,6 +468,32 @@ export const OrchestrationThreadActivity = Schema.Struct({
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
 
+export const OrchestrationProviderItemContentPart = Schema.Struct({
+  streamKind: RuntimeContentStreamKind,
+  text: Schema.String,
+  contentIndex: Schema.NullOr(NonNegativeInt),
+  summaryIndex: Schema.NullOr(NonNegativeInt),
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationProviderItemContentPart = typeof OrchestrationProviderItemContentPart.Type;
+
+export const OrchestrationProviderItem = Schema.Struct({
+  id: RuntimeItemId,
+  providerItemId: Schema.NullOr(ProviderItemId),
+  provider: ProviderKind,
+  turnId: Schema.NullOr(TurnId),
+  itemType: CanonicalItemType,
+  status: RuntimeItemStatus,
+  title: Schema.NullOr(TrimmedNonEmptyString),
+  detail: Schema.NullOr(TrimmedNonEmptyString),
+  data: Schema.NullOr(Schema.Json),
+  content: Schema.Array(OrchestrationProviderItemContentPart),
+  sourceRef: Schema.NullOr(ProviderRuntimeSourceRef),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationProviderItem = typeof OrchestrationProviderItem.Type;
+
 export const ProviderThreadInjectTextItem = Schema.Struct({
   type: Schema.Literal("message"),
   role: Schema.Literal("assistant"),
@@ -642,6 +676,7 @@ export const OrchestrationThread = Schema.Struct({
   messages: Schema.Array(OrchestrationMessage),
   proposedPlans: Schema.Array(OrchestrationProposedPlan).pipe(Schema.withDecodingDefault(() => [])),
   activities: Schema.Array(OrchestrationThreadActivity),
+  providerItems: Schema.Array(OrchestrationProviderItem).pipe(Schema.withDecodingDefault(() => [])),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });

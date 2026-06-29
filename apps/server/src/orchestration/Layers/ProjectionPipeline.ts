@@ -44,6 +44,9 @@ import {
   type ProjectionThreadProposedPlanRepositoryShape,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import {
+  ProjectionThreadProviderItemRepository,
+} from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThreadRuntimeRepository } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import {
@@ -60,6 +63,7 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadProviderItemRepositoryLive } from "../../persistence/Layers/ProjectionThreadProviderItems.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionThreadRuntimeRepositoryLive } from "../../persistence/Layers/ProjectionThreadRuntime.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -83,6 +87,10 @@ import {
 } from "../../attachmentStore.ts";
 import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
 import { makeMiscProjectors } from "./ProjectionPipeline.projectors.misc.ts";
+import {
+  retainProjectionProviderItemsAfterConversationRollback,
+  retainProjectionProviderItemsAfterRevert,
+} from "./ProjectionPipeline.helpers.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -90,6 +98,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadShellSummaries: "projection.thread-shell-summaries",
   threadMessages: "projection.thread-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
+  threadProviderItems: "projection.thread-provider-items",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
   threadRuntime: "projection.thread-runtime",
@@ -588,6 +597,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
   const projectionThreadRepository = yield* ProjectionThreadRepository;
   const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
   const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
+  const projectionThreadProviderItemRepository = yield* ProjectionThreadProviderItemRepository;
   const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
   const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
   const projectionThreadRuntimeRepository = yield* ProjectionThreadRuntimeRepository;
@@ -598,6 +608,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
     projectionThreadRepository,
     projectionThreadMessageRepository,
     projectionThreadProposedPlanRepository,
+    projectionThreadProviderItemRepository,
     projectionThreadActivityRepository,
     projectionThreadSessionRepository,
     projectionThreadRuntimeRepository,
@@ -1280,6 +1291,79 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       }
     });
 
+  const applyThreadProviderItemsProjection: ProjectorDefinition["apply"] = (
+    event,
+    _attachmentSideEffects,
+  ) =>
+    Effect.gen(function* () {
+      switch (event.type) {
+        case "thread.provider-item-upserted":
+          yield* projectionThreadProviderItemRepository.upsert({
+            providerItemId: event.payload.providerItem.id,
+            threadId: event.payload.threadId,
+            turnId: event.payload.providerItem.turnId,
+            item: event.payload.providerItem,
+            createdAt: event.payload.providerItem.createdAt,
+            updatedAt: event.payload.providerItem.updatedAt,
+          });
+          return;
+
+        case "thread.reverted": {
+          const existingRows = yield* projectionThreadProviderItemRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const existingTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const keptRows = retainProjectionProviderItemsAfterRevert(
+            existingRows,
+            existingTurns,
+            event.payload.turnCount,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+          yield* projectionThreadProviderItemRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadProviderItemRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
+        case "thread.conversation-rolled-back": {
+          const existingRows = yield* projectionThreadProviderItemRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const removedTurnIds = new Set(event.payload.removedTurnIds ?? []);
+          const keptRows = retainProjectionProviderItemsAfterConversationRollback(
+            existingRows,
+            removedTurnIds,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+          yield* projectionThreadProviderItemRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadProviderItemRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
+        default:
+          return;
+      }
+    });
+
   const applyThreadActivitiesProjection: ProjectorDefinition["apply"] = (
     event,
     _attachmentSideEffects,
@@ -1822,6 +1906,11 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
       apply: applyThreadProposedPlansProjection,
     },
     {
+      name: ORCHESTRATION_PROJECTOR_NAMES.threadProviderItems,
+      phase: "hot",
+      apply: applyThreadProviderItemsProjection,
+    },
+    {
       name: ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
       phase: "hot",
       apply: applyThreadActivitiesProjection,
@@ -2101,6 +2190,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
+  Layer.provideMerge(ProjectionThreadProviderItemRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionThreadRuntimeRepositoryLive),

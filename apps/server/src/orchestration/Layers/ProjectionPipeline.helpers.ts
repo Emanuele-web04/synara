@@ -2,6 +2,7 @@ import { ApprovalRequestId, type OrchestrationEvent } from "@t3tools/contracts";
 
 import type { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import type { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import type { ProjectionThreadProviderItem } from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import type { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import type { ProjectionThreadRuntime } from "../../persistence/Services/ProjectionThreadRuntime.ts";
 import type { ProjectionTurn } from "../../persistence/Services/ProjectionTurns.ts";
@@ -220,6 +221,24 @@ export function retainProjectionProposedPlansAfterRevert(
   );
 }
 
+export function retainProjectionProviderItemsAfterRevert(
+  providerItems: ReadonlyArray<ProjectionThreadProviderItem>,
+  turns: ReadonlyArray<ProjectionTurn>,
+  turnCount: number,
+): ReadonlyArray<ProjectionThreadProviderItem> {
+  const retainedTurnIds = new Set<string>(
+    turns
+      .filter(
+        (turn) =>
+          turn.turnId !== null &&
+          turn.checkpointTurnCount !== null &&
+          turn.checkpointTurnCount <= turnCount,
+      )
+      .flatMap((turn) => (turn.turnId === null ? [] : [turn.turnId])),
+  );
+  return providerItems.filter((item) => item.turnId === null || retainedTurnIds.has(item.turnId));
+}
+
 export function rollbackProjectionMessagesFromMessage(
   messages: ReadonlyArray<ProjectionThreadMessage>,
   messageId: string,
@@ -268,6 +287,13 @@ export function retainProjectionProposedPlansAfterConversationRollback(
   return proposedPlans.filter(
     (proposedPlan) => proposedPlan.turnId === null || !removedTurnIds.has(proposedPlan.turnId),
   );
+}
+
+export function retainProjectionProviderItemsAfterConversationRollback(
+  providerItems: ReadonlyArray<ProjectionThreadProviderItem>,
+  removedTurnIds: ReadonlySet<string>,
+): ReadonlyArray<ProjectionThreadProviderItem> {
+  return providerItems.filter((item) => item.turnId === null || !removedTurnIds.has(item.turnId));
 }
 
 export function collectThreadAttachmentRelativePaths(

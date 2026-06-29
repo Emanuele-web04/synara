@@ -353,6 +353,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           archivedAt: null,
           deletedAt: null,
           handoff: null,
+          providerItems: [],
           messages: [
             {
               id: asMessageId("message-0"),

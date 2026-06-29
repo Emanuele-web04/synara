@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -32,7 +32,8 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
@@ -229,6 +230,7 @@ function ChatRouteGlobalShortcuts() {
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeThreadTerminalState = activeContextThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
@@ -379,29 +381,30 @@ function ChatRouteGlobalShortcuts() {
               : command === "chat.newCursor"
                 ? "cursor"
                 : "gemini";
-        const providerAvailability = resolveProviderSendAvailability({
-          provider,
-          statuses: providerStatuses,
-        });
-        if (!providerAvailability.usable) {
-          event.preventDefault();
-          event.stopPropagation();
-          toastManager.add({
-            type: "error",
-            title: providerAvailability.unavailableReason,
-          });
-          return;
-        }
         const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
         if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(target.projectId, {
-          provider,
-          ...(target.inheritContext
-            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
-            : {}),
-        });
+        void (async () => {
+          const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
+            provider,
+            statuses: providerStatuses,
+            refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+          });
+          if (!providerAvailability.usable) {
+            toastManager.add({
+              type: "error",
+              title: providerAvailability.unavailableReason,
+            });
+            return;
+          }
+          await handleNewThread(target.projectId, {
+            provider,
+            ...(target.inheritContext
+              ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+              : {}),
+          });
+        })();
         return;
       }
 
@@ -438,7 +441,9 @@ function ChatRouteGlobalShortcuts() {
     keybindings,
     latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
+    platform,
     providerStatuses,
+    refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
     terminalOpen,

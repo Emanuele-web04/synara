@@ -76,6 +76,7 @@ import Migration0057 from "./Migrations/048_ReviewWalkthroughCache.ts";
 import Migration0058 from "./Migrations/049_ReviewWalkthroughCacheTokenIdentity.ts";
 import Migration0059 from "./Migrations/050_EnsureReviewWalkthroughCacheTokenIdentity.ts";
 import Migration0060 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
+import Migration0061 from "./Migrations/061_ProjectionThreadProviderItems.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -148,6 +149,7 @@ export const migrationEntries = [
   [58, "ReviewWalkthroughCacheTokenIdentity", Migration0058],
   [59, "EnsureReviewWalkthroughCacheTokenIdentity", Migration0059],
   [60, "AutomationCompletionEvaluationBacklog", Migration0060],
+  [61, "ProjectionThreadProviderItems", Migration0061],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

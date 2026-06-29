@@ -73,6 +73,7 @@ function makeThread(
     checkpoints: [],
     session: null,
     ...overrides,
+    providerItems: overrides.providerItems ?? [],
   };
 }
 

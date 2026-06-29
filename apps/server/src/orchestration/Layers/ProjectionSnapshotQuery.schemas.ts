@@ -10,6 +10,7 @@ import {
   ModelSelection,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  OrchestrationProviderItem,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationReviewChatTarget,
@@ -37,6 +38,7 @@ import { ProjectionProject } from "../../persistence/Services/ProjectionProjects
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivity } from "../../persistence/Services/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessage } from "../../persistence/Services/ProjectionThreadMessages.ts";
+import { ProjectionThreadProviderItem } from "../../persistence/Services/ProjectionThreadProviderItems.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
 import { ProjectionThreadSession } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import { ProjectionThread } from "../../persistence/Services/ProjectionThreads.ts";
@@ -71,6 +73,11 @@ export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFie
   }),
 );
 export const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
+export const ProjectionThreadProviderItemDbRowSchema = ProjectionThreadProviderItem.mapFields(
+  Struct.assign({
+    item: Schema.fromJsonString(OrchestrationProviderItem),
+  }),
+);
 export const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     createBranchFlowCompleted: Schema.Number,
@@ -163,6 +170,9 @@ export type ProjectionThreadMessageDbRow = Schema.Schema.Type<
 export type ProjectionThreadProposedPlanDbRow = Schema.Schema.Type<
   typeof ProjectionThreadProposedPlanDbRowSchema
 >;
+export type ProjectionThreadProviderItemDbRow = Schema.Schema.Type<
+  typeof ProjectionThreadProviderItemDbRowSchema
+>;
 export type ProjectionThreadActivityDbRow = Schema.Schema.Type<
   typeof ProjectionThreadActivityDbRowSchema
 >;
@@ -178,6 +188,7 @@ export const REQUIRED_SNAPSHOT_PROJECTORS = [
   ORCHESTRATION_PROJECTOR_NAMES.threadShellSummaries,
   ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
   ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
+  ORCHESTRATION_PROJECTOR_NAMES.threadProviderItems,
   ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
   ORCHESTRATION_PROJECTOR_NAMES.threadSessions,
   ORCHESTRATION_PROJECTOR_NAMES.checkpoints,

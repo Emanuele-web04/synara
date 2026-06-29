@@ -15,11 +15,13 @@ import {
   type RefObject,
   type TouchEventHandler,
   type WheelEventHandler,
+  useRef,
 } from "react";
 import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
@@ -42,20 +44,25 @@ interface ChatTranscriptPaneProps {
   isRevertingCheckpoint: boolean;
   isWorking: boolean;
   followLiveOutput: boolean;
+  nowIso?: ComponentProps<typeof MessagesTimeline>["nowIso"];
   listRef: RefObject<LegendListRef | null>;
   timelineControllerRef?: RefObject<MessagesTimelineController | null>;
   pinnedMessageIds?: ReadonlySet<MessageId>;
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  transcriptContainerRef?: RefObject<HTMLDivElement | null>;
+  enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
+  onMarkdownContentReflow?: ComponentProps<typeof MessagesTimeline>["onMarkdownContentReflow"];
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
   onMessagesMouseUp: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerCancel: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerDown: PointerEventHandler<HTMLDivElement>;
   onMessagesPointerUp: PointerEventHandler<HTMLDivElement>;
   onMessagesScroll: ComponentProps<typeof MessagesTimeline>["onMessagesScroll"];
+  onMessagesKeyDown?: ComponentProps<typeof MessagesTimeline>["onMessagesKeyDown"];
   onMessagesTouchEnd: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchMove: TouchEventHandler<HTMLDivElement>;
   onMessagesTouchStart: TouchEventHandler<HTMLDivElement>;
@@ -69,6 +76,7 @@ interface ChatTranscriptPaneProps {
   onRevertUserMessage: (messageId: MessageId) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
   onScrollToBottom: () => void;
+  shouldTailReflow?: ComponentProps<typeof MessagesTimeline>["shouldTailReflow"];
   onToggleWorkGroup?: (groupId: string) => void;
   resolvedTheme: "light" | "dark";
   revertTurnCountByUserMessageId: Map<MessageId, number>;
@@ -96,20 +104,25 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   isRevertingCheckpoint,
   isWorking,
   followLiveOutput,
+  nowIso,
   listRef,
   timelineControllerRef,
   pinnedMessageIds,
   canPinMessage,
   onTogglePinMessage,
   threadMarkers,
+  transcriptContainerRef,
+  enteringUserMessageIds,
   markdownCwd,
   onExpandTimelineImage,
+  onMarkdownContentReflow,
   onMessagesClickCapture,
   onMessagesMouseUp,
   onMessagesPointerCancel,
   onMessagesPointerDown,
   onMessagesPointerUp,
   onMessagesScroll,
+  onMessagesKeyDown,
   onMessagesTouchEnd,
   onMessagesTouchMove,
   onMessagesTouchStart,
@@ -123,6 +136,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   onRevertUserMessage,
   onEditUserMessage,
   onScrollToBottom,
+  shouldTailReflow,
   onToggleWorkGroup,
   resolvedTheme,
   revertTurnCountByUserMessageId,
@@ -133,12 +147,35 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   turnDiffSummaryByAssistantMessageId,
   workspaceRoot,
 }: ChatTranscriptPaneProps) {
+  const latestMessageEntry = (() => {
+    for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
+      const entry = timelineEntries[index];
+      if (entry?.kind === "message") {
+        return entry.message;
+      }
+    }
+    return null;
+  })();
+  const liveLogAnnouncementRef = useRef<{ messageId: string | null; text: string }>({
+    messageId: null,
+    text: "",
+  });
+  if (latestMessageEntry && liveLogAnnouncementRef.current.messageId !== latestMessageEntry.id) {
+    const speaker = latestMessageEntry.role === "user" ? "You" : "Assistant";
+    liveLogAnnouncementRef.current = {
+      messageId: latestMessageEntry.id,
+      text: `${speaker}: ${latestMessageEntry.text.slice(0, 220)}`,
+    };
+  } else if (!latestMessageEntry && liveLogAnnouncementRef.current.messageId !== null) {
+    liveLogAnnouncementRef.current = { messageId: null, text: "" };
+  }
   const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
     ? { paddingRight: contentInsetRightPx }
     : undefined;
 
   return (
     <div
+      ref={transcriptContainerRef}
       data-chat-transcript-pane="true"
       aria-hidden={terminalWorkspaceTerminalTabActive}
       className={cn(
@@ -146,6 +183,15 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
         terminalWorkspaceTerminalTabActive ? "pointer-events-none invisible" : "",
       )}
     >
+      <div
+        role="log"
+        aria-live="polite"
+        aria-relevant="additions text"
+        aria-atomic="false"
+        className="sr-only"
+      >
+        {liveLogAnnouncementRef.current.text}
+      </div>
       <div className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
         {agentActivityDetail && onCloseAgentActivityDetail ? (
           <AgentActivityDetailView
@@ -173,8 +219,10 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+            nowIso={nowIso}
             onOpenTurnDiff={onOpenTurnDiff}
             onOpenThread={onOpenThread}
             {...(onOpenAutomation ? { onOpenAutomation } : {})}
@@ -183,6 +231,8 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(onEditUserMessage ? { onEditUserMessage } : {})}
             isRevertingCheckpoint={isRevertingCheckpoint}
             onImageExpand={onExpandTimelineImage}
+            {...(onMarkdownContentReflow ? { onMarkdownContentReflow } : {})}
+            {...(shouldTailReflow ? { shouldTailReflow } : {})}
             followLiveOutput={followLiveOutput}
             onIsAtEndChange={onIsAtEndChange}
             onMessagesScroll={onMessagesScroll}
@@ -192,6 +242,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             onMessagesPointerDown={onMessagesPointerDown}
             onMessagesPointerUp={onMessagesPointerUp}
             onMessagesPointerCancel={onMessagesPointerCancel}
+            {...(onMessagesKeyDown ? { onMessagesKeyDown } : {})}
             onMessagesTouchStart={onMessagesTouchStart}
             onMessagesTouchMove={onMessagesTouchMove}
             onMessagesTouchEnd={onMessagesTouchEnd}
@@ -215,9 +266,17 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           />
         )}
 
-        {scrollButtonVisible && !agentActivityDetail ? (
+        {!agentActivityDetail ? (
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1",
+              // Reuse the shared disclosure motion so the arrow fades + drifts in/out with
+              // the same 220ms ease-out curve (and motion-reduce fallback) as every other
+              // show/hide in the app. The wrapper stays pointer-events-none; only the
+              // button re-enables pointer events while visible.
+              DISCLOSURE_CONTENT_MOTION_CLASS,
+              scrollButtonVisible ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
+            )}
             // Follow the same right inset as transcript rows so the button centers in the
             // visible chat column while the side panel overlays the viewport edge.
             style={scrollButtonFrameStyle}
@@ -227,7 +286,12 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
               aria-label="Scroll to bottom"
-              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]"
+              aria-hidden={!scrollButtonVisible}
+              tabIndex={scrollButtonVisible ? 0 : -1}
+              className={cn(
+                "flex size-11 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)] sm:size-8",
+                scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
+              )}
             >
               <ArrowDownIcon className="size-3.5" />
             </button>

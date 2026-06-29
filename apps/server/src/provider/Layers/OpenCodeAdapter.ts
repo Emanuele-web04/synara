@@ -61,6 +61,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
@@ -3796,10 +3797,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
 
-        const text = withProviderPlanModePrompt({
+        const baseText = withProviderPlanModePrompt({
           text: input.input?.trim() ?? "",
           interactionMode: input.interactionMode,
         }).trim();
+        const text =
+          appendFileAttachmentsPromptBlock({
+            text: baseText,
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            include: "all-files",
+          })?.trim() ?? "";
         const fileParts = toOpenCodeFileParts({
           attachments: input.attachments,
           resolveAttachmentPath: (attachment) =>

@@ -142,6 +142,7 @@ export const Route = createRootRouteWithContext<{
   errorComponent: RootRouteErrorView,
   head: () => ({
     meta: [{ name: "title", content: APP_DISPLAY_NAME }],
+    scripts: import.meta.env.DEV ? [{ src: "https://ui.sh/ui-picker.js" }] : [],
   }),
 });
 
@@ -217,6 +218,18 @@ function ProviderUpdateNotifications() {
   const { settings } = useAppSettings();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const providerUpdateServerSettings = useMemo(
+    () =>
+      serverSettingsQuery.data
+        ? {
+            ...serverSettingsQuery.data,
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }
+        : null,
+    [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
+  );
+  const providerUpdateChecksEnabled =
+    serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
@@ -224,6 +237,7 @@ function ProviderUpdateNotifications() {
   // Provider latest-version checks are slow/network-backed, so keep this much
   // coarser than auth focus refreshes while still avoiding manual-only refreshes.
   useProviderStatusRefresh({
+    enabled: providerUpdateChecksEnabled,
     initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
     intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
   });
@@ -232,10 +246,10 @@ function ProviderUpdateNotifications() {
       getVisibleProviderUpdateStatuses({
         providers: serverConfigQuery.data?.providers ?? [],
         hiddenProviders: settings.hiddenProviders,
-        serverSettings: serverSettingsQuery.data ?? null,
+        serverSettings: providerUpdateServerSettings,
         oneClickOnly: true,
       }),
-    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
+    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
   );
   const oneClickProviders = useMemo(
     () => outdatedProviders.filter((provider) => !isProviderUpdateActive(provider)),
@@ -725,6 +739,7 @@ function isThreadDetailEventForThread(event: OrchestrationEvent, threadId: Threa
   }
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.provider-item-upserted" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||

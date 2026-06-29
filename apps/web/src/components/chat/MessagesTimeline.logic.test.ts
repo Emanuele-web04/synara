@@ -227,30 +227,6 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
-  it("replaces working rows when the live status label changes", () => {
-    const firstRows: MessagesTimelineRow[] = [
-      {
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: "2026-05-09T10:00:00.000Z",
-      },
-    ];
-    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
-    const labelledRows: MessagesTimelineRow[] = [
-      {
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: "2026-05-09T10:00:00.000Z",
-        label: "Thinking",
-      },
-    ];
-
-    const second = computeStableMessagesTimelineRows(labelledRows, first);
-
-    expect(second).not.toBe(first);
-    expect(second.result[0]).toBe(labelledRows[0]);
-  });
-
   it("replaces work rows when automation card fields are added", () => {
     const firstRows: MessagesTimelineRow[] = [
       {
@@ -353,76 +329,45 @@ describe("computeStableMessagesTimelineRows", () => {
     expect(second.result[0]).toBe(enrichedRows[0]);
   });
 
-  it("keeps settled rows stable while repeated assistant streaming deltas update the live row", () => {
-    const userMessage = {
-      id: MessageId.makeUnsafe("user-1"),
-      role: "user" as const,
-      text: "Explain the plan.",
-      createdAt: "2026-05-09T10:00:00.000Z",
-      streaming: false,
-    };
-    const userRow: MessageTimelineRow = {
-      kind: "message",
-      id: "user-1",
-      createdAt: "2026-05-09T10:00:00.000Z",
-      message: userMessage,
-      durationStart: "2026-05-09T10:00:00.000Z",
-      showAssistantCopyButton: false,
-      assistantCopyStreaming: false,
-    };
-
-    let state = computeStableMessagesTimelineRows(
-      [
-        userRow,
-        {
-          kind: "message",
-          id: "assistant-1",
-          createdAt: "2026-05-09T10:00:01.000Z",
-          message: {
-            id: MessageId.makeUnsafe("assistant-1"),
-            role: "assistant" as const,
-            text: "",
-            createdAt: "2026-05-09T10:00:01.000Z",
-            streaming: true,
-          },
-          durationStart: "2026-05-09T10:00:00.000Z",
-          showAssistantCopyButton: true,
-          assistantCopyStreaming: true,
+  it("preserves unchanged visible row objects when only the streaming tail assistant text grows", () => {
+    const firstRows: MessageTimelineRow[] = Array.from({ length: 80 }, (_, index) => {
+      const id = index === 79 ? "assistant-tail" : `assistant-history-${index}`;
+      return {
+        kind: "message",
+        id,
+        createdAt: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        message: {
+          id: MessageId.makeUnsafe(id),
+          role: "assistant",
+          text: index === 79 ? "Streaming token 0" : `History row ${index}`,
+          createdAt: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+          streaming: index === 79,
         },
-      ],
-      emptyStableRows(),
+        durationStart: `2026-05-09T10:${String(index).padStart(2, "0")}:00.000Z`,
+        showAssistantCopyButton: index !== 79,
+        assistantCopyStreaming: index === 79,
+      };
+    });
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+    const nextRows: MessageTimelineRow[] = firstRows.map((row, index) =>
+      index === 79
+        ? {
+            ...row,
+            message: {
+              ...row.message,
+              text: "Streaming token 0 Streaming token 1",
+            },
+          }
+        : row,
     );
 
-    const stableUserRow = state.result[0];
-    let previousAssistantRow = state.result[1];
+    const second = computeStableMessagesTimelineRows(nextRows, first);
 
-    for (let step = 1; step <= 50; step += 1) {
-      state = computeStableMessagesTimelineRows(
-        [
-          userRow,
-          {
-            kind: "message",
-            id: "assistant-1",
-            createdAt: "2026-05-09T10:00:01.000Z",
-            message: {
-              id: MessageId.makeUnsafe("assistant-1"),
-              role: "assistant" as const,
-              text: "token ".repeat(step).trim(),
-              createdAt: "2026-05-09T10:00:01.000Z",
-              streaming: true,
-            },
-            durationStart: "2026-05-09T10:00:00.000Z",
-            showAssistantCopyButton: true,
-            assistantCopyStreaming: true,
-          },
-        ],
-        state,
-      );
-
-      expect(state.result[0]).toBe(stableUserRow);
-      expect(state.result[1]).not.toBe(previousAssistantRow);
-      previousAssistantRow = state.result[1];
+    expect(second).not.toBe(first);
+    for (let index = 0; index < 79; index += 1) {
+      expect(second.result[index]).toBe(first.result[index]);
     }
+    expect(second.result[79]).toBe(nextRows[79]);
   });
 });
 
@@ -739,24 +684,6 @@ describe("deriveMessagesTimelineRows", () => {
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
 
-  it("labels the live working row from trailing thinking work", () => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      timelineEntries: [
-        userEntry("u1", "2026-01-01T00:00:00Z"),
-        workEntry("thinking-1", "2026-01-01T00:00:01Z", "Thinking", "thinking"),
-      ],
-      isWorking: true,
-      activeTurnStartedAt: "2026-01-01T00:00:00Z",
-    });
-
-    expect(rows.at(-1)).toMatchObject({
-      kind: "working",
-      label: "Thinking",
-      createdAt: "2026-01-01T00:00:00Z",
-    });
-  });
-
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
     const rows = deriveMessagesTimelineRows({
       ...baseInput,
@@ -827,6 +754,37 @@ describe("deriveMessagesTimelineRows", () => {
     expect(terminal!.collapsedTurnItems).toBeUndefined();
   });
 
+  it("keeps pre-existing tool work above the new live narration text", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "I will inspect it.",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "read files"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Here is what I found so far.",
+          streaming: true,
+        }),
+        workEntry("w2", "2026-01-01T00:00:04Z", "search files"),
+      ],
+    });
+
+    const streamingNarration = messageRow(rows, "a2");
+
+    expect(streamingNarration?.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(streamingNarration?.leadingWorkGroupId).toBe("entry-w1");
+    expect(streamingNarration?.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w2"]);
+    expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
+  });
+
   it("keeps live raw stream work inline on the active assistant row", () => {
     const rawStreamWork: TimelineEntry = {
       id: "entry-command-output",
@@ -890,8 +848,10 @@ describe("deriveMessagesTimelineRows", () => {
 
     const terminal = messageRow(rows, "a1");
     expect(terminal).toBeDefined();
-    expect(terminal!.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.inlineWorkEntries).toBeUndefined();
     expect(terminal!.collapsedTurnItems).toBeUndefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
   it("collapses an older settled turn when a follow-up user message is waiting for output", () => {

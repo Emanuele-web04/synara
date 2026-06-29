@@ -25,6 +25,10 @@ import { normalizeProjectFromReadModel, normalizeProjectFromShell } from "./proj
 import { normalizeProposedPlans } from "./threadProposedPlans";
 import { normalizeActivities } from "./threadActivities";
 import {
+  mergeReadModelProviderItemsWithLiveHotPath,
+  normalizeProviderItems,
+} from "./threadProviderItems";
+import {
   mergeReadModelMessagesWithLiveHotPath,
   normalizeChatMessages,
   shouldPreserveRunningTurn,
@@ -160,6 +164,26 @@ function mergeReadModelLatestTurnWithLiveHotPath(
   };
 }
 
+function shouldPreserveLiveProviderItems(
+  previousThread: Thread | undefined,
+  incoming: ReadModelThread,
+): boolean {
+  const previousTurnId = previousThread?.latestTurn?.turnId;
+  if (!previousTurnId) {
+    return false;
+  }
+  const hasLiveProviderItem = previousThread.providerItems.some(
+    (item) => item.turnId === previousTurnId && item.status === "inProgress",
+  );
+  if (!hasLiveProviderItem) {
+    return false;
+  }
+  if (incoming.latestTurn === null) {
+    return true;
+  }
+  return incoming.latestTurn.turnId === previousTurnId && incoming.latestTurn.completedAt === null;
+}
+
 export function mergeReadModelThreadDetailWithLiveHotPath(
   incoming: ReadModelThread,
   previousThread: Thread | undefined,
@@ -170,6 +194,14 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
 
   const preserveRunningTurn = shouldPreserveRunningTurn(previousThread, incoming);
   const messages = mergeReadModelMessagesWithLiveHotPath(incoming.messages, previousThread);
+  const providerItems = mergeReadModelProviderItemsWithLiveHotPath(
+    incoming.providerItems,
+    previousThread,
+    {
+      preserveRunningTurn:
+        preserveRunningTurn || shouldPreserveLiveProviderItems(previousThread, incoming),
+    },
+  );
   const session = mergeReadModelSessionWithLiveHotPath(incoming.session, previousThread, {
     preserveRunningTurn,
   });
@@ -178,6 +210,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   });
   if (
     messages === incoming.messages &&
+    providerItems === incoming.providerItems &&
     session === incoming.session &&
     latestTurn === incoming.latestTurn
   ) {
@@ -186,6 +219,7 @@ export function mergeReadModelThreadDetailWithLiveHotPath(
   return {
     ...incoming,
     messages,
+    providerItems,
     session,
     latestTurn,
   };
@@ -357,6 +391,7 @@ export function normalizeThreadFromReadModel(
   const modelSelection = normalizeModelSelection(incoming.modelSelection, previous?.modelSelection);
   const session = normalizeThreadSession(incoming.session, previous?.session);
   const messages = normalizeChatMessages(incoming.messages, previous?.messages);
+  const providerItems = normalizeProviderItems(incoming.providerItems, previous?.providerItems);
   const proposedPlans = normalizeProposedPlans(incoming.proposedPlans, previous?.proposedPlans);
   const latestTurn = normalizeLatestTurn(incoming.latestTurn, previous?.latestTurn);
   const handoff =
@@ -436,6 +471,7 @@ export function normalizeThreadFromReadModel(
     previous.interactionMode === incoming.interactionMode &&
     previous.session === session &&
     previous.messages === messages &&
+    previous.providerItems === providerItems &&
     previous.proposedPlans === proposedPlans &&
     previous.error === error &&
     previous.createdAt === incoming.createdAt &&
@@ -485,6 +521,7 @@ export function normalizeThreadFromReadModel(
     interactionMode: incoming.interactionMode,
     session,
     messages,
+    providerItems,
     proposedPlans,
     error,
     createdAt: incoming.createdAt,

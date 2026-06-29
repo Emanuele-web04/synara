@@ -6,7 +6,12 @@
 // Exports: EMPTY_* sentinels, writeThreadState/writeThreadShellProjection, removeThread/ProjectState,
 //   commitThreadProjection, retainThreadScopedRecord, ensureThreadRegistered.
 
-import { type MessageId, type ThreadId, type TurnId } from "@t3tools/contracts";
+import {
+  type MessageId,
+  type OrchestrationProviderItem,
+  type ThreadId,
+  type TurnId,
+} from "@t3tools/contracts";
 import type { AppState } from "../store";
 import {
   type ChatMessage,
@@ -19,6 +24,7 @@ import {
 import { getThreadFromState } from "../threadDerivation";
 import { buildActivitySlice } from "./threadActivities";
 import { buildMessageSlice } from "./threadMessages";
+import { buildProviderItemSlice } from "./threadProviderItems";
 import { buildProposedPlanSlice, sourceProposedPlansEqual } from "./threadProposedPlans";
 import { buildSidebarThreadSummary } from "./sidebarSummaries";
 import {
@@ -43,6 +49,11 @@ export const EMPTY_ACTIVITY_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 export const EMPTY_ACTIVITY_BY_THREAD: Record<
   ThreadId,
   Record<string, Thread["activities"][number]>
+> = {};
+export const EMPTY_PROVIDER_ITEM_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
+export const EMPTY_PROVIDER_ITEM_BY_THREAD: Record<
+  ThreadId,
+  Record<string, OrchestrationProviderItem>
 > = {};
 export const EMPTY_PROPOSED_PLAN_IDS_BY_THREAD: Record<ThreadId, string[]> = {};
 export const EMPTY_PROPOSED_PLAN_BY_THREAD: Record<
@@ -262,6 +273,25 @@ export function writeThreadState(
     };
   }
 
+  if (
+    previousThread?.providerItems !== nextThread.providerItems ||
+    (nextState.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD)[nextThread.id] ===
+      undefined
+  ) {
+    const nextProviderItemSlice = buildProviderItemSlice(nextThread);
+    nextState = {
+      ...nextState,
+      providerItemIdsByThreadId: {
+        ...(nextState.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD),
+        [nextThread.id]: nextProviderItemSlice.ids,
+      },
+      providerItemByThreadId: {
+        ...(nextState.providerItemByThreadId ?? EMPTY_PROVIDER_ITEM_BY_THREAD),
+        [nextThread.id]: nextProviderItemSlice.byId,
+      },
+    };
+  }
+
   if (previousThread?.proposedPlans !== nextThread.proposedPlans) {
     const nextProposedPlanSlice = buildProposedPlanSlice(nextThread);
     nextState = {
@@ -310,6 +340,10 @@ export function removeThreadState(state: AppState, threadId: ThreadId): AppState
     state.activityIdsByThreadId ?? EMPTY_ACTIVITY_IDS_BY_THREAD;
   const { [threadId]: _removedActivities, ...activityByThreadId } =
     state.activityByThreadId ?? EMPTY_ACTIVITY_BY_THREAD;
+  const { [threadId]: _removedProviderItemIds, ...providerItemIdsByThreadId } =
+    state.providerItemIdsByThreadId ?? EMPTY_PROVIDER_ITEM_IDS_BY_THREAD;
+  const { [threadId]: _removedProviderItems, ...providerItemByThreadId } =
+    state.providerItemByThreadId ?? EMPTY_PROVIDER_ITEM_BY_THREAD;
   const { [threadId]: _removedPlanIds, ...proposedPlanIdsByThreadId } =
     state.proposedPlanIdsByThreadId ?? EMPTY_PROPOSED_PLAN_IDS_BY_THREAD;
   const { [threadId]: _removedPlans, ...proposedPlanByThreadId } =
@@ -341,6 +375,8 @@ export function removeThreadState(state: AppState, threadId: ThreadId): AppState
     messageByThreadId,
     activityIdsByThreadId,
     activityByThreadId,
+    providerItemIdsByThreadId,
+    providerItemByThreadId,
     proposedPlanIdsByThreadId,
     proposedPlanByThreadId,
     turnDiffIdsByThreadId,

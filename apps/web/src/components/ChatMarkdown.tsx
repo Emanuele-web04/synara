@@ -3,9 +3,9 @@
 // Layer: Web chat presentation component
 // Exports: ChatMarkdown
 
-import { DiffsHighlighter, getSharedHighlighter, SupportedLanguages } from "@pierre/diffs";
-import type { ThreadMarker } from "@t3tools/contracts";
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
+import type { ThreadMarker } from "@t3tools/contracts";
+import "katex/dist/katex.min.css";
 import React, {
   Children,
   type CSSProperties,
@@ -26,25 +26,44 @@ import ReactMarkdown from "react-markdown";
 import { defaultUrlTransform } from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import rehypeRaw from "rehype-raw";
-import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
+import rehypeSanitize, {
+  defaultSchema,
+  type Options as RehypeSanitizeOptions,
+} from "rehype-sanitize";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { openInPreferredEditor } from "../editorPreferences";
 import { copyTextToClipboard } from "../hooks/useCopyToClipboard";
 import { resolveDiffThemeName, type DiffThemeName } from "../lib/diffRendering";
-import { fnv1a32 } from "../lib/diffRendering";
 import { dedentCode, parseCodeFenceInfo, type CodeFenceInfo } from "../lib/codeFence";
-import { getFileIconName } from "../file-icons";
+import { getFileIconName, pathLooksLikeKnownFile } from "../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { isLocalImageMarkdownSrc } from "../lib/localImageUrls";
-import { LRUCache } from "../lib/lruCache";
 import { useTheme } from "../hooks/useTheme";
+import { useSmoothStreamedText } from "../hooks/useSmoothStreamedText";
+import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../lib/workspaceFileOpener";
 import { resolveMarkdownFileLinkTarget, rewriteMarkdownFileUriHref } from "../markdown-links";
-import { readNativeApi } from "../nativeApi";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { GeneratedMarkdownImage } from "./chat/GeneratedMarkdownImage";
 import { isMermaidFence, MarkdownMermaidDiagram } from "./chat/MarkdownMermaidDiagram";
+import {
+  COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+} from "./composerInlineChip";
+import { LinkChipIcon } from "./LinkChipIcon";
+import { InlineMentionChip } from "./chat/InlineMentionChip";
 import { IconButton } from "./ui/icon-button";
+
+const EXTERNAL_HTTP_HREF_PATTERN = /^https?:\/\//i;
+// Trailing `:line` / `:line:col` position suffix on a resolved file link. Kept on
+// the href (so opening jumps to the line) but stripped for icon/title resolution.
+const MARKDOWN_LINK_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const MARKDOWN_EXTERNAL_LINK_CLASS_NAME =
+  "inline font-medium text-[var(--info-foreground)] underline-offset-2 hover:underline";
+const MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME = `${COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME} ${COMPOSER_INLINE_CHIP_ICON_LABEL_GAP_CLASS_NAME}`;
+
+function isExternalHttpHref(href: string | undefined): href is string {
+  return typeof href === "string" && EXTERNAL_HTTP_HREF_PATTERN.test(href);
+}
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -70,24 +89,46 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
-  isStreaming?: boolean | undefined;
+  isStreaming?: boolean;
+  allowHtml?: boolean;
   className?: string | undefined;
   style?: CSSProperties | undefined;
   onImageExpand?: ((preview: ExpandedImagePreview) => void) | undefined;
+  onContentReflow?: (() => void) | undefined;
   markers?: readonly ThreadMarker[] | undefined;
-  // Render the GitHub-flavored HTML subset (sanitized). Enable only for externally
-  // authored content such as PR/review comment bodies.
-  allowHtml?: boolean | undefined;
+  /**
+   * Makes GFM task-list checkboxes interactive. Receives the 1-based line of
+   * the task item in `text` so the caller can flip that `[ ]` marker at the
+   * source (line numbers stay valid because the internal dollar protection is
+   * length- and newline-preserving). Without it checkboxes render read-only.
+   */
+  onTaskToggle?: ((input: { sourceLine: number; checked: boolean }) => void) | undefined;
+}
+
+// Source line of the enclosing task-list item, provided by the `li` override.
+// The checkbox `input` element is synthesized by mdast-util-to-hast without
+// position info, so it cannot read its own source location.
+const TaskItemSourceLineContext = React.createContext<number | null>(null);
+
+function MarkdownTaskCheckbox(props: {
+  checked: boolean;
+  onTaskToggle: ChatMarkdownProps["onTaskToggle"];
+}) {
+  const { checked, onTaskToggle } = props;
+  const sourceLine = React.useContext(TaskItemSourceLineContext);
+  const interactive = onTaskToggle !== undefined && sourceLine !== null;
+  return (
+    <input
+      type="checkbox"
+      className="chat-markdown-task-checkbox"
+      checked={checked}
+      disabled={!interactive}
+      {...(interactive ? { onChange: () => onTaskToggle({ sourceLine, checked: !checked }) } : {})}
+    />
+  );
 }
 
 const CODE_FENCE_LANGUAGE_REGEX = /(?:^|\s)language-([^\s]+)/;
-const MAX_HIGHLIGHT_CACHE_ENTRIES = 500;
-const MAX_HIGHLIGHT_CACHE_MEMORY_BYTES = 50 * 1024 * 1024;
-const highlightedCodeCache = new LRUCache<string>(
-  MAX_HIGHLIGHT_CACHE_ENTRIES,
-  MAX_HIGHLIGHT_CACHE_MEMORY_BYTES,
-);
-const highlighterPromiseCache = new Map<string, Promise<DiffsHighlighter>>();
 type MarkdownRemarkPlugins = NonNullable<
   React.ComponentProps<typeof ReactMarkdown>["remarkPlugins"]
 >;
@@ -98,10 +139,21 @@ const MARKDOWN_REMARK_PLUGINS: MarkdownRemarkPlugins = [
   remarkGfm,
   [remarkMath, { singleDollarTextMath: true }],
 ];
-const LITERAL_DOLLAR_PLACEHOLDER = "CHATMARKDOWNLITERALDOLLARPLACEHOLDER";
+const LITERAL_DOLLAR_PLACEHOLDER = "\uE000";
+// `\$` is two source characters that render as a single `$`. Collapsing it to one placeholder used
+// to shorten the protected string, which shifted every downstream offset (thread-marker positions
+// are resolved against the raw text but applied against the parsed mdast positions). A two-character
+// placeholder keeps `protectLiteralMarkdownDollars` length-preserving so those offsets stay aligned;
+// it is restored ahead of the single-char placeholder (the two share no characters, so order is
+// only for clarity).
+const ESCAPED_DOLLAR_PLACEHOLDER = "\uE001\uE002";
 
 function restoreLiteralDollarPlaceholders(value: string): string {
-  return value.replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$");
+  return value
+    .replaceAll(ESCAPED_DOLLAR_PLACEHOLDER, "$")
+    .replaceAll(LITERAL_DOLLAR_PLACEHOLDER, "$")
+    .replaceAll(encodeURIComponent(ESCAPED_DOLLAR_PLACEHOLDER), "$")
+    .replaceAll(encodeURIComponent(LITERAL_DOLLAR_PLACEHOLDER), "$");
 }
 
 function restoreLiteralDollarsInNode(node: unknown): void {
@@ -130,42 +182,22 @@ const MARKDOWN_REHYPE_PLUGINS: MarkdownRehypePlugins = [
   [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
   rehypeRestoreLiteralDollars,
 ];
-
-// GitHub renders a subset of raw HTML in comment bodies (collapsible <details>,
-// responsive <picture>/<source>, etc.). Mirror that subset so bot comments don't
-// leak their tags as literal text, while still scrubbing anything executable.
-// `className` is allow-listed only with remark-math's marker values so rehype-katex
-// (which runs after sanitize) can still find inline/display math nodes.
-const MARKDOWN_SANITIZE_SCHEMA = {
+const MARKDOWN_ALLOWED_HTML_SCHEMA: RehypeSanitizeOptions = {
   ...defaultSchema,
-  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary", "picture", "source"],
+  tagNames: [...(defaultSchema.tagNames ?? []), "details", "summary"],
   attributes: {
     ...defaultSchema.attributes,
-    span: [
-      ...(defaultSchema.attributes?.span ?? []),
-      ["className", "math", "math-inline", "math-display"],
-    ],
-    div: [
-      ...(defaultSchema.attributes?.div ?? []),
-      ["className", "math", "math-inline", "math-display"],
-    ],
-    img: [...(defaultSchema.attributes?.img ?? []), "srcSet", "sizes"],
-    source: ["srcSet", "media", "type", "sizes", "src"],
     details: [...(defaultSchema.attributes?.details ?? []), "open"],
+    summary: defaultSchema.attributes?.summary ?? [],
   },
 };
-
-const MARKDOWN_REHYPE_PLUGINS_WITH_HTML: MarkdownRehypePlugins = [
-  rehypeRaw,
-  [rehypeSanitize, MARKDOWN_SANITIZE_SCHEMA],
-  [rehypeKatex, { output: "htmlAndMathml", strict: false, throwOnError: false }],
-  rehypeRestoreLiteralDollars,
-];
-
 type MarkdownTextNode = {
   type: "text";
   value: string;
-  position?: { start?: { offset?: number }; end?: { offset?: number } };
+  position?: {
+    start?: { offset?: number };
+    end?: { offset?: number };
+  };
 };
 type MarkdownParentNode = {
   type?: string;
@@ -178,6 +210,8 @@ type ThreadMarkerFragmentContinuity = {
   readonly continuesAfter: boolean;
 };
 
+// The "active" ring (a transient deep-link highlight) is applied imperatively by the timeline so
+// it never re-parses the markdown tree; this className is the stable, parse-time-only part.
 function markerClassNameFor(marker: ThreadMarker) {
   return [
     "thread-marker",
@@ -189,6 +223,7 @@ function markerClassNameFor(marker: ThreadMarker) {
     .join(" ");
 }
 
+// Joins marker fragments split by markdown nodes so bold/code boundaries still read as one mark.
 function markerFragmentClassNameFor(
   marker: RenderableThreadMarker,
   continuity: ThreadMarkerFragmentContinuity,
@@ -247,6 +282,7 @@ function applyThreadMarkersToNode(node: MarkdownNode, markers: readonly Renderab
   }
 
   const parent = node as MarkdownParentNode;
+  // The guard above already proved `children` is an array; `?? []` only satisfies the optional type.
   parent.children = (parent.children ?? []).flatMap((child) => {
     if (child && typeof child === "object" && "type" in child && child.type === "text") {
       return splitTextNodeWithMarkers(child as MarkdownTextNode, markers);
@@ -452,7 +488,7 @@ function protectLiteralDollarsInPlainText(value: string): string {
 
   while (cursor < value.length) {
     if (value[cursor] === "\\" && value[cursor + 1] === "$") {
-      result += LITERAL_DOLLAR_PLACEHOLDER;
+      result += ESCAPED_DOLLAR_PLACEHOLDER;
       cursor += 2;
       continue;
     }
@@ -593,10 +629,6 @@ function protectLiteralDollarsInMarkdownLinks(value: string): string {
 
 // Tighten single-dollar math so currency and escaped dollars stay literal without touching code spans.
 function protectLiteralMarkdownDollars(value: string): string {
-  if (!value.includes("$")) {
-    return value;
-  }
-
   let result = "";
   let cursor = 0;
 
@@ -669,11 +701,12 @@ function extractCodeBlock(
     return null;
   }
 
+  // The single child is the fenced code element. Its rendered `type` is the
+  // custom `code` component (not the string "code") once we override `code`
+  // below, so detect by shape (a valid element carrying the code text) rather
+  // than by tag identity. `pre` only ever wraps a code element in markdown.
   const onlyChild = childNodes[0];
-  if (
-    !isValidElement<{ className?: string; children?: ReactNode }>(onlyChild) ||
-    onlyChild.type !== "code"
-  ) {
+  if (!isValidElement<{ className?: string; children?: ReactNode }>(onlyChild)) {
     return null;
   }
 
@@ -683,33 +716,87 @@ function extractCodeBlock(
   };
 }
 
-function createHighlightCacheKey(code: string, language: string, themeName: DiffThemeName): string {
-  return `${fnv1a32(code).toString(36)}:${code.length}:${language}:${themeName}`;
+function isMarkdownTableFenceLanguage(language: string): boolean {
+  const normalizedLanguage = language.trim().toLowerCase();
+  return normalizedLanguage === "md" || normalizedLanguage === "markdown";
 }
 
-function estimateHighlightedSize(html: string, code: string): number {
-  return Math.max(html.length * 2, code.length * 3);
-}
-
-function getHighlighterPromise(language: string): Promise<DiffsHighlighter> {
-  const cached = highlighterPromiseCache.get(language);
-  if (cached) return cached;
-
-  const promise = getSharedHighlighter({
-    themes: [resolveDiffThemeName("dark"), resolveDiffThemeName("light")],
-    langs: [language as SupportedLanguages],
-    preferredHighlighter: "shiki-js",
-  }).catch((err) => {
-    highlighterPromiseCache.delete(language);
-    if (language === "text") {
-      // "text" itself failed — Shiki cannot initialize at all, surface the error
-      throw err;
+function isMarkdownTableFenceContent(code: string): boolean {
+  const lines = code
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^>\s?/, ""));
+  let previousLine: string | null = null;
+  for (const line of lines) {
+    if (line.length === 0) {
+      previousLine = null;
+      continue;
     }
-    // Language not supported by Shiki — fall back to "text"
-    return getHighlighterPromise("text");
-  });
-  highlighterPromiseCache.set(language, promise);
-  return promise;
+    if (
+      previousLine?.includes("|") &&
+      line.includes("|") &&
+      /^\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?$/.test(line)
+    ) {
+      return true;
+    }
+    previousLine = line;
+  }
+  return false;
+}
+
+const INLINE_CODE_FILE_PATH_MAX_LENGTH = 120;
+
+// Decides whether an inline code span names a file/path that should render as a
+// mention chip (icon + medium label), matching how a file reads in the composer.
+// Conservative on purpose: requires a recognized filename/extension and rejects
+// whitespace and URLs so ordinary prose tokens stay plain inline code.
+function inlineCodeFilePath(raw: string): string | null {
+  // Strip a pair of surrounding quotes/backticks the author may have wrapped the
+  // path in (e.g. `'src/data/social-metrics.ts'`).
+  const value = raw.trim().replace(/^['"`]+|['"`]+$/g, "");
+  if (
+    value.length === 0 ||
+    value.length > INLINE_CODE_FILE_PATH_MAX_LENGTH ||
+    /\s/.test(value) ||
+    value.includes("://")
+  ) {
+    return null;
+  }
+  return pathLooksLikeKnownFile(value) ? value : null;
+}
+
+// Shared openable file chip: the same mention-chip UI (file icon + medium label)
+// used for both assistant markdown file links and inline code that names a file.
+// A plain click prefers the surface's in-app viewer (right-dock file pane);
+// meta/ctrl-click — or a surface without a viewer — opens the preferred
+// external editor. `targetPath` may carry a `:line` suffix (used to open); the
+// chip icon and title use the position-free path.
+function OpenableFileChip(props: {
+  targetPath: string;
+  theme: "light" | "dark";
+  label?: ReactNode;
+  href?: string;
+}) {
+  const opener = useWorkspaceFileOpener();
+  const chipPath = props.targetPath.replace(MARKDOWN_LINK_POSITION_SUFFIX_PATTERN, "");
+  return (
+    <InlineMentionChip
+      path={chipPath}
+      theme={props.theme}
+      href={props.href ?? props.targetPath}
+      onActivate={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const forceExternalEditor = event.metaKey || event.ctrlKey;
+        openWorkspaceFileReference(forceExternalEditor ? null : opener, props.targetPath);
+      }}
+      {...(opener?.prefetchFile
+        ? { onHoverPrefetch: () => opener.prefetchFile?.(props.targetPath) }
+        : {})}
+      {...(props.label !== undefined ? { label: props.label } : {})}
+    />
+  );
 }
 
 function CodeBlockHeaderTitle({ fence }: { fence: CodeFenceInfo }) {
@@ -813,14 +900,43 @@ interface SuspenseShikiCodeBlockProps {
   isStreaming: boolean;
 }
 
+type SyntaxHighlightingModule = typeof import("../lib/syntaxHighlighting");
+let syntaxHighlightingModulePromise: Promise<SyntaxHighlightingModule> | null = null;
+
+function getSyntaxHighlightingModulePromise(): Promise<SyntaxHighlightingModule> {
+  syntaxHighlightingModulePromise ??= import("../lib/syntaxHighlighting");
+  return syntaxHighlightingModulePromise;
+}
+
 function SuspenseShikiCodeBlock({
   language,
   code,
   themeName,
   isStreaming,
 }: SuspenseShikiCodeBlockProps) {
-  const cacheKey = createHighlightCacheKey(code, language, themeName);
-  const cachedHighlightedHtml = !isStreaming ? highlightedCodeCache.get(cacheKey) : null;
+  const syntaxHighlighting = use(getSyntaxHighlightingModulePromise());
+  return (
+    <LoadedShikiCodeBlock
+      syntaxHighlighting={syntaxHighlighting}
+      language={language}
+      code={code}
+      themeName={themeName}
+      isStreaming={isStreaming}
+    />
+  );
+}
+
+function LoadedShikiCodeBlock({
+  syntaxHighlighting,
+  language,
+  code,
+  themeName,
+  isStreaming,
+}: SuspenseShikiCodeBlockProps & { syntaxHighlighting: SyntaxHighlightingModule }) {
+  const cacheKey = syntaxHighlighting.createSyntaxHighlightCacheKey(code, language, themeName);
+  const cachedHighlightedHtml = !isStreaming
+    ? syntaxHighlighting.getCachedSyntaxHighlightedHtml(cacheKey)
+    : null;
 
   if (cachedHighlightedHtml != null) {
     return (
@@ -831,30 +947,46 @@ function SuspenseShikiCodeBlock({
     );
   }
 
-  const highlighter = use(getHighlighterPromise(language));
+  // The uncached path lives in its own component: an early return above must
+  // not change this component's hook order once the cache fills.
+  return (
+    <UncachedShikiCodeBlock
+      syntaxHighlighting={syntaxHighlighting}
+      cacheKey={cacheKey}
+      language={language}
+      code={code}
+      themeName={themeName}
+      isStreaming={isStreaming}
+    />
+  );
+}
+
+function UncachedShikiCodeBlock({
+  syntaxHighlighting,
+  cacheKey,
+  language,
+  code,
+  themeName,
+  isStreaming,
+}: SuspenseShikiCodeBlockProps & {
+  syntaxHighlighting: SyntaxHighlightingModule;
+  cacheKey: string;
+}) {
+  const highlighter = use(syntaxHighlighting.getSyntaxHighlighterPromise(language));
   const highlightedHtml = useMemo(() => {
-    try {
-      return highlighter.codeToHtml(code, { lang: language, theme: themeName });
-    } catch (error) {
-      // Log highlighting failures for debugging while falling back to plain text
-      console.warn(
-        `Code highlighting failed for language "${language}", falling back to plain text.`,
-        error instanceof Error ? error.message : error,
-      );
-      // If highlighting fails for this language, render as plain text
-      return highlighter.codeToHtml(code, { lang: "text", theme: themeName });
-    }
-  }, [code, highlighter, language, themeName]);
+    return syntaxHighlighting.highlightCodeToHtmlWithFallback(
+      highlighter,
+      code,
+      language,
+      themeName,
+    );
+  }, [code, highlighter, language, syntaxHighlighting, themeName]);
 
   useEffect(() => {
     if (!isStreaming) {
-      highlightedCodeCache.set(
-        cacheKey,
-        highlightedHtml,
-        estimateHighlightedSize(highlightedHtml, code),
-      );
+      syntaxHighlighting.cacheSyntaxHighlightedHtml(cacheKey, highlightedHtml, code);
     }
-  }, [cacheKey, code, highlightedHtml, isStreaming]);
+  }, [cacheKey, code, highlightedHtml, isStreaming, syntaxHighlighting]);
 
   return (
     <div className="chat-markdown-shiki" dangerouslySetInnerHTML={{ __html: highlightedHtml }} />
@@ -865,15 +997,22 @@ function ChatMarkdown({
   text,
   cwd,
   isStreaming = false,
+  allowHtml = false,
   className = "text-sm leading-relaxed",
   style,
   onImageExpand,
+  onContentReflow,
   markers,
-  allowHtml = false,
+  onTaskToggle,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
-  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(text), [text]);
+  // Reveal streamed text at a steady, adaptive cadence so tokens appear fluidly instead of
+  // in the ~100ms network clumps that land in the store. No-ops (returns `text`) when not
+  // streaming or under reduced motion. Governs cadence only; the deferred value below still
+  // bounds the markdown re-parse cost.
+  const smoothedText = useSmoothStreamedText(text, isStreaming);
+  const normalizedText = useMemo(() => protectLiteralMarkdownDollars(smoothedText), [smoothedText]);
   // While streaming, let React deprioritize and coalesce the markdown re-parse so a
   // fast token stream (one flush per ~100ms) doesn't re-render the full ReactMarkdown
   // tree on every flush. The deferred value always converges to the latest text, and
@@ -892,33 +1031,51 @@ function ChatMarkdown({
         : MARKDOWN_REMARK_PLUGINS,
     [threadMarkerRemarkPlugin],
   );
+  const rehypePlugins = useMemo<MarkdownRehypePlugins>(
+    () =>
+      allowHtml
+        ? [rehypeRaw, [rehypeSanitize, MARKDOWN_ALLOWED_HTML_SCHEMA], ...MARKDOWN_REHYPE_PLUGINS]
+        : MARKDOWN_REHYPE_PLUGINS,
+    [allowHtml],
+  );
   const markdownUrlTransform = useCallback((href: string) => {
     const restoredHref = restoreLiteralDollarPlaceholders(href);
     return rewriteMarkdownFileUriHref(restoredHref) ?? defaultUrlTransform(restoredHref);
   }, []);
   const markdownComponents = useMemo<Components>(
     () => ({
-      a({ node: _node, href, ...props }) {
+      a({ node: _node, href, children, ...props }) {
         const restoredHref = href ? restoreLiteralDollarPlaceholders(href) : href;
-        const targetPath = resolveMarkdownFileLinkTarget(restoredHref, cwd);
+        const isExternalHttp = isExternalHttpHref(restoredHref);
+        const targetPath = isExternalHttp ? null : resolveMarkdownFileLinkTarget(restoredHref, cwd);
         if (!targetPath) {
-          return <a {...props} href={restoredHref} target="_blank" rel="noopener noreferrer" />;
+          return (
+            <a
+              {...props}
+              href={restoredHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={isExternalHttp ? MARKDOWN_EXTERNAL_LINK_CLASS_NAME : props.className}
+            >
+              {isExternalHttp ? (
+                <LinkChipIcon
+                  url={restoredHref}
+                  className={MARKDOWN_EXTERNAL_LINK_ICON_CLASS_NAME}
+                />
+              ) : null}
+              {children}
+            </a>
+          );
         }
 
+        // Local file links keep their openable behavior but adopt the shared
+        // mention-chip UI (file icon + medium label). The link text is preserved
+        // as the label.
         return (
-          <a
-            {...props}
-            href={restoredHref}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              const api = readNativeApi();
-              if (api) {
-                void openInPreferredEditor(api, targetPath);
-              } else {
-                console.warn("Native API not found. Unable to open file in editor.");
-              }
-            }}
+          <OpenableFileChip
+            targetPath={targetPath}
+            theme={resolvedTheme}
+            {...(restoredHref ? { href: restoredHref } : {})}
           />
         );
       },
@@ -930,7 +1087,35 @@ function ChatMarkdown({
 
         const fence = parseCodeFenceInfo(extractRawFenceInfo(codeBlock.className));
         const code = dedentCode(codeBlock.code);
-        const highlightedCodeBlock = (
+        if (
+          !isStreaming &&
+          isMarkdownTableFenceLanguage(fence.language) &&
+          isMarkdownTableFenceContent(code)
+        ) {
+          return (
+            <ChatMarkdown
+              text={code}
+              cwd={cwd}
+              isStreaming={isStreaming}
+              className="text-[inherit] leading-[inherit]"
+              onImageExpand={onImageExpand}
+              markers={undefined}
+              onTaskToggle={undefined}
+            />
+          );
+        }
+
+        if (isStreaming) {
+          return (
+            <MarkdownCodeBlock code={code} fence={fence}>
+              <pre {...props}>
+                <code className={codeBlock.className}>{code}</code>
+              </pre>
+            </MarkdownCodeBlock>
+          );
+        }
+
+        const fallback = (
           <MarkdownCodeBlock code={code} fence={fence}>
             <CodeHighlightErrorBoundary fallback={<pre {...props}>{children}</pre>}>
               <Suspense fallback={<pre {...props}>{children}</pre>}>
@@ -947,15 +1132,29 @@ function ChatMarkdown({
 
         if (isMermaidFence(fence)) {
           return (
-            <MarkdownMermaidDiagram
-              code={code}
-              themeName={diffThemeName}
-              fallback={highlightedCodeBlock}
-            />
+            <MarkdownMermaidDiagram code={code} themeName={diffThemeName} fallback={fallback} />
           );
         }
 
-        return highlightedCodeBlock;
+        return fallback;
+      },
+      code({ node: _node, className, children, ...props }) {
+        // Fenced blocks carry a `language-*` class and are rendered by `pre`;
+        // only inline code (no class) that names a file becomes an openable
+        // mention chip. The target is resolved against cwd so it opens like a
+        // markdown file link; an unresolvable path still chips on its raw value.
+        if (!className) {
+          const filePath = inlineCodeFilePath(nodeToPlainText(children));
+          if (filePath) {
+            const targetPath = resolveMarkdownFileLinkTarget(filePath, cwd) ?? filePath;
+            return <OpenableFileChip targetPath={targetPath} theme={resolvedTheme} />;
+          }
+        }
+        return (
+          <code className={className} {...props}>
+            {children}
+          </code>
+        );
       },
       img({ node: _node, src, alt = "", ...props }) {
         const restoredSrc = src ? restoreLiteralDollarPlaceholders(src) : "";
@@ -966,20 +1165,63 @@ function ChatMarkdown({
               alt={alt}
               cwd={cwd}
               onImageExpand={onImageExpand}
+              onImageLoad={onContentReflow}
             />
           );
         }
-        return <img {...props} src={restoredSrc} alt={alt} loading="lazy" />;
+        return (
+          <img
+            {...props}
+            src={restoredSrc}
+            alt={alt}
+            loading="lazy"
+            onLoad={(event) => {
+              props.onLoad?.(event);
+              onContentReflow?.();
+            }}
+          />
+        );
+      },
+      li({ node, children, ...props }) {
+        // Task items carry their source line down to the checkbox via context.
+        const isTaskItem =
+          typeof props.className === "string" && props.className.includes("task-list-item");
+        const sourceLine = node?.position?.start.line ?? null;
+        if (!isTaskItem || sourceLine === null) {
+          return <li {...props}>{children}</li>;
+        }
+        return (
+          <li {...props}>
+            <TaskItemSourceLineContext.Provider value={sourceLine}>
+              {children}
+            </TaskItemSourceLineContext.Provider>
+          </li>
+        );
+      },
+      input({ node: _node, ...props }) {
+        if (props.type === "checkbox") {
+          return (
+            <MarkdownTaskCheckbox checked={props.checked === true} onTaskToggle={onTaskToggle} />
+          );
+        }
+        return <input {...props} />;
+      },
+      table({ node: _node, children, ...props }) {
+        return (
+          <div className="chat-markdown-table-scroll">
+            <table {...props}>{children}</table>
+          </div>
+        );
       },
     }),
-    [cwd, diffThemeName, isStreaming, onImageExpand],
+    [cwd, diffThemeName, isStreaming, onContentReflow, onImageExpand, onTaskToggle, resolvedTheme],
   );
 
   return (
     <div className={`chat-markdown w-full min-w-0 ${className} text-foreground`} style={style}>
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
-        rehypePlugins={allowHtml ? MARKDOWN_REHYPE_PLUGINS_WITH_HTML : MARKDOWN_REHYPE_PLUGINS}
+        rehypePlugins={rehypePlugins}
         components={markdownComponents}
         urlTransform={markdownUrlTransform}
       >

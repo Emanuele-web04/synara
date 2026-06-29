@@ -123,7 +123,38 @@ async function waitForThread(
       return thread;
     }
     if (Date.now() >= deadline) {
-      throw new Error("Timed out waiting for thread state");
+      throw new Error(
+        `Timed out waiting for thread state: ${JSON.stringify(
+          thread === undefined
+            ? null
+            : {
+                id: thread.id,
+                messages: thread.messages.map((message) => ({
+                  id: message.id,
+                  streaming: message.streaming,
+                  text: message.text,
+                })),
+                providerItems: thread.providerItems.map((item) => ({
+                  id: item.id,
+                  itemType: item.itemType,
+                  status: item.status,
+                  title: item.title,
+                  detail: item.detail,
+                  content: item.content.map((part) => ({
+                    streamKind: part.streamKind,
+                    text: part.text,
+                    contentIndex: part.contentIndex,
+                    summaryIndex: part.summaryIndex,
+                  })),
+                })),
+                activities: thread.activities.map((activity) => ({
+                  id: activity.id,
+                  kind: activity.kind,
+                  summary: activity.summary,
+                })),
+              },
+        )}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
     return poll();
@@ -1557,6 +1588,267 @@ describe("ProviderRuntimeIngestion", () => {
         },
       },
     });
+  });
+
+  it("preserves typed provider items while keeping legacy messages and activities", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-typed-items");
+    const now = "2026-03-01T11:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-typed-turn-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {},
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-typed-answer-a-delta"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("answer-a"),
+      sourceRef: {
+        runtimeEventId: asEventId("evt-typed-answer-a-delta"),
+        nativeEventId: asEventId("native-typed-answer-a-delta"),
+        nativeEventName: "codex.item.content_delta",
+        provider: "codex",
+        sourceSequence: 1,
+        runtimeSubsequence: 0,
+        turnId,
+        itemId: asItemId("answer-a"),
+        requestId: null,
+        contentIndex: 0,
+      },
+      payload: {
+        streamKind: "assistant_text",
+        delta: "First answer",
+        contentIndex: 0,
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-typed-answer-b-delta"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:02.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("answer-b"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "Second answer",
+        contentIndex: 1,
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-typed-answer-a-complete"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:03.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("answer-a"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        title: "Assistant answer",
+      },
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-typed-command-started"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:04.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("cmd-typed"),
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        title: "Running command",
+        detail: "bun test",
+      },
+    });
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-provider-ref-command-started"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:04.500Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      providerRefs: {
+        providerItemId: "provider-ref-cmd",
+      },
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        title: "Running referenced command",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-provider-ref-command-complete"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:04.600Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      providerRefs: {
+        providerItemId: "provider-ref-cmd",
+      },
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Referenced command complete",
+      },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-typed-command-output"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:05.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("cmd-typed"),
+      payload: {
+        streamKind: "command_output",
+        delta: "command output",
+        contentIndex: 0,
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-typed-command-complete"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:06.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("cmd-typed"),
+      payload: {
+        itemType: "command_execution",
+        status: "failed",
+        title: "Command failed",
+        detail: "exit 1",
+        data: {
+          rawInput: { command: "bun test" },
+        },
+      },
+    });
+    harness.emit({
+      type: "mcp.oauth.completed",
+      eventId: asEventId("evt-typed-mcp-oauth"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:07.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        success: false,
+        name: "github",
+        error: "login required",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-typed-turn-cancelled"),
+      provider: "codex",
+      createdAt: "2026-03-01T11:00:08.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        state: "cancelled",
+        stopReason: "user stopped",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.providerItems.some((item) => item.id === "cmd-typed" && item.status === "failed") &&
+        entry.providerItems.some(
+          (item) => item.itemType === "error" && item.status === "declined",
+        ) &&
+        entry.messages.some(
+          (message) => message.id === "assistant:answer-b" && message.streaming === false,
+        ),
+    );
+
+    const answerA = thread.providerItems.find((item) => item.id === "answer-a");
+    const answerB = thread.providerItems.find((item) => item.id === "answer-b");
+    const command = thread.providerItems.find((item) => item.id === "cmd-typed");
+    const providerRefCommand = thread.providerItems.find((item) => item.id === "provider-ref-cmd");
+    const mcpOauth = thread.providerItems.find((item) => item.title === "github");
+    const cancelled = thread.providerItems.find((item) => item.title === "Turn cancelled");
+
+    expect(answerA).toMatchObject({
+      itemType: "assistant_message",
+      status: "completed",
+      turnId,
+      title: "Assistant answer",
+      content: [
+        {
+          streamKind: "assistant_text",
+          text: "First answer",
+          contentIndex: 0,
+          summaryIndex: null,
+        },
+      ],
+      sourceRef: {
+        contentIndex: 0,
+        itemId: "answer-a",
+      },
+    });
+    expect(answerB).toMatchObject({
+      itemType: "assistant_message",
+      status: "inProgress",
+      content: [
+        {
+          streamKind: "assistant_text",
+          text: "Second answer",
+          contentIndex: 1,
+        },
+      ],
+    });
+    expect(command).toMatchObject({
+      itemType: "command_execution",
+      status: "failed",
+      title: "Command failed",
+      detail: "exit 1",
+      data: {
+        rawInput: { command: "bun test" },
+      },
+      content: [
+        {
+          streamKind: "command_output",
+          text: "command output",
+          contentIndex: 0,
+        },
+      ],
+    });
+    expect(providerRefCommand).toMatchObject({
+      itemType: "command_execution",
+      providerItemId: "provider-ref-cmd",
+      status: "completed",
+      title: "Referenced command complete",
+    });
+    expect(mcpOauth).toMatchObject({
+      itemType: "mcp_tool_call",
+      status: "failed",
+      detail: "login required",
+    });
+    expect(cancelled).toMatchObject({
+      itemType: "error",
+      status: "declined",
+      detail: "user stopped",
+    });
+    expect(thread.messages.map((message) => message.id)).toEqual(
+      expect.arrayContaining(["assistant:answer-a", "assistant:answer-b"]),
+    );
+    expect(thread.activities.some((activity) => activity.id === "evt-typed-command-complete")).toBe(
+      true,
+    );
   });
 
   it("uses assistant item completion detail when no assistant deltas were streamed", async () => {
@@ -3527,11 +3819,29 @@ describe("ProviderRuntimeIngestion", () => {
       data.rawOutput && typeof data.rawOutput === "object"
         ? (data.rawOutput as Record<string, unknown>)
         : {};
+    const providerItem = thread.providerItems.find(
+      (item) => item.id === "provider-item:thread-1:evt-large-tool-data",
+    );
+    const providerItemData =
+      providerItem?.data && typeof providerItem.data === "object"
+        ? (providerItem.data as Record<string, unknown>)
+        : {};
+    const providerItemRawOutput =
+      providerItemData.rawOutput && typeof providerItemData.rawOutput === "object"
+        ? (providerItemData.rawOutput as Record<string, unknown>)
+        : {};
 
     expect(data.__synaraTruncated).toBe(true);
     expect(JSON.stringify(data).length).toBeLessThan(17_000);
     expect(rawInput.command).toBe("bun run something");
     expect(String(rawOutput.stdout ?? "").length).toBeLessThan(3_000);
+    expect(providerItemData.__synaraTruncated).toBeUndefined();
+    const providerItemStdout = providerItemRawOutput.stdout;
+    expect(providerItemStdout).toBeTypeOf("string");
+    if (typeof providerItemStdout !== "string") {
+      throw new Error("provider item raw output stdout should remain an untruncated string");
+    }
+    expect(providerItemStdout.length).toBe(largeOutput.length);
   });
 
   it("attaches buffered command output deltas to the completed tool activity", async () => {
@@ -3599,8 +3909,18 @@ describe("ProviderRuntimeIngestion", () => {
       data.rawOutput && typeof data.rawOutput === "object"
         ? (data.rawOutput as Record<string, unknown>)
         : {};
+    const providerItem = thread.providerItems.find((item) => item.id === "item-command-output");
+    const providerItemData =
+      providerItem?.data && typeof providerItem.data === "object"
+        ? (providerItem.data as Record<string, unknown>)
+        : {};
+    const providerItemRawOutput =
+      providerItemData.rawOutput && typeof providerItemData.rawOutput === "object"
+        ? (providerItemData.rawOutput as Record<string, unknown>)
+        : {};
 
     expect(rawOutput.output).toBe("first line\nsecond line\n");
+    expect(providerItemRawOutput.output).toBe("first line\nsecond line\n");
   });
 
   it("keeps buffered command output when completed raw streams are empty", async () => {
@@ -3898,6 +4218,58 @@ describe("ProviderRuntimeIngestion", () => {
       "A configured MCP server rejected Codex because it requires Bearer authentication.",
     );
     expect(String(warningPayload?.detail)).toContain("rmcp::transport::worker");
+  });
+
+  it("labels OpenCode retry warnings with a provider-specific summary and visible detail", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-opencode-retry-warning"),
+      provider: "opencode",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-opencode"),
+      payload: {
+        message: "Provider request failed; retrying.",
+        detail: {
+          attempt: 2,
+        },
+      },
+      raw: {
+        source: "opencode.sdk.event",
+        payload: {
+          type: "session.next.retried",
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-opencode-retry-warning",
+      ),
+    );
+
+    const warning = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-opencode-retry-warning",
+    );
+    const payload =
+      warning?.payload && typeof warning.payload === "object"
+        ? (warning.payload as Record<string, unknown>)
+        : undefined;
+    expect(warning).toMatchObject({
+      kind: "runtime.warning",
+      summary: "OpenCode retrying",
+    });
+    expect(payload).toMatchObject({
+      message: "Provider request failed; retrying.",
+      detail: "Provider request failed; retrying.",
+      nativeEventType: "session.next.retried",
+      data: {
+        attempt: 2,
+      },
+    });
   });
 
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {

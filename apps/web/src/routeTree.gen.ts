@@ -24,6 +24,7 @@ import { Route as ChatAutomationsIndexRouteImport } from './routes/_chat.automat
 import { Route as ChatWorkspaceWorkspaceIdRouteImport } from './routes/_chat.workspace.$workspaceId'
 import { Route as ChatReviewReferenceRouteImport } from './routes/_chat.review.$reference'
 import { Route as ChatKanbanProjectIdRouteImport } from './routes/_chat.kanban.$projectId'
+import { Route as ChatDevTranscriptRouteImport } from './routes/_chat.dev.transcript'
 import { Route as ChatAutomationsAutomationIdRouteImport } from './routes/_chat.automations.$automationId'
 
 const ChatRoute = ChatRouteImport.update({
@@ -101,6 +102,11 @@ const ChatKanbanProjectIdRoute = ChatKanbanProjectIdRouteImport.update({
   path: '/kanban/$projectId',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatDevTranscriptRoute = ChatDevTranscriptRouteImport.update({
+  id: '/dev/transcript',
+  path: '/dev/transcript',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatAutomationsAutomationIdRoute =
   ChatAutomationsAutomationIdRouteImport.update({
     id: '/$automationId',
@@ -117,6 +123,7 @@ export interface FileRoutesByFullPath {
   '/settings': typeof ChatSettingsRoute
   '/worldcup': typeof ChatWorldcupRoute
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
+  '/dev/transcript': typeof ChatDevTranscriptRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/review/$reference': typeof ChatReviewReferenceRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
@@ -132,6 +139,7 @@ export interface FileRoutesByTo {
   '/worldcup': typeof ChatWorldcupRoute
   '/': typeof ChatIndexRoute
   '/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
+  '/dev/transcript': typeof ChatDevTranscriptRoute
   '/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/review/$reference': typeof ChatReviewReferenceRoute
   '/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/_chat/worldcup': typeof ChatWorldcupRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/automations/$automationId': typeof ChatAutomationsAutomationIdRoute
+  '/_chat/dev/transcript': typeof ChatDevTranscriptRoute
   '/_chat/kanban/$projectId': typeof ChatKanbanProjectIdRoute
   '/_chat/review/$reference': typeof ChatReviewReferenceRoute
   '/_chat/workspace/$workspaceId': typeof ChatWorkspaceWorkspaceIdRoute
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/settings'
     | '/worldcup'
     | '/automations/$automationId'
+    | '/dev/transcript'
     | '/kanban/$projectId'
     | '/review/$reference'
     | '/workspace/$workspaceId'
@@ -185,6 +195,7 @@ export interface FileRouteTypes {
     | '/worldcup'
     | '/'
     | '/automations/$automationId'
+    | '/dev/transcript'
     | '/kanban/$projectId'
     | '/review/$reference'
     | '/workspace/$workspaceId'
@@ -203,6 +214,7 @@ export interface FileRouteTypes {
     | '/_chat/worldcup'
     | '/_chat/'
     | '/_chat/automations/$automationId'
+    | '/_chat/dev/transcript'
     | '/_chat/kanban/$projectId'
     | '/_chat/review/$reference'
     | '/_chat/workspace/$workspaceId'
@@ -323,6 +335,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatKanbanProjectIdRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/dev/transcript': {
+      id: '/_chat/dev/transcript'
+      path: '/dev/transcript'
+      fullPath: '/dev/transcript'
+      preLoaderRoute: typeof ChatDevTranscriptRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/automations/$automationId': {
       id: '/_chat/automations/$automationId'
       path: '/$automationId'
@@ -369,6 +388,7 @@ interface ChatRouteChildren {
   ChatSettingsRoute: typeof ChatSettingsRoute
   ChatWorldcupRoute: typeof ChatWorldcupRoute
   ChatIndexRoute: typeof ChatIndexRoute
+  ChatDevTranscriptRoute: typeof ChatDevTranscriptRoute
   ChatKanbanProjectIdRoute: typeof ChatKanbanProjectIdRoute
   ChatWorkspaceWorkspaceIdRoute: typeof ChatWorkspaceWorkspaceIdRoute
   ChatKanbanIndexRoute: typeof ChatKanbanIndexRoute
@@ -383,6 +403,7 @@ const ChatRouteChildren: ChatRouteChildren = {
   ChatSettingsRoute: ChatSettingsRoute,
   ChatWorldcupRoute: ChatWorldcupRoute,
   ChatIndexRoute: ChatIndexRoute,
+  ChatDevTranscriptRoute: ChatDevTranscriptRoute,
   ChatKanbanProjectIdRoute: ChatKanbanProjectIdRoute,
   ChatWorkspaceWorkspaceIdRoute: ChatWorkspaceWorkspaceIdRoute,
   ChatKanbanIndexRoute: ChatKanbanIndexRoute,

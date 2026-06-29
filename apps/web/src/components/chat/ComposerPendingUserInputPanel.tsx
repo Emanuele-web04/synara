@@ -136,7 +136,21 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   }
 
   return (
-    <div className="px-5 pt-3.5 pb-3.5 sm:px-6">
+    <div
+      role="group"
+      className="px-5 pt-3.5 pb-3.5 sm:px-6"
+      data-composer-blocker="pending-user-input"
+      aria-describedby={`pending-user-input-status-${prompt.requestId}`}
+    >
+      <span
+        id={`pending-user-input-status-${prompt.requestId}`}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        Input required. Question {questionIndex + 1} of {prompt.questions.length}.
+      </span>
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2">
           {prompt.questions.length > 1 ? (
@@ -163,6 +177,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
                 key={`${activeQuestion.id}:${option.label}`}
                 type="button"
                 disabled={isResponding}
+                aria-pressed={isSelected}
                 onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
                 className={cn(
                   "group flex w-full items-center gap-3 rounded-lg border px-3 py-2 text-left transition-all duration-150",

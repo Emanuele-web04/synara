@@ -39,6 +39,7 @@ import {
   ThreadMarkerDoneSetPayload,
   ThreadMarkerLabelSetPayload,
   ThreadMarkerRemovedPayload,
+  ThreadProviderItemUpsertedPayload,
   ThreadProposedPlanUpsertedPayload,
   ThreadConversationRolledBackPayload,
   ThreadRuntimeModeSetPayload,
@@ -173,6 +174,13 @@ function retainThreadProposedPlansAfterRevert(
   return proposedPlans.filter(
     (proposedPlan) => proposedPlan.turnId === null || retainedTurnIds.has(proposedPlan.turnId),
   );
+}
+
+function retainThreadProviderItemsAfterRevert(
+  providerItems: ReadonlyArray<OrchestrationThread["providerItems"][number]>,
+  retainedTurnIds: ReadonlySet<string>,
+): ReadonlyArray<OrchestrationThread["providerItems"][number]> {
+  return providerItems.filter((item) => item.turnId === null || retainedTurnIds.has(item.turnId));
 }
 
 function rollbackThreadMessagesFromMessage(
@@ -342,6 +350,7 @@ export function projectEvent(
             deletedAt: null,
             handoff: payload.handoff,
             messages: [],
+            providerItems: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -835,6 +844,36 @@ export function projectEvent(
         };
       });
 
+    case "thread.provider-item-upserted":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadProviderItemUpsertedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        const providerItems = [
+          ...thread.providerItems.filter((entry) => entry.id !== payload.providerItem.id),
+          payload.providerItem,
+        ].toSorted(
+          (left, right) =>
+            left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+        );
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            providerItems,
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
     case "thread.turn-diff-completed":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -942,6 +981,10 @@ export function projectEvent(
             thread.proposedPlans,
             retainedTurnIds,
           ).slice(-200);
+          const providerItems = retainThreadProviderItemsAfterRevert(
+            thread.providerItems,
+            retainedTurnIds,
+          );
           const activities = retainThreadActivitiesAfterRevert(thread.activities, retainedTurnIds);
 
           const latestCheckpoint = checkpoints.at(-1) ?? null;
@@ -963,6 +1006,7 @@ export function projectEvent(
               checkpoints,
               messages,
               proposedPlans,
+              providerItems,
               activities,
               latestTurn,
               updatedAt: event.occurredAt,
@@ -999,6 +1043,9 @@ export function projectEvent(
           const proposedPlans = thread.proposedPlans
             .filter((plan) => plan.turnId === null || !rollback.removedTurnIds.has(plan.turnId))
             .slice(-200);
+          const providerItems = thread.providerItems.filter(
+            (item) => item.turnId === null || !rollback.removedTurnIds.has(item.turnId),
+          );
           const activities = thread.activities.filter(
             (activity) => activity.turnId === null || !rollback.removedTurnIds.has(activity.turnId),
           );
@@ -1010,6 +1057,7 @@ export function projectEvent(
               checkpoints,
               messages: rollback.messages.slice(-MAX_THREAD_MESSAGES),
               proposedPlans,
+              providerItems,
               activities,
               latestTurn:
                 latestCheckpoint === null

@@ -1,8 +1,11 @@
 import {
+  ApprovalRequestId,
   EventId,
   MessageId,
+  RuntimeItemId,
   ThreadId,
   TurnId,
+  type OrchestrationProviderItem,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
@@ -18,6 +21,8 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
+  deriveTranscriptComposerState,
+  deriveTranscriptRows,
   deriveWorkLogEntries,
   findLatestProposedPlan,
   findSidebarProposedPlan,
@@ -27,6 +32,8 @@ import {
   isFileChangeWorkLogEntry,
   isLatestTurnSettled,
   isProviderFileEditWorkLogEntry,
+  TRANSCRIPT_COMPOSER_BLOCKER_PRIORITY,
+  TRANSCRIPT_STATE_TABLE,
 } from "./session-logic";
 import { extractCollabAction, extractCollabSubagents } from "./session-logic.workLog.collab";
 
@@ -50,6 +57,42 @@ function makeActivity(overrides: {
     payload,
     turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
+  };
+}
+
+function makeProviderItem(
+  overrides: Omit<Partial<OrchestrationProviderItem>, "id" | "content"> & {
+    id: string;
+    text?: string;
+    createdAt?: string;
+    content?: OrchestrationProviderItem["content"];
+  },
+): OrchestrationProviderItem {
+  const { content, createdAt: createdAtOverride, id, text, ...itemOverrides } = overrides;
+  const createdAt = createdAtOverride ?? "2026-02-23T00:00:00.000Z";
+  return {
+    id: RuntimeItemId.makeUnsafe(id),
+    providerItemId: null,
+    provider: "codex",
+    turnId: null,
+    itemType: "command_execution",
+    status: "completed",
+    title: null,
+    detail: null,
+    data: null,
+    content: content ?? [
+      {
+        streamKind: "command_output",
+        text: text ?? "",
+        contentIndex: 0,
+        summaryIndex: null,
+        updatedAt: createdAt,
+      },
+    ],
+    sourceRef: null,
+    updatedAt: createdAt,
+    ...itemOverrides,
+    createdAt,
   };
 }
 
@@ -179,6 +222,324 @@ describe("derivePendingApprovals", () => {
     ];
 
     expect(derivePendingApprovals(activities)).toEqual([]);
+  });
+});
+
+describe("deriveTranscriptRows", () => {
+  it("orders preamble reasoning, tools, and final answer from provider items without duplicating legacy assistant messages", () => {
+    const turnId = TurnId.makeUnsafe("turn-native");
+    const rows = deriveTranscriptRows({
+      messages: [
+        {
+          id: MessageId.makeUnsafe("user-1"),
+          role: "user",
+          text: "fix it",
+          turnId,
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("assistant-legacy"),
+          role: "assistant",
+          text: "legacy final",
+          turnId,
+          createdAt: "2026-02-23T00:00:04.000Z",
+          streaming: false,
+        },
+      ],
+      providerItems: [
+        makeProviderItem({
+          id: "reasoning-1",
+          itemType: "reasoning",
+          turnId,
+          text: "Need to inspect the failure.",
+          createdAt: "2026-02-23T00:00:02.000Z",
+        }),
+        makeProviderItem({
+          id: "command-1",
+          itemType: "command_execution",
+          title: "Ran tests",
+          turnId,
+          text: "1 failed",
+          createdAt: "2026-02-23T00:00:03.000Z",
+        }),
+        makeProviderItem({
+          id: "assistant-1",
+          itemType: "assistant_message",
+          turnId,
+          text: "Fixed.",
+          createdAt: "2026-02-23T00:00:04.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["user", "reasoning", "work", "assistant"]);
+    expect(rows.map((row) => row.key)).toEqual([
+      "message:user-1",
+      "provider-item:reasoning-1",
+      "provider-item:command-1",
+      "provider-item:assistant-1",
+    ]);
+    expect(rows[3]).toMatchObject({
+      source: "provider-item",
+      label: "Assistant response",
+      ariaLabel: "Assistant response: completed",
+    });
+  });
+
+  it("keeps command-output-only turns visible as work rows", () => {
+    const rows = deriveTranscriptRows({
+      messages: [
+        {
+          id: MessageId.makeUnsafe("user-command-only"),
+          role: "user",
+          text: "run status",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      providerItems: [
+        makeProviderItem({
+          id: "command-only",
+          itemType: "command_execution",
+          title: "Ran status",
+          text: "working tree clean",
+          createdAt: "2026-02-23T00:00:02.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["user", "work"]);
+    expect(rows[1]).toMatchObject({
+      key: "provider-item:command-only",
+      text: "working tree clean",
+      label: "Ran status",
+    });
+  });
+
+  it("marks failed provider tools without changing their transcript position", () => {
+    const rows = deriveTranscriptRows({
+      messages: [],
+      providerItems: [
+        makeProviderItem({
+          id: "failed-tool",
+          itemType: "command_execution",
+          title: "Ran typecheck",
+          status: "failed",
+          text: "Type error",
+          createdAt: "2026-02-23T00:00:02.000Z",
+        }),
+        makeProviderItem({
+          id: "assistant-after-failure",
+          itemType: "assistant_message",
+          text: "I need to fix the type error.",
+          createdAt: "2026-02-23T00:00:03.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.key)).toEqual([
+      "provider-item:failed-tool",
+      "provider-item:assistant-after-failure",
+    ]);
+    expect(rows[0]).toMatchObject({
+      kind: "work",
+      status: "failed",
+      ariaLabel: "Ran typecheck: failed",
+    });
+  });
+
+  it("preserves trailing post-answer work instead of folding it into the final answer", () => {
+    const rows = deriveTranscriptRows({
+      messages: [],
+      providerItems: [
+        makeProviderItem({
+          id: "assistant-answer",
+          itemType: "assistant_message",
+          text: "Done.",
+          createdAt: "2026-02-23T00:00:02.000Z",
+        }),
+        makeProviderItem({
+          id: "post-answer-work",
+          itemType: "mcp_tool_call",
+          title: "Archived thread",
+          text: "Archived.",
+          createdAt: "2026-02-23T00:00:03.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["assistant", "work"]);
+    expect(rows.map((row) => row.key)).toEqual([
+      "provider-item:assistant-answer",
+      "provider-item:post-answer-work",
+    ]);
+  });
+
+  it("sorts reconnect replay rows chronologically while keeping stable keys and labels", () => {
+    const rows = deriveTranscriptRows({
+      messages: [
+        {
+          id: MessageId.makeUnsafe("assistant-replay"),
+          role: "assistant",
+          text: "legacy fallback",
+          createdAt: "2026-02-23T00:00:04.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.makeUnsafe("user-replay"),
+          role: "user",
+          text: "hello",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      providerItems: [
+        makeProviderItem({
+          id: "assistant-replay-provider",
+          itemType: "assistant_message",
+          text: "provider answer",
+          createdAt: "2026-02-23T00:00:04.000Z",
+        }),
+        makeProviderItem({
+          id: "reasoning-replay",
+          itemType: "reasoning",
+          text: "thinking",
+          createdAt: "2026-02-23T00:00:02.000Z",
+        }),
+      ],
+    });
+
+    expect(rows.map((row) => row.key)).toEqual([
+      "message:user-replay",
+      "provider-item:reasoning-replay",
+      "provider-item:assistant-replay-provider",
+      "message:assistant-replay",
+    ]);
+    expect(rows.every((row) => row.label.length > 0 && row.ariaLabel.length > 0)).toBe(true);
+  });
+
+  it("keeps legacy message and activity rows when provider items are absent", () => {
+    const rows = deriveTranscriptRows({
+      messages: [
+        {
+          id: MessageId.makeUnsafe("legacy-user"),
+          role: "user",
+          text: "legacy path",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+      ],
+      workEntries: [
+        {
+          id: "legacy-work",
+          createdAt: "2026-02-23T00:00:02.000Z",
+          label: "Read files",
+          tone: "tool",
+        },
+      ],
+    });
+
+    expect(rows.map((row) => row.source)).toEqual(["legacy-message", "legacy-activity"]);
+    expect(rows.map((row) => row.kind)).toEqual(["user", "work"]);
+  });
+
+  it("documents composer blocker priority and transcript state table states", () => {
+    expect(TRANSCRIPT_COMPOSER_BLOCKER_PRIORITY).toEqual([
+      "pending-approval",
+      "pending-user-input",
+      "plan-follow-up",
+      "disconnected",
+      "normal",
+    ]);
+    expect(TRANSCRIPT_STATE_TABLE.map((entry) => entry.state)).toEqual([
+      "empty-thread",
+      "optimistic-send",
+      "streaming-text",
+      "tool-only-activity",
+      "approval-wait",
+      "pending-user-input",
+      "plan-follow-up",
+      "disconnected-reconnect",
+      "stale-request",
+      "settled-collapse",
+      "error-flush",
+    ]);
+
+    expect(
+      deriveTranscriptComposerState({
+        pendingApprovals: [
+          {
+            requestId: ApprovalRequestId.makeUnsafe("approval-1"),
+            requestKind: "command",
+            createdAt: "2026-02-23T00:00:01.000Z",
+          },
+        ],
+        pendingUserInputs: [
+          {
+            requestId: ApprovalRequestId.makeUnsafe("input-1"),
+            createdAt: "2026-02-23T00:00:02.000Z",
+            questions: [
+              {
+                id: "choice",
+                header: "Choice",
+                question: "Pick one",
+                options: [{ label: "A", description: "Choose A" }],
+              },
+            ],
+          },
+        ],
+        planFollowUp: { id: "plan-1", title: "Plan ready" },
+        isConnected: false,
+      }),
+    ).toMatchObject({
+      kind: "pending-approval",
+      label: "Approval required",
+      disabled: true,
+      sourceId: "approval-1",
+    });
+    expect(
+      deriveTranscriptComposerState({
+        pendingApprovals: [],
+        pendingUserInputs: [
+          {
+            requestId: ApprovalRequestId.makeUnsafe("input-1"),
+            createdAt: "2026-02-23T00:00:02.000Z",
+            questions: [
+              {
+                id: "choice",
+                header: "Choice",
+                question: "Pick one",
+                options: [{ label: "A", description: "Choose A" }],
+              },
+            ],
+          },
+        ],
+        planFollowUp: { id: "plan-1", title: "Plan ready" },
+        isConnected: false,
+      }),
+    ).toMatchObject({
+      kind: "pending-user-input",
+      label: "Input required",
+      disabled: true,
+      sourceId: "input-1",
+    });
+    expect(
+      deriveTranscriptComposerState({
+        pendingApprovals: [],
+        pendingUserInputs: [],
+        planFollowUp: { id: "plan-1", title: "Plan ready" },
+        isConnected: false,
+      }),
+    ).toMatchObject({ kind: "plan-follow-up", sourceId: "plan-1" });
+    expect(
+      deriveTranscriptComposerState({
+        pendingApprovals: [],
+        pendingUserInputs: [],
+        planFollowUp: null,
+        isConnected: false,
+      }),
+    ).toMatchObject({ kind: "disconnected", disabled: true });
   });
 });
 
@@ -338,6 +699,31 @@ describe("derivePendingUserInputs", () => {
     ];
 
     expect(derivePendingUserInputs(activities)[0]?.questions[0]?.multiSelect).toBe(true);
+  });
+
+  it("keeps text-only user-input questions so the composer can collect the answer", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "user-input-open-text",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "user-input.requested",
+        summary: "User input requested",
+        tone: "info",
+        payload: {
+          requestId: "req-user-input-text-1",
+          questions: [
+            {
+              id: "input",
+              header: "Pi plugin",
+              question: "Type a response.",
+              options: [],
+            },
+          ],
+        },
+      }),
+    ];
+
+    expect(derivePendingUserInputs(activities)[0]?.questions[0]?.options).toEqual([]);
   });
 });
 
@@ -1568,6 +1954,84 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("shows runtime warning messages and collapses repeated identical warning rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-retry-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-3",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "opencode-retry-3",
+      label: "OpenCode retrying",
+      detail: "3 notices - Provider request failed; retrying.",
+      preview: "3 notices - Provider request failed; retrying.",
+    });
+  });
+
+  it("does not collapse identical runtime warnings across turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-retry",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "turn-2-retry",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-2",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["turn-1-retry", "turn-2-retry"]);
+    expect(entries.map((entry) => entry.detail)).toEqual([
+      "Provider request failed; retrying.",
+      "Provider request failed; retrying.",
+    ]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1645,6 +2109,60 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
     expect(entry?.command).toBe("bun run lint");
+  });
+
+  it("preserves latest lifecycle status when tool rows collapse", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-started",
+        kind: "tool.started",
+        summary: "Running command",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            toolCallId: "command-status-1",
+            item: {
+              command: "bun run lint",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "command-tool-completed",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            toolCallId: "command-status-1",
+            item: {
+              command: "bun run lint",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "failed-command-tool",
+        kind: "tool.completed",
+        summary: "Command failed",
+        tone: "error",
+        payload: {
+          itemType: "command_execution",
+          data: {
+            toolCallId: "command-status-2",
+            item: {
+              command: "bun run typecheck",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => [entry.id, entry.status])).toEqual([
+      [EventId.makeUnsafe("command-tool-completed"), "completed"],
+      [EventId.makeUnsafe("failed-command-tool"), "failed"],
+    ]);
   });
 
   it("keeps full command output details for command tool activities", () => {
@@ -3028,6 +3546,9 @@ describe("deriveWorkLogEntries", () => {
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
       toolTitle: "Read",
+      // toolName must survive derivation so the timeline can pick the file-read
+      // (search) icon instead of the generic wrench fallback.
+      toolName: "Read",
     });
   });
 

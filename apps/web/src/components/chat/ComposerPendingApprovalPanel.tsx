@@ -28,7 +28,21 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   const kindLabel = KIND_LABEL[approval.requestKind];
 
   return (
-    <div className="px-5 pt-3 pb-3 sm:px-6">
+    <div
+      role="group"
+      className="px-5 pt-3 pb-3 sm:px-6"
+      data-composer-blocker="pending-approval"
+      aria-describedby={`pending-approval-status-${approval.requestId}`}
+    >
+      <span
+        id={`pending-approval-status-${approval.requestId}`}
+        className="sr-only"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        Approval required for {kindLabel.toLowerCase()} request.
+      </span>
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-1.5">
           <span className="shrink-0 text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/70">

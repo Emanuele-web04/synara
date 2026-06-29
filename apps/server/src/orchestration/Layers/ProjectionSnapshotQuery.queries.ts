@@ -22,6 +22,7 @@ import {
   ProjectionThreadDbRowSchema,
   ProjectionThreadIdLookupRowSchema,
   ProjectionThreadMessageDbRowSchema,
+  ProjectionThreadProviderItemDbRowSchema,
   ProjectionThreadProposedPlanDbRowSchema,
   ProjectionThreadSessionDbRowSchema,
   SyntheticSubagentParentLookupInput,
@@ -145,6 +146,23 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
             updated_at AS "updatedAt"
           FROM projection_thread_proposed_plans
           ORDER BY thread_id ASC, created_at ASC, plan_id ASC
+        `,
+  });
+
+  const listThreadProviderItemRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadProviderItemDbRowSchema,
+    execute: () =>
+      sql`
+          SELECT
+            provider_item_id AS "providerItemId",
+            thread_id AS "threadId",
+            turn_id AS "turnId",
+            item_json AS "item",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM projection_thread_provider_items
+          ORDER BY thread_id ASC, created_at ASC, provider_item_id ASC
         `,
   });
 
@@ -546,6 +564,24 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
         `,
   });
 
+  const listThreadProviderItemRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadProviderItemDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+          SELECT
+            provider_item_id AS "providerItemId",
+            thread_id AS "threadId",
+            turn_id AS "turnId",
+            item_json AS "item",
+            created_at AS "createdAt",
+            updated_at AS "updatedAt"
+          FROM projection_thread_provider_items
+          WHERE thread_id = ${threadId}
+          ORDER BY created_at ASC, provider_item_id ASC
+        `,
+  });
+
   const listThreadActivityRowsByThread = SqlSchema.findAll({
     Request: ThreadIdLookupInput,
     Result: ProjectionThreadActivityDbRowSchema,
@@ -774,6 +810,7 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
     listThreadRows,
     listThreadMessageRows,
     listThreadProposedPlanRows,
+    listThreadProviderItemRows,
     listThreadActivityRows,
     listThreadSessionRows,
     listCheckpointRows,
@@ -787,6 +824,7 @@ export const makeSnapshotQueries = (sql: SqlClient.SqlClient) => {
     getSyntheticSubagentParentThreadRow,
     listThreadMessageRowsByThread,
     listThreadProposedPlanRowsByThread,
+    listThreadProviderItemRowsByThread,
     listThreadActivityRowsByThread,
     getThreadSessionRowByThread,
     getLatestTurnRowByThread,

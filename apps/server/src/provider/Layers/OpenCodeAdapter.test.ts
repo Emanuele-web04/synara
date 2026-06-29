@@ -2018,6 +2018,61 @@ describe("OpenCodeAdapter runtime lifecycle", () => {
     });
   });
 
+  it("projects generic file attachments into text instead of native OpenCode file parts", async () => {
+    const runtime = createMockOpenCodeRuntime();
+
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const adapter = yield* OpenCodeAdapter;
+        yield* adapter.startSession({
+          provider: "opencode",
+          threadId: asThreadId("thread-docx-attachment"),
+          runtimeMode: "full-access",
+        });
+
+        yield* adapter.sendTurn({
+          threadId: asThreadId("thread-docx-attachment"),
+          input: "summarize this",
+          interactionMode: "default",
+          attachments: [
+            {
+              type: "file",
+              id: "thread-docx-attachment-00000000-0000-4000-8000-000000000001",
+              name: "minutes.docx",
+              mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+              sizeBytes: 4_096,
+            },
+          ],
+          modelSelection: {
+            provider: "opencode",
+            model: "openai/gpt-5.4",
+          },
+        });
+      }).pipe(
+        Effect.provide(
+          makeOpenCodeAdapterLive({ runtime: runtime.runtime }).pipe(
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), { prefix: "opencode-adapter-test-" }),
+            ),
+            Layer.provideMerge(NodeServices.layer),
+          ),
+        ),
+      ),
+    );
+
+    const parts = runtime.promptCalls[0]?.parts as Array<Record<string, unknown>> | undefined;
+    expect(parts).toHaveLength(1);
+    expect(parts?.[0]).toMatchObject({ type: "text" });
+    expect(parts?.[0]?.text).toEqual(expect.stringContaining("<attached_files>"));
+    expect(parts?.[0]?.text).toEqual(expect.stringContaining('"minutes.docx"'));
+    expect(parts?.[0]?.text).toEqual(
+      expect.stringContaining(
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      ),
+    );
+    expect(parts?.[0]?.text).toEqual(expect.stringContaining(".docx"));
+  });
+
   it("pins plan-mode turns to the OpenCode plan agent", async () => {
     const runtime = createMockOpenCodeRuntime();
 

@@ -48,6 +48,7 @@ import {
   OrchestrationMessageRole,
   OrchestrationMessageSource,
   OrchestrationProposedPlan,
+  OrchestrationProviderItem,
   OrchestrationReadModel,
   OrchestrationReviewChatTarget,
   OrchestrationSession,
@@ -116,6 +117,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-action-requested",
   "thread.session-set",
   "thread.proposed-plan-upserted",
+  "thread.provider-item-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
   "thread.runtime-provision-requested",
@@ -465,6 +467,11 @@ export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
   proposedPlan: OrchestrationProposedPlan,
 });
 
+export const ThreadProviderItemUpsertedPayload = Schema.Struct({
+  threadId: ThreadId,
+  providerItem: OrchestrationProviderItem,
+});
+
 export const ThreadTurnDiffCompletedPayload = Schema.Struct({
   threadId: ThreadId,
   turnId: TurnId,
@@ -795,6 +802,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.proposed-plan-upserted"),
     payload: ThreadProposedPlanUpsertedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.provider-item-upserted"),
+    payload: ThreadProviderItemUpsertedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

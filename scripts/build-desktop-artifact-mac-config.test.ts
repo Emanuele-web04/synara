@@ -8,58 +8,56 @@ import {
   NODE_PTY_ASAR_UNPACK_GLOBS,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 describe("createDesktopPlatformBuildConfig", () => {
-  it("adds explicit microphone entitlements to macOS builds", () => {
+  it("skips signing for unsigned macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
-      hasMacIconComposer: false,
     });
     const mac = config.mac as Record<string, unknown>;
     const extendInfo = mac.extendInfo as Record<string, unknown>;
 
     assert.deepStrictEqual(mac.target, ["dmg", "zip"]);
+    assert.equal(mac.icon, "icon.icns");
     assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
-    assert.equal(mac.hardenedRuntime, true);
-    assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
-    assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    assert.equal(mac.identity, null);
+    assert.equal(mac.hardenedRuntime, undefined);
+    assert.equal(mac.notarize, undefined);
+    assert.equal(mac.entitlements, undefined);
+    assert.equal(mac.entitlementsInherit, undefined);
     assert.equal(extendInfo.NSMicrophoneUsageDescription, MICROPHONE_USAGE_DESCRIPTION);
-    assert.equal(config.afterPack, undefined);
-    assert.equal(config.dmg, undefined);
   });
 
-  it("preserves the icon composer packaging path for macOS builds", () => {
+  it("enables notarization for signed macOS builds", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "mac",
       target: "dmg",
-      hasMacIconComposer: true,
+      macSigned: true,
+      macNotarize: true,
     });
     const mac = config.mac as Record<string, unknown>;
-    const extendInfo = mac.extendInfo as Record<string, unknown>;
 
-    assert.equal(mac.icon, "icon.icon");
-    assert.deepStrictEqual(config.asarUnpack, ["node_modules/node-pty/**"]);
-    assert.equal(extendInfo.CFBundleIconFile, "icon.icns");
-    assert.equal(config.afterPack, "./electron-builder-after-pack.cjs");
-    assert.deepStrictEqual(config.dmg, { icon: "icon.icns" });
+    assert.equal(mac.identity, undefined);
+    assert.equal(mac.hardenedRuntime, true);
+    assert.equal(mac.entitlements, MAC_ENTITLEMENTS_PATH);
+    assert.equal(mac.entitlementsInherit, MAC_INHERITED_ENTITLEMENTS_PATH);
+    assert.equal(mac.notarize, true);
   });
 
   it("leaves non-macOS platform configs unchanged", () => {
     const linux = createDesktopPlatformBuildConfig({
       platform: "linux",
       target: "AppImage",
-      hasMacIconComposer: false,
     });
     const win = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",
-      hasMacIconComposer: false,
       windowsAzureSignOptions: { publisherName: "T3 Tools" },
     });
 
     assert.equal(linux.mac, undefined);
-    assert.equal(linux.afterPack, undefined);
     assert.deepStrictEqual(linux.asarUnpack, ["node_modules/node-pty/**"]);
     assert.deepStrictEqual(linux.linux, {
       target: ["AppImage"],
@@ -86,7 +84,6 @@ describe("createDesktopPlatformBuildConfig", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "linux",
       target: "AppImage",
-      hasMacIconComposer: false,
     });
 
     assert.deepStrictEqual([...NODE_PTY_ASAR_UNPACK_GLOBS], ["node_modules/node-pty/**"]);
@@ -122,5 +119,13 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
 
     assert.ok(issue?.includes("Build linux/x64 on a matching Linux host"));
+  });
+
+  it("keeps separate macOS sources for solid and rounded icons", () => {
+    assert.equal(BRAND_ASSET_PATHS.productionMacIconPng, "assets/prod/black-macos-1024.png");
+    assert.equal(
+      BRAND_ASSET_PATHS.productionMacLegacyIconPng,
+      "assets/prod/black-macos-legacy-1024.png",
+    );
   });
 });

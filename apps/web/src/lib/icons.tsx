@@ -42,7 +42,6 @@ import {
   IconHash,
   IconFolder,
   IconFolderOpen,
-  IconEdit,
   IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
@@ -65,7 +64,6 @@ import {
   IconPlus,
   IconRefresh,
   IconRocket,
-  IconRobot,
   IconRotate2,
   IconSelector,
   IconSettings,
@@ -128,7 +126,13 @@ export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
-export const BotIcon = adaptIcon(IconRobot);
+// Single source for the robot/agent glyph. Sourced from the Central icon set so
+// every robot affordance (reasoning rows, agent-task rows, agent mention chips,
+// subagent menus, agent-activity headers) renders one identical icon. Use
+// BotIcon in React; AGENT_ROBOT_ICON_NAME for imperative DOM via
+// createCentralIconElement.
+export const AGENT_ROBOT_ICON_NAME = "robot";
+export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
@@ -171,6 +175,10 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
+// Stacked "folders" glyph used as the single representation of a file tree /
+// explorer surface (right-dock explorer, editor Files activity, diff file-tree
+// toggle). Central "reversed" outline asset so it matches the rest of the chrome.
+export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 export const GitForkIcon = centralIconWrapper("fork");
@@ -213,6 +221,7 @@ export const PanelRightCloseIcon = SidebarHiddenRightWideIcon;
 export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
+export const SquarePenIcon: LucideIcon = centralIconWrapper("compose-pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
 // Solid pin from the fill set — used wherever a pin reflects "pinned" status
 // (project + thread rows and their hover cards) rather than a neutral action.
@@ -233,7 +242,6 @@ export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
 export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);
-export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />
 );

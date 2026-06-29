@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark, .dark *));
 
@@ -69,11 +68,18 @@
     background: var(--app-shell-background, transparent);
   }
   :root {
-    /* One token for every app-surface divider line: the vertical sidebar↔chat seam
-       AND the horizontal chrome-bar dividers (chat/workspace/dock/diff headers). Both
-       resolve through here so the two divider directions always read as the same line.
-       (Chat headers previously used the lighter --color-border-light and looked off.) */
-    --app-surface-divider: var(--color-border);
+    /* One token for the INTERNAL chat-surface dividers: the horizontal chrome-bar
+       hairlines (chat/workspace/dock/diff headers) AND the right-side pane splits
+       (diff/browser/dock). All resolve through here so those divider directions read
+       as the same line. The rounded sidebar↔chat seam is intentionally NOT one of
+       these — it stays at full --color-border (see --seam-line) so the card's outer
+       edge reads as before.
+       (Chat headers previously used the lighter --color-border-light and looked off.)
+       Held at a fraction of --color-border so these internal dividers sit slightly MORE
+       transparent than card/input borders — color-mix toward transparent scales the
+       border's alpha (same proven form as the seam-hover tint below) and stays
+       theme-aware because --color-border already differs per theme. */
+    --app-surface-divider: color-mix(in srgb, var(--color-border) 60%, transparent);
     /* Rounded-corner radius of the chat card's seam side. Defined once here so the card
        radius, the seam ring clip-path, the right-side border-radius, and the backing
        strip width stay in lockstep. (All call sites still carry a 0.75rem fallback.) */
@@ -100,8 +106,18 @@
     -webkit-backdrop-filter: var(--app-sidebar-backdrop-filter, none);
   }
 
-  .desktop-top-bar-traffic-light-gutter {
-    padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+  /* Small circular icon badges that sit directly on the sidebar surface inside
+     thread rows — the meta-chip stack, the handoff provider avatar, the terminal
+     count badge. They take the SAME material as the sidebar (translucent or
+     opaque, whatever the shell currently is) so they read as part of it instead
+     of an opaque blob, plus a 1px ring so stacked/overlapping icons stay
+     visually separated. Ring + shadow are one box-shadow so they don't affect
+     layout. */
+  .sidebar-icon-chip {
+    background: var(--app-sidebar-surface, var(--card));
+    box-shadow:
+      0 0 0 1px var(--sidebar-border),
+      0 1px 2px 0 rgb(0 0 0 / 0.05);
   }
 
   /* ─── Chat card seam (sidebar ↔ chat divider) ─────────────────────────────────
@@ -146,10 +162,14 @@
     z-index: 0;
     top: 0;
     bottom: 0;
-    /* Hidden unless the sidebar is open (see expanded rule below): when collapsed the
-       wrapper reaches the window edge, and a blurred strip there paints over the
-       macOS window's rounded corner. */
-    display: none;
+    /* Faded out unless the sidebar is open (see expanded rule below): when collapsed the
+       wrapper reaches the window edge, and a blurred strip there would paint over the
+       macOS window's rounded corner. Driven by opacity (not display) + a transition so
+       the wedge fades in step with the slide — at rest collapsed it is opacity:0, so it
+       still never paints over the window corner. */
+    display: block;
+    opacity: 0;
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
     width: var(--app-content-card-radius, 0.75rem);
     pointer-events: none;
     background-color: var(--app-sidebar-surface, var(--card));
@@ -161,15 +181,12 @@
     left: 0;
   }
 
-  [data-sidebar-side="right"] .chat-content-card-backing::after {
-    right: 0;
-  }
-
-  /* Only when a sidebar is expanded is the seam (and its wedge) in the middle of the
-     window, safely away from the window's corners — so only then paint the strip. */
-  [data-slot="sidebar-wrapper"]:has([data-slot="sidebar"][data-state="expanded"])
+  /* Only when the chat layout's own sidebar is expanded is the seam (and its wedge) in the
+     middle of the window, safely away from the window's corners — so only then paint the
+     strip. Direct-child :has() so the nested right-dock sidebar-wrapper can't drive this. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="expanded"])
     .chat-content-card-backing::after {
-    display: block;
+    opacity: 1;
   }
 
   /* Seam tokens + soft depth, side-agnostic so each value lives in ONE place. The card
@@ -186,39 +203,33 @@
      sidebar; when the sidebar is collapsed the seam sits at the window edge and the shadow
      simply falls off-screen. */
   .chat-content-card {
-    --seam-line: var(--app-surface-divider);
+    /* The rounded outer seam reads stronger than --color-border (and NOT the more-transparent
+       --app-surface-divider used by the internal hairlines/splits): the card's outer
+       edge against the sidebar should read as solid. Do not re-unify these. */
+    --seam-line: --alpha(var(--color-black) / 8%);
     --seam-shadow-color: rgba(0, 0, 0, 0.1);
     --seam-shadow-x: 0px;
-    box-shadow: var(--seam-shadow-x) 0 16px -10px var(--seam-shadow-color);
+    /* Soft, low-spread depth: a modest blur + negative spread keeps the shadow near the
+       seam edge rather than fanning across the sidebar, just enough to lift the card. */
+    box-shadow: var(--seam-shadow-x) 0 12px -10px var(--seam-shadow-color);
+    /* Match the left sidebar shell's SIDEBAR_OFFCANVAS_MOTION_CLASS slide
+       (`duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]`) so the seam corner
+       rounds/squares and the depth shadow fades IN STEP with the offcanvas animation
+       instead of snapping at frame 0 (the collapsed rule below flips both). */
+    transition:
+      box-shadow 300ms cubic-bezier(0.32, 0.72, 0, 1),
+      border-radius 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   .dark .chat-content-card {
-    --seam-shadow-color: rgba(0, 0, 0, 0.44);
+    --seam-shadow-color: rgba(0, 0, 0, 0.36);
+    --seam-line: --alpha(var(--color-white) / 8%);
   }
 
   [data-sidebar-side="left"] .chat-content-card {
-    --seam-shadow-x: -11px;
+    --seam-shadow-x: -6.5px;
     border-radius: var(--app-content-card-radius, 0.75rem) 0 0
       var(--app-content-card-radius, 0.75rem);
-  }
-
-  [data-sidebar-side="right"] .chat-content-card {
-    --seam-shadow-x: 11px;
-    border-radius: 0 var(--app-content-card-radius, 0.75rem) var(--app-content-card-radius, 0.75rem)
-      0;
-  }
-
-  .review-shell-card {
-    --app-content-card-radius: 1.15rem;
-    background: var(--background);
-  }
-
-  .dark .review-shell-card {
-    --seam-shadow-color: rgba(0, 0, 0, 0.58);
-  }
-
-  .review-shell-card .review-route-strip {
-    background: var(--background);
   }
 
   .chat-content-card::before {
@@ -229,6 +240,9 @@
     pointer-events: none;
     border-radius: inherit;
     box-shadow: inset 0 0 0 1px var(--seam-line);
+    /* Fade the seam ring with the slide (collapsed rule sets opacity:0) — `display`
+       can't transition, so opacity is what keeps this in step with the animation. */
+    transition: opacity 300ms cubic-bezier(0.32, 0.72, 0, 1);
   }
 
   /* Keep only the seam-side radius strip: the vertical edge + both curves on that
@@ -237,13 +251,29 @@
     clip-path: inset(0 calc(100% - var(--app-content-card-radius, 0.75rem)) 0 0);
   }
 
-  [data-sidebar-side="right"] .chat-content-card::before {
-    clip-path: inset(0 0 0 calc(100% - var(--app-content-card-radius, 0.75rem)));
+  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card {
+    --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
   }
 
-  [data-sidebar-side="left"]:has([data-placement="content-seam"]:hover) .chat-content-card,
-  [data-sidebar-side="right"]:has([data-placement="content-seam"]:hover) .chat-content-card {
-    --seam-line: color-mix(in srgb, var(--foreground) 30%, transparent);
+  /* Sidebar collapsed (offcanvas): the card fills the window edge-to-edge, so its rounded
+     seam corner would sit ON TOP of the macOS window's OWN rounded corner — two mismatched
+     curves overlapping. Square the card and drop the seam ring + depth here; the window's
+     own corner is then the only one. (The backing strip is already expanded-only.)
+     Use the DIRECT-CHILD combinator: only the chat layout's own sidebar is a direct child of
+     this wrapper; the right dock nests its own sidebar-wrapper, so a plain descendant :has()
+     would also fire on the dock's (always-collapsed) sidebar. */
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card {
+    border-radius: 0;
+    /* Fade the depth shadow via its color token rather than `box-shadow: none` —
+       Chromium snaps box-shadow to/from `none`, but keeping the geometry and only
+       driving the color to transparent interpolates cleanly with the slide. */
+    --seam-shadow-color: transparent;
+  }
+
+  [data-slot="sidebar-wrapper"]:has(> [data-slot="sidebar"][data-state="collapsed"])
+    .chat-content-card::before {
+    opacity: 0;
   }
 
   /* ─── Chat-surface header hairline (horizontal counterpart of the seam) ───────────
@@ -265,17 +295,9 @@
      read as a brighter dot, so pull the hairline 1px off the seam side: it butts against
      the seam stroke instead of crossing it. Anchor to the far edge and shrink the width so
      only the seam-side end retracts. */
-  [data-sidebar-side="left"] .chat-content-card .chat-surface-divider,
-  [data-sidebar-side="right"] .chat-content-card .chat-surface-divider {
-    background-size: calc(100% - 1px) 1px;
-  }
-
   [data-sidebar-side="left"] .chat-content-card .chat-surface-divider {
+    background-size: calc(100% - 1px) 1px;
     background-position: right bottom;
-  }
-
-  [data-sidebar-side="right"] .chat-content-card .chat-surface-divider {
-    background-position: left bottom;
   }
 
   /* Settings uses a route-level surface so the frosted window material is not
@@ -308,26 +330,50 @@
   }
 }
 
-/* Smooth entry for chat pane swaps (empty landing <-> transcript+bottom composer). */
+/* Fast opacity-only entry for chat pane swaps. Avoid vertical motion because the
+   empty landing can re-render in place when switching Home -> project. */
 @keyframes chat-pane-enter {
   from {
     opacity: 0;
-    transform: translateY(6px);
   }
 
   to {
     opacity: 1;
-    transform: none;
   }
 }
 
 .chat-pane-enter {
-  animation: chat-pane-enter 220ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: opacity, transform;
+  animation: chat-pane-enter 140ms ease-out;
+  will-change: opacity;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .chat-pane-enter {
+    animation: none;
+  }
+}
+
+/* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
+   so the transcript can stay lightweight while the row appears less abruptly. */
+@keyframes chat-message-send-enter {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.992);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.chat-message-send-enter {
+  animation: chat-message-send-enter 180ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-send-enter {
     animation: none;
   }
 }
@@ -411,15 +457,12 @@
   --radius: 0.625rem;
   --radius-user-message: 0.8rem;
   --font-ui-family: var(
-    --app-font-ui-override,
-    var(
-      --theme-font-ui-family,
-      -apple-system,
-      BlinkMacSystemFont,
-      "Segoe UI",
-      system-ui,
-      sans-serif
-    )
+    --theme-font-ui-family,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    system-ui,
+    sans-serif
   );
   --font-mono-family: var(
     --theme-font-code-family,
@@ -432,44 +475,40 @@
     Menlo,
     monospace
   );
-  --font-chat-code-family: var(
-    --app-font-chat-code-override,
-    var(--theme-font-code-family, var(--font-mono-family))
-  );
+  --font-chat-code-family: var(--theme-font-code-family, var(--font-mono-family));
   --terminal-font-family: "JetBrainsMono NFM", "JetBrainsMono NF", "JetBrains Mono", monospace;
   --app-shell-background: transparent;
   --app-sidebar-backdrop-filter: blur(8px) saturate(135%);
   --app-sidebar-shadow: inset 0 1px 0 rgba(0, 0, 0, 0.025);
   --app-sidebar-surface: color-mix(in srgb, var(--card) 64%, transparent);
-  --background: oklch(0.985 0.003 60);
-  --foreground: oklch(0.27 0.006 60);
-  --card: oklch(0.985 0.003 60);
-  --card-foreground: oklch(0.27 0.006 60);
-  --shadow-card: 0 1px 2px -1px oklch(0.27 0.006 60 / 0.06);
-  --popover: oklch(0.985 0.003 60);
-  --popover-foreground: oklch(0.27 0.006 60);
-  --primary: oklch(0.255 0.006 60);
-  --primary-foreground: oklch(0.99 0.003 60);
-  --secondary: oklch(0.955 0.006 60);
-  --secondary-foreground: oklch(0.27 0.006 60);
-  --muted: oklch(0.945 0.006 60);
-  --muted-foreground: oklch(0.515 0.007 60);
-  --accent: oklch(0.955 0.006 60);
-  --accent-foreground: oklch(0.27 0.006 60);
-  --destructive: oklch(0.585 0.17 27);
-  --border: oklch(0.905 0.007 60);
-  --input: oklch(0.885 0.007 60);
-  --ring: oklch(0.7 0.05 45);
-  --destructive-foreground: oklch(0.5 0.13 27);
+  --background: #fcfcfc;
+  --foreground: var(--color-neutral-800);
+  --card: var(--color-white);
+  --card-foreground: var(--color-neutral-800);
+  --popover: var(--color-white);
+  --popover-foreground: var(--color-neutral-800);
+  --primary: var(--color-neutral-900);
+  --primary-foreground: var(--color-white);
+  --secondary: --alpha(var(--color-black) / 4%);
+  --secondary-foreground: var(--color-neutral-800);
+  --muted: --alpha(var(--color-black) / 4%);
+  --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-black));
+  --accent: --alpha(var(--color-black) / 4%);
+  --accent-foreground: var(--color-neutral-800);
+  --destructive: var(--color-red-500);
+  --border: --alpha(var(--color-black) / 5%);
+  --input: --alpha(var(--color-black) / 6%);
+  --ring: var(--color-neutral-400);
+  --destructive-foreground: var(--color-red-700);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
   --chart-3: oklch(0.439 0 0);
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
-  --info: var(--color-text-accent, oklch(0.6 0.16 250));
-  --info-foreground: var(--color-text-accent, oklch(0.5 0.13 250));
-  --success: oklch(0.62 0.16 150);
-  --success-foreground: oklch(0.5 0.13 150);
+  --info: var(--color-text-accent, var(--color-blue-500));
+  --info-foreground: var(--color-text-accent, #526fff);
+  --success: var(--color-emerald-500);
+  --success-foreground: var(--color-emerald-700);
   --sidebar: var(--card);
   --sidebar-foreground: var(--foreground);
   --sidebar-primary: var(--primary);
@@ -481,41 +520,40 @@
   --sidebar-ring: var(--ring);
   --color-background-button-secondary-hover: var(--secondary);
   --color-background-elevated-secondary: var(--secondary);
-  --warning: oklch(0.74 0.15 75);
-  --warning-foreground: oklch(0.5 0.13 75);
+  --warning: var(--color-amber-500);
+  --warning-foreground: var(--color-amber-700);
   --claude: #d97757;
 
   @variant dark {
     color-scheme: dark;
-    --background: oklch(0.155 0.004 60);
-    --foreground: oklch(0.94 0.004 60);
-    --card: oklch(0.205 0.005 60);
-    --card-foreground: oklch(0.94 0.004 60);
-    --shadow-card: none;
-    --popover: oklch(0.235 0.005 60);
-    --popover-foreground: oklch(0.94 0.004 60);
-    --primary: oklch(0.94 0.004 60);
-    --primary-foreground: oklch(0.205 0.005 60);
-    --secondary: oklch(0.255 0.006 60);
-    --secondary-foreground: oklch(0.94 0.004 60);
-    --muted: oklch(0.245 0.006 60);
-    --muted-foreground: oklch(0.65 0.006 60);
-    --accent: oklch(0.255 0.006 60);
-    --accent-foreground: oklch(0.94 0.004 60);
-    --destructive: oklch(0.7 0.14 27);
-    --border: oklch(0.295 0.007 60);
-    --input: oklch(0.315 0.007 60);
-    --ring: oklch(0.62 0.06 45);
-    --destructive-foreground: oklch(0.78 0.13 27);
+    --background: #0e0e0e;
+    --foreground: var(--color-neutral-100);
+    --card: color-mix(in srgb, var(--background) 99%, var(--color-white));
+    --card-foreground: var(--color-neutral-100);
+    --popover: color-mix(in srgb, var(--background) 99%, var(--color-white));
+    --popover-foreground: var(--color-neutral-100);
+    --primary: var(--color-neutral-100);
+    --primary-foreground: var(--color-neutral-900);
+    --secondary: --alpha(var(--color-white) / 4%);
+    --secondary-foreground: var(--color-neutral-100);
+    --muted: --alpha(var(--color-white) / 4%);
+    --muted-foreground: color-mix(in srgb, var(--color-neutral-500) 90%, var(--color-white));
+    --accent: --alpha(var(--color-white) / 4%);
+    --accent-foreground: var(--color-neutral-100);
+    --destructive: color-mix(in srgb, var(--color-red-500) 90%, var(--color-white));
+    --border: --alpha(var(--color-white) / 4%);
+    --input: --alpha(var(--color-white) / 5%);
+    --ring: var(--color-neutral-500);
+    --destructive-foreground: var(--color-red-400);
     --chart-1: oklch(0.87 0 0);
     --chart-2: oklch(0.556 0 0);
     --chart-3: oklch(0.439 0 0);
     --chart-4: oklch(0.371 0 0);
     --chart-5: oklch(0.269 0 0);
-    --info: var(--color-text-accent, oklch(0.7 0.14 250));
-    --info-foreground: var(--color-text-accent, oklch(0.78 0.13 250));
-    --success: oklch(0.7 0.14 150);
-    --success-foreground: oklch(0.78 0.13 150);
+    --info: var(--color-text-accent, var(--color-blue-500));
+    --info-foreground: var(--color-text-accent, #6073cc);
+    --success: var(--color-emerald-500);
+    --success-foreground: var(--color-emerald-400);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-primary: var(--primary);
@@ -530,8 +568,8 @@
     --app-sidebar-surface: color-mix(in srgb, var(--card) 72%, transparent);
     --color-background-button-secondary-hover: var(--secondary);
     --color-background-elevated-secondary: var(--secondary);
-    --warning: oklch(0.78 0.13 75);
-    --warning-foreground: oklch(0.86 0.1 75);
+    --warning: var(--color-amber-500);
+    --warning-foreground: var(--color-amber-400);
   }
 }
 
@@ -693,8 +731,44 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown ol,
 .chat-markdown blockquote,
 .chat-markdown pre,
-.chat-markdown table {
+.chat-markdown .chat-markdown-table-scroll {
   margin: 0.65rem 0;
+}
+
+.chat-markdown h1,
+.chat-markdown h2,
+.chat-markdown h3,
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  margin: 0.85rem 0 0.35rem;
+  color: var(--foreground);
+  font-weight: 590;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.chat-markdown h1 {
+  font-size: 1.18em;
+}
+
+.chat-markdown h2 {
+  font-size: 1.1em;
+}
+
+.chat-markdown h3 {
+  font-size: 1.04em;
+}
+
+.chat-markdown h4,
+.chat-markdown h5,
+.chat-markdown h6 {
+  font-size: 1em;
+}
+
+.chat-markdown h5,
+.chat-markdown h6 {
+  color: color-mix(in srgb, var(--foreground) 82%, var(--muted-foreground));
 }
 
 .chat-markdown ul {
@@ -764,10 +838,80 @@ label:has(> select#reasoning-effort) select {
   text-underline-offset: 0.18em;
 }
 
+.chat-markdown .thread-marker {
+  border-radius: 0.22em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  transition:
+    background-color 160ms ease,
+    box-shadow 160ms ease,
+    text-decoration-color 160ms ease;
+}
+
+.chat-markdown .thread-marker-highlight {
+  padding: 0.02em 0.12em;
+}
+
+/* Markdown can split one marker across inline nodes; only outer edges keep padding/radius. */
+.chat-markdown .thread-marker-highlight.thread-marker-continues-before {
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+.chat-markdown .thread-marker-highlight.thread-marker-continues-after {
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.chat-markdown .thread-marker-underline {
+  text-decoration-line: underline;
+  text-decoration-thickness: 0.14em;
+  text-underline-offset: 0.18em;
+}
+
+.chat-markdown .thread-marker-yellow {
+  background-color: color-mix(in srgb, var(--color-text-accent) 12%, transparent);
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
+}
+
+.chat-markdown .thread-marker-blue {
+  background-color: transparent;
+  text-decoration-color: color-mix(in srgb, var(--color-text-foreground) 22%, transparent);
+}
+
+.chat-markdown .thread-marker-green {
+  background-color: color-mix(in srgb, #34d399 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #10b981 82%, transparent);
+}
+
+.chat-markdown .thread-marker-pink {
+  background-color: color-mix(in srgb, #f472b6 24%, transparent);
+  text-decoration-color: color-mix(in srgb, #ec4899 82%, transparent);
+}
+
+.chat-markdown .thread-marker-done {
+  opacity: 0.58;
+}
+
+.chat-markdown .thread-marker-active {
+  box-shadow:
+    0 0 0 2px var(--color-background-surface),
+    0 0 0 4px color-mix(in srgb, var(--color-text-foreground) 34%, transparent);
+}
+
+.chat-markdown .thread-marker-active.thread-marker-continues-before,
+.chat-markdown .thread-marker-active.thread-marker-continues-after {
+  box-shadow: none;
+}
+
 .chat-markdown blockquote {
-  border-left: 2px solid var(--border);
-  padding-left: 0.8rem;
-  color: var(--muted-foreground);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--muted) 28%, transparent);
+  padding: 0.45rem 0.65rem;
+  color: color-mix(in srgb, var(--foreground) 88%, var(--muted-foreground));
 }
 
 .chat-markdown :not(pre) > code {
@@ -828,17 +972,22 @@ label:has(> select#reasoning-effort) select {
 
 .chat-markdown .chat-markdown-codeblock {
   margin: 0.65rem 0;
+  min-width: 0;
+  max-width: 100%;
   overflow: hidden;
-  border-radius: 0.65rem;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 0.5rem;
   background: var(--app-chat-code-surface);
 }
 
 .chat-markdown .chat-markdown-codeblock__header {
-  display: flex;
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   justify-content: space-between;
   gap: 0.5rem;
-  padding: 0.1rem 0.4rem 0.1rem 0.6rem;
+  padding: 0.2rem 0.4rem 0.2rem 0.55rem;
 }
 
 .chat-markdown .chat-markdown-codeblock__lang {
@@ -858,7 +1007,7 @@ label:has(> select#reasoning-effort) select {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 0.375rem;
+  gap: 0.325rem;
   font-size: 0.72rem;
   line-height: 1.4;
   user-select: none;
@@ -872,10 +1021,12 @@ label:has(> select#reasoning-effort) select {
 }
 
 .chat-markdown .chat-markdown-codeblock__file-name {
-  flex-shrink: 0;
+  min-width: 0;
+  overflow: hidden;
   font-family: var(--font-chat-code-family);
   font-weight: 500;
   color: var(--foreground);
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -900,16 +1051,29 @@ label:has(> select#reasoning-effort) select {
   display: inline-flex;
   flex-shrink: 0;
   align-items: center;
-  gap: 0.125rem;
+  gap: 0.0625rem;
 }
 
 .chat-markdown .chat-markdown-codeblock__action {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0.25rem;
   color: var(--muted-foreground);
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
 }
 
 .chat-markdown .chat-markdown-codeblock__action:hover,
 .chat-markdown .chat-markdown-codeblock__action[data-active="true"] {
+  background: color-mix(in srgb, var(--muted) 50%, transparent);
   color: var(--foreground);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-markdown .chat-markdown-codeblock__action {
+    transition: none;
+  }
 }
 
 .chat-markdown .chat-markdown-codeblock__body pre {
@@ -939,54 +1103,73 @@ label:has(> select#reasoning-effort) select {
   font-family: inherit !important;
 }
 
-.chat-markdown .chat-markdown-mermaid {
-  margin: 0.65rem 0;
-  max-width: 100%;
-  overflow-x: auto;
-  border: 1px solid color-mix(in srgb, var(--border) 52%, transparent);
-  border-radius: 0.85rem;
-  background: color-mix(in srgb, var(--card) 82%, var(--background));
-  padding: 0.85rem;
+.editor-file-viewer__plain,
+.editor-file-viewer__highlight .shiki {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+  padding: 1rem;
+  font-family: var(--font-chat-code-family);
+  font-size: var(--app-font-size-chat-code, 12px);
+  line-height: 1.65;
+  tab-size: 2;
 }
 
-.chat-markdown .chat-markdown-mermaid__svg {
-  min-width: min-content;
+.editor-file-viewer::-webkit-scrollbar-corner {
+  background: var(--color-background-surface);
 }
 
-.chat-markdown .chat-markdown-mermaid__svg svg {
-  display: block;
-  max-width: 100%;
-  height: auto;
-  margin: 0 auto;
+.editor-file-viewer__plain {
+  color: color-mix(in srgb, var(--foreground) 88%, transparent);
 }
 
-.chat-markdown .chat-markdown-mermaid__loading {
-  min-height: 7rem;
-  border-radius: 0.65rem;
-  background: linear-gradient(
-    90deg,
-    color-mix(in srgb, var(--muted) 45%, transparent),
-    color-mix(in srgb, var(--muted) 72%, transparent),
-    color-mix(in srgb, var(--muted) 45%, transparent)
-  );
-  background-size: 200% 100%;
-  animation: chat-markdown-mermaid-loading 1.2s ease-in-out infinite;
+.editor-file-viewer__highlight {
+  min-height: 100%;
+  width: max-content;
+  min-width: 100%;
 }
 
-@keyframes chat-markdown-mermaid-loading {
-  0% {
-    background-position: 200% 0;
-  }
-
-  100% {
-    background-position: -200% 0;
-  }
+.editor-file-viewer__highlight .shiki code,
+.editor-file-viewer__highlight .shiki * {
+  font-family: inherit !important;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .chat-markdown .chat-markdown-mermaid__loading {
-    animation: none;
-  }
+/* Line-number gutter for the read-only file preview. Rendered via CSS counters
+   on the per-line spans (Shiki and the plain fallback both emit .line), so the
+   numbers stay out of text selection, clipboard copies, and the selection
+   line-range math used by "Reference lines in chat". */
+.editor-file-viewer__plain code,
+.editor-file-viewer__highlight .shiki code {
+  counter-reset: editor-file-line;
+}
+
+/* The line itself owns the gutter inset; the number is painted into that inset
+   out of the text flow (absolute) so it never becomes part of a text selection.
+   The previous in-flow `position: sticky` inline-block sat at the start of each
+   line's inline box, which made the browser snap a single-character drag to the
+   whole line. */
+.editor-file-viewer__plain .line,
+.editor-file-viewer__highlight .shiki .line {
+  position: relative;
+  padding-left: 6.25ch;
+}
+
+.editor-file-viewer__plain .line::before,
+.editor-file-viewer__highlight .shiki .line::before {
+  counter-increment: editor-file-line;
+  content: counter(editor-file-line);
+  position: absolute;
+  left: 0;
+  width: 4ch;
+  text-align: right;
+  color: color-mix(in srgb, var(--foreground) 30%, transparent);
+  pointer-events: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 /* Inline file-comment affordances (hover "+" gutter button, selected-line
@@ -1546,47 +1729,551 @@ label:has(> select#reasoning-effort) select {
   }
 }
 
-/* Lightweight text shimmer for the "Working for …" status line.
-   CSS-only: clips an animated gradient to the glyphs so there is no JS timer
-   or React re-render driving the effect. Edges use currentColor (the muted
-   text color set via Tailwind) so non-highlighted text matches the original
-   exactly, and a brighter band sweeps across once per cycle. */
-.working-shimmer {
-  background-image: linear-gradient(
-    100deg,
-    currentColor 0%,
-    currentColor 46%,
-    color-mix(in srgb, currentColor, white 62%) 50%,
-    currentColor 54%,
-    currentColor 100%
-  );
-  background-size: 200% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: working-shimmer 3.3s linear infinite;
+/* scroll-fade utility — vendored verbatim from shadcn 4.12.0
+   (dist/tailwind.css `@utility scroll-fade`). Same rationale as the shimmer
+   block below — importing the full `shadcn` stylesheet would clash with this
+   project's custom theme, so the self-contained scroll-fade block lives here.
+   Applied to the transcript scroll container via `scroll-fade-b` so streamed
+   content dissolves toward the composer and the fade clears at the live edge.
+   Scroll-aware through `animation-timeline: scroll()`; the `@property`
+   initial-values keep it fade-free when the container is not scrollable, and a
+   static-fade `@supports` fallback covers browsers without scroll timelines.
+   Provides `scroll-fade`, `scroll-fade-y`, `scroll-fade-x`, the directional
+   `scroll-fade-{t,b,l,r,s,e}`, size modifiers `scroll-fade-*` /
+   `scroll-fade-{t,b,s,e}-*`, and `scroll-fade-none`.
+   Docs: https://ui.shadcn.com/docs/utils/scroll-fade */
+@property --scroll-fade-t {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-b {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-s {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-e {
+  syntax: "<length-percentage>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --scroll-fade-mask {
+  syntax: "*";
+  inherits: false;
 }
 
-/* Slow, delicate sweep across the whole word over the first ~85% of the cycle
-   (~2.8s), then a short ~0.5s pause before it repeats. The start/end positions
-   (108% / -8%) park the band exactly at the word's left/right edges, so the
-   visible sweep spans every glyph with no off-screen dead time and the loop
-   restart is invisible. Two segments keep the sweep speed and the pause
-   independently tunable. */
-@keyframes working-shimmer {
-  0% {
-    background-position: 108% 0;
+@theme inline {
+  @keyframes scroll-fade-reveal-t {
+    from {
+      --scroll-fade-t: 0px;
+    }
+    to {
+      --scroll-fade-t: var(
+        --_scroll-fade-size-t,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
   }
-  85% {
-    background-position: -8% 0;
+  @keyframes scroll-fade-reveal-b {
+    from {
+      --scroll-fade-b: var(
+        --_scroll-fade-size-b,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+    to {
+      --scroll-fade-b: 0px;
+    }
   }
-  100% {
-    background-position: -8% 0;
+  @keyframes scroll-fade-reveal-s {
+    from {
+      --scroll-fade-s: 0px;
+    }
+    to {
+      --scroll-fade-s: var(
+        --_scroll-fade-size-s,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
   }
+  @keyframes scroll-fade-reveal-e {
+    from {
+      --scroll-fade-e: var(
+        --_scroll-fade-size-e,
+        var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+      );
+    }
+    to {
+      --scroll-fade-e: 0px;
+    }
+  }
+}
+
+@utility scroll-fade {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-y {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-block: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-block));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-t 1ms ease-in-out,
+      scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y), scroll(self y);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-x {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-inline: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-inline: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  mask-image: var(--scroll-fade-mask, var(--scroll-fade-inline));
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation:
+      scroll-fade-reveal-s 1ms ease-in-out,
+      scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline), scroll(self inline);
+    animation-range:
+      0 var(--scroll-fade-reveal, calc(var(--spacing) * 24)),
+      calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-t {
+  --_scroll-fade-size-t: var(
+    --scroll-fade-t-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 var(--scroll-fade-t, 0px),
+    #000 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-t 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-t: var(--_scroll-fade-size-t);
+  }
+}
+
+@utility scroll-fade-b {
+  --_scroll-fade-size-b: var(
+    --scroll-fade-b-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to bottom,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-b, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-b 1ms ease-in-out;
+    animation-timeline: scroll(self y);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-b: var(--_scroll-fade-size-b);
+  }
+}
+
+@utility scroll-fade-l {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-s 1ms ease-in-out;
+    animation-timeline: scroll(self x);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+  }
+}
+
+@utility scroll-fade-r {
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self x);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-s {
+  --_scroll-fade-size-s: var(
+    --scroll-fade-s-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    transparent 0,
+    #000 var(--scroll-fade-s, 0px),
+    #000 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(
+      to left,
+      transparent 0,
+      #000 var(--scroll-fade-s, 0px),
+      #000 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-s 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: 0 var(--scroll-fade-reveal, calc(var(--spacing) * 24));
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-s: var(--_scroll-fade-size-s);
+  }
+}
+
+@utility scroll-fade-e {
+  --_scroll-fade-size-e: var(
+    --scroll-fade-e-size,
+    var(--scroll-fade-size, min(12%, calc(var(--spacing) * 10)))
+  );
+  --scroll-fade-mask: linear-gradient(
+    to right,
+    #000 0,
+    #000 calc(100% - var(--scroll-fade-e, 0px)),
+    transparent 100%
+  );
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    --scroll-fade-mask: linear-gradient(
+      to left,
+      #000 0,
+      #000 calc(100% - var(--scroll-fade-e, 0px)),
+      transparent 100%
+    );
+  }
+  -webkit-mask-image: var(--scroll-fade-mask);
+  mask-image: var(--scroll-fade-mask);
+  -webkit-mask-composite: source-in;
+  mask-composite: intersect;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+
+  @supports (animation-timeline: scroll()) {
+    animation: scroll-fade-reveal-e 1ms ease-in-out;
+    animation-timeline: scroll(self inline);
+    animation-range: calc(100% - var(--scroll-fade-reveal, calc(var(--spacing) * 24))) 100%;
+    animation-fill-mode: both;
+  }
+
+  @supports not (animation-timeline: scroll()) {
+    --scroll-fade-e: var(--_scroll-fade-size-e);
+  }
+}
+
+@utility scroll-fade-* {
+  --scroll-fade-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-t-* {
+  --scroll-fade-t-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-t-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-b-* {
+  --scroll-fade-b-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-b-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-s-* {
+  --scroll-fade-s-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-s-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-e-* {
+  --scroll-fade-e-size: calc(var(--spacing) * --value(integer));
+  --scroll-fade-e-size: --value([length], [percentage]);
+}
+
+@utility scroll-fade-none {
+  --scroll-fade-mask: none;
+}
+
+/* Text shimmer utility — vendored verbatim from shadcn 4.12.0
+   (dist/tailwind.css `@utility shimmer`). The full `shadcn` stylesheet is not
+   imported because it would clash with this project's custom theme, so the
+   self-contained shimmer block lives here instead. Applied on the
+   "Working for …" status line via the `shimmer` class. Provides `shimmer`,
+   `shimmer-duration-*`, `shimmer-spread-*`, `shimmer-angle-*`,
+   `shimmer-color-*`, `shimmer-once`, `shimmer-reverse`, and `shimmer-none`.
+   Docs: https://ui.shadcn.com/docs/utils/shimmer */
+@property --shimmer-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 20deg;
+}
+@property --shimmer-image {
+  syntax: "*";
+  inherits: false;
+}
+@property --shimmer-text-fill {
+  syntax: "*";
+  inherits: false;
+}
+
+@theme inline {
+  @keyframes tw-shimmer {
+    from {
+      background-position: 100% 0;
+    }
+    to {
+      background-position: 0 0;
+    }
+  }
+}
+
+@utility shimmer {
+  --_spread: var(--shimmer-spread, calc(3ch + 40px));
+  --_base: currentColor;
+  --_highlight: var(--shimmer-color, oklch(from currentColor l c h / calc(alpha* 0.2)));
+
+  background-image: var(
+    --shimmer-image,
+    linear-gradient(
+      calc(90deg + var(--shimmer-angle)),
+      var(--_base) calc(50% - var(--_spread)),
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% - var(--_spread) * 0.5),
+      var(--_highlight) 50%,
+      color-mix(in oklch, var(--_highlight), var(--_base) 50%) calc(50% + var(--_spread) * 0.5),
+      var(--_base) calc(50% + var(--_spread))
+    )
+  );
+  background-repeat: no-repeat;
+  background-size: calc(200% + var(--_spread) * 2) 100%;
+  background-position: 0 0;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: var(--shimmer-text-fill, transparent);
+  animation: tw-shimmer var(--shimmer-duration, 2s) linear infinite;
+
+  @variant dark {
+    --_highlight: var(
+      --shimmer-color,
+      oklch(from currentColor max(0.8, calc(l + 0.4)) c h / calc(alpha + 0.4))
+    );
+  }
+
+  &:where([dir="rtl"], [dir="rtl"] *) {
+    animation-direction: reverse;
+  }
+}
+
+@utility shimmer-once {
+  animation-iteration-count: 1;
+}
+
+@utility shimmer-reverse {
+  animation-direction: reverse;
+}
+
+@utility shimmer-none {
+  --shimmer-image: none;
+  --shimmer-text-fill: currentColor;
+}
+
+@utility shimmer-color-* {
+  --shimmer-color: --value(--color, [color]);
+  --shimmer-color: color-mix(
+    in oklch,
+    --value(--color, [color]) calc(--modifier(integer) * 1%),
+    transparent
+  );
+}
+
+@utility shimmer-duration-* {
+  --shimmer-duration: calc(--value(integer) * 1ms);
+}
+
+@utility shimmer-spread-* {
+  --shimmer-spread: calc(var(--spacing) * --value(integer));
+  --shimmer-spread: --value([length], [percentage]);
+}
+
+@utility shimmer-angle-* {
+  --shimmer-angle: calc(--value(integer) * 1deg);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .working-shimmer {
+  .shimmer {
     animation: none;
     background-image: none;
     -webkit-text-fill-color: currentColor;
@@ -1670,16 +2357,35 @@ label:has(> select#reasoning-effort) select {
   outline-offset: 2px;
 }
 
+.chat-markdown .chat-markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  border: 1px solid color-mix(in srgb, var(--border) 65%, transparent);
+  border-radius: 0.5rem;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
+}
+
 .chat-markdown table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
+  font-size: 0.8125em;
+  line-height: 1.45;
 }
 
 .chat-markdown th,
 .chat-markdown td {
   border: 1px solid var(--border);
-  padding: 0.35rem 0.45rem;
+  padding: 0.25rem 0.5rem;
   text-align: left;
+  vertical-align: top;
+  white-space: nowrap;
+  word-break: normal;
+  overflow-wrap: normal;
 }
 
 /* Keep diff chrome aligned with the user-configured code font, not the base mono fallback. */
@@ -1697,62 +2403,14 @@ diffs-container {
 
 .diff-render-file {
   border: 1px solid var(--border);
-  border-radius: 0.75rem;
-  overflow: clip;
-  background: color-mix(in srgb, var(--background) 88%, var(--card));
-}
-
-.review-files-workbench {
-  --review-workbench-bg: color-mix(in srgb, var(--background) 96%, var(--card));
-  --review-pane-bg: color-mix(in srgb, var(--background) 92%, var(--card));
-  --review-diff-file-bg: color-mix(in srgb, var(--background) 88%, var(--card));
-  --review-diff-header-bg: color-mix(in srgb, var(--card) 58%, var(--background));
-  --review-pane-border: color-mix(in srgb, var(--border) 72%, transparent);
-  background: var(--review-workbench-bg);
-  color: var(--foreground);
-}
-
-.review-diff-viewport {
-  --review-diff-font-size: 13px;
-  background: color-mix(in srgb, var(--background) 94%, var(--card));
-}
-
-.review-files-workbench .review-diff-viewport {
-  background: var(--review-pane-bg);
-}
-
-.review-diff-viewport .diff-render-file {
-  border-color: color-mix(in srgb, var(--border) 34%, transparent);
   border-radius: 0.5rem;
-  background: color-mix(in srgb, var(--background) 90%, var(--card));
-  box-shadow: none;
+  overflow: clip;
+  background: color-mix(in srgb, var(--card) 92%, var(--background));
 }
 
-.review-files-workbench .review-diff-viewport .diff-render-file {
-  border-color: var(--review-pane-border);
-  background: var(--review-diff-file-bg);
-}
-
-.review-files-workbench .review-diff-viewport .diff-render-file {
-  border-right: 1px solid var(--review-pane-border);
-  border-left: 1px solid var(--review-pane-border);
-  border-radius: 0.625rem;
-  background: var(--review-diff-file-bg);
-  border-color: var(--review-pane-border);
-}
-
-.review-diff-viewport .diff-render-file:first-child {
-  margin-top: 0;
-}
-
-.review-diff-viewport .diff-render-file [data-diffs-header],
-.review-diff-viewport .diff-render-file [data-file-info] {
-  background: color-mix(in srgb, var(--card) 36%, var(--background));
-}
-
-.review-files-workbench .review-diff-viewport .diff-render-file [data-diffs-header],
-.review-files-workbench .review-diff-viewport .diff-render-file [data-file-info] {
-  background: var(--review-diff-header-bg);
+.diff-render-file [data-diffs-header],
+.diff-render-file [data-file-info] {
+  cursor: pointer;
 }
 
 .diff-render-file__image-preview {
@@ -1786,6 +2444,12 @@ diffs-container {
   border-radius: var(--composer-radius);
 }
 
+/* macOS Electron: leading inset for sidebar toggle + route nav past native traffic lights.
+   Value is driven by --desktop-top-bar-traffic-light-gutter (inverse-scaled on View zoom). */
+:root[data-runtime="electron"] .desktop-top-bar-traffic-light-gutter {
+  padding-left: var(--desktop-top-bar-traffic-light-gutter, 90px) !important;
+}
+
 /* Electron: continuous macOS-style corners (do not stack with corner-shape). */
 :root[data-runtime="electron"] .chat-composer-shell,
 :root[data-runtime="electron"] .chat-composer-surface,
@@ -1810,6 +2474,16 @@ diffs-container {
   border-bottom-right-radius: 0;
   border-top-left-radius: calc(var(--composer-radius) - 1px);
   border-top-right-radius: calc(var(--composer-radius) - 1px);
+}
+
+/* A stacked panel marked attachedToPrevious merges into the panel above it:
+   drop its top radius so the seam reads as one continuous, inline surface
+   instead of a separate rounded card. The panel above has border-b-0, so this
+   panel's own top border becomes the 1px divider between the fused sections —
+   the same way live-change and queued follow-up rows fuse above the composer. */
+.chat-composer-stacked-top[data-composer-stacked-attached="true"] {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
 }
 
 .chat-composer-surface {

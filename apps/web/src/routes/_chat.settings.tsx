@@ -42,6 +42,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
   DEFAULT_UI_DENSITY,
+  type ReviewWalkthroughDiffStyle,
   type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
@@ -91,18 +92,18 @@ import {
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
 import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
 import { SandboxesSettings } from "../components/settings/SandboxesSettings";
+import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { SidebarInset } from "../components/ui/sidebar";
+import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -189,6 +190,19 @@ const UI_DENSITY_OPTIONS = [
   label: string;
   description: string;
 }>;
+
+const REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "unified", label: "Unified" },
+  { value: "split", label: "Split" },
+] as const satisfies ReadonlyArray<{
+  value: ReviewWalkthroughDiffStyle;
+  label: string;
+}>;
+
+function isReviewWalkthroughDiffStyle(value: string): value is ReviewWalkthroughDiffStyle {
+  return value === "auto" || value === "unified" || value === "split";
+}
 
 const THEME_OPTIONS = [
   {
@@ -763,14 +777,24 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
+  const providerUpdateServerSettings = useMemo(
+    () =>
+      serverSettingsQuery.data
+        ? {
+            ...serverSettingsQuery.data,
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }
+        : null,
+    [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
+  );
   const outdatedProviderStatuses = useMemo(
     () =>
       getVisibleProviderUpdateStatuses({
         providers: serverConfigQuery.data?.providers ?? [],
         hiddenProviders: settings.hiddenProviders,
-        serverSettings: serverSettingsQuery.data ?? null,
+        serverSettings: providerUpdateServerSettings,
       }),
-    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
+    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
   );
   const outdatedProviderCount = outdatedProviderStatuses.length;
   useSettingsTargetScroll(
@@ -963,8 +987,8 @@ function SettingsRouteView() {
     ...(settings.reviewWalkthroughDiffStyle !== defaults.reviewWalkthroughDiffStyle
       ? ["Walkthrough diff view"]
       : []),
-    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
-      ? ["Prompt suggestions"]
+    ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
+      ? ["Provider update checks"]
       : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
@@ -2093,13 +2117,33 @@ function SettingsRouteView() {
           ariaLabel: "Wrap diff lines by default",
         })}
 
-        {renderBooleanSettingRow({
-          settingKey: "enableComposerSuggestions",
-          title: "Prompt suggestions",
-          description: "Show suggested prompts under the composer when starting a new thread.",
-          resetLabel: "prompt suggestions",
-          ariaLabel: "Show composer prompt suggestions",
-        })}
+        <SettingsRow
+          title="Walkthrough diff view"
+          description="Choose the default diff layout for PR walkthrough chapters."
+          resetAction={
+            settings.reviewWalkthroughDiffStyle !== defaults.reviewWalkthroughDiffStyle ? (
+              <SettingResetButton
+                label="walkthrough diff view"
+                onClick={() =>
+                  updateSettings({
+                    reviewWalkthroughDiffStyle: defaults.reviewWalkthroughDiffStyle,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <SettingsSegmentedControl
+              value={settings.reviewWalkthroughDiffStyle}
+              onValueChange={(value) => {
+                if (!isReviewWalkthroughDiffStyle(value)) return;
+                updateSettings({ reviewWalkthroughDiffStyle: value });
+              }}
+              ariaLabel="Walkthrough diff view preference"
+              options={REVIEW_WALKTHROUGH_DIFF_STYLE_OPTIONS}
+            />
+          }
+        />
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
@@ -2607,16 +2651,27 @@ function SettingsRouteView() {
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
+        {renderBooleanSettingRow({
+          settingKey: "enableProviderUpdateChecks",
+          title: "Automatic CLI update checks",
+          description:
+            "Check Codex, Claude, and other provider CLIs for newer versions in the background.",
+          resetLabel: "CLI update checks",
+          ariaLabel: "Automatic CLI update checks",
+        })}
+
         <SettingsRow
           title="Provider updates"
-          description="Update installed provider tools that Synara can safely update."
+          description="Review installed provider tools that Synara can safely update."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
         >
-          {outdatedProviderStatuses.length > 0 ? (
+          {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
             <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
               {outdatedProviderStatuses.map((providerStatus) => {
                 const updateAdvisory = providerStatus.versionAdvisory;
@@ -2686,9 +2741,11 @@ function SettingsRouteView() {
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
           resetAction={
             isInstallSettingsDirty ? (
@@ -2779,16 +2836,21 @@ function SettingsRouteView() {
                   ? shouldShowProviderUpdateStatus({
                       provider: providerStatus,
                       hiddenProviderSet,
-                      serverSettings: serverSettingsQuery.data ?? null,
+                      serverSettings: providerUpdateServerSettings,
                     })
                   : false;
                 const providerUpdateSuppressed =
                   providerStatus?.versionAdvisory?.status === "behind_latest" &&
                   !showProviderUpdateStatus;
+                const currentProviderVersion = formatProviderVersion(providerStatus?.version);
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateSuppressed
-                    ? null
-                    : providerUpdateStatusLabel(providerStatus)
+                  ? !settings.enableProviderUpdateChecks
+                    ? currentProviderVersion
+                      ? `Current ${currentProviderVersion}`
+                      : null
+                    : providerUpdateSuppressed
+                      ? null
+                      : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -3254,6 +3316,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "shortcuts":
+        return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":
         return renderWorktreesPanel();
       case "archived":
@@ -3291,10 +3355,7 @@ function SettingsRouteView() {
         CHAT_CONTENT_CARD_CLASS_NAME,
       )}
     >
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
-      >
+      <RouteInsetSurface surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}>
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
@@ -3360,7 +3421,7 @@ function SettingsRouteView() {
           onOpenChange={setReleaseHistoryOpen}
           defaultExpandedVersion={APP_VERSION}
         />
-      </SidebarInset>
+      </RouteInsetSurface>
     </div>
   );
 }

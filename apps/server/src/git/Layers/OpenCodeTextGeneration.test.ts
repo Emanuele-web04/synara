@@ -24,6 +24,7 @@ const runtimeMock = {
     startCwds: [] as Array<string | undefined>,
     sessionCreateInputs: [] as Array<Record<string, unknown>>,
     promptUrls: [] as string[],
+    promptInputs: [] as Array<Record<string, unknown>>,
     authHeaders: [] as Array<string | null>,
     closeCalls: [] as string[],
     promptStartedResolvers: [] as Array<() => void>,
@@ -37,6 +38,7 @@ const runtimeMock = {
     this.state.startCwds.length = 0;
     this.state.sessionCreateInputs.length = 0;
     this.state.promptUrls.length = 0;
+    this.state.promptInputs.length = 0;
     this.state.authHeaders.length = 0;
     this.state.closeCalls.length = 0;
     this.state.promptStartedResolvers.length = 0;
@@ -86,8 +88,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           runtimeMock.state.sessionCreateInputs.push(input);
           return { data: { id: `${baseUrl}/session` } };
         },
-        prompt: async () => {
+        prompt: async (input: Record<string, unknown>) => {
           runtimeMock.state.promptUrls.push(baseUrl);
+          runtimeMock.state.promptInputs.push(input);
           runtimeMock.state.authHeaders.push(
             serverPassword ? `Basic ${btoa(`opencode:${serverPassword}`)}` : null,
           );
@@ -408,6 +411,45 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         },
         agent: "build",
       });
+    }),
+  );
+
+  it.effect("projects generic attachments into text-generation prompts", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.promptResult = {
+        data: {
+          parts: [{ type: "text", text: JSON.stringify({ title: "Meeting recap" }) }],
+        },
+      };
+      const textGeneration = yield* OpenCodeTextGeneration;
+
+      yield* textGeneration.generateThreadTitle({
+        cwd: process.cwd(),
+        message: "summarize this",
+        attachments: [
+          {
+            type: "file" as const,
+            id: "thread-title-docx-00000000-0000-4000-8000-000000000001",
+            name: "minutes.docx",
+            mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            sizeBytes: 4_096,
+          },
+        ],
+        modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+      });
+
+      const parts = runtimeMock.state.promptInputs[0]?.parts as
+        | Array<Record<string, unknown>>
+        | undefined;
+      expect(parts).toHaveLength(1);
+      expect(parts?.[0]).toMatchObject({ type: "text" });
+      expect(parts?.[0]?.text).toEqual(expect.stringContaining("<attached_files>"));
+      expect(parts?.[0]?.text).toEqual(expect.stringContaining('"minutes.docx"'));
+      expect(parts?.[0]?.text).toEqual(
+        expect.stringContaining(
+          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+      );
     }),
   );
 

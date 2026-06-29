@@ -1,4 +1,4 @@
-import { ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
+import { MessageId, ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -8,12 +8,14 @@ import {
   type LocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
+  deriveTranscriptTailFollowKey,
   describeVoiceRecordingStartError,
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveComposerEnterDispatchMode,
   resolveDefaultEnvironmentPanelOpen,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
@@ -24,6 +26,7 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
+  shouldMaintainTranscriptTailFollow,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
@@ -112,6 +115,76 @@ describe("composer pasted text collapse", () => {
         isComposerApprovalState: true,
         hasPendingUserInput: false,
         showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("deriveTranscriptTailFollowKey", () => {
+  const baseMessage = {
+    id: MessageId.makeUnsafe("assistant-message-1"),
+    role: "assistant" as const,
+    text: "hello",
+    streaming: true,
+    completedAt: undefined,
+  };
+
+  it("changes when assistant text grows", () => {
+    const firstKey = deriveTranscriptTailFollowKey({ latestMessage: baseMessage });
+    const nextKey = deriveTranscriptTailFollowKey({
+      latestMessage: { ...baseMessage, text: "hello world" },
+    });
+
+    expect(nextKey).not.toBe(firstKey);
+  });
+
+  it("stays stable for work-only updates when the latest message is unchanged", () => {
+    const firstKey = deriveTranscriptTailFollowKey({ latestMessage: baseMessage });
+    const workOnlyUpdateKey = deriveTranscriptTailFollowKey({ latestMessage: { ...baseMessage } });
+
+    expect(workOnlyUpdateKey).toBe(firstKey);
+  });
+
+  it("stays stable when streaming settles without text growth", () => {
+    const streamingKey = deriveTranscriptTailFollowKey({ latestMessage: baseMessage });
+    const settledKey = deriveTranscriptTailFollowKey({
+      latestMessage: {
+        ...baseMessage,
+        streaming: false,
+        completedAt: "2026-06-28T21:10:00.000Z",
+      },
+    });
+
+    expect(settledKey).toBe(streamingKey);
+  });
+
+  it("maintains tail follow only while streaming text produces a new key", () => {
+    expect(
+      shouldMaintainTranscriptTailFollow({
+        previousTailKey: "message:5",
+        nextTailKey: "message:11",
+        hasStreamingAssistantText: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldMaintainTranscriptTailFollow({
+        previousTailKey: "message:11",
+        nextTailKey: "message:11",
+        hasStreamingAssistantText: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMaintainTranscriptTailFollow({
+        previousTailKey: "message:5",
+        nextTailKey: "message:11",
+        hasStreamingAssistantText: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldMaintainTranscriptTailFollow({
+        previousTailKey: null,
+        nextTailKey: "message:11",
+        hasStreamingAssistantText: true,
       }),
     ).toBe(false);
   });
@@ -727,6 +800,32 @@ describe("deriveComposerSendState", () => {
     });
 
     expect(state.hasSendableContent).toBe(true);
+  });
+});
+
+describe("resolveComposerEnterDispatchMode", () => {
+  it("uses normal queue dispatch for bare Enter", () => {
+    expect(
+      resolveComposerEnterDispatchMode({ hasLiveTurn: true, metaKey: false, ctrlKey: false }),
+    ).toBe("queue");
+  });
+
+  it("steers live turns with Cmd/Ctrl Enter", () => {
+    expect(
+      resolveComposerEnterDispatchMode({ hasLiveTurn: true, metaKey: true, ctrlKey: false }),
+    ).toBe("steer");
+    expect(
+      resolveComposerEnterDispatchMode({ hasLiveTurn: true, metaKey: false, ctrlKey: true }),
+    ).toBe("steer");
+  });
+
+  it("does not mark idle modifier-Enter sends as steering", () => {
+    expect(
+      resolveComposerEnterDispatchMode({ hasLiveTurn: false, metaKey: true, ctrlKey: false }),
+    ).toBe("queue");
+    expect(
+      resolveComposerEnterDispatchMode({ hasLiveTurn: false, metaKey: false, ctrlKey: true }),
+    ).toBe("queue");
   });
 });
 
