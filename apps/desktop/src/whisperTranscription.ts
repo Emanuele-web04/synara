@@ -73,7 +73,7 @@ function resolveWhisperCliBinary(): string | null {
 }
 
 // Verify SHA256 of a downloaded model. Refuse if hash doesn't match.
-function verifyModelSha256(filePath: string, expectedHash: string): boolean {
+export function verifyModelSha256(filePath: string, expectedHash: string): boolean {
   try {
     const hash = Crypto.createHash("sha256");
     const data = Fs.readFileSync(filePath);
@@ -197,7 +197,7 @@ export async function ensureWhisperModel(
 // Resample 24kHz 16-bit mono WAV to 16kHz 16-bit mono WAV.
 // Linear interpolation. ~30 lines. Recorder stays at 24kHz for both paths
 // (ChatGPT requires 24kHz, whisper requires 16kHz).
-function resampleWav24kTo16k(inputBuffer: Buffer): Buffer {
+export function resampleWav24kTo16k(inputBuffer: Buffer): Buffer {
   // Parse WAV header to find data start.
   if (inputBuffer.length < 44) throw new Error("Invalid WAV: too short");
   const sampleRate = inputBuffer.readUInt32LE(24);
