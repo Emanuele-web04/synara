@@ -57,6 +57,7 @@ import {
   probeGeminiCapabilities,
 } from "../geminiAcpProbe";
 import {
+  buildCursorAgentCommand,
   buildCursorAgentHeadlessEnv,
   DEFAULT_CURSOR_AGENT_BINARY,
   resolveCursorAgentBinaryPath,
@@ -796,14 +797,16 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
     ),
   );
 
-const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) =>
-  runProviderCommand(executable, args, buildCursorAgentHeadlessEnv()).pipe(
+const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) => {
+  const command = buildCursorAgentCommand(executable, args);
+  return runProviderCommand(command.command, command.args, buildCursorAgentHeadlessEnv()).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
-        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        ? Effect.fail(new Error(`spawn ${command.command} ENOENT`))
         : Effect.succeed(result),
     ),
   );
+};
 
 function parseCursorAuthStatusFromOutput(result: CommandResult): {
   readonly status: ServerProviderStatusState;
@@ -2142,13 +2145,14 @@ export const ProviderHealthLive = Layer.effect(
           });
         }
         if (provider === "cursor") {
+          const command = buildCursorAgentCommand(getProviderBinaryPath(provider, settings), [
+            "update",
+          ]);
           return makeProviderMaintenanceCapabilities({
             provider,
             packageName: null,
-            updateExecutable: resolveCursorAgentBinaryPath(
-              getProviderBinaryPath(provider, settings),
-            ),
-            updateArgs: ["update"],
+            updateExecutable: command.command,
+            updateArgs: command.args,
             updateLockKey: "cursor-agent",
           });
         }

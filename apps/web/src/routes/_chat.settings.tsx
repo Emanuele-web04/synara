@@ -398,10 +398,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
       { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
     ],
     binaryPathKey: "cursorBinaryPath",
-    binaryPlaceholder: "Cursor Agent binary path",
+    binaryPlaceholder: "Cursor Agent or Cursor CLI path",
     binaryDescription: (
       <>
-        Leave blank to use <code>cursor-agent</code> from your PATH.
+        Leave blank to use <code>cursor-agent</code> from your PATH. Cursor editor CLI paths are
+        accepted too.
       </>
     ),
     apiEndpointKey: "cursorApiEndpoint",

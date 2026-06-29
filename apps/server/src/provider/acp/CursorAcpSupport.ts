@@ -19,7 +19,11 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
-import { CURSOR_AGENT_BROWSERLESS_ENV, resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
+import {
+  CURSOR_AGENT_BROWSERLESS_ENV,
+  buildCursorAgentCommand,
+  type CursorAgentCommand,
+} from "./CursorAcpCommand.ts";
 
 export interface CursorAcpRuntimeCursorSettings {
   readonly apiEndpoint?: string;
@@ -64,16 +68,26 @@ export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
 ): AcpSpawnInput {
+  const command = buildCursorAgentCommand(cursorSettings?.binaryPath, [
+    ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
+    "acp",
+  ]);
   return {
-    command: resolveCursorAgentBinaryPath(cursorSettings?.binaryPath),
-    args: [
-      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
-      "acp",
-    ],
+    command: command.command,
+    args: command.args,
     cwd,
     // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
     env: CURSOR_AGENT_BROWSERLESS_ENV,
   };
+}
+
+export function buildCursorCliModelListCommand(
+  cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
+): CursorAgentCommand {
+  return buildCursorAgentCommand(cursorSettings?.binaryPath, [
+    ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
+    "models",
+  ]);
 }
 
 export const makeCursorAcpRuntime = (

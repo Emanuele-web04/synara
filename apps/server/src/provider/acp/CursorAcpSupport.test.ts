@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
   buildCursorAcpModelDescriptors,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
@@ -136,6 +137,19 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
+  it("uses the Cursor editor launcher through the agent subcommand", () => {
+    expect(buildCursorAcpSpawnInput({ binaryPath: "/not-real/bin/cursor" }, "/tmp/project"))
+      .toEqual({
+        command: "/not-real/bin/cursor",
+        args: ["agent", "acp"],
+        cwd: "/tmp/project",
+        env: {
+          NO_BROWSER: "true",
+          BROWSER: "www-browser",
+        },
+      });
+  });
+
   it("includes the configured api endpoint when present", () => {
     expect(
       buildCursorAcpSpawnInput(
@@ -153,6 +167,47 @@ describe("buildCursorAcpSpawnInput", () => {
         NO_BROWSER: "true",
         BROWSER: "www-browser",
       },
+    });
+  });
+
+  it("passes api endpoint overrides through Cursor editor launchers", () => {
+    expect(
+      buildCursorAcpSpawnInput(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        "/tmp/project",
+      ),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+});
+
+describe("buildCursorCliModelListCommand", () => {
+  it("builds the default Cursor model list command", () => {
+    expect(buildCursorCliModelListCommand(undefined)).toEqual({
+      command: "cursor-agent",
+      args: ["models"],
+    });
+  });
+
+  it("uses configured Cursor editor launchers for model discovery", () => {
+    expect(
+      buildCursorCliModelListCommand({
+        binaryPath: "/not-real/bin/cursor",
+        apiEndpoint: "http://localhost:3000",
+      }),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "models"],
     });
   });
 });

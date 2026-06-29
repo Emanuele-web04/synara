@@ -9,7 +9,11 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { buildCursorAgentHeadlessEnv, resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
+import {
+  buildCursorAgentCommand,
+  buildCursorAgentHeadlessEnv,
+  resolveCursorAgentBinaryPath,
+} from "./CursorAcpCommand.ts";
 
 describe("resolveCursorAgentBinaryPath", () => {
   it("defaults to cursor-agent when no binary is configured", () => {
@@ -26,6 +30,84 @@ describe("resolveCursorAgentBinaryPath", () => {
   it("honors explicit custom Cursor binary paths", () => {
     expect(resolveCursorAgentBinaryPath("cursor-agent")).toBe("cursor-agent");
     expect(resolveCursorAgentBinaryPath("/usr/local/bin/agent")).toBe("/usr/local/bin/agent");
+  });
+});
+
+describe("buildCursorAgentCommand", () => {
+  it("runs default Cursor Agent commands directly", () => {
+    expect(buildCursorAgentCommand(undefined, ["acp"])).toEqual({
+      command: "cursor-agent",
+      args: ["acp"],
+    });
+    expect(buildCursorAgentCommand("agent", ["models"])).toEqual({
+      command: "cursor-agent",
+      args: ["models"],
+    });
+  });
+
+  it("normalizes Cursor editor launchers before appending agent args", () => {
+    expect(
+      buildCursorAgentCommand("cursor", ["acp"], {
+        env: { PATH: "/tools" },
+        pathExists: (path) => path === "/tools/cursor-agent",
+      }),
+    ).toEqual({
+      command: "cursor-agent",
+      args: ["acp"],
+    });
+    expect(
+      buildCursorAgentCommand(
+        "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+        ["models"],
+        { pathExists: () => false },
+      ),
+    ).toEqual({
+      command: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+      args: ["agent", "models"],
+    });
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
+        ["--version"],
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
+      args: ["agent", "--version"],
+    });
+  });
+
+  it("falls back to the Cursor agent subcommand when bare cursor has no cursor-agent peer", () => {
+    expect(
+      buildCursorAgentCommand("cursor", ["acp"], {
+        env: { PATH: "/tools" },
+        pathExists: () => false,
+      }),
+    ).toEqual({
+      command: "cursor",
+      args: ["agent", "acp"],
+    });
+  });
+
+  it("prefers a sibling cursor-agent when a Cursor shim path is configured", () => {
+    expect(
+      buildCursorAgentCommand("/Users/me/.local/bin/cursor", ["acp"], {
+        pathExists: (path) => path === "/Users/me/.local/bin/cursor-agent",
+      }),
+    ).toEqual({
+      command: "/Users/me/.local/bin/cursor-agent",
+      args: ["acp"],
+    });
+  });
+
+  it("honors explicit agent paths without adding another subcommand", () => {
+    expect(buildCursorAgentCommand("/Users/me/.local/bin/agent", ["acp"])).toEqual({
+      command: "/Users/me/.local/bin/agent",
+      args: ["acp"],
+    });
+    expect(buildCursorAgentCommand("/Users/me/.local/bin/cursor-agent", ["acp"])).toEqual({
+      command: "/Users/me/.local/bin/cursor-agent",
+      args: ["acp"],
+    });
   });
 });
 
