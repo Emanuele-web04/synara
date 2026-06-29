@@ -44,11 +44,22 @@ export function VoiceDictationPopup() {
   } = useVoiceRecorder();
 
   // Show popup on right-Option hold (200ms threshold to distinguish from quick taps).
+  // Disabled when a text input/textarea/contenteditable is focused — right-Option
+  // is used for special characters on Mac keyboards, so triggering the popup would
+  // interfere with typing.
   useEffect(() => {
     if (!settings.voiceDictationEnabled) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isRightOptionKey(event) || rightOptionHeldRef.current) return;
+      const active = document.activeElement;
+      if (
+        active instanceof HTMLInputElement ||
+        active instanceof HTMLTextAreaElement ||
+        (active instanceof HTMLElement && active.isContentEditable)
+      ) {
+        return;
+      }
       rightOptionHeldRef.current = true;
       // Remember the currently focused element for text insertion.
       lastFocusedElementRef.current = document.activeElement as HTMLElement | null;
