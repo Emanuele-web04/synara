@@ -102,6 +102,18 @@ describe("buildCursorAgentCommand", () => {
     });
   });
 
+  it("uses the bare Cursor shim when no agent command can be resolved", () => {
+    expect(
+      buildCursorAgentCommand("cursor", ["acp"], {
+        env: { PATH: "/tools" },
+        pathExists: (path) => path === "/tools/cursor",
+      }),
+    ).toEqual({
+      command: "cursor",
+      args: ["acp"],
+    });
+  });
+
   it("falls back to PATH cursor-agent before inventing an agent sibling", () => {
     expect(
       buildCursorAgentCommand("/missing/bin/cursor", ["acp"], {

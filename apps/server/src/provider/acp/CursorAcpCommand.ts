@@ -82,7 +82,7 @@ function resolveCursorEditorLauncherCommand(
         return siblingAgent;
       }
     }
-    return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
+    return { command, args: [] };
   }
 
   const siblingAgent = resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
