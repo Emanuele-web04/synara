@@ -1214,6 +1214,10 @@ function normalizeProviderModelOptions(
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
       : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
+      : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
     codexCandidate?.reasoningEffort === "low" ||
@@ -1371,7 +1375,9 @@ function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi) {
+  // Devin has no client-side model options; pass through an empty object if present.
+  const devin = devinCandidate && Object.keys(devinCandidate).length === 0 ? {} : undefined;
+  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi && !devin) {
     return null;
   }
   return {
@@ -1383,6 +1389,7 @@ function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
+    ...(devin ? { devin } : {}),
   };
 }
 
@@ -1436,9 +1443,11 @@ function normalizeModelSelection(
                 ? modelOptions?.cursor
                 : provider === "opencode"
                   ? modelOptions?.opencode
-                  : provider === "pi"
-                    ? modelOptions?.pi
-                    : undefined;
+                  : provider === "devin"
+                    ? modelOptions?.devin
+                    : provider === "pi"
+                      ? modelOptions?.pi
+                      : undefined;
   return makeModelSelection(provider, model, options);
 }
 

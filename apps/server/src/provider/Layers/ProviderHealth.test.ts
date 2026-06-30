@@ -1910,11 +1910,16 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
                 );
               }
               if (joined === "--version") {
-                return Effect.succeed(
-                  mockHandle({ stdout: "devin 1.2.3\n", stderr: "", code: 0 }),
-                );
+                return Effect.succeed(mockHandle({ stdout: "devin 1.2.3\n", stderr: "", code: 0 }));
               }
-              return Effect.fail(new Error(`Unexpected args: ${joined}`));
+              return Effect.fail(
+                PlatformError.systemError({
+                  _tag: "NotFound",
+                  module: "ChildProcess",
+                  method: "spawn",
+                  description: `Unexpected args: ${joined}`,
+                }),
+              );
             }),
           ),
         ),

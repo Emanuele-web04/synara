@@ -124,7 +124,7 @@ export function runCliVersionHealthProbe<R>(input: {
       return {
         ok: true,
         version,
-        parsedVersion: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`),
+        parsedVersion: parseGenericCliVersion(`${version.stdout}\n${version.stderr}`) ?? undefined,
         checkedAt: input.checkedAt,
       };
     }),

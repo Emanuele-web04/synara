@@ -196,11 +196,16 @@ export function parseAvailableCommands(
         !Array.isArray(command.input._meta)
           ? (command.input._meta as Record<string, unknown>)
           : undefined;
-      const result: AcpAvailableCommand = { name };
+      const result: {
+        name: string;
+        description?: string;
+        inputHint?: string;
+        inputMeta?: Record<string, unknown>;
+      } = { name };
       if (description !== undefined) result.description = description;
       if (inputHint !== undefined) result.inputHint = inputHint;
       if (inputMeta !== undefined) result.inputMeta = inputMeta;
-      return result;
+      return result as AcpAvailableCommand;
     })
     .filter((command): command is AcpAvailableCommand => command !== undefined);
 }
