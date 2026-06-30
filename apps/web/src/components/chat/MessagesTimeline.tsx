@@ -89,7 +89,13 @@ import {
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveReadableCommandDisplay, isInspectCommand } from "../../lib/toolCallLabel";
+import {
+  deriveReadableCommandDisplay,
+  extractWebFetchUrl,
+  isInspectCommand,
+} from "../../lib/toolCallLabel";
+import { describeLinkChip } from "~/lib/linkChips";
+import { LinkChipIcon } from "../LinkChipIcon";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -135,6 +141,11 @@ import {
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import {
+  resolveActiveTrailSnapshot,
+  type ActiveTrailSnapshot,
+  type MessageTrailAnchor,
+} from "./messageTrail.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -166,6 +177,10 @@ const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
 const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
 const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
 const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
+// Treat any partially visible row (>= 1px) as in view, so the navigation trail's
+// "active" tick tracks the topmost rendered row rather than waiting for a turn to
+// be substantially on-screen.
+const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 // The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
 // never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
 const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
@@ -290,6 +305,8 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
+  /** Emits current + visible sent-message anchors as the viewport scrolls (drives the trail). */
+  onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
   onMessagesMouseUp?: ComponentProps<typeof LegendList>["onMouseUp"];
   onMessagesPointerCancel?: ComponentProps<typeof LegendList>["onPointerCancel"];
@@ -343,6 +360,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
+  onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
   onMessagesPointerCancel,
@@ -708,16 +726,72 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       window.cancelAnimationFrame(frameId);
     };
   }, [onIsAtEndChange, resolvedListRef, rows.length]);
+  // Sent-message anchors (id + position in the virtualized row list) for the
+  // navigation trail. Held in a ref so the viewability callback stays stable and
+  // doesn't re-subscribe LegendList on every transcript change.
+  const userMessageAnchors = useMemo<MessageTrailAnchor[]>(() => {
+    const anchors: MessageTrailAnchor[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind === "message" && row.message.role === "user") {
+        anchors.push({ id: row.message.id, rowIndex: index });
+      }
+    });
+    return anchors;
+  }, [rows]);
+  const userMessageAnchorsRef = useRef(userMessageAnchors);
+  userMessageAnchorsRef.current = userMessageAnchors;
+  const emitTrailHighlightsForViewport = useCallback(
+    (topRowIndex: number, bottomRowIndex: number) => {
+      if (!onTrailHighlightsChange || !Number.isFinite(topRowIndex)) {
+        return;
+      }
+      onTrailHighlightsChange(
+        resolveActiveTrailSnapshot(userMessageAnchorsRef.current, topRowIndex, bottomRowIndex),
+      );
+    },
+    [onTrailHighlightsChange],
+  );
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = resolvedListRef.current?.getState?.();
       if (state) {
         onIsAtEndChange?.(state.isAtEnd);
+        emitTrailHighlightsForViewport(state.start, state.end);
       }
     },
-    [onIsAtEndChange, onMessagesScroll, resolvedListRef],
+    [emitTrailHighlightsForViewport, onIsAtEndChange, onMessagesScroll, resolvedListRef],
   );
+  const handleViewableItemsChanged = useCallback<
+    NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
+  >(
+    ({ viewableItems }) => {
+      let topIndex = Number.POSITIVE_INFINITY;
+      let bottomIndex = Number.NEGATIVE_INFINITY;
+      for (const token of viewableItems) {
+        if (token.isViewable) {
+          topIndex = Math.min(topIndex, token.index);
+          bottomIndex = Math.max(bottomIndex, token.index);
+        }
+      }
+      emitTrailHighlightsForViewport(topIndex, bottomIndex);
+    },
+    [emitTrailHighlightsForViewport],
+  );
+  useEffect(() => {
+    if (!onTrailHighlightsChange) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      const state = resolvedListRef.current?.getState?.();
+      if (state) {
+        emitTrailHighlightsForViewport(state.start, state.end);
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [emitTrailHighlightsForViewport, onTrailHighlightsChange, resolvedListRef, rows.length]);
   const toggleFileChangesExpanded = useCallback((turnId: TurnId) => {
     setExpandedFileChangesByTurnId((current) => ({
       ...current,
@@ -1634,6 +1708,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onPointerDown={onMessagesPointerDown}
         onPointerUp={onMessagesPointerUp}
         onScroll={handleListScroll}
+        {...(onTrailHighlightsChange
+          ? {
+              onViewableItemsChanged: handleViewableItemsChanged,
+              viewabilityConfig: TRAIL_VIEWABILITY_CONFIG,
+            }
+          : {})}
         onTouchEnd={onMessagesTouchEnd}
         onTouchMove={onMessagesTouchMove}
         onTouchStart={onMessagesTouchStart}
@@ -2693,21 +2773,34 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
+  // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
+  // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
+  // composer and markdown links so every site reference looks identical.
+  const webFetchUrl = extractWebFetchUrl(workEntry);
   // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
   const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
-  const leftIconKind = isGitHubToolRow ? "github" : isMcpToolRow ? "mcp" : undefined;
+  const leftIconKind = webFetchUrl
+    ? "web-fetch"
+    : isGitHubToolRow
+      ? "github"
+      : isMcpToolRow
+        ? "mcp"
+        : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
-  const displayText = combineWorkEntryDisplayText(heading, preview);
+  const displayText = webFetchUrl
+    ? describeLinkChip(webFetchUrl).label
+    : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
     Boolean(preview) &&
     normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText = rawCommand ?? (showInlineAgentTaskPreview ? heading : displayText);
+  const hoverText =
+    rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
@@ -2994,7 +3087,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 )}
                 data-tool-icon={leftIconKind}
               >
-                <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                {webFetchUrl ? (
+                  <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                ) : (
+                  <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                )}
               </span>
               <div
                 className={cn(

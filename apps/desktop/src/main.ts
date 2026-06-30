@@ -12,6 +12,7 @@ import * as Path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -132,6 +133,8 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
+const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
 const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
 const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
 const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
@@ -2341,6 +2344,29 @@ function registerIpcHandlers(): void {
     } catch {
       return false;
     }
+  });
+
+  ipcMain.removeHandler(CLIPBOARD_WRITE_IMAGE_CHANNEL);
+  ipcMain.handle(CLIPBOARD_WRITE_IMAGE_CHANNEL, async (_event, rawDataUrl: unknown) => {
+    if (typeof rawDataUrl !== "string") {
+      return false;
+    }
+    if (rawDataUrl.length > MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH) {
+      return false;
+    }
+
+    const dataUrl = rawDataUrl.trim();
+    if (!dataUrl.startsWith("data:image/png;base64,")) {
+      return false;
+    }
+
+    const image = nativeImage.createFromDataURL(dataUrl);
+    if (image.isEmpty()) {
+      return false;
+    }
+
+    clipboard.writeImage(image);
+    return true;
   });
 
   ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);

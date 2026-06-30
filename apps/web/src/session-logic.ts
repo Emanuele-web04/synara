@@ -1149,17 +1149,42 @@ function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
   const collapsed: DerivedWorkLogEntry[] = [];
+  // Tools that carry a unique tool-call id (collapseKey "tool:<id>") merge by that
+  // id regardless of position. This is what fixes providers that emit every tool's
+  // started event before any of their completed events — Claude's parallel tool
+  // calls — which the adjacency-only path below renders as a started row plus a
+  // separate completed row. The id is unique per call, so distinct calls of the
+  // same tool never merge into each other.
+  const stableToolIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const previous = collapsed.at(-1);
     if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
       continue;
     }
+    const stableToolKey =
+      entry.collapseKey?.startsWith("tool:") &&
+      isRenderableToolLifecycleActivity(entry.activityKind)
+        ? entry.collapseKey
+        : undefined;
+    if (stableToolKey !== undefined) {
+      const existingIndex = stableToolIndexByKey.get(stableToolKey);
+      if (existingIndex !== undefined) {
+        collapsed[existingIndex] = mergeDerivedWorkLogEntries(collapsed[existingIndex]!, entry);
+        continue;
+      }
+    }
     if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      if (stableToolKey !== undefined) {
+        stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+      }
       continue;
     }
     collapsed.push(entry);
+    if (stableToolKey !== undefined) {
+      stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+    }
   }
   return collapsed;
 }

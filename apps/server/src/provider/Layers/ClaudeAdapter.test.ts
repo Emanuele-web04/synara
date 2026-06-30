@@ -1009,6 +1009,8 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(toolInputUpdated?.type, "item.updated");
       if (toolInputUpdated?.type === "item.updated") {
         assert.deepEqual(toolInputUpdated.payload.data, {
+          toolCallId: "tool-grep-1",
+          callId: "tool-grep-1",
           toolName: "Grep",
           input: {
             pattern: "foo",

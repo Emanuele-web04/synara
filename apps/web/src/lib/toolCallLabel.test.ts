@@ -3,9 +3,50 @@ import {
   deriveInlineCommandCall,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
+  extractWebFetchUrl,
   isInspectCommand,
   normalizeCompactToolLabel,
 } from "./toolCallLabel";
+
+describe("extractWebFetchUrl", () => {
+  it("pulls the url out of a WebFetch argument summary", () => {
+    expect(
+      extractWebFetchUrl({
+        toolName: "WebFetch",
+        detail: 'WebFetch: {"url":"https://ui.shadcn.com/docs/components","prompt":"List EVER..."}',
+      }),
+    ).toBe("https://ui.shadcn.com/docs/components");
+  });
+
+  it("recognizes alternate fetch tool names and the uri field", () => {
+    expect(
+      extractWebFetchUrl({
+        toolName: "web_fetch",
+        detail: '{"uri":"https://example.com/path"}',
+      }),
+    ).toBe("https://example.com/path");
+  });
+
+  it("falls back to a bare URL token when there is no json field", () => {
+    expect(extractWebFetchUrl({ toolName: "fetch", detail: "Fetching https://example.com." })).toBe(
+      "https://example.com",
+    );
+  });
+
+  it("ignores non-fetch tools", () => {
+    expect(
+      extractWebFetchUrl({ toolName: "Read", detail: '{"url":"https://example.com"}' }),
+    ).toBeNull();
+  });
+
+  it("ignores non-http(s) and missing urls", () => {
+    expect(
+      extractWebFetchUrl({ toolName: "WebFetch", detail: '{"url":"ftp://example.com"}' }),
+    ).toBeNull();
+    expect(extractWebFetchUrl({ toolName: "WebFetch", detail: '{"prompt":"hi"}' })).toBeNull();
+    expect(extractWebFetchUrl({ toolName: "WebFetch", detail: undefined })).toBeNull();
+  });
+});
 
 describe("normalizeCompactToolLabel", () => {
   it("removes trailing completion wording", () => {
