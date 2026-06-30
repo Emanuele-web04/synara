@@ -4,6 +4,7 @@
 
 import {
   ArchiveIcon,
+  CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
@@ -34,7 +35,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
+import { HiOutlineArchiveBox } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import {
@@ -526,10 +527,12 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
 // collapsed project still advertises active child chats.
 function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
   if (status.label === "Completed") {
+    // Match the worktree/other trailing chips' optical size (15px) so the green
+    // check reads as part of the same right-side icon cluster.
     return (
-      <HiOutlineCheckCircle
+      <CheckCircle2Icon
         aria-hidden="true"
-        className={cn("size-3.5 shrink-0", status.colorClass)}
+        className={cn(SIDEBAR_TRAILING_ICON_CLASS, status.colorClass)}
       />
     );
   }
@@ -561,13 +564,17 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   sidebarHoverRevealHideClassName("thread-row"),
 );
 
-/** Fixed-width timestamp/status column; fades on hover so pin/archive can overlay this slot. */
+/** Fixed-width status column; fades on hover so pin/archive can overlay this slot. */
 function threadRowTimestampSlotClassName(
   isSubagentThread: boolean,
   toneClassName?: string,
 ): string {
   return cn(
-    "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums",
+    // No right margin: the timestamp moved to the hover card, so this column now
+    // only carries the status glyph (check/spinner/dot). It must sit flush at the
+    // row's right padding like the meta chips (worktree, fork) — a leftover `mr-1`
+    // pushed the completed check ~4px past them and broke the trailing-cluster line.
+    "flex shrink-0 items-center justify-end leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "w-[1.2rem] text-[10px]"

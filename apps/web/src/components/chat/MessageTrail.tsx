@@ -62,18 +62,21 @@ const RAIL_MAX_HEIGHT_RATIO = 0.8;
 const TICK_LEFT_PAD_PX = 14;
 const TICK_HEIGHT_PX = 2;
 // Short at rest, long when magnified — a wide base→max gap is what reads as a
-// real Dock magnification (left 14 + max 32 = 46px, clears the 56px rail).
-const TICK_BASE_W = 8;
-const TICK_MAX_W = 32;
+// real Dock magnification (left 14 + max 30 = 44px, clears the 56px rail).
+const TICK_BASE_W = 6;
+const TICK_MAX_W = 30;
 // Vertical centre-to-centre gap — kept tight so the ticks read as one close
 // stack at rest. The magnified width is independent of this gap (ticks grow
 // sideways, not into each other), so tight spacing keeps full magnification.
 const TICK_SPACING_PX = 10;
-// Resting ticks stay faint; only the reading-anchor tick and the magnified
-// focus brighten. Lower rest opacity = the un-focused ticks read as light.
+// Resting ticks stay faint; the reading-anchor tick is darker. Opacity is a fixed
+// per-state colour — it never follows the cursor as a gradient.
 const TICK_REST_OPACITY = 0.2;
 const TICK_VISIBLE_OPACITY = 0.52;
 const TICK_ANCHOR_OPACITY = 0.9;
+// Only the single tick directly under the pointer/keyboard focus goes full black —
+// its neighbours just grow in size, they don't darken (no opacity falloff).
+const TICK_FOCUS_OPACITY = 1;
 const TOOLTIP_ESTIMATED_H_PX = 56;
 const TOOLTIP_OFFSET_X_PX = 8;
 
@@ -285,8 +288,8 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
 
     let styles: TickStyle[];
     if (geometry.spacing === 0 || reducedMotionRef.current) {
-      // Degenerate rail or reduced motion: flat-highlight the focused tick only,
-      // leave the rest at rest (no continuous width morphing).
+      // Degenerate rail or reduced motion: the focused tick jumps to max width with
+      // no continuous morphing (its colour is set below, same as the Gaussian branch).
       styles = computeRestStyles(
         count,
         anchor,
@@ -294,8 +297,9 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         TICK_REST_OPACITY,
         TICK_ANCHOR_OPACITY,
       );
-      if (styles[focusedIndex]) {
-        styles[focusedIndex] = { width: TICK_MAX_W, opacity: 1 };
+      const focusedStyle = styles[focusedIndex];
+      if (focusedStyle) {
+        focusedStyle.width = TICK_MAX_W;
       }
     } else {
       // Width grows horizontally while ticks stack vertically (2px tall each), so
@@ -313,6 +317,11 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
       );
     }
     applyHighlightFloors(styles);
+    // Darken only the focused tick — neighbours keep their state colour.
+    const focusedStyle = styles[focusedIndex];
+    if (focusedStyle) {
+      focusedStyle.opacity = TICK_FOCUS_OPACITY;
+    }
     writeStyles(styles);
     showTooltip(focusedIndex, geometry);
   }, [applyHighlightFloors, applyRest, showTooltip, writeStyles]);
@@ -563,7 +572,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
         onClick={handleClick}
         className={cn(
           "scroll-fade-y relative w-full overflow-y-auto overscroll-contain [contain:layout] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
-          visible ? "pointer-events-auto cursor-pointer" : "pointer-events-none",
+          visible ? "pointer-events-auto" : "pointer-events-none",
         )}
         style={{ maxHeight: `${RAIL_MAX_HEIGHT_RATIO * 100}%` }}
       >

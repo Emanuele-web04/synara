@@ -306,10 +306,11 @@ export interface TickStyle {
 }
 
 /**
- * Map Gaussian weights to width + opacity. Width lerps `baseW → effectiveMaxW`;
- * opacity lerps `restOpacity → 1` (so the focused tick reaches exactly 1). The
- * anchor tick is floored at `anchorOpacity` in every state so it never flashes
- * dim when the pointer is elsewhere.
+ * Map Gaussian weights to width only — opacity stays a fixed per-state colour.
+ * Width lerps `baseW → effectiveMaxW` with the weight (the Dock size effect), but
+ * the colour never follows the cursor: each tick keeps its state opacity (anchor
+ * dark, everything else at `restOpacity`); the visible-in-viewport mid tone is
+ * layered on afterwards by the caller. Only the size changes under the pointer.
  */
 export function computeTickStyles(
   weights: readonly number[],
@@ -319,13 +320,10 @@ export function computeTickStyles(
   restOpacity: number,
   anchorOpacity: number,
 ): TickStyle[] {
-  return weights.map((weight, index) => {
-    const floor = index === currentAnchorIndex ? anchorOpacity : restOpacity;
-    return {
-      width: baseW + (effectiveMaxW - baseW) * weight,
-      opacity: clampNumber(restOpacity + (1 - restOpacity) * weight, floor, 1),
-    };
-  });
+  return weights.map((weight, index) => ({
+    width: baseW + (effectiveMaxW - baseW) * weight,
+    opacity: index === currentAnchorIndex ? anchorOpacity : restOpacity,
+  }));
 }
 
 /** Rest-state styles (pointer away): all `baseW`, anchor brightened. */

@@ -291,17 +291,18 @@ describe("computeTickStyles", () => {
   const rest = 0.38;
   const anchor = 0.9;
 
-  it("gives a full-strength focused tick (lerp form reaches opacity 1 / width maxW)", () => {
+  it("grows the focused tick to maxW but keeps its rest colour (size changes, not opacity)", () => {
     const [style] = computeTickStyles([1], null, baseW, maxW, rest, anchor);
-    expect(style!.opacity).toBeCloseTo(1, 5);
     expect(style!.width).toBeCloseTo(maxW, 5);
+    expect(style!.opacity).toBeCloseTo(rest, 5); // colour never follows the cursor
   });
 
-  it("never dims the anchor tick below its floor, even at weight 0", () => {
-    const styles = computeTickStyles([0, 0], 0, baseW, maxW, rest, anchor);
-    expect(styles[0]!.opacity).toBeCloseTo(anchor, 5);
-    expect(styles[1]!.opacity).toBeCloseTo(rest, 5);
-    expect(styles[1]!.width).toBeCloseTo(baseW, 5);
+  it("keeps opacity fixed per state regardless of weight (anchor dark, others rest)", () => {
+    // Even the magnified anchor (weight 1) stays at anchor opacity, not brighter.
+    const styles = computeTickStyles([1, 0.5, 0], 0, baseW, maxW, rest, anchor);
+    expect(styles.map((s) => s.opacity)).toEqual([anchor, rest, rest]);
+    expect(styles[0]!.width).toBeCloseTo(maxW, 5);
+    expect(styles[2]!.width).toBeCloseTo(baseW, 5);
   });
 });
 

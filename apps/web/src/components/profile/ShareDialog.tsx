@@ -104,17 +104,20 @@ export function ShareDialog({
     }
   }, [copyCardToClipboard]);
 
-  const handleShare = useCallback(async (target: ShareTarget) => {
-    setBusy(target);
-    setStatus(null);
-    try {
-      const copyResult = await copyCardToClipboard();
-      openExternalUrl(shareIntentUrl(target));
-      setStatus(shareStatusMessage(copyResult));
-    } finally {
-      setBusy(null);
-    }
-  }, [copyCardToClipboard]);
+  const handleShare = useCallback(
+    async (target: ShareTarget) => {
+      setBusy(target);
+      setStatus(null);
+      try {
+        const copyResult = await copyCardToClipboard();
+        openExternalUrl(shareIntentUrl(target));
+        setStatus(shareStatusMessage(copyResult));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [copyCardToClipboard],
+  );
 
   const handleSave = useCallback(async () => {
     const node = cardRef.current;

@@ -251,7 +251,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Claude",
     description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
-    example: "claude-sonnet-5-0",
+    example: "claude-custom-model",
   },
   cursor: {
     provider: "cursor",

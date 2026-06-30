@@ -39,9 +39,7 @@ function envFlagDisabled(value: string | undefined): boolean {
 }
 
 // Mirrors the Claude Agent adapter default while honoring persisted custom CLI paths.
-export function resolveClaudeCredentialKeepaliveBinaryPath(
-  binaryPath: string | undefined,
-): string {
+export function resolveClaudeCredentialKeepaliveBinaryPath(binaryPath: string | undefined): string {
   return binaryPath?.trim() || "claude";
 }
 

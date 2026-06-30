@@ -44,7 +44,8 @@ import {
   ThreadId,
   TurnId,
   type UserInputQuestion,
-  ClaudeCodeEffort,
+  type ClaudeApiEffort,
+  type ClaudeCodeEffort,
   type ProviderComposerCapabilities,
   type ProviderListCommandsInput,
   type ProviderListCommandsResult,
@@ -313,7 +314,7 @@ function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray
 
 function getEffectiveClaudeCodeEffort(
   effort: ClaudeCodeEffort | null | undefined,
-): Exclude<ClaudeCodeEffort, "ultrathink" | "ultracode"> | null {
+): ClaudeApiEffort | null {
   if (!effort) {
     return null;
   }
