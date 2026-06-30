@@ -152,5 +152,14 @@ export function makeAuthProbeUnavailableStatus(input: {
 }
 
 export function authProbeFailureMessage(prefix: string, error: unknown): string {
-  return error instanceof Error ? `${prefix}: ${error.message}.` : `${prefix}.`;
+  if (error instanceof Error) {
+    return `${prefix}: ${error.message}.`;
+  }
+  if (typeof error === "string" && error.trim().length > 0) {
+    return `${prefix}: ${error.trim()}.`;
+  }
+  if (error !== undefined && error !== null) {
+    return `${prefix}: ${String(error)}.`;
+  }
+  return `${prefix}.`;
 }

@@ -1871,6 +1871,38 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("does not treat WINDSURF_API_KEY as authenticated when auth probe fails to run", () =>
+      Effect.gen(function* () {
+        const savedDevinApiKey = process.env.WINDSURF_API_KEY;
+        process.env.WINDSURF_API_KEY = "wk-test-key";
+        try {
+          const status = yield* checkDevinProviderStatus;
+          assert.strictEqual(status.provider, "devin");
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.available, true);
+          assert.strictEqual(status.authStatus, "unknown");
+          assert.match(status.message ?? "", /Could not verify Devin authentication status/);
+        } finally {
+          if (savedDevinApiKey === undefined) {
+            delete process.env.WINDSURF_API_KEY;
+          } else {
+            process.env.WINDSURF_API_KEY = savedDevinApiKey;
+          }
+        }
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "devin 1.2.3\n", stderr: "", code: 0 };
+            if (joined === "auth status") {
+              throw new Error("spawn devin auth status EACCES");
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("includes version advisory when Devin CLI is below recommended minimum", () =>
       Effect.gen(function* () {
         const status = yield* checkDevinProviderStatus;

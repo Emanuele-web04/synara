@@ -20,6 +20,7 @@ const PROVIDER = "devin" as const;
 const DEVIN_PLAN_MODE_ALIASES = ["plan"];
 const DEVIN_FULL_ACCESS_MODE_ALIASES = ["bypass", "bypass permissions"];
 const DEVIN_CODE_MODE_ALIASES = ["accept-edits", "code", "accept edits"];
+const DEVIN_DEFAULT_MODE_ALIASES = ["ask", "default", "normal"];
 
 function normalizedModeText(value: string): string {
   return value
@@ -70,6 +71,16 @@ export function resolveDevinModeId(input: {
   return undefined;
 }
 
+function isDevinPlanModeId(
+  modes: ReadonlyArray<AcpSessionMode>,
+  modeId: string | undefined,
+): boolean {
+  if (!modeId) return false;
+  const currentMode = modes.find((mode) => mode.id === modeId);
+  if (!currentMode) return false;
+  return findDevinModeByAliases([currentMode], DEVIN_PLAN_MODE_ALIASES) !== undefined;
+}
+
 export function applyDevinModeSelection(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly threadId: ThreadId;
@@ -79,11 +90,18 @@ export function applyDevinModeSelection(input: {
   return Effect.gen(function* () {
     const modeState = yield* input.runtime.getModeState;
     if (!modeState) return;
-    const modeId = resolveDevinModeId({
+    let modeId = resolveDevinModeId({
       modes: modeState.availableModes,
       runtimeMode: input.runtimeMode,
       ...(input.interactionMode ? { interactionMode: input.interactionMode } : {}),
     });
+    if (
+      input.interactionMode !== "plan" &&
+      isDevinPlanModeId(modeState.availableModes, modeState.currentModeId) &&
+      modeId === undefined
+    ) {
+      modeId = findDevinModeByAliases(modeState.availableModes, DEVIN_DEFAULT_MODE_ALIASES)?.id;
+    }
     if (!modeId || modeId === modeState.currentModeId) return;
     yield* input.runtime
       .setMode(modeId)

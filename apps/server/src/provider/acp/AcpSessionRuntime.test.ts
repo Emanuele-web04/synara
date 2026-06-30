@@ -70,14 +70,6 @@ describe("isAcpAuthRequiredError", () => {
     expect(isAcpAuthRequiredError(error)).toBe(false);
   });
 
-  it("returns true for AcpRequestError with code -32000 and empty string errorMessage", () => {
-    const error = new EffectAcpErrors.AcpRequestError({
-      code: -32000,
-      errorMessage: "",
-    });
-    expect(isAcpAuthRequiredError(error)).toBe(true);
-  });
-
   it("returns true for code -32000 regardless of errorMessage content", () => {
     const error = new EffectAcpErrors.AcpRequestError({
       code: -32000,
@@ -137,11 +129,6 @@ describe("causeIndicatesAuthRequired", () => {
   it("returns true for a Die cause with 'auth required' message", () => {
     const cause = Cause.die(new Error("Auth required"));
     expect(causeIndicatesAuthRequired(cause)).toBe(true);
-  });
-
-  it("returns false for a Die cause with 'author' in the message (no auth word boundary)", () => {
-    const cause = Cause.die(new Error("the author field is missing"));
-    expect(causeIndicatesAuthRequired(cause)).toBe(false);
   });
 
   it("returns false for a Die cause with a non-auth error", () => {

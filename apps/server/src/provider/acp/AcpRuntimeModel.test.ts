@@ -5,6 +5,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   extractModelConfigId,
   mergeToolCallState,
+  parseAvailableCommands,
   parsePermissionRequest,
   parseSessionModeState,
   parseSessionUpdateEvent,
@@ -514,6 +515,28 @@ describe("AcpRuntimeModel", () => {
             ],
           },
         },
+      },
+    ]);
+  });
+
+  it("preserves command input metadata when parsing available commands", () => {
+    const commands = parseAvailableCommands([
+      {
+        name: "/deploy",
+        description: "Deploy the app",
+        input: {
+          hint: "environment",
+          _meta: { required: true, placeholder: "staging" },
+        },
+      },
+    ] satisfies ReadonlyArray<EffectAcpSchema.AvailableCommand>);
+
+    expect(commands).toEqual([
+      {
+        name: "/deploy",
+        description: "Deploy the app",
+        inputHint: "environment",
+        inputMeta: { required: true, placeholder: "staging" },
       },
     ]);
   });

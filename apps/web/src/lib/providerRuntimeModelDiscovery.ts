@@ -5,7 +5,7 @@
  */
 import type { ProviderKind } from "@t3tools/contracts";
 
-export const PROVIDERS_REQUIRING_RUNTIME_MODEL_DISCOVERY = new Set<ProviderKind>([
+export const PROVIDERS_REQUIRING_RUNTIME_MODEL_DISCOVERY: ReadonlySet<ProviderKind> = new Set([
   "cursor",
   "devin",
   "kilo",

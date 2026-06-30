@@ -102,6 +102,14 @@ describe("buildDevinAcpSpawnInput — env allowlist filtering", () => {
     });
   });
 
+  it("includes Windows Path casing from the allowlist", () => {
+    withEnv({ Path: "C:\\Windows\\System32", PATH: undefined }, () => {
+      const result = buildDevinAcpSpawnInput(undefined, "/tmp");
+      assert.strictEqual(result.env.Path, "C:\\Windows\\System32");
+      assert.strictEqual(result.env.PATH, undefined);
+    });
+  });
+
   it("includes HOME from the allowlist", () => {
     withEnv({ HOME: "/home/user" }, () => {
       const result = buildDevinAcpSpawnInput(undefined, "/tmp");

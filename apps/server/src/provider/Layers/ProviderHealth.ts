@@ -1923,22 +1923,12 @@ export const makeCheckDevinProviderStatus = (
     }
     const parsedVersion = versionOutcome.parsedVersion;
 
-    const hasApiKeyEnv = hasDevinApiKeyEnv();
     const authProbe = yield* runDevinCommand(["auth", "status"], executable).pipe(
       Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
       Effect.result,
     );
 
     if (Result.isFailure(authProbe)) {
-      if (hasApiKeyEnv) {
-        return {
-          provider: DEVIN_PROVIDER,
-          ...DEVIN_API_KEY_AUTHENTICATED_STATUS,
-          available: true,
-          version: parsedVersion,
-          checkedAt,
-        } satisfies ServerProviderStatus;
-      }
       return makeAuthProbeUnavailableStatus({
         provider: DEVIN_PROVIDER,
         parsedVersion,
@@ -1951,15 +1941,6 @@ export const makeCheckDevinProviderStatus = (
     }
 
     if (Option.isNone(authProbe.success)) {
-      if (hasApiKeyEnv) {
-        return {
-          provider: DEVIN_PROVIDER,
-          ...DEVIN_API_KEY_AUTHENTICATED_STATUS,
-          available: true,
-          version: parsedVersion,
-          checkedAt,
-        } satisfies ServerProviderStatus;
-      }
       return makeAuthProbeUnavailableStatus({
         provider: DEVIN_PROVIDER,
         parsedVersion,

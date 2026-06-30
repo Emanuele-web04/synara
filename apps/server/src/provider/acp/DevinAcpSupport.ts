@@ -39,6 +39,7 @@ export const DEVIN_API_KEY_ENV_KEYS = ["WINDSURF_API_KEY"] as const;
 const DEVIN_ENV_ALLOWLIST_PREFIXES = ["DEVIN_", "WINDSURF_"] as const;
 const DEVIN_ENV_ALLOWLIST_NAMES = new Set([
   "PATH",
+  "Path",
   "HOME",
   "USER",
   "SHELL",

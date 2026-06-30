@@ -58,6 +58,7 @@ export interface AcpAvailableCommand {
   readonly name: string;
   readonly description?: string;
   readonly inputHint?: string;
+  readonly inputMeta?: Record<string, unknown>;
 }
 
 export type AcpParsedSessionEvent =
@@ -189,9 +190,16 @@ export function parseAvailableCommands(
       if (!name) return undefined;
       const description = command.description?.trim() || undefined;
       const inputHint = command.input?.hint?.trim() || undefined;
+      const inputMeta =
+        command.input?._meta &&
+        typeof command.input._meta === "object" &&
+        !Array.isArray(command.input._meta)
+          ? (command.input._meta as Record<string, unknown>)
+          : undefined;
       const result: AcpAvailableCommand = { name };
       if (description !== undefined) result.description = description;
       if (inputHint !== undefined) result.inputHint = inputHint;
+      if (inputMeta !== undefined) result.inputMeta = inputMeta;
       return result;
     })
     .filter((command): command is AcpAvailableCommand => command !== undefined);

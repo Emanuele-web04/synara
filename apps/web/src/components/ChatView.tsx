@@ -842,7 +842,10 @@ function ComposerModelLoadingControl(props: { widthClassName: string }) {
         props.widthClassName,
       )}
     >
-      <RefreshCwIcon aria-hidden="true" className="size-3.5 animate-spin" />
+      <RefreshCwIcon
+        aria-hidden="true"
+        className="size-3.5 animate-spin motion-reduce:animate-none"
+      />
       <span className="truncate text-[length:var(--app-font-size-ui-xs,11px)]">Loading models</span>
     </div>
   );
@@ -1847,9 +1850,7 @@ export default function ChatView({
     }),
   );
   const devinModelDiscoveryEnabled =
-    isModelPickerOpen ||
-    lockedProvider === "devin" ||
-    (selectedProvider === "devin" && sessionProvider === "devin");
+    selectedProvider === "devin" || lockedProvider === "devin" || isModelPickerOpen;
   const devinDynamicModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "devin",

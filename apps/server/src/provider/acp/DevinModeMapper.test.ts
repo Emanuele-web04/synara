@@ -300,4 +300,24 @@ describe("applyDevinModeSelection", () => {
       assert.strictEqual(error._tag, "ProviderAdapterRequestError");
     }),
   );
+
+  it.effect("restores ask/default mode after leaving plan interaction", () =>
+    Effect.gen(function* () {
+      const setModes: string[] = [];
+      const modes = [makeMode("ask", "Ask"), makeMode("planning", "Plan")];
+      const modeState = makeModeState("planning", modes);
+      const runtime = makeMockRuntime({
+        modeState,
+        onSetMode: (id) => {
+          setModes.push(id);
+        },
+      });
+      yield* applyDevinModeSelection({
+        runtime,
+        threadId,
+        runtimeMode: "approval-required",
+      });
+      assert.deepStrictEqual(setModes, ["ask"]);
+    }),
+  );
 });
