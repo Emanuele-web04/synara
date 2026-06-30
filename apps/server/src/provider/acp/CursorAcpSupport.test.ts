@@ -142,7 +142,7 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
-  it("uses configured Cursor editor launchers when no agent command is resolved", () => {
+  it("uses cursor-agent when a configured Cursor editor has no agent command resolved", () => {
     expect(
       buildCursorAcpSpawnInput(
         { binaryPath: "/not-real/bin/cursor" },
@@ -150,8 +150,8 @@ describe("buildCursorAcpSpawnInput", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "acp"],
+      command: "cursor-agent",
+      args: ["acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -180,7 +180,7 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
-  it("passes api endpoint overrides through the Cursor shim fallback", () => {
+  it("keeps api endpoint overrides when falling back to cursor-agent", () => {
     expect(
       buildCursorAcpSpawnInput(
         {
@@ -191,8 +191,8 @@ describe("buildCursorAcpSpawnInput", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "-e", "http://localhost:3000", "acp"],
+      command: "cursor-agent",
+      args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -210,7 +210,7 @@ describe("buildCursorCliModelListCommand", () => {
     });
   });
 
-  it("uses the Cursor shim fallback for model discovery", () => {
+  it("uses cursor-agent for model discovery when a configured editor has no agent resolved", () => {
     expect(
       buildCursorCliModelListCommand(
         {
@@ -220,8 +220,8 @@ describe("buildCursorCliModelListCommand", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "/not-real/bin/cursor",
-      args: ["agent", "-e", "http://localhost:3000", "models"],
+      command: "cursor-agent",
+      args: ["-e", "http://localhost:3000", "models"],
     });
   });
 });

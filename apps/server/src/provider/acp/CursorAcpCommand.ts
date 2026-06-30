@@ -81,7 +81,7 @@ function resolveCursorEditorLauncherCommand(
         return siblingAgent;
       }
     }
-    return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
+    return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
 
   const siblingAgent = resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
@@ -91,22 +91,15 @@ function resolveCursorEditorLauncherCommand(
   if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
     return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
-  const siblingLegacyAgent = resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options);
-  if (siblingLegacyAgent) {
-    return siblingLegacyAgent;
-  }
-  return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
+  return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
 }
 
 function resolveCursorSiblingAgentCommand(
   parts: CursorCommandPathParts,
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
-  // Prefer real agent binaries; the launcher fallback must explicitly dispatch to its agent command.
-  return (
-    resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options) ??
-    resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options)
-  );
+  // Only trust Cursor's named agent binary when deriving from an editor launcher path.
+  return resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
 }
 
 function resolveCursorSiblingCommand(
