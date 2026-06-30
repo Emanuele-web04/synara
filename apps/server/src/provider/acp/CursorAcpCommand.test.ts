@@ -142,6 +142,16 @@ describe("buildCursorAgentCommand", () => {
     const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
     const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
     expect(
+      buildCursorAgentCommand("cursor", ["acp"], {
+        env: { PATH: "/Applications/Cursor.app/Contents/Resources/app/bin" },
+        pathExists: (path) => path === cursorPath || path === agentPath,
+      }),
+    ).toEqual({
+      command: agentPath,
+      args: ["acp"],
+    });
+
+    expect(
       buildCursorAgentCommand(cursorPath, ["acp"], {
         env: { PATH: "" },
         pathExists: (path) => path === agentPath,
@@ -179,7 +189,7 @@ describe("buildCursorAgentCommand", () => {
     });
   });
 
-  it("skips PowerShell sibling agent shims for Windows editor launchers", () => {
+  it("prefers safer Windows shims but accepts PowerShell-only Cursor agent siblings", () => {
     expect(
       buildCursorAgentCommand(
         "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
@@ -193,6 +203,33 @@ describe("buildCursorAgentCommand", () => {
     ).toEqual({
       command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.cmd",
       args: ["acp"],
+    });
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
+        ["status"],
+        {
+          pathExists: (path) =>
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.ps1",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.ps1",
+      args: ["status"],
+    });
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
+        ["models"],
+        {
+          env: { PATH: "" },
+          pathExists: (path) =>
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.ps1",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.ps1",
+      args: ["models"],
     });
     expect(
       buildCursorAgentCommand(

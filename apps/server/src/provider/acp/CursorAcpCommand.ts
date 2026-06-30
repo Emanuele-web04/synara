@@ -76,7 +76,9 @@ function resolveCursorEditorLauncherCommand(
     const cursorPath = findCommandOnPath(command, options);
     if (cursorPath) {
       const cursorPathParts = splitCursorCommandPath(cursorPath);
-      const siblingAgent = resolveCursorSiblingAgentCommand(cursorPathParts, options);
+      const siblingAgent =
+        resolveCursorSiblingAgentCommand(cursorPathParts, options) ??
+        resolveTrustedCursorLegacySiblingCommand(cursorPathParts, options);
       if (siblingAgent) {
         return siblingAgent;
       }
@@ -145,8 +147,10 @@ function cursorSiblingAgentExtensions(parts: CursorCommandPathParts): ReadonlyAr
   const preferredExtension = isWindowsSafeExecutableExtension(parts.extension)
     ? [parts.extension]
     : [];
+  const powerShellFallbackExtension =
+    parts.extension.toLowerCase() === ".ps1" ? [parts.extension] : [];
   const extensions = shouldProbeWindowsExtensions
-    ? [...preferredExtension, ...WINDOWS_EXECUTABLE_EXTENSIONS, ""]
+    ? [...preferredExtension, ...WINDOWS_EXECUTABLE_EXTENSIONS, "", ...powerShellFallbackExtension]
     : [parts.extension];
   return [...new Set(extensions)];
 }
