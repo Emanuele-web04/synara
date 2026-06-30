@@ -31,15 +31,15 @@ export interface ActionState {
 export type LoaderColorPreset = "synara" | "spectrum" | "mono";
 
 // Exactly 3 preset themes. Locked — no per-color customization (too complex for v1).
-// Synara: accent-based (uses the app accent color for all states, error in red).
+// Synara: foreground-based (white in dark mode, black in light mode; error in red).
 // Spectrum: distinct hues per state (maximum distinguishability).
 // Mono: grayscale + accent for error (subtle, for users who want minimal color).
 const ACTION_COLOR_PRESETS: Record<LoaderColorPreset, Record<ActionStateName, string>> = {
   synara: {
-    thinking: "var(--accent)",
-    reading: "var(--accent)",
-    editing: "var(--accent)",
-    "running-command": "var(--accent)",
+    thinking: "var(--foreground)",
+    reading: "var(--foreground)",
+    editing: "var(--foreground)",
+    "running-command": "var(--foreground)",
     error: "var(--destructive)",
   },
   spectrum: {

@@ -202,7 +202,7 @@ describe("mapWorkLogToActionState", () => {
   it("uses synara preset colors by default", () => {
     const entry = makeEntry({ label: "test", tone: "thinking" });
     const state = mapWorkLogToActionState(entry);
-    expect(state.color).toBe("var(--accent)");
+    expect(state.color).toBe("var(--foreground)");
   });
 
   it("uses spectrum preset colors when specified", () => {

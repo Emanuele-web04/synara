@@ -13,10 +13,10 @@ const DOTMATRIX_SIZE = 12;
 // At 12px sidebar size, per-state distinction is invisible — the island shows
 // per-state loaders where the expanded view has room for the full 5 states.
 const DOTMATRIX_ACTION_COLOR: Record<ActionStateName, string> = {
-  thinking: "var(--accent)",
-  reading: "var(--accent)",
-  editing: "var(--accent)",
-  "running-command": "var(--accent)",
+  thinking: "var(--foreground)",
+  reading: "var(--foreground)",
+  editing: "var(--foreground)",
+  "running-command": "var(--foreground)",
   error: "var(--destructive)",
 };
 
