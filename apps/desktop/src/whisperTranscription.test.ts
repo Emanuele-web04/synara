@@ -9,7 +9,7 @@ vi.mock("electron", () => ({
   net: { request: () => ({}) },
 }));
 
-import { resampleWav24kTo16k, verifyModelSha256 } from "./whisperTranscription";
+import { resampleWav24kTo16k, verifyModelSha256, ensureWhisperModel } from "./whisperTranscription";
 
 // Build a 24kHz 16-bit mono WAV with the given PCM samples.
 function makeWav24k(samples: number[]): Buffer {
@@ -140,5 +140,11 @@ describe("verifyModelSha256", () => {
 
   it("returns false when file does not exist", () => {
     expect(verifyModelSha256(Path.join(tmpDir, "nonexistent.bin"), "0".repeat(64))).toBe(false);
+  });
+});
+
+describe("ensureWhisperModel", () => {
+  it("throws on unknown model name", async () => {
+    await expect(ensureWhisperModel("nonexistent-model")).rejects.toThrow("Unknown whisper model");
   });
 });

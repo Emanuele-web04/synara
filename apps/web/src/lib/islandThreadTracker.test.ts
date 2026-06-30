@@ -110,6 +110,27 @@ describe("threadActivityTimestamp", () => {
     });
     expect(threadActivityTimestamp(thread)).toBe("2026-01-04T00:00:00Z");
   });
+
+  it("returns empty string when all timestamps are null/undefined", () => {
+    const thread = {
+      ...makeThread({ id: "t1" }),
+      latestTurn: null,
+      activities: [],
+      updatedAt: undefined,
+      createdAt: undefined,
+    } as unknown as Thread;
+    expect(threadActivityTimestamp(thread)).toBe("");
+  });
+
+  it("uses createdAt as final fallback", () => {
+    const thread = makeThread({
+      id: "t1",
+      latestTurn: null,
+      activities: [],
+      createdAt: "2026-01-01T00:00:00Z",
+    });
+    expect(threadActivityTimestamp(thread)).toBe("2026-01-01T00:00:00Z");
+  });
 });
 
 describe("selectActiveIslandThread", () => {
@@ -190,5 +211,20 @@ describe("selectRecentIslandThreads", () => {
     ];
     const recent = selectRecentIslandThreads(threads);
     expect(recent.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("respects the limit parameter", () => {
+    const threads = Array.from({ length: 7 }, (_, i) =>
+      makeThread({ id: `t${i}`, createdAt: `2026-01-0${i + 1}T00:00:00Z` }),
+    );
+    const recent = selectRecentIslandThreads(threads, 3);
+    expect(recent).toHaveLength(3);
+    // Most recent first
+    expect(recent[0]!.id).toBe("t6");
+  });
+
+  it("returns empty array when all threads are archived", () => {
+    const threads = [makeThread({ id: "t1", archivedAt: "2026-01-02" })];
+    expect(selectRecentIslandThreads(threads)).toEqual([]);
   });
 });

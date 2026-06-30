@@ -163,6 +163,25 @@ describe("mapWorkLogToActionState", () => {
     expect(state.state).toBe("running-command");
   });
 
+  it("maps inspect commands to reading state with processing compact state", () => {
+    const entry = makeEntry({
+      label: "ls -la",
+      tone: "tool",
+      requestKind: "command",
+      command: "ls -la",
+    });
+    const state = mapWorkLogToActionState(entry);
+    expect(state.state).toBe("reading");
+    expect(state.compactState).toBe("processing");
+  });
+
+  it("maps error category to error compact state", () => {
+    const entry = makeEntry({ label: "failed", tone: "error" });
+    const state = mapWorkLogToActionState(entry);
+    expect(state.compactState).toBe("error");
+    expect(state.state).toBe("error");
+  });
+
   it("sanitizes labels by truncating to 80 chars", () => {
     const longLabel = "a".repeat(100);
     const entry = makeEntry({ label: longLabel, tone: "thinking" });
