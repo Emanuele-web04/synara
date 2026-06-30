@@ -6,6 +6,7 @@ import {
   extractWebFetchUrl,
   isInspectCommand,
   normalizeCompactToolLabel,
+  resolveCommandVisualKind,
 } from "./toolCallLabel";
 
 describe("extractWebFetchUrl", () => {
@@ -302,5 +303,24 @@ describe("isInspectCommand", () => {
     expect(isInspectCommand("node build.js")).toBe(false);
     expect(isInspectCommand("rm -rf dist")).toBe(false);
     expect(isInspectCommand("mkdir foo")).toBe(false);
+  });
+});
+
+describe("resolveCommandVisualKind", () => {
+  it("classifies git commands through shell and global-option wrappers", () => {
+    expect(resolveCommandVisualKind("git status --short")).toBe("git");
+    expect(resolveCommandVisualKind("git -C apps/web status --short")).toBe("git");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc "cd repo && git branch -vv"`)).toBe("git");
+  });
+
+  it("classifies GitHub CLI commands through env wrappers", () => {
+    expect(resolveCommandVisualKind("gh pr view 274 --repo owner/repo")).toBe("github");
+    expect(resolveCommandVisualKind("env -u GH_TOKEN gh pr status")).toBe("github");
+    expect(resolveCommandVisualKind("hub pull-request -m test")).toBe("github");
+  });
+
+  it("keeps inspections and ordinary commands distinct", () => {
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
+    expect(resolveCommandVisualKind("bun run build")).toBe("terminal");
   });
 });

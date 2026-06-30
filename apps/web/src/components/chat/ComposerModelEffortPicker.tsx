@@ -217,7 +217,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
       {showsFastBadge ? (
         <FastModeIcon
           aria-hidden="true"
-          className="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]"
+          className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
         />
       ) : null}
       {triggerStatusLabel ? (

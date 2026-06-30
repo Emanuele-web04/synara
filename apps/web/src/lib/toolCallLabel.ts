@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, isInspectCommand, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @t3tools/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
@@ -143,6 +143,8 @@ export interface ReadableCommandDisplay {
   readonly target: string;
   readonly fullCommand: string;
 }
+
+export type CommandVisualKind = "inspect" | "git" | "github" | "terminal";
 
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
@@ -455,9 +457,24 @@ export function deriveReadableCommandDisplay(
 // Reuses the same command unwrapping as deriveReadableCommandDisplay so the
 // timeline search icon stays in sync with the derived command label.
 export function isInspectCommand(rawCommand: string): boolean {
+  return resolveCommandVisualKind(rawCommand) === "inspect";
+}
+
+// Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
+// This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
+export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
   const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
   const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
-  return isInspectCommandTool(tool);
+  if (isInspectCommandTool(tool)) {
+    return "inspect";
+  }
+  if (tool === "git") {
+    return "git";
+  }
+  if (tool === "gh" || tool === "hub") {
+    return "github";
+  }
+  return "terminal";
 }
 
 export function deriveInlineCommandCall(rawCommand: string): string {
