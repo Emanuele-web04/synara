@@ -81,6 +81,7 @@ import {
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
   fetchCursorAcpModelDescriptors,
   makeCursorAcpRuntime,
   parseCursorCliModelList,
@@ -1480,12 +1481,12 @@ export function makeCursorAdapter(
       );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
-        const args = [
-          ...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []),
-          "models",
-        ];
+        const command = buildCursorCliModelListCommand({
+          binaryPath: effectiveBinaryPath,
+          ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        });
         const env = buildCursorAgentHeadlessEnv();
-        const prepared = prepareWindowsSafeProcess(effectiveBinaryPath, args, {
+        const prepared = prepareWindowsSafeProcess(command.command, command.args, {
           env,
         });
         const child = yield* childProcessSpawner.spawn(
@@ -1508,7 +1509,7 @@ export function makeCursorAdapter(
             method: "model/list",
             detail:
               stderr.trim() ||
-              `Cursor model discovery failed because '${effectiveBinaryPath} models' exited with code ${exitCode}.`,
+              `Cursor model discovery failed because '${[command.command, ...command.args].join(" ")}' exited with code ${exitCode}.`,
           });
         }
         const models = parseCursorCliModelList(stdout);
