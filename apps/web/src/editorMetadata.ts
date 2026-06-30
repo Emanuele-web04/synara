@@ -53,6 +53,7 @@ const EDITOR_ICONS: Partial<Record<EditorId, Icon>> = {
   sublime: SublimeTextIcon,
   antigravity: AntigravityIcon,
   ghostty: GhosttyIcon,
+  muxy: TerminalAppIcon,
   terminal: TerminalAppIcon,
   warp: WarpIcon,
   xcode: XcodeIcon,

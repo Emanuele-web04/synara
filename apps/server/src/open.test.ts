@@ -250,6 +250,16 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
         args: [`--working-directory=${path.dirname(filePath)}`],
       });
 
+      const muxyLaunch = yield* resolveEditorLaunch(
+        { cwd: `${filePath}:71:5`, editor: "muxy" },
+        "linux",
+        { PATH: "" },
+      );
+      assert.deepEqual(muxyLaunch, {
+        command: "muxy",
+        args: [path.dirname(filePath)],
+      });
+
       const binDir = path.join(dir, "bin");
       yield* fs.makeDirectory(binDir, { recursive: true });
       yield* fs.writeFileString(path.join(binDir, "konsole"), "#!/bin/sh\n");
@@ -296,6 +306,9 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       yield* fs.makeDirectory(path.join(home, "Applications", "Ghostty.app"), {
         recursive: true,
       });
+      yield* fs.makeDirectory(path.join(home, "Applications", "Muxy.app"), {
+        recursive: true,
+      });
       yield* fs.makeDirectory(path.join(home, "Applications", "WebStorm.app"), {
         recursive: true,
       });
@@ -311,6 +324,16 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
       assert.deepEqual(ghosttyLaunch, {
         command: "open",
         args: ["-a", "Ghostty", "/tmp/workspace"],
+      });
+
+      const muxyLaunch = yield* resolveEditorLaunch(
+        { cwd: "/tmp/workspace", editor: "muxy" },
+        "darwin",
+        { HOME: home, PATH: "" },
+      );
+      assert.deepEqual(muxyLaunch, {
+        command: "open",
+        args: ["-a", "Muxy", "/tmp/workspace"],
       });
 
       const terminalLaunch = yield* resolveEditorLaunch(
@@ -344,6 +367,7 @@ it.layer(NodeServices.layer)("resolveEditorLaunch", (it) => {
 
       const availableEditors = resolveAvailableEditors("darwin", { HOME: home, PATH: "" });
       assert.equal(availableEditors.includes("ghostty"), true);
+      assert.equal(availableEditors.includes("muxy"), true);
       assert.equal(availableEditors.includes("webstorm"), true);
       assert.equal(availableEditors.includes("pycharm"), true);
     }),

@@ -109,6 +109,13 @@ export const EDITORS = [
     launchStyle: "terminal-working-directory",
   },
   {
+    id: "muxy",
+    label: "Muxy",
+    commands: ["muxy"],
+    macApplications: ["Muxy"],
+    launchStyle: "terminal-working-directory",
+  },
+  {
     id: "terminal",
     label: "Terminal",
     commands: [

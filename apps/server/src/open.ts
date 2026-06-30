@@ -193,6 +193,8 @@ const TERMINAL_ARGS_BY_COMMAND: Readonly<Record<string, TerminalArgsBuilder>> = 
   kitty: (workingDirectory) => ["--directory", workingDirectory],
   wezterm: (workingDirectory) => ["start", "--cwd", workingDirectory],
   ghostty: DEFAULT_TERMINAL_ARGS,
+  // Muxy's CLI opens a project from a bare path, matching its `muxy .` flow.
+  muxy: (workingDirectory) => [workingDirectory],
   warp: DEFAULT_TERMINAL_ARGS,
 };
 
