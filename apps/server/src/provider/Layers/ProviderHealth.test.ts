@@ -1552,42 +1552,44 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("falls back through configured Cursor editors when no agent command is resolved", () =>
-      Effect.gen(function* () {
-        const originalPath = process.env.PATH;
-        yield* Effect.acquireRelease(
-          Effect.sync(() => {
-            process.env.PATH = "";
-          }),
-          () =>
+    it.effect(
+      "falls back through configured Cursor editors when no agent command is resolved",
+      () =>
+        Effect.gen(function* () {
+          const originalPath = process.env.PATH;
+          yield* Effect.acquireRelease(
             Effect.sync(() => {
-              if (originalPath !== undefined) {
-                process.env.PATH = originalPath;
-              } else {
-                delete process.env.PATH;
-              }
+              process.env.PATH = "";
             }),
-        );
-        const status = yield* makeCheckCursorProviderStatus("/custom/bin/cursor");
-        assert.strictEqual(status.status, "ready");
-      }).pipe(
-        Effect.provide(
-          mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "/custom/bin/cursor");
-            const joined = args.join(" ");
-            if (joined === "agent --version") {
-              return { stdout: "cursor 2026.04.27\n", stderr: "", code: 0 };
-            }
-            if (joined === "agent status") {
-              return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
-            }
-            if (joined === "agent models") {
-              return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
-            }
-            throw new Error(`Unexpected args: ${joined}`);
-          }),
+            () =>
+              Effect.sync(() => {
+                if (originalPath !== undefined) {
+                  process.env.PATH = originalPath;
+                } else {
+                  delete process.env.PATH;
+                }
+              }),
+          );
+          const status = yield* makeCheckCursorProviderStatus("/custom/bin/cursor");
+          assert.strictEqual(status.status, "ready");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args, command) => {
+              assert.strictEqual(command, "/custom/bin/cursor");
+              const joined = args.join(" ");
+              if (joined === "agent --version") {
+                return { stdout: "cursor 2026.04.27\n", stderr: "", code: 0 };
+              }
+              if (joined === "agent status") {
+                return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
+              }
+              if (joined === "agent models") {
+                return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
+              }
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
         ),
-      ),
     );
 
     it.effect("returns unavailable when Cursor Agent is missing", () =>

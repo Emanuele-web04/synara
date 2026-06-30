@@ -72,10 +72,7 @@ export function buildCursorAcpSpawnInput(
 ): AcpSpawnInput {
   const command = buildCursorAgentCommand(
     cursorSettings?.binaryPath,
-    [
-      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
-      "acp",
-    ],
+    [...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []), "acp"],
     commandOptions,
   );
   return {

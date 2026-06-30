@@ -797,7 +797,10 @@ const runKiloCommand = (args: ReadonlyArray<string>, executable = "kilo") =>
     ),
   );
 
-const runCursorCommand = (args: ReadonlyArray<string>, executable = DEFAULT_CURSOR_AGENT_BINARY) => {
+const runCursorCommand = (
+  args: ReadonlyArray<string>,
+  executable = DEFAULT_CURSOR_AGENT_BINARY,
+) => {
   const command = buildCursorAgentCommand(executable, args);
   return runProviderCommand(command.command, command.args, buildCursorAgentHeadlessEnv()).pipe(
     Effect.flatMap((result) =>

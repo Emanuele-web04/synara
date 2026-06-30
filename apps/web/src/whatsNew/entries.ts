@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.6",
+    date: "Jun 30",
+    features: [
+      {
+        id: "cursor-launch-fallbacks",
+        title: "Cursor launch fallback is much sturdier",
+        description:
+          "Synara now finds Cursor agent commands across more install layouts, including bundled sibling shims and legacy shim locations, while rejecting unsafe fallbacks.",
+        details:
+          "Cursor ACP command discovery now resolves safer CLI paths, honors bundled sibling launchers, preserves legacy shim coverage, and avoids falling back to paths that do not match the expected Cursor agent shape.",
+      },
+      {
+        id: "muxy-open-in",
+        title: "Muxy can open from Synara",
+        description:
+          "Open-in support now recognizes Muxy, so editor/open buttons can hand files to the right desktop target when Muxy is part of your workflow.",
+        details:
+          "Editor metadata, open-route handling, and focused coverage were extended so Muxy is treated as a supported external app alongside the existing editor launch targets.",
+      },
+      {
+        id: "live-message-trail",
+        title: "Live chats leave a clearer message trail",
+        description:
+          "Active replies now expose a calmer live trail through the transcript, making long-running turns easier to follow while new work arrives.",
+        details:
+          "The transcript gained MessageTrail rendering, shared message-trail logic, browser coverage, and timeline integration so live assistant activity can stay visible without fighting the normal message rows.",
+      },
+      {
+        id: "clipboard-image-sharing",
+        title: "Image sharing works better on desktop",
+        description:
+          "Share cards and exported profile visuals can now use the desktop clipboard image path, making it easier to paste polished snapshots elsewhere.",
+        details:
+          "The web share-card export path now cooperates with desktop clipboard IPC, including preload contracts and browser-side helpers for copying generated image blobs.",
+      },
+      {
+        id: "claude-credential-keepalive",
+        title: "Claude credentials stay fresh longer",
+        description:
+          "Synara refreshes Claude credential freshness on macOS so long sessions are less likely to hit the familiar stale-token sign-in failure.",
+        details:
+          "A Claude credential keepalive helper, adapter integration, and focused tests now keep the OAuth token file active enough to avoid the roughly eight-hour stale credential path.",
+      },
+      {
+        id: "model-and-sidebar-polish",
+        title: "Models, command rows, and status icons got a polish pass",
+        description:
+          "Sonnet 5 variants, sidebar status icons, branded command rows, chat bubble padding, and tool labels were tightened for a more readable daily workspace.",
+        details:
+          "The release adds Sonnet 5 model variant metadata, refines sidebar status presentation, brands command/tool rows more clearly, and trims chat typography spacing in dense transcript areas.",
+      },
+    ],
+  },
+  {
     version: "0.3.5",
     date: "Jun 30",
     features: [

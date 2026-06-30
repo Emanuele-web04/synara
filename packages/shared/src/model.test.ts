@@ -249,8 +249,10 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
     expect([...CLAUDE_PROMPT_MODE_OPTIONS]).toEqual(["ultrathink"]);
     expect([...CLAUDE_CODE_MODE_OPTIONS]).toEqual(["ultracode"]);
 
-    const sonnet5Levels = getModelCapabilities("claudeAgent", "claude-sonnet-5")
-      .reasoningEffortLevels;
+    const sonnet5Levels = getModelCapabilities(
+      "claudeAgent",
+      "claude-sonnet-5",
+    ).reasoningEffortLevels;
     expect(sonnet5Levels.find((option) => option.value === "max")).toMatchObject({
       controlSource: "api-effort",
     });
@@ -259,8 +261,10 @@ describe("getModelCapabilities reasoningEffortLevels", () => {
       apiEffortValue: "xhigh",
     });
 
-    const opus46Levels = getModelCapabilities("claudeAgent", "claude-opus-4-6")
-      .reasoningEffortLevels;
+    const opus46Levels = getModelCapabilities(
+      "claudeAgent",
+      "claude-opus-4-6",
+    ).reasoningEffortLevels;
     expect(opus46Levels.find((option) => option.value === "ultrathink")).toMatchObject({
       controlSource: "prompt-prefix",
     });

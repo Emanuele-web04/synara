@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.3.6 - 2026-06-30
+
+### Added
+
+- Added safer Cursor ACP command discovery and launcher fallback coverage for bundled sibling shims, legacy shims, and fallback ordering.
+- Added Muxy Open In support through editor metadata, server open handling, and focused tests.
+- Added live message trail rendering, shared trail logic, browser coverage, and timeline integration for active transcript updates.
+- Added desktop clipboard image sharing for share-card/profile exports.
+- Added Claude credential keepalive coverage to keep macOS OAuth credentials fresh across longer sessions.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.6` across the server, desktop, web, and contracts packages.
+- Refined Cursor agent command resolution so fallback launchers prefer known-safe agent paths and reject unsafe editor fallbacks.
+- Refined checkpoint and transcript handling around turn completion, live trail rendering, and message timeline integration.
+- Refined Sonnet 5 model variant metadata, sidebar status icons, command-row branding, tool-call labels, chat bubble padding, and model effort picker copy.
+- Refined task-completion notification logic and share-card export behavior around desktop clipboard support.
+
+### Fixed
+
+- Fixed Cursor ACP CLI path resolution for packaged/bundled Cursor layouts and legacy shim paths.
+- Fixed unsafe Cursor editor fallback behavior by rejecting launch paths that do not match the expected agent command shape.
+- Fixed Claude sessions becoming stale after long macOS OAuth credential idle periods.
+- Fixed file-change checkpoint timing around completed turns so summaries attach after the relevant assistant message is known.
+- Fixed formatting drift in ProviderHealth, Cursor ACP, and shared model test files caught by the release gate.
+
+### Verification
+
+- Initial `bun run fmt:check` failed on `apps/server/src/provider/Layers/ProviderHealth.test.ts`, `apps/server/src/provider/Layers/ProviderHealth.ts`, `apps/server/src/provider/acp/CursorAcpCommand.ts`, `apps/server/src/provider/acp/CursorAcpSupport.ts`, and `packages/shared/src/model.test.ts`; after targeted `bunx oxfmt` on those files, the final formatter check passed.
+- `bun run lint` passed with 158 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m38.929s. `@t3tools/web` passed 191 files / 2273 tests. `t3` passed 138 files with 1 skipped file, 1517 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` and `npm run lint` passed.
+
 ## 0.3.5 - 2026-06-30
 
 ### Added

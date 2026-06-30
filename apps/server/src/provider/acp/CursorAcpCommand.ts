@@ -91,7 +91,9 @@ function resolveCursorEditorLauncherCommand(
     return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
   }
 
-  const siblingProbeParts = splitCursorCommandPath(resolveRealPathForSiblingProbe(command, options));
+  const siblingProbeParts = splitCursorCommandPath(
+    resolveRealPathForSiblingProbe(command, options),
+  );
   const siblingAgent = resolveCursorSiblingCommand(
     siblingProbeParts,
     DEFAULT_CURSOR_AGENT_BINARY,
