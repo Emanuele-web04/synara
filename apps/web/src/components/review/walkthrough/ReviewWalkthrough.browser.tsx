@@ -48,6 +48,45 @@ const WALKTHROUGH = {
   ],
 } satisfies ReviewWalkthroughData;
 
+function walkthroughWithChapters(count: number): ReviewWalkthroughData {
+  return {
+    ...WALKTHROUGH,
+    chapters: Array.from({ length: count }, (_, index) => {
+      const number = index + 1;
+      return {
+        id: `chapter-${number}`,
+        title: `Review chapter ${number}`,
+        summary: `Chapter ${number} summary.`,
+        intent: `Read chapter ${number}.`,
+        anchor: `chapter-${number}.ts`,
+        risk: "minor" as const,
+        hunkRefs: [],
+        files: [`src/chapter-${number}.ts`],
+        status: "queued" as const,
+      };
+    }),
+  };
+}
+
+function walkthroughWithFocusAreas(count: number): ReviewWalkthroughData {
+  return {
+    ...WALKTHROUGH,
+    prologue: {
+      ...WALKTHROUGH.prologue,
+      focusAreas: Array.from({ length: count }, (_, index) => {
+        const number = index + 1;
+        return {
+          type: "architecture" as const,
+          severity: "medium" as const,
+          title: `Focus area ${number}`,
+          description: `Confirm focus area ${number} is handled before approving.`,
+          locations: [`src/focus-area-${number}.ts`],
+        };
+      }),
+    },
+  };
+}
+
 const nativeApiMock = vi.hoisted(() => ({
   generateWalkthrough: vi.fn(async () => ({
     walkthrough: WALKTHROUGH,
@@ -207,6 +246,70 @@ describe("ReviewWalkthrough", () => {
     try {
       await expect.element(page.getByText(/Generating walkthrough|No chapters/)).toBeVisible();
       expect(nativeApiMock.generateWalkthrough).toHaveBeenCalledTimes(0);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps long desktop chapter rails scrollable to the last chapter", async () => {
+    nativeApiMock.generateWalkthrough.mockResolvedValueOnce({
+      walkthrough: walkthroughWithChapters(18),
+      reviewedHeadSha: "abc123",
+      patchSignature: "sig123",
+    });
+    await page.viewport(1440, 560);
+    const mounted = await renderWalkthrough();
+
+    try {
+      await expect
+        .element(page.getByRole("button", { name: "Chapter 1: Review chapter 1" }))
+        .toBeVisible();
+      const railList = document.querySelector<HTMLElement>(
+        '[aria-label="Changes"] [role="list"]',
+      );
+      expect(railList).toBeTruthy();
+      expect(railList!.scrollHeight).toBeGreaterThan(railList!.clientHeight);
+
+      railList!.scrollTop = railList!.scrollHeight;
+      railList!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      const lastChapter = page.getByRole("button", { name: "Chapter 18: Review chapter 18" });
+      await expect.element(lastChapter).toBeVisible();
+      const lastChapterRect = lastChapter.element().getBoundingClientRect();
+      const railListRect = railList!.getBoundingClientRect();
+      expect(lastChapterRect.bottom).toBeLessThanOrEqual(railListRect.bottom + 1);
+      expect(lastChapterRect.top).toBeGreaterThanOrEqual(railListRect.top - 1);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps long desktop prologues scrollable to the start action", async () => {
+    nativeApiMock.generateWalkthrough.mockResolvedValueOnce({
+      walkthrough: walkthroughWithFocusAreas(12),
+      reviewedHeadSha: "abc123",
+      patchSignature: "sig123",
+    });
+    await page.viewport(1440, 560);
+    const mounted = await renderWalkthrough();
+
+    try {
+      await expect.element(page.getByText("Focus area 1", { exact: true })).toBeVisible();
+      const reader = document.querySelector<HTMLElement>(
+        'section[aria-label="Walkthrough reader"]',
+      );
+      expect(reader).toBeTruthy();
+      expect(reader!.scrollHeight).toBeGreaterThan(reader!.clientHeight);
+
+      reader!.scrollTop = reader!.scrollHeight;
+      reader!.dispatchEvent(new Event("scroll", { bubbles: true }));
+
+      const startButton = page.getByRole("button", { name: "Start reading" });
+      await expect.element(startButton).toBeVisible();
+      const startButtonRect = startButton.element().getBoundingClientRect();
+      const readerRect = reader!.getBoundingClientRect();
+      expect(startButtonRect.bottom).toBeLessThanOrEqual(readerRect.bottom + 1);
+      expect(startButtonRect.top).toBeGreaterThanOrEqual(readerRect.top - 1);
     } finally {
       await mounted.cleanup();
     }
