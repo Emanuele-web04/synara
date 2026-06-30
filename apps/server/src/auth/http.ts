@@ -12,7 +12,6 @@ import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 import {
   AuthError,
   type AuthRequest,
-  type AuthenticatedSession,
   type ServerAuthShape,
 } from "./Services/ServerAuth";
 import type { SessionCredentialServiceShape } from "./Services/SessionCredentialService";

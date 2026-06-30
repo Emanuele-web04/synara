@@ -682,7 +682,6 @@ export function buildThemeCssVariables(
   // --app-shell-background / --background). Sourcing the sidebar from the primary
   // surface keeps its pure color matching Codex in both light and dark.
   const sidebarSurface = readCodexVariable("--color-background-surface");
-  const sidebarRaisedSurface = readCodexVariable("--color-background-elevated-primary");
   const settingsSurface = readCodexVariable("--color-background-surface");
   const composerSurface =
     variant === "dark"

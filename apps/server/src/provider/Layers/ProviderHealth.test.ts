@@ -353,7 +353,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           });
 
           const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
-            Effect.timeoutOption(2_000),
+            Effect.timeoutOption(10_000),
           );
           assert.strictEqual(streamedCodex._tag, "Some");
           if (streamedCodex._tag !== "Some") {

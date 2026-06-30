@@ -711,7 +711,7 @@ export function isOpenFavoriteEditorShortcut(
 
 export function isTerminalClearShortcut(
   event: ShortcutEventLike,
-  platform = navigator.platform,
+  _platform = navigator.platform,
 ): boolean {
   if (event.type !== undefined && event.type !== "keydown") {
     return false;

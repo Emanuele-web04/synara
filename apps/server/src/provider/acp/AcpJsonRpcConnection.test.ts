@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import * as os from "node:os";
+import { execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
@@ -13,7 +14,9 @@ import type * as EffectAcpProtocol from "effect-acp/protocol";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const mockAgentPath = path.join(__dirname, "../../../scripts/acp-mock-agent.ts");
-const bunExe = "bun";
+// Resolve bun to an absolute path so spawn works even when the test runner's
+// PATH doesn't include the bun install directory.
+const bunExe = execSync("command -v bun || which bun", { encoding: "utf8" }).trim() || "bun";
 
 // Minimal raw NDJSON ACP agent for the available_commands_update test below.
 // The shared scripts/acp-mock-agent.ts never emits that notification, so this

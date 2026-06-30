@@ -1681,12 +1681,6 @@ function flattenOpenCodeCommands(
     .toSorted((left, right) => left.name.localeCompare(right.name));
 }
 
-function redactOpenCodeRequestDetail(detail: string): string {
-  return detail
-    .replace(/authorization["':=\s]+(?:basic\s+)?[^"',}\s]+/gi, "authorization=[redacted]")
-    .replace(/basic\s+[a-z0-9+/=]+/gi, "Basic [redacted]");
-}
-
 function isUnsupportedOpenCodeCommandListError(cause: OpenCodeRuntimeError): boolean {
   const detail = cause.detail.toLowerCase();
   return (
