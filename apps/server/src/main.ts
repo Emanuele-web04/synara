@@ -25,6 +25,7 @@ import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
+import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
@@ -289,6 +290,13 @@ const makeServerProgram = (input: CliInput) =>
 
     const config = yield* ServerConfig;
     yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
+    // Keep the macOS Claude OAuth token fresh so sessions don't report "not logged in"
+    // every ~8h when the Keychain access token expires (see claudeCredentialKeepalive.ts).
+    yield* Effect.sync(() =>
+      startClaudeCredentialKeepalive({
+        log: (message) => Effect.runFork(Effect.logInfo(message)),
+      }),
+    );
 
     if (!config.devUrl && !config.staticDir) {
       yield* Effect.logWarning(
