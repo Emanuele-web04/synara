@@ -63,7 +63,7 @@ describe("buildCursorAgentCommand", () => {
       ),
     ).toEqual({
       command: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
-      args: ["models"],
+      args: ["agent", "models"],
     });
     expect(
       buildCursorAgentCommand(
@@ -73,7 +73,7 @@ describe("buildCursorAgentCommand", () => {
       ),
     ).toEqual({
       command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
-      args: ["--version"],
+      args: ["agent", "--version"],
     });
     expect(
       buildCursorAgentCommand(
@@ -110,7 +110,7 @@ describe("buildCursorAgentCommand", () => {
       }),
     ).toEqual({
       command: "cursor",
-      args: ["acp"],
+      args: ["agent", "acp"],
     });
   });
 
@@ -161,7 +161,7 @@ describe("buildCursorAgentCommand", () => {
       ),
     ).toEqual({
       command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
-      args: ["status"],
+      args: ["agent", "status"],
     });
   });
 

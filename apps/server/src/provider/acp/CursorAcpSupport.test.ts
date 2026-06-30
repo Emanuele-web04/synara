@@ -151,7 +151,7 @@ describe("buildCursorAcpSpawnInput", () => {
       ),
     ).toEqual({
       command: "/not-real/bin/cursor",
-      args: ["acp"],
+      args: ["agent", "acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -192,7 +192,7 @@ describe("buildCursorAcpSpawnInput", () => {
       ),
     ).toEqual({
       command: "/not-real/bin/cursor",
-      args: ["-e", "http://localhost:3000", "acp"],
+      args: ["agent", "-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -221,7 +221,7 @@ describe("buildCursorCliModelListCommand", () => {
       ),
     ).toEqual({
       command: "/not-real/bin/cursor",
-      args: ["-e", "http://localhost:3000", "models"],
+      args: ["agent", "-e", "http://localhost:3000", "models"],
     });
   });
 });

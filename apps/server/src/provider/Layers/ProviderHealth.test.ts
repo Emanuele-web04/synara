@@ -1575,13 +1575,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           mockSpawnerLayer((args, command) => {
             assert.strictEqual(command, "/custom/bin/cursor");
             const joined = args.join(" ");
-            if (joined === "--version") {
+            if (joined === "agent --version") {
               return { stdout: "cursor 2026.04.27\n", stderr: "", code: 0 };
             }
-            if (joined === "status") {
+            if (joined === "agent status") {
               return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
             }
-            if (joined === "models") {
+            if (joined === "agent models") {
               return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);

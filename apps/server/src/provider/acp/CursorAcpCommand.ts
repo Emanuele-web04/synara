@@ -81,7 +81,7 @@ function resolveCursorEditorLauncherCommand(
         return siblingAgent;
       }
     }
-    return { command, args: [] };
+    return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
   }
 
   const siblingAgent = resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
@@ -95,14 +95,14 @@ function resolveCursorEditorLauncherCommand(
   if (siblingLegacyAgent) {
     return siblingLegacyAgent;
   }
-  return { command, args: [] };
+  return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
 }
 
 function resolveCursorSiblingAgentCommand(
   parts: CursorCommandPathParts,
   options: ResolvedCursorAgentCommandOptions,
 ): CursorAgentCommand | undefined {
-  // Cursor editor launchers do not host `cursor agent`; agent commands are top-level binaries.
+  // Prefer real agent binaries; the launcher fallback must explicitly dispatch to its agent command.
   return (
     resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options) ??
     resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options)
