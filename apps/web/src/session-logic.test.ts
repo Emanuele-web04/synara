@@ -1127,6 +1127,113 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["real-work-log"]);
   });
 
+  it("collapses interleaved parallel tool calls into one row per tool-call id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "a-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_a", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "b-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "WebFetch: {}",
+          data: { toolCallId: "toolu_b", toolName: "WebFetch", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "a-completed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: 'Workflow: {"script":"x"}',
+          data: { toolCallId: "toolu_a", toolName: "Workflow", input: { script: "x" } },
+        },
+      }),
+      makeActivity({
+        id: "b-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: 'WebFetch: {"url":"https://x.dev"}',
+          data: { toolCallId: "toolu_b", toolName: "WebFetch", input: { url: "https://x.dev" } },
+        },
+      }),
+    ];
+
+    // Without id-based collapse this is 4 rows (a started, b started, a completed,
+    // b completed); each tool call must merge to one row, kept at its start position.
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["a-completed", "b-completed"]);
+    expect(entries.map((entry) => entry.toolName)).toEqual(["Workflow", "WebFetch"]);
+  });
+
+  it("keeps distinct calls of the same tool separate by tool-call id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "first-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_1", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "second-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_2", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "first-completed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_1", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "second-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_2", toolName: "Workflow", input: {} },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["first-completed", "second-completed"]);
+  });
+
   it("orders work log by activity sequence when present", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -2620,7 +2727,7 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
-  it("uses the OpenCode task description for generic completion rows that cannot collapse", () => {
+  it("collapses an OpenCode task across an interleaved runtime error by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "opencode-task-update",
@@ -2676,7 +2783,11 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined).at(-1)).toEqual(
+    // The task update + completion share a tool-call id and merge into one row even
+    // though a runtime error arrived between them; the runtime error stays separate.
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(2);
+    expect(entries.find((entry) => entry.itemType === "collab_agent_tool_call")).toEqual(
       expect.objectContaining({
         id: "opencode-task-complete",
         itemType: "collab_agent_tool_call",
@@ -2684,6 +2795,7 @@ describe("deriveWorkLogEntries", () => {
         detail: "Tool execution aborted",
       }),
     );
+    expect(entries.some((entry) => entry.tone === "error")).toBe(true);
   });
 
   it("uses completed Claude task result content for generic agent task rows", () => {

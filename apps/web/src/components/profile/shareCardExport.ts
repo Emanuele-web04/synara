@@ -5,6 +5,7 @@
 // Layer: web profile feature.
 
 import { toBlob } from "html-to-image";
+import { copyPngBlobToDesktopClipboard } from "~/lib/desktopClipboard";
 import { readNativeApi } from "~/nativeApi";
 
 export { downloadBlob } from "~/lib/browserDownload";
@@ -35,6 +36,10 @@ export async function renderNodeToPngBlob(
 }
 
 export async function copyImageToClipboard(blob: Blob): Promise<boolean> {
+  if (await copyPngBlobToDesktopClipboard(blob)) {
+    return true;
+  }
+
   try {
     if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
       return false;

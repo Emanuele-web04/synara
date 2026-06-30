@@ -692,6 +692,30 @@ function summarizeToolRequest(toolName: string, input: Record<string, unknown>):
   return `${toolName}: ${serialized.slice(0, 397)}...`;
 }
 
+// Tools whose result is surfaced through a dedicated runtime channel — AskUserQuestion
+// via the user-input request flow, ExitPlanMode via the proposed-plan flow — must NOT
+// also emit a generic tool-call lifecycle item, or the timeline shows a redundant
+// "ToolName: {json}" row alongside the real interaction surface.
+function isClientSurfacedClaudeTool(toolName: string): boolean {
+  return toolName === "AskUserQuestion" || toolName === "ExitPlanMode";
+}
+
+// Stable per-call identity stamped on every tool lifecycle event's data so the client
+// can collapse started/updated/completed (and dedupe parallel calls) by tool-call id
+// instead of relying on row adjacency. Mirrors the shape other adapters emit (Pi/Grok).
+function toolLifecycleEventData(
+  tool: Pick<ToolInFlight, "itemId" | "toolName" | "input">,
+  extra?: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    toolCallId: tool.itemId,
+    callId: tool.itemId,
+    toolName: tool.toolName,
+    input: tool.input,
+    ...extra,
+  };
+}
+
 function normalizeClaudeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
   if (value === "completed") {
     return "completed";
@@ -1869,10 +1893,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               status: status === "completed" ? "completed" : "failed",
               title: tool.title,
               ...(tool.detail ? { detail: tool.detail } : {}),
-              data: {
-                toolName: tool.toolName,
-                input: tool.input,
-              },
+              data: toolLifecycleEventData(tool),
             },
             providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
             raw: {
@@ -2097,10 +2118,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 status: "inProgress",
                 title: nextTool.title,
                 ...(nextTool.detail ? { detail: nextTool.detail } : {}),
-                data: {
-                  toolName: nextTool.toolName,
-                  input: nextTool.input,
-                },
+                data: toolLifecycleEventData(nextTool),
               },
               providerRefs: nativeProviderRefs(context, { providerItemId: nextTool.itemId }),
               raw: {
@@ -2137,6 +2155,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           const toolName = block.name;
+          // AskUserQuestion / ExitPlanMode are rendered by their own runtime channels;
+          // emitting a generic tool item here would duplicate them as a raw row.
+          if (isClientSurfacedClaudeTool(toolName)) {
+            return;
+          }
           const itemType = classifyToolItemType(toolName);
           const toolInput =
             typeof block.input === "object" && block.input !== null
@@ -2173,10 +2196,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               status: "inProgress",
               title: tool.title,
               ...(tool.detail ? { detail: tool.detail } : {}),
-              data: {
-                toolName: tool.toolName,
-                input: toolInput,
-              },
+              data: toolLifecycleEventData(tool),
             },
             providerRefs: nativeProviderRefs(context, { providerItemId: tool.itemId }),
             raw: {
@@ -2237,11 +2257,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
           const [index, tool] = toolEntry;
           const itemStatus = toolResult.isError ? "failed" : "completed";
-          const toolData = {
-            toolName: tool.toolName,
-            input: tool.input,
-            result: toolResult.block,
-          };
+          const toolData = toolLifecycleEventData(tool, { result: toolResult.block });
 
           const updatedStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
