@@ -28,6 +28,8 @@ const execFileAsync = promisify(execFile);
 
 const DEFAULT_INTERVAL_MINUTES = 30;
 const COMMAND_TIMEOUT_MS = 20_000;
+export const CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS = 2_147_483_647;
+export const CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS = ["auth", "status"] as const;
 
 function envFlagDisabled(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
@@ -36,18 +38,26 @@ function envFlagDisabled(value: string | undefined): boolean {
   );
 }
 
-function resolveIntervalMs(env: NodeJS.ProcessEnv): number {
+// Mirrors the Claude Agent adapter default while honoring persisted custom CLI paths.
+export function resolveClaudeCredentialKeepaliveBinaryPath(
+  binaryPath: string | undefined,
+): string {
+  return binaryPath?.trim() || "claude";
+}
+
+// Caps the tuning knob before setInterval can overflow into Node's 1ms clamp behavior.
+export function resolveClaudeCredentialKeepaliveIntervalMs(env: NodeJS.ProcessEnv): number {
   const raw = env.T3CODE_CLAUDE_KEEPALIVE_MINUTES?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INTERVAL_MINUTES;
-  return minutes * 60 * 1000;
+  return Math.min(minutes * 60 * 1000, CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS);
 }
 
 // `claude auth status` validates the stored OAuth token and refreshes it via the refresh
 // token when at/near expiry, persisting the new token back to the Keychain. It is a cheap,
 // local operation that never consumes inference quota.
 async function nudgeClaudeTokenRefresh(binaryPath: string): Promise<void> {
-  await execFileAsync(binaryPath, ["auth", "status", "--json"], {
+  await execFileAsync(binaryPath, [...CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS], {
     timeout: COMMAND_TIMEOUT_MS,
   });
 }
@@ -64,7 +74,7 @@ export function startClaudeCredentialKeepalive(input?: {
 }): ClaudeCredentialKeepaliveHandle {
   const platform = input?.platform ?? process.platform;
   const env = input?.env ?? process.env;
-  const binaryPath = input?.binaryPath ?? "claude";
+  const binaryPath = resolveClaudeCredentialKeepaliveBinaryPath(input?.binaryPath);
   const log = input?.log ?? (() => {});
 
   // Only macOS exhibits the Keychain/short-TTL behavior that causes the bug; other platforms
@@ -73,7 +83,7 @@ export function startClaudeCredentialKeepalive(input?: {
     return { stop: () => {} };
   }
 
-  const intervalMs = resolveIntervalMs(env);
+  const intervalMs = resolveClaudeCredentialKeepaliveIntervalMs(env);
   let inFlight = false;
 
   const tick = async (): Promise<void> => {

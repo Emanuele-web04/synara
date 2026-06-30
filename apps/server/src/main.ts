@@ -31,6 +31,7 @@ import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
@@ -286,17 +287,11 @@ const makeServerProgram = (input: CliInput) =>
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
+    const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
     yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
-    // Keep the macOS Claude OAuth token fresh so sessions don't report "not logged in"
-    // every ~8h when the Keychain access token expires (see claudeCredentialKeepalive.ts).
-    yield* Effect.sync(() =>
-      startClaudeCredentialKeepalive({
-        log: (message) => Effect.runFork(Effect.logInfo(message)),
-      }),
-    );
 
     if (!config.devUrl && !config.staticDir) {
       yield* Effect.logWarning(
@@ -308,6 +303,16 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+    const settings = yield* serverSettings.getSettings;
+    // Keep the macOS Claude OAuth token fresh using the same configured CLI binary
+    // that normal Claude Agent sessions use.
+    yield* Effect.sync(() =>
+      startClaudeCredentialKeepalive({
+        binaryPath: settings.providers.claudeAgent.binaryPath,
+        log: (message) => Effect.runFork(Effect.logInfo(message)),
+      }),
+    );
+
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     // Start the retention loop after the server is live so startup can serve
