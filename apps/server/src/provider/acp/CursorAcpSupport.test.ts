@@ -142,7 +142,7 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
-  it("uses cursor-agent when a configured Cursor editor has no agent command resolved", () => {
+  it("uses configured Cursor editor launchers when no agent command is resolved", () => {
     expect(
       buildCursorAcpSpawnInput(
         { binaryPath: "/not-real/bin/cursor" },
@@ -150,8 +150,8 @@ describe("buildCursorAcpSpawnInput", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["acp"],
+      command: "/not-real/bin/cursor",
+      args: ["agent", "acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -199,7 +199,7 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
-  it("keeps api endpoint overrides when falling back to cursor-agent", () => {
+  it("passes api endpoint overrides through the Cursor launcher fallback", () => {
     expect(
       buildCursorAcpSpawnInput(
         {
@@ -210,8 +210,8 @@ describe("buildCursorAcpSpawnInput", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["-e", "http://localhost:3000", "acp"],
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
       env: {
         NO_BROWSER: "true",
@@ -229,7 +229,7 @@ describe("buildCursorCliModelListCommand", () => {
     });
   });
 
-  it("uses cursor-agent for model discovery when a configured editor has no agent resolved", () => {
+  it("uses the Cursor launcher fallback for model discovery", () => {
     expect(
       buildCursorCliModelListCommand(
         {
@@ -239,8 +239,8 @@ describe("buildCursorCliModelListCommand", () => {
         noCursorAgentCommandOptions,
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["-e", "http://localhost:3000", "models"],
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "models"],
     });
   });
 });

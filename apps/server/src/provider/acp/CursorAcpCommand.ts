@@ -6,7 +6,7 @@
  *
  * @module CursorAcpCommand
  */
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import * as path from "node:path";
 
 export const DEFAULT_CURSOR_AGENT_BINARY = "cursor-agent";
@@ -30,11 +30,13 @@ export interface CursorAgentCommand {
 export interface CursorAgentCommandOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly pathExists?: (path: string) => boolean;
+  readonly realpath?: (path: string) => string;
 }
 
 interface ResolvedCursorAgentCommandOptions {
   readonly env: NodeJS.ProcessEnv;
   readonly pathExists: (path: string) => boolean;
+  readonly realpath: (path: string) => string;
 }
 
 interface CursorCommandPathParts {
@@ -45,6 +47,7 @@ interface CursorCommandPathParts {
 }
 
 const CURSOR_EXECUTABLE_EXTENSION_PATTERN = /\.(?:bat|cmd|exe|ps1)$/iu;
+const POWERSHELL_EXECUTABLE = "powershell.exe";
 const WINDOWS_EXECUTABLE_EXTENSIONS = [".exe", ".cmd", ".bat"] as const;
 
 function splitCursorCommandPath(command: string): CursorCommandPathParts {
@@ -75,7 +78,9 @@ function resolveCursorEditorLauncherCommand(
     }
     const cursorPath = findCommandOnPath(command, options);
     if (cursorPath) {
-      const cursorPathParts = splitCursorCommandPath(cursorPath);
+      const cursorPathParts = splitCursorCommandPath(
+        resolveRealPathForSiblingProbe(cursorPath, options),
+      );
       const siblingAgent =
         resolveCursorSiblingAgentCommand(cursorPathParts, options) ??
         resolveTrustedCursorLegacySiblingCommand(cursorPathParts, options);
@@ -83,21 +88,26 @@ function resolveCursorEditorLauncherCommand(
         return siblingAgent;
       }
     }
-    return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
+    return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
   }
 
-  const siblingAgent = resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
+  const siblingProbeParts = splitCursorCommandPath(resolveRealPathForSiblingProbe(command, options));
+  const siblingAgent = resolveCursorSiblingCommand(
+    siblingProbeParts,
+    DEFAULT_CURSOR_AGENT_BINARY,
+    options,
+  );
   if (siblingAgent) {
     return siblingAgent;
   }
   if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
     return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
-  const siblingLegacyAgent = resolveTrustedCursorLegacySiblingCommand(parts, options);
+  const siblingLegacyAgent = resolveTrustedCursorLegacySiblingCommand(siblingProbeParts, options);
   if (siblingLegacyAgent) {
     return siblingLegacyAgent;
   }
-  return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
+  return { command, args: [LEGACY_CURSOR_AGENT_BINARY] };
 }
 
 function resolveCursorSiblingAgentCommand(
@@ -116,6 +126,17 @@ function resolveTrustedCursorLegacySiblingCommand(
     return undefined;
   }
   return resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options);
+}
+
+function resolveRealPathForSiblingProbe(
+  command: string,
+  options: ResolvedCursorAgentCommandOptions,
+): string {
+  try {
+    return options.realpath(command);
+  } catch {
+    return command;
+  }
 }
 
 function isCursorOwnedLauncherDirectory(directory: string): boolean {
@@ -195,6 +216,16 @@ function findCommandOnPath(
   return undefined;
 }
 
+function wrapPowerShellCommand(command: string, args: ReadonlyArray<string>): CursorAgentCommand {
+  if (!/\.ps1$/iu.test(command)) {
+    return { command, args: [...args] };
+  }
+  return {
+    command: POWERSHELL_EXECUTABLE,
+    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", command, ...args],
+  };
+}
+
 // Resolves persisted/default Cursor binary settings into the executable Synara should spawn.
 export function resolveCursorAgentBinaryPath(binaryPath: string | null | undefined): string {
   const configuredBinaryPath = binaryPath?.trim();
@@ -213,11 +244,13 @@ export function buildCursorAgentCommand(
   const commandOptions = {
     env: options.env ?? process.env,
     pathExists: options.pathExists ?? existsSync,
+    realpath: options.realpath ?? realpathSync.native,
   };
   const editorLauncher = resolveCursorEditorLauncherCommand(command, commandOptions);
-  return editorLauncher
+  const resolvedCommand = editorLauncher
     ? { command: editorLauncher.command, args: [...editorLauncher.args, ...args] }
     : { command, args: [...args] };
+  return wrapPowerShellCommand(resolvedCommand.command, resolvedCommand.args);
 }
 
 // Cursor auth/status probes must stay headless so provider refreshes never open login browsers.

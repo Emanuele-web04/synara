@@ -62,8 +62,8 @@ describe("buildCursorAgentCommand", () => {
         { pathExists: () => false },
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["models"],
+      command: "/Applications/Cursor.app/Contents/Resources/app/bin/cursor",
+      args: ["agent", "models"],
     });
     expect(
       buildCursorAgentCommand(
@@ -72,8 +72,8 @@ describe("buildCursorAgentCommand", () => {
         { pathExists: () => false },
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["--version"],
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
+      args: ["agent", "--version"],
     });
     expect(
       buildCursorAgentCommand(
@@ -97,20 +97,20 @@ describe("buildCursorAgentCommand", () => {
         pathExists: (path) => path === "/tools/cursor" || path === "/tools/agent",
       }),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["acp"],
+      command: "cursor",
+      args: ["agent", "acp"],
     });
   });
 
-  it("falls back to cursor-agent when no Cursor agent command can be resolved", () => {
+  it("falls back through Cursor editor launchers when no agent command can be resolved", () => {
     expect(
       buildCursorAgentCommand("cursor", ["acp"], {
         env: { PATH: "/tools" },
         pathExists: (path) => path === "/tools/cursor",
       }),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["acp"],
+      command: "cursor",
+      args: ["agent", "acp"],
     });
   });
 
@@ -141,6 +141,7 @@ describe("buildCursorAgentCommand", () => {
   it("uses bundled sibling agent commands for Cursor-owned editor paths", () => {
     const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
     const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
+    const cursorSymlinkPath = "/usr/local/bin/cursor";
     expect(
       buildCursorAgentCommand("cursor", ["acp"], {
         env: { PATH: "/Applications/Cursor.app/Contents/Resources/app/bin" },
@@ -149,6 +150,17 @@ describe("buildCursorAgentCommand", () => {
     ).toEqual({
       command: agentPath,
       args: ["acp"],
+    });
+
+    expect(
+      buildCursorAgentCommand("cursor", ["models"], {
+        env: { PATH: "/usr/local/bin" },
+        pathExists: (path) => path === cursorSymlinkPath || path === agentPath,
+        realpath: (path) => (path === cursorSymlinkPath ? cursorPath : path),
+      }),
+    ).toEqual({
+      command: agentPath,
+      args: ["models"],
     });
 
     expect(
@@ -184,8 +196,8 @@ describe("buildCursorAgentCommand", () => {
         pathExists: (path) => path === "/usr/local/bin/agent",
       }),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["acp"],
+      command: "/usr/local/bin/cursor",
+      args: ["agent", "acp"],
     });
   });
 
@@ -214,8 +226,15 @@ describe("buildCursorAgentCommand", () => {
         },
       ),
     ).toEqual({
-      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.ps1",
-      args: ["status"],
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor-agent.ps1",
+        "status",
+      ],
     });
     expect(
       buildCursorAgentCommand(
@@ -228,8 +247,15 @@ describe("buildCursorAgentCommand", () => {
         },
       ),
     ).toEqual({
-      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.ps1",
-      args: ["models"],
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.ps1",
+        "models",
+      ],
     });
     expect(
       buildCursorAgentCommand(
@@ -238,8 +264,16 @@ describe("buildCursorAgentCommand", () => {
         { pathExists: () => false },
       ),
     ).toEqual({
-      command: "cursor-agent",
-      args: ["status"],
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.ps1",
+        "agent",
+        "status",
+      ],
     });
   });
 

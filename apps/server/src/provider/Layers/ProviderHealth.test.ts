@@ -1552,7 +1552,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
-    it.effect("falls back to cursor-agent when a configured Cursor editor has no agent command", () =>
+    it.effect("falls back through configured Cursor editors when no agent command is resolved", () =>
       Effect.gen(function* () {
         const originalPath = process.env.PATH;
         yield* Effect.acquireRelease(
@@ -1573,15 +1573,15 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args, command) => {
-            assert.strictEqual(command, "cursor-agent");
+            assert.strictEqual(command, "/custom/bin/cursor");
             const joined = args.join(" ");
-            if (joined === "--version") {
+            if (joined === "agent --version") {
               return { stdout: "cursor 2026.04.27\n", stderr: "", code: 0 };
             }
-            if (joined === "status") {
+            if (joined === "agent status") {
               return { stdout: "Logged in as user@example.com\n", stderr: "", code: 0 };
             }
-            if (joined === "models") {
+            if (joined === "agent models") {
               return { stdout: "gpt-5 - GPT-5\n", stderr: "", code: 0 };
             }
             throw new Error(`Unexpected args: ${joined}`);
