@@ -91,6 +91,10 @@ function resolveCursorEditorLauncherCommand(
   if (findCommandOnPath(DEFAULT_CURSOR_AGENT_BINARY, options)) {
     return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
   }
+  const siblingLegacyAgent = resolveTrustedCursorLegacySiblingCommand(parts, options);
+  if (siblingLegacyAgent) {
+    return siblingLegacyAgent;
+  }
   return { command: DEFAULT_CURSOR_AGENT_BINARY, args: [] };
 }
 
@@ -100,6 +104,26 @@ function resolveCursorSiblingAgentCommand(
 ): CursorAgentCommand | undefined {
   // Only trust Cursor's named agent binary when deriving from an editor launcher path.
   return resolveCursorSiblingCommand(parts, DEFAULT_CURSOR_AGENT_BINARY, options);
+}
+
+function resolveTrustedCursorLegacySiblingCommand(
+  parts: CursorCommandPathParts,
+  options: ResolvedCursorAgentCommandOptions,
+): CursorAgentCommand | undefined {
+  if (!isCursorOwnedLauncherDirectory(parts.directory)) {
+    return undefined;
+  }
+  return resolveCursorSiblingCommand(parts, LEGACY_CURSOR_AGENT_BINARY, options);
+}
+
+function isCursorOwnedLauncherDirectory(directory: string): boolean {
+  const normalizedDirectory = directory.replaceAll("\\", "/").toLowerCase();
+  return (
+    normalizedDirectory.includes("/cursor.app/") ||
+    normalizedDirectory.includes("/programs/cursor/") ||
+    normalizedDirectory.includes("/cursor/resources/app/") ||
+    normalizedDirectory.includes("/cursor-agent/")
+  );
 }
 
 function resolveCursorSiblingCommand(

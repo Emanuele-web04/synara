@@ -138,6 +138,35 @@ describe("buildCursorAgentCommand", () => {
     });
   });
 
+  it("uses bundled sibling agent commands for Cursor-owned editor paths", () => {
+    const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
+    const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
+    expect(
+      buildCursorAgentCommand(cursorPath, ["acp"], {
+        env: { PATH: "" },
+        pathExists: (path) => path === agentPath,
+      }),
+    ).toEqual({
+      command: agentPath,
+      args: ["acp"],
+    });
+
+    expect(
+      buildCursorAgentCommand(
+        "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\cursor.cmd",
+        ["status"],
+        {
+          env: { PATH: "" },
+          pathExists: (path) =>
+            path === "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.cmd",
+        },
+      ),
+    ).toEqual({
+      command: "C:\\Users\\me\\AppData\\Local\\Programs\\Cursor\\bin\\agent.cmd",
+      args: ["status"],
+    });
+  });
+
   it("ignores adjacent generic agent commands for configured Cursor editor paths", () => {
     expect(
       buildCursorAgentCommand("/usr/local/bin/cursor", ["acp"], {

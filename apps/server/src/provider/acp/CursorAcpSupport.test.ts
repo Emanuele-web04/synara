@@ -160,6 +160,25 @@ describe("buildCursorAcpSpawnInput", () => {
     });
   });
 
+  it("uses bundled sibling agent commands for Cursor editor ACP startup", () => {
+    const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
+    const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
+    expect(
+      buildCursorAcpSpawnInput({ binaryPath: cursorPath }, "/tmp/project", {
+        env: { PATH: "" },
+        pathExists: (path) => path === agentPath,
+      }),
+    ).toEqual({
+      command: agentPath,
+      args: ["acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+
   it("includes the configured api endpoint when present", () => {
     expect(
       buildCursorAcpSpawnInput(
