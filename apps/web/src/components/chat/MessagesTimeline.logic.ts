@@ -476,7 +476,7 @@ function collapseSettledTurns(
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
-      for (const index of [...foldIndices].sort((a, b) => b - a)) {
+      for (const index of foldIndices.toSorted((a, b) => b - a)) {
         rows.splice(index, 1);
       }
       pass -= foldIndices.length;

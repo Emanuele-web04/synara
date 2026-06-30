@@ -146,7 +146,7 @@ describe("discoverSkillsCatalog", () => {
       includeDuplicateOrigins: true,
     });
     expect(settingsCatalog.filter((skill) => skill.name === "reviewer")).toHaveLength(2);
-    expect(settingsCatalog.map((skill) => skill.scope).sort()).toEqual(["claude", "codex"]);
+    expect(settingsCatalog.map((skill) => skill.scope).toSorted()).toEqual(["claude", "codex"]);
   });
 
   it("prefers the provider-native copy and falls back to Synara for that provider", async () => {
@@ -248,7 +248,7 @@ description: Direct Pi markdown skill
 
     // ...but forceReload bypasses the cache and refreshes it.
     const reloaded = await discoverSkillsCatalog({ homeDir, synaraBaseDir, forceReload: true });
-    expect(reloaded.map((skill) => skill.name).sort()).toEqual(["first", "second"]);
+    expect(reloaded.map((skill) => skill.name).toSorted()).toEqual(["first", "second"]);
   });
 
   it("includes project-level .synara skills when a cwd is provided", async () => {

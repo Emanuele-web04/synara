@@ -83,7 +83,7 @@ export function SkillsSettingsPanel() {
     } else {
       next.add(key);
     }
-    const disabled = [...next].sort();
+    const disabled = next.toSorted();
     if (latestSettings) {
       // Optimistic flip; a failed patch invalidates back to the server state.
       queryClient.setQueryData(serverQueryKeys.settings(), {
