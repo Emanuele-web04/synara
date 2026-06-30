@@ -92,7 +92,7 @@ import {
 import {
   deriveReadableCommandDisplay,
   extractWebFetchUrl,
-  isInspectCommand,
+  resolveCommandVisualKind,
 } from "../../lib/toolCallLabel";
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
@@ -1044,7 +1044,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
                       USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
                       bubbleIsChipOnly
-                        ? "py-1 px-3.5"
+                        ? "py-0.5 px-3"
                         : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
@@ -2534,11 +2534,19 @@ function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   return name === "read" || name === "readfile" || name === "viewfile";
 }
 
-// Read-only inspection commands (read/search/find/list) share the search icon so
-// every inspection row looks the same; other shell commands keep the terminal icon.
+// Command rows reuse toolCallLabel's wrapper-aware classifier so wrapped git/gh
+// commands get the GitHub mark while ordinary commands keep the terminal icon.
 function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
   const command = workEntry.command ?? workEntry.rawCommand;
-  return command && isInspectCommand(command) ? SearchIcon : TerminalIcon;
+  switch (command ? resolveCommandVisualKind(command) : "terminal") {
+    case "inspect":
+      return SearchIcon;
+    case "git":
+    case "github":
+      return GitHubIcon;
+    case "terminal":
+      return TerminalIcon;
+  }
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
@@ -2777,13 +2785,14 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
   // composer and markdown links so every site reference looks identical.
   const webFetchUrl = extractWebFetchUrl(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
+  // Every tool row leads with a single left icon; keep branded glyphs discoverable
+  // for command rows and app-backed tool rows.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
   const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
   const leftIconKind = webFetchUrl
     ? "web-fetch"
-    : isGitHubToolRow
+    : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
       : isMcpToolRow
         ? "mcp"

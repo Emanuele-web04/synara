@@ -204,7 +204,7 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-[8px]");
+    expect(markup).toContain("py-1.5");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
@@ -1738,6 +1738,64 @@ describe("MessagesTimeline", () => {
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
+  });
+
+  it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-git-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-git-command",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Checked",
+              command: "git status --short",
+            },
+          },
+          {
+            id: "entry-gh-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-gh-command",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Ran",
+              command: "gh pr view 274 --repo owner/repo",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-tool-icon="github"/g)).toHaveLength(2);
+    expect(markup).not.toContain("/central-icons-reversed/git.svg");
   });
 
   it("marks command rows with captured details as clickable", async () => {
