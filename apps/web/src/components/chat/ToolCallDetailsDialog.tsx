@@ -116,7 +116,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
           <div className="space-y-3">
             {details.edits.map((edit, index) => (
               <div
-                key={`${edit.path ?? "edit"}:${edit.oldString?.slice(0, 32) ?? index}`}
+                key={`${edit.path ?? "edit"}:${edit.oldText?.slice(0, 32) ?? edit.newText?.slice(0, 32) ?? "edit"}`}
                 className="overflow-hidden rounded-lg border border-border/45 bg-background/58"
               >
                 {edit.path ? (

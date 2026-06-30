@@ -93,7 +93,7 @@ import { type SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
 
-const EMPTY_DIFF_SUMMARIES: ReadonlyArray<TurnDiffSummary> = [];
+const EMPTY_DIFF_SUMMARIES: TurnDiffSummary[] = [];
 
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 
