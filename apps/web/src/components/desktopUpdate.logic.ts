@@ -145,6 +145,18 @@ export function getDesktopUpdateButtonLabel(state: DesktopUpdateState | null): s
   return getDesktopUpdateButtonPresentation(state).label;
 }
 
+/**
+ * Clamped, integer download percentage to surface on the update button while a
+ * download is in flight. Returns null outside the downloading state or when the
+ * updater has not reported a finite percentage yet.
+ */
+export function getDesktopUpdateDownloadPercent(state: DesktopUpdateState | null): number | null {
+  if (!state || state.status !== "downloading") return null;
+  const percent = state.downloadPercent;
+  if (typeof percent !== "number" || !Number.isFinite(percent)) return null;
+  return Math.max(0, Math.min(100, Math.floor(percent)));
+}
+
 export function getArm64IntelBuildWarningDescription(state: DesktopUpdateState): string {
   if (!shouldShowArm64IntelBuildWarning(state)) {
     return "This install is using the correct architecture.";
