@@ -62,10 +62,15 @@ jobs:
       - name: Test
         run: bun run test
 
+      # --yes keeps bunx from waiting on an interactive install prompt, and the
+      # step timeout stops apt/download stalls from eating the whole job budget.
       - name: Install browser test runtime
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
         run: |
           cd apps/web
-          bunx playwright install --with-deps chromium
+          bunx --yes playwright install --with-deps chromium
 
       # Non-blocking: the ChatView geometry parity tests currently fail on headless
       # Linux (they were never exercised in CI while the runner queue was dead).
@@ -73,6 +78,7 @@ jobs:
       # Linux-rendering failures are fixed.
       - name: Browser test
         continue-on-error: true
+        timeout-minutes: 20
         run: bun run --cwd apps/web test:browser
 
       - name: Build desktop pipeline
