@@ -939,9 +939,27 @@ export const makeCheckCodexProviderStatus = (
   const executable = nonEmptyTrimmed(binaryPath) ?? "codex";
   return Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
-    const probeEnv = yield* Effect.promise(() =>
-      makeCodexProbeEnv(homePath, shadowHomePath, accountId),
-    );
+    // Overlay materialization can reject misconfigured account homes (e.g. a
+    // symlinked shadow auth.json); report that as this instance's status instead
+    // of letting a defect take down the whole provider refresh.
+    const probeEnvResult = yield* Effect.tryPromise({
+      try: () => makeCodexProbeEnv(homePath, shadowHomePath, accountId),
+      catch: (cause) => cause,
+    }).pipe(Effect.result);
+    if (Result.isFailure(probeEnvResult)) {
+      const error = probeEnvResult.failure;
+      return {
+        provider: CODEX_PROVIDER,
+        instanceId: CODEX_PROVIDER,
+        driver: CODEX_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies ServerProviderStatus;
+    }
+    const probeEnv = probeEnvResult.success;
 
     // Probe 1: `codex --version` — is the CLI reachable?
     const versionProbe = yield* probeProviderCliVersion(
