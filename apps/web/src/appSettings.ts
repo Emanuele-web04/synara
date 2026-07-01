@@ -927,7 +927,10 @@ function resolveCodexLaunchSettingsForInstance(
   }
   return {
     binaryPath,
-    homePath: account.homePath || settings.codexHomePath,
+    // A blank account home must stay blank: falling back to the shared default
+    // home would make downstream code treat it as the account's own dedicated
+    // home and mirror the default account's credentials into it.
+    homePath: account.homePath,
     shadowHomePath: account.shadowHomePath,
     accountId: account.id !== DEFAULT_CODEX_ACCOUNT_ID ? account.id : "",
     hasAdditionalAccounts: normalizeCodexAccounts(settings.codexAccounts).length > 0,
@@ -1478,9 +1481,10 @@ export function patchCustomModelsForProviderInstance(
     providerInstances: {
       ...settings.providerInstances,
       [instance.instanceId]: {
+        // No enabled flag here: forcing it on would re-enable a disabled
+        // derived provider/account through the key-by-key derivation merge.
         ...(existing ?? {
-          driver: instance.provider,
-          enabled: true,
+          driver: providerDriverKind(instance.provider),
           ...(codexAccount?.label.trim() ? { displayName: codexAccount.label.trim() } : {}),
         }),
         config: mergeProviderInstanceConfigPatch(existing?.config, { customModels: models }),

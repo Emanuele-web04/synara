@@ -193,7 +193,10 @@ function deriveLegacyCodexAccountInstances(settings: ServerSettings): ProviderIn
       enabled: codex.enabled,
       config: {
         binaryPath: codex.binaryPath,
-        homePath: account.homePath.trim() || codex.homePath,
+        // A blank account home stays blank: inheriting the shared default home
+        // would make downstream isolation treat it as the account's own
+        // dedicated home and mirror the default account's credentials.
+        homePath: account.homePath.trim(),
         shadowHomePath: account.shadowHomePath.trim(),
         accountId,
         customModels: codex.customModels,

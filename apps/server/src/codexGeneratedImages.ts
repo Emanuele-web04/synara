@@ -105,6 +105,12 @@ export function codexConfiguredHomePathsFromSettings(settings: ServerSettings): 
     if (typeof instanceHomePath === "string" && instanceHomePath.trim()) {
       homePaths.add(instanceHomePath.trim());
     }
+    // With the browser-plugin overlay disabled, shadow-home accounts run with
+    // the shadow directory as CODEX_HOME and write images beneath it.
+    const instanceShadowHomePath = instance.config.shadowHomePath;
+    if (typeof instanceShadowHomePath === "string" && instanceShadowHomePath.trim()) {
+      homePaths.add(instanceShadowHomePath.trim());
+    }
   }
   return [...homePaths];
 }

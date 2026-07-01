@@ -1417,7 +1417,6 @@ describe("provider-indexed custom model settings", () => {
       providerInstances: {
         claudeAgent: {
           driver: "claudeAgent",
-          enabled: true,
           // Launch settings are not copied: derived default instances merge the
           // live legacy settings in at derivation time, so later edits to the
           // provider settings keep applying.
@@ -1449,7 +1448,6 @@ describe("provider-indexed custom model settings", () => {
       providerInstances: {
         opencode: {
           driver: "opencode",
-          enabled: true,
           config: {
             customModels: ["openrouter/custom-opencode"],
           },
@@ -1485,7 +1483,6 @@ describe("provider-indexed custom model settings", () => {
       providerInstances: {
         codex_work: {
           driver: "codex",
-          enabled: true,
           displayName: "Work",
           // Account launch fields stay in the legacy codexAccounts entry and are
           // merged into the derived instance, so the patch stores only models.
