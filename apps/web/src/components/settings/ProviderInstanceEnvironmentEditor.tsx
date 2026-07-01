@@ -23,6 +23,47 @@ function isRedactedVariable(variable: ProviderInstanceEnvironmentVariable): bool
   return variable.sensitive === true && variable.valueRedacted === true;
 }
 
+// Rows are keyed by variable name, so a committed rename remounts the row. Commit
+// names only on blur/Enter (never on a typing debounce) to keep focus stable.
+function EnvVariableNameInput({
+  id,
+  name,
+  disabled,
+  title,
+  onCommit,
+}: {
+  readonly id: string;
+  readonly name: string;
+  readonly disabled?: boolean;
+  readonly title?: string;
+  readonly onCommit: (nextName: string) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  return (
+    <Input
+      id={id}
+      size="sm"
+      variant="soft"
+      className="w-2/5 font-mono"
+      disabled={disabled}
+      title={title}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={() => onCommit(draft)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.currentTarget.blur();
+        }
+        if (event.key === "Escape") {
+          setDraft(name);
+        }
+      }}
+      placeholder="VAR_NAME"
+      spellCheck={false}
+    />
+  );
+}
+
 export function ProviderInstanceEnvironmentEditor({
   instanceId,
   environment,
@@ -74,16 +115,14 @@ export function ProviderInstanceEnvironmentEditor({
         const redacted = isRedactedVariable(entry);
         return (
           <div key={`${instanceId}-env-${entry.name}`} className="flex items-center gap-2">
-            <DebouncedSettingTextInput
+            <EnvVariableNameInput
               id={`provider-instance-${instanceId}-env-${index}-name`}
-              size="sm"
-              variant="soft"
-              className="w-2/5 font-mono"
               disabled={redacted}
-              value={entry.name}
+              name={entry.name}
               onCommit={(nextName) => {
                 const trimmed = nextName.trim();
                 if (
+                  trimmed === entry.name ||
                   !isEnvironmentVariableName(trimmed) ||
                   entries.some(
                     (other, otherIndex) => otherIndex !== index && other.name === trimmed,
@@ -93,8 +132,6 @@ export function ProviderInstanceEnvironmentEditor({
                 }
                 replaceEntry(index, { ...entry, name: trimmed });
               }}
-              placeholder="VAR_NAME"
-              spellCheck={false}
               title={
                 redacted ? "Replace or remove the saved secret before renaming it." : undefined
               }
