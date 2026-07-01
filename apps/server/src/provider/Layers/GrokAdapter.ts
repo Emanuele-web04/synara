@@ -1100,15 +1100,6 @@ export function makeGrokAdapter(
             ),
           );
 
-          yield* applyRequestedSessionConfiguration({
-            runtime: acp,
-            runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
-            modelSelection: grokModelSelection,
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-          });
-
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
           const now = yield* nowIso;
@@ -1214,10 +1205,7 @@ export function makeGrokAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
-                      if (
-                        ctx.compactingThread ||
-                        isGrokContextCompactionToolCall(event.toolCall)
-                      ) {
+                      if (ctx.compactingThread || isGrokContextCompactionToolCall(event.toolCall)) {
                         const lifecycle =
                           event.toolCall.status === "completed" ||
                           event.toolCall.status === "failed"
@@ -1234,9 +1222,7 @@ export function makeGrokAdapter(
                           status,
                           title:
                             event.toolCall.title?.trim() ||
-                            (status === "completed"
-                              ? "Context compacted"
-                              : "Compacting context"),
+                            (status === "completed" ? "Context compacted" : "Compacting context"),
                           ...(event.toolCall.detail ? { detail: event.toolCall.detail } : {}),
                         });
                         return;
@@ -1320,6 +1306,15 @@ export function makeGrokAdapter(
           ctx.notificationFiber = notificationFiber;
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
+
+          yield* applyRequestedSessionConfiguration({
+            runtime: acp,
+            runtimeMode: input.runtimeMode,
+            interactionMode: undefined,
+            modelSelection: grokModelSelection,
+            mapError: ({ cause, method }) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          });
 
           if (resumeSessionId !== undefined) {
             yield* waitForGrokResumeReplayQuiet(ctx);
