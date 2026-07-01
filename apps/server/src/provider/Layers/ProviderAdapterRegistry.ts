@@ -50,14 +50,25 @@ function stampSessionForInstance(
     : { ...session, providerInstanceId: instanceId };
 }
 
+// Some adapters do not persist providerInstanceId on their sessions. The
+// registry remembers which instance started each untagged thread so those
+// live sessions stay visible to the facade that owns them instead of being
+// misattributed to the driver's default instance.
+type UntaggedSessionClaims = Map<string, ProviderInstanceId>;
+
 function sessionBelongsToInstance(
   session: ProviderSession,
   instanceId: ProviderInstanceId,
+  untaggedClaims: UntaggedSessionClaims,
 ): boolean {
-  return (
-    session.providerInstanceId === instanceId ||
-    (session.providerInstanceId === undefined && instanceId === session.provider)
-  );
+  if (session.providerInstanceId !== undefined) {
+    return session.providerInstanceId === instanceId;
+  }
+  const claimedBy = untaggedClaims.get(session.threadId);
+  if (claimedBy !== undefined) {
+    return claimedBy === instanceId;
+  }
+  return instanceId === session.provider;
 }
 
 function eventBelongsToInstance(
@@ -73,6 +84,7 @@ function eventBelongsToInstance(
 function adapterFacadeForInstance(
   adapter: ProviderAdapterShape<ProviderAdapterError>,
   instanceId: ProviderInstanceId,
+  untaggedClaims: UntaggedSessionClaims,
 ): ProviderAdapterShape<ProviderAdapterError> {
   const startSession: ProviderAdapterShape<ProviderAdapterError>["startSession"] = (input) =>
     adapter
@@ -81,13 +93,20 @@ function adapterFacadeForInstance(
         provider: adapter.provider,
         providerInstanceId: instanceId,
       } satisfies ProviderSessionStartInput)
-      .pipe(Effect.map((session) => stampSessionForInstance(session, instanceId)));
+      .pipe(
+        Effect.map((session) => {
+          if (session.providerInstanceId === undefined) {
+            untaggedClaims.set(session.threadId, instanceId);
+          }
+          return stampSessionForInstance(session, instanceId);
+        }),
+      );
 
   const listSessions: ProviderAdapterShape<ProviderAdapterError>["listSessions"] = () =>
     adapter.listSessions().pipe(
       Effect.map((sessions) =>
         sessions
-          .filter((session) => sessionBelongsToInstance(session, instanceId))
+          .filter((session) => sessionBelongsToInstance(session, instanceId, untaggedClaims))
           .map((session) => stampSessionForInstance(session, instanceId)),
       ),
     );
@@ -99,7 +118,16 @@ function adapterFacadeForInstance(
 
   const stopSession: ProviderAdapterShape<ProviderAdapterError>["stopSession"] = (threadId) =>
     hasSession(threadId).pipe(
-      Effect.flatMap((active) => (active ? adapter.stopSession(threadId) : Effect.void)),
+      Effect.flatMap((hasActiveSession) =>
+        hasActiveSession ? adapter.stopSession(threadId) : Effect.void,
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (untaggedClaims.get(threadId) === instanceId) {
+            untaggedClaims.delete(threadId);
+          }
+        }),
+      ),
     );
 
   const stopAll: ProviderAdapterShape<ProviderAdapterError>["stopAll"] = () =>
@@ -154,6 +182,7 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
 
     const byProvider = new Map(adapters.map((adapter) => [adapter.provider, adapter]));
     const serverSettings = yield* ServerSettingsService;
+    const untaggedSessionClaims: UntaggedSessionClaims = new Map();
 
     const getByProvider: ProviderAdapterRegistryShape["getByProvider"] = (provider) => {
       const adapter = byProvider.get(provider);
@@ -178,7 +207,9 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
             return Effect.fail(new ProviderUnsupportedError({ provider: instanceId }));
           }
           return getByProvider(instance.driver).pipe(
-            Effect.map((adapter) => adapterFacadeForInstance(adapter, instance.instanceId)),
+            Effect.map((adapter) =>
+              adapterFacadeForInstance(adapter, instance.instanceId, untaggedSessionClaims),
+            ),
           );
         }),
         Effect.mapError(

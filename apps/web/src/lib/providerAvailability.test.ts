@@ -254,6 +254,8 @@ describe("isProviderUsable", () => {
     expect(
       isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "unauthenticated" }),
     ).toBe(false);
+    // Advisory warnings the health layer marks available (Pi bundled SDK,
+    // Cursor model-discovery warnings) stay sendable.
     expect(
       isProviderUsable({
         ...BASE_STATUS,
@@ -261,7 +263,7 @@ describe("isProviderUsable", () => {
         status: "warning",
         authStatus: "authenticated",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isProviderUsable({
         ...BASE_STATUS,
