@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.7 - 2026-07-02
+
+### Added
+
+- Added live desktop update download percentages on the sidebar update button, including clamped integer handling and focused edge-case coverage.
+- Added single-flight checkpoint capture for matching repo/ref pairs, with a 180s aggregate timeout and first-writer-wins `skipIfExists` baselines.
+- Added recovery coverage for missing message-start baselines before turn-start checkpoint aliasing.
+- Added pure Claude auth-status parsing and generic provider CLI-output helpers, making provider health behavior easier to test in isolation.
+- Added a shared in-process `claude auth status` lock so health probes and macOS credential keepalive ticks do not race the same rotating OAuth refresh token.
+- Added CI timeouts and non-interactive browser-runtime install safeguards so hosted quality runs fail fast instead of hanging indefinitely.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.7` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Moved the sidebar Chats section into the scrollable sidebar content, added an accessible disclosure state, and reused the shared disclosure chevron.
+- Refined the desktop update action styling to use the info color while active downloads show a compact percent pill.
+- Refined Claude provider health to retry structured `loggedIn:false` false negatives once, read verified local credential metadata, and preserve subscription/auth labels more reliably.
+- Forked the macOS Claude credential keepalive after server startup and passed the configured home dir into the Claude process environment so the best-effort keepalive cannot block boot.
+- Moved the CI quality job onto GitHub-hosted runners and switched Playwright installation to the workspace-local binary after `bunx` installs stalled.
+
+### Fixed
+
+- Fixed Claude Agent health checks that could briefly report an authenticated account as logged out when concurrent `claude auth status` calls raced a refresh-token rotation.
+- Fixed checkpoint baseline races that could overwrite or miss the original pre-turn snapshot used for transcript diffs and restore points.
+- Fixed first-message sends from the empty chat landing opening the Environment panel unexpectedly after the transcript view appears.
+- Fixed crowded sidebar footer behavior by keeping chat history rows with the main sidebar list and leaving the footer for account/update controls.
+- Fixed release CI being blocked by the unavailable Blacksmith runner queue; Linux browser tests now continue for signal without blocking while geometry parity failures are tracked separately.
+
+### Verification
+
+- `bun run fmt:check` passed across 1508 files.
+- `bun run lint` passed with 158 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
+- `bun run build` passed: 6 tasks successful in 14.425s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, Rolldown/Babel plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m23.405s. `@t3tools/web` passed 191 files / 2274 tests. `effect-acp` passed 3 files / 24 tests. `t3` passed 140 files with 1 skipped file, 1532 passed tests, and 6 skipped tests.
+- `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.7`, and `npm run lint` passed.
+
 ## 0.3.6 - 2026-06-30
 
 ### Added
