@@ -16,6 +16,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
+  RuntimeItemId,
   RuntimeRequestId,
   type RuntimeMode,
   type ThreadId,
@@ -97,8 +98,9 @@ const GROK_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const GROK_ACP_DEBUG_ENV = "SYNARA_GROK_ACP_DEBUG";
 const DPCODE_GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
-const GROK_RESUME_REPLAY_QUIET_MS = 350;
-const GROK_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
+const GROK_RESUME_REPLAY_QUIET_MS = 200;
+const GROK_RESUME_REPLAY_MAX_WAIT_MS = 1_500;
+const GROK_COMPACT_PROMPT = "/compact";
 // Backstop for an alive-but-silent grok child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
 // Generous by design so legitimate long, quiet tool runs are not killed;
@@ -268,8 +270,17 @@ interface GrokSessionContext {
   lastTurnActivityAt: number | undefined;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
+  compactingThread: boolean;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
+}
+
+export function isGrokContextCompactionToolCall(toolCall: AcpToolCallState): boolean {
+  const haystack = [toolCall.kind, toolCall.title, toolCall.detail]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  return /\b(compact|summariz)/u.test(haystack);
 }
 
 function clearGrokActiveTurn(ctx: GrokSessionContext, turnId: TurnId): boolean {
@@ -835,11 +846,39 @@ export function makeGrokAdapter(
           yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "resume-replay");
           return undefined;
         }
+        if (ctx.compactingThread) {
+          return undefined;
+        }
         if (ctx.activeTurnId === undefined) {
           yield* noteSuppressedGrokRuntimeEvent(ctx, eventTag, "orphan-turn-event");
           return undefined;
         }
         return ctx.activeTurnId;
+      });
+
+    const emitGrokContextCompactionRuntimeEvent = (
+      ctx: GrokSessionContext,
+      input: {
+        readonly lifecycle: "item.updated" | "item.completed";
+        readonly status: "inProgress" | "completed" | "failed";
+        readonly title: string;
+        readonly detail?: string;
+      },
+    ) =>
+      Effect.gen(function* () {
+        yield* offerRuntimeEvent({
+          type: input.lifecycle,
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          itemId: RuntimeItemId.makeUnsafe(`grok-compaction:${ctx.threadId}`),
+          payload: {
+            itemType: "context_compaction",
+            status: input.status,
+            title: input.title,
+            ...(input.detail ? { detail: input.detail } : {}),
+          },
+        });
       });
 
     // On session/load, Grok can replay old ACP updates after the session is "ready".
@@ -1107,6 +1146,7 @@ export function makeGrokAdapter(
             lastTurnActivityAt: undefined,
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
+            compactingThread: false,
             latestSessionCostUsd: undefined,
             stopped: false,
           };
@@ -1174,6 +1214,33 @@ export function makeGrokAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
+                      if (
+                        ctx.compactingThread ||
+                        isGrokContextCompactionToolCall(event.toolCall)
+                      ) {
+                        const lifecycle =
+                          event.toolCall.status === "completed" ||
+                          event.toolCall.status === "failed"
+                            ? "item.completed"
+                            : "item.updated";
+                        const status =
+                          event.toolCall.status === "failed"
+                            ? "failed"
+                            : event.toolCall.status === "completed"
+                              ? "completed"
+                              : "inProgress";
+                        yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+                          lifecycle,
+                          status,
+                          title:
+                            event.toolCall.title?.trim() ||
+                            (status === "completed"
+                              ? "Context compacted"
+                              : "Compacting context"),
+                          ...(event.toolCall.detail ? { detail: event.toolCall.detail } : {}),
+                        });
+                        return;
+                      }
                       const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
@@ -1668,9 +1735,91 @@ export function makeGrokAdapter(
         supportsPluginMentions: false,
         supportsPluginDiscovery: false,
         supportsRuntimeModelList: true,
-        supportsThreadCompaction: false,
+        supportsThreadCompaction: true,
         supportsThreadImport: false,
       } satisfies ProviderComposerCapabilities);
+
+    const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
+      withThreadLock(
+        threadId,
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(threadId);
+          if (ctx.resumeReplayReady !== undefined) {
+            yield* Deferred.await(ctx.resumeReplayReady);
+          }
+          if (ctx.activeTurnId !== undefined) {
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "compactThread",
+              issue: "Cannot compact while a Grok turn is still active.",
+            });
+          }
+
+          ctx.compactingThread = true;
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.updated",
+            status: "inProgress",
+            title: "Compacting context",
+          });
+
+          const compactResult = yield* ctx.acp
+            .prompt({
+              prompt: [{ type: "text", text: GROK_COMPACT_PROMPT }],
+            })
+            .pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, threadId, "session/prompt", error),
+              ),
+              Effect.exit,
+            );
+
+          ctx.compactingThread = false;
+
+          if (Exit.isFailure(compactResult)) {
+            const detail = Cause.failureOption(compactResult.cause)
+              .pipe(Option.map((error) => (error instanceof Error ? error.message : String(error))))
+              .pipe(Option.getOrElse(() => "Grok compaction failed."));
+            yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+              lifecycle: "item.completed",
+              status: "failed",
+              title: "Context compaction failed",
+              detail,
+            });
+            return yield* Effect.fail(
+              new ProviderAdapterRequestError({
+                provider: PROVIDER,
+                method: "session/prompt",
+                detail,
+              }),
+            );
+          }
+
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.completed",
+            status: "completed",
+            title: "Context compacted",
+          });
+          yield* offerRuntimeEvent({
+            type: "thread.state.changed",
+            ...(yield* makeEventStamp()),
+            provider: PROVIDER,
+            threadId: ctx.threadId,
+            payload: {
+              state: "compacted",
+              reason: "provider.compactThread",
+            },
+          });
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              const ctx = sessions.get(threadId);
+              if (ctx) {
+                ctx.compactingThread = false;
+              }
+            }),
+          ),
+        ),
+      );
 
     const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
@@ -1788,6 +1937,7 @@ export function makeGrokAdapter(
       stopSession,
       listSessions,
       getComposerCapabilities,
+      compactThread,
       listModels,
       hasSession,
       stopAll,

@@ -45,6 +45,7 @@ describe("withBackendHeapLimitArg", () => {
   it("adds a heap limit when none exists", () => {
     expect(withBackendHeapLimitArg("--trace-warnings", 4096)).toEqual([
       "--max-old-space-size=4096",
+      "--js-flags=--max-old-space-size=4096",
     ]);
   });
 
@@ -64,6 +65,6 @@ describe("resolveBackendNodeArgs", () => {
         existingNodeOptions: "--enable-source-maps",
         totalMemoryBytes: gb(24),
       }),
-    ).toEqual(["--max-old-space-size=6144"]);
+    ).toEqual(["--max-old-space-size=6144", "--js-flags=--max-old-space-size=6144"]);
   });
 });

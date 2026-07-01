@@ -48,7 +48,10 @@ export function withBackendHeapLimitArg(
     return [];
   }
 
-  return [`--max-old-space-size=${maxOldSpaceMb}`];
+  return [
+    `--max-old-space-size=${maxOldSpaceMb}`,
+    `--js-flags=--max-old-space-size=${maxOldSpaceMb}`,
+  ];
 }
 
 export function resolveBackendNodeArgs(input: {

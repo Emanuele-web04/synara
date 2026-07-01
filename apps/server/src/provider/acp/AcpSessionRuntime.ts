@@ -173,6 +173,9 @@ const makeAcpSessionRuntime = (
     const assistantSegmentRef = yield* Ref.make<AcpAssistantSegmentState>({ nextSegmentIndex: 0 });
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
+    // session/load can replay a large history before the consumer attaches; drop
+    // those notifications so they never accumulate in the unbounded queue.
+    const acceptingSessionUpdatesRef = yield* Ref.make(false);
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -244,13 +247,19 @@ const makeAcpSessionRuntime = (
     const acp = ServiceMap.getUnsafe(acpContext, EffectAcpClient.AcpClient);
 
     yield* acp.handleSessionUpdate((notification) =>
-      handleSessionUpdate({
-        queue: eventQueue,
-        modeStateRef,
-        toolCallsRef,
-        assistantSegmentRef,
-        params: notification,
-      }),
+      Ref.get(acceptingSessionUpdatesRef).pipe(
+        Effect.flatMap((accepting) =>
+          accepting
+            ? handleSessionUpdate({
+                queue: eventQueue,
+                modeStateRef,
+                toolCallsRef,
+                assistantSegmentRef,
+                params: notification,
+              })
+            : Effect.void,
+        ),
+      ),
     );
 
     const initializeClientCapabilities = {
@@ -462,6 +471,9 @@ const makeAcpSessionRuntime = (
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
       yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
+      yield* Ref.set(toolCallsRef, new Map());
+      yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+      yield* Ref.set(acceptingSessionUpdatesRef, true);
 
       const nextState = {
         sessionId,
