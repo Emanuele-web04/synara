@@ -36,7 +36,7 @@ export const SIDEBAR_HOVER_CARD_ROW_CLASS_NAME = `flex w-full min-w-0 items-cent
  * own, and the surface itself is sourced from the tooltip token so the cards and
  * plain tooltips can never drift apart.
  */
-export const SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME = `${APP_TOOLTIP_SURFACE_CLASS_NAME} w-[16rem]`;
+export const SIDEBAR_HOVER_CARD_SURFACE_CLASS_NAME = `${APP_TOOLTIP_SURFACE_CLASS_NAME} w-[16rem] !transition-none data-ending-style:!opacity-100 data-ending-style:!scale-100 data-starting-style:!opacity-100 data-starting-style:!scale-100`;
 
 /**
  * Open/close timing spread onto BOTH cards' triggers. In Base UI v1.5 `delay`/

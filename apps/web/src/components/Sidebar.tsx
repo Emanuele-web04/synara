@@ -5267,9 +5267,7 @@ export default function Sidebar() {
       hasHiddenThreads,
       isThreadListExpanded,
     } = projectSidebarData;
-    const projectFolderIconClassName = isProjectPinned
-      ? "opacity-0"
-      : sidebarHoverRevealHideClassName("project-header");
+    const projectFolderIconClassName = isProjectPinned ? "opacity-0" : undefined;
     const projectRun = projectRunsByProjectId[project.id] ?? null;
     const projectRunServer = projectRunServerByProjectId.get(project.id) ?? null;
     // A project reads as "running" when Synara tracks a run for it or when a
@@ -5377,7 +5375,7 @@ export default function Sidebar() {
                 SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
                 isProjectPinned
                   ? "pointer-events-auto opacity-100"
-                  : "pointer-events-none opacity-0 md:group-hover/project-header:pointer-events-auto md:group-hover/project-header:opacity-100 md:group-has-[:focus-visible]/project-header:pointer-events-auto md:group-has-[:focus-visible]/project-header:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100",
+                  : "pointer-events-none opacity-0 focus-visible:pointer-events-auto focus-visible:opacity-100",
               )}
               onMouseDown={(event) => {
                 event.preventDefault();
