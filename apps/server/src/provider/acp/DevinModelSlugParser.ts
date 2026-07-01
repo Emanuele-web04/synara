@@ -29,6 +29,10 @@ const SLUG_VARIANT_TOKENS = new Set([
   "1m",
 ]);
 
+const EFFORT_TOKENS = new Set(["low", "medium", "high", "xhigh", "max", "none", "minimal", "slow"]);
+
+const FAST_TOKENS = new Set(["fast", "priority"]);
+
 const DISPLAY_VARIANT_WORDS = new Set([
   "fast",
   "low",
@@ -44,9 +48,13 @@ const DISPLAY_VARIANT_WORDS = new Set([
   "1m",
 ]);
 
-export interface ParsedDevinModelSlug {
+export interface ParsedDevinSlug {
   readonly baseSlug: string;
   readonly baseName: string;
+  readonly effort: string | null;
+  readonly fast: boolean;
+  readonly thinking: boolean;
+  readonly contextWindow: string | null;
 }
 
 function titleCaseWord(word: string): string {
@@ -82,10 +90,7 @@ function formatBaseSlug(baseSlug: string): string {
   return formatted.join(" ");
 }
 
-export function parseDevinModelSlug(
-  slug: string,
-  displayName: string,
-): ParsedDevinModelSlug | null {
+export function parseDevinModelSlug(slug: string, displayName: string): ParsedDevinSlug | null {
   const trimmedSlug = slug.trim();
   if (!trimmedSlug) return null;
   if (MODE_VALUES.has(trimmedSlug)) return null;
@@ -94,10 +99,25 @@ export function parseDevinModelSlug(
   const sep = isModelPrefix ? "_" : "-";
 
   // Strip variant suffixes from the right to get baseSlug (guard: keep >= 1 part).
+  // Capture what was stripped into variant dimensions (first occurrence wins).
   const parts = trimmedSlug.split(sep);
+  let effort: string | null = null;
+  let fast = false;
+  let thinking = false;
+  let contextWindow: string | null = null;
   while (parts.length > 1) {
     const last = parts[parts.length - 1];
     if (!last || !SLUG_VARIANT_TOKENS.has(last.toLowerCase())) break;
+    const token = last.toLowerCase();
+    if (EFFORT_TOKENS.has(token) && effort === null) {
+      effort = token;
+    } else if (FAST_TOKENS.has(token) && !fast) {
+      fast = true;
+    } else if (token === "thinking" && !thinking) {
+      thinking = true;
+    } else if (token === "1m" && contextWindow === null) {
+      contextWindow = "1m";
+    }
     parts.pop();
   }
   const baseSlug = parts.join(sep);
@@ -122,5 +142,5 @@ export function parseDevinModelSlug(
     baseName = formatBaseSlug(baseSlug);
   }
 
-  return { baseSlug, baseName };
+  return { baseSlug, baseName, effort, fast, thinking, contextWindow };
 }

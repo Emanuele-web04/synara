@@ -130,20 +130,17 @@ export const GrokModelOptions = Schema.Struct({
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
 /**
- * Devin model options — intentionally empty. Devin model capabilities
- * (reasoning effort, thinking budget, etc.) are managed server-side via
- * ACP config options, not exposed as client-side toggles.
- *
- * Strict: rejects any object with keys (e.g. `{fastMode: true}`).
+ * Devin model options — variant selections resolved to full slugs by the adapter.
+ * Devin encodes variants in model slugs (e.g. claude-opus-4-8-high_fast), not
+ * via runtime config options. The adapter uses a variant matrix to resolve
+ * base + options to the correct full slug before calling session/set_model.
  */
-export const DevinModelOptions = Schema.declare(
-  (u): u is Record<string, never> =>
-    u !== null && typeof u === "object" && !Array.isArray(u) && Object.keys(u).length === 0,
-  {
-    identifier: "DevinModelOptions",
-    description: "An empty object — Devin has no client-side model options",
-  },
-);
+export const DevinModelOptions = Schema.Struct({
+  reasoningEffort: Schema.optional(TrimmedNonEmptyString),
+  fastMode: Schema.optional(Schema.Boolean),
+  thinking: Schema.optional(Schema.Boolean),
+  contextWindow: Schema.optional(Schema.String),
+});
 export type DevinModelOptions = typeof DevinModelOptions.Type;
 
 export const ProviderModelOptions = Schema.Struct({

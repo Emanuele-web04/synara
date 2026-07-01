@@ -82,8 +82,13 @@ import {
   validateUserInputAnswersForElicitation,
 } from "../acp/DevinElicitation.ts";
 import { applyDevinModeSelection } from "../acp/DevinModeMapper.ts";
-import { parseDevinModelSlug } from "../acp/DevinModelSlugParser.ts";
-import { DEVIN_FALLBACK_MODELS, normalizeDevinModelSlug } from "../acp/DevinModelCatalog.ts";
+import {
+  DEVIN_FALLBACK_MODELS,
+  normalizeDevinModelSlug,
+  buildDevinVariantMatrix,
+  resolveDevinModelSlug,
+  type DevinBaseModel,
+} from "../acp/DevinModelCatalog.ts";
 import { DevinAdapter, type DevinAdapterShape } from "../Services/DevinAdapter.ts";
 import type { ProviderThreadTurnSnapshot } from "../Services/ProviderAdapter.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -144,6 +149,16 @@ type DevinModelEntry = {
   readonly name: string;
   readonly upstreamProviderId?: string | undefined;
   readonly upstreamProviderName?: string | undefined;
+  readonly supportedReasoningEfforts?:
+    | ReadonlyArray<{ value: string; label?: string | undefined; description?: string | undefined }>
+    | undefined;
+  readonly defaultReasoningEffort?: string | undefined;
+  readonly supportsFastMode?: boolean | undefined;
+  readonly supportsThinkingToggle?: boolean | undefined;
+  readonly contextWindowOptions?:
+    | ReadonlyArray<{ value: string; label: string; isDefault?: true | undefined }>
+    | undefined;
+  readonly defaultContextWindow?: string | undefined;
 };
 
 interface DevinSessionContext {
@@ -163,6 +178,8 @@ interface DevinSessionContext {
   cachedModels: ReadonlyArray<DevinModelEntry> | undefined;
   /** Binary path that produced cachedModels, for cache invalidation. */
   cachedModelsBinaryPath: string | undefined;
+  /** Variant matrix built from config options, for resolving base+options to full slugs. */
+  variantMatrix: ReadonlyMap<string, DevinBaseModel> | undefined;
   stopped: boolean;
 }
 
@@ -240,10 +257,13 @@ function storeColdDiscoveredModels(
 
 function extractDevinModelsFromConfigOptions(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
-): readonly DevinModelEntry[] {
+): {
+  readonly models: readonly DevinModelEntry[];
+  readonly matrix: ReadonlyMap<string, DevinBaseModel>;
+} {
   const modelOption = configOptions.find((opt) => opt.category === "model");
   if (!modelOption || modelOption.type !== "select") {
-    return [];
+    return { models: [], matrix: new Map() };
   }
 
   const rawEntries = modelOption.options.flatMap((entry) =>
@@ -252,18 +272,37 @@ function extractDevinModelsFromConfigOptions(
       : entry.options.map((option) => ({ slug: option.value, name: option.name ?? option.value })),
   );
 
-  return rawEntries.flatMap((entry) => {
-    const parsed = parseDevinModelSlug(entry.slug, entry.name);
-    if (!parsed) return [];
-    return [
-      {
-        slug: entry.slug,
-        name: entry.name,
-        upstreamProviderId: parsed.baseSlug,
-        upstreamProviderName: parsed.baseName,
-      },
-    ];
-  });
+  const matrix = buildDevinVariantMatrix(rawEntries);
+
+  const models: DevinModelEntry[] = [];
+  for (const base of matrix.values()) {
+    const supportedReasoningEfforts =
+      base.supportedEfforts.length > 0
+        ? base.supportedEfforts.map((effort) => ({ value: effort }))
+        : undefined;
+    const contextWindowOptions =
+      base.contextWindowOptions.length > 0
+        ? base.contextWindowOptions.map((cw) => ({ value: cw, label: cw === "1m" ? "1M" : cw }))
+        : undefined;
+    const defaultVariant = base.defaultVariant;
+
+    models.push({
+      slug: base.baseSlug,
+      name: base.baseName,
+      upstreamProviderId: base.baseSlug,
+      upstreamProviderName: base.baseName,
+      ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+      ...(defaultVariant.effort ? { defaultReasoningEffort: defaultVariant.effort } : {}),
+      ...(base.supportsFastMode ? { supportsFastMode: true } : {}),
+      ...(base.supportsThinking ? { supportsThinkingToggle: true } : {}),
+      ...(contextWindowOptions ? { contextWindowOptions } : {}),
+      ...(defaultVariant.contextWindow
+        ? { defaultContextWindow: defaultVariant.contextWindow }
+        : {}),
+    });
+  }
+
+  return { models, matrix };
 }
 
 function makeDefaultRuntimeFactory(input: DevinAcpRuntimeFactoryInput) {
@@ -517,10 +556,33 @@ function makeProviderAdapter(
             ),
           );
 
-          const selectedModel =
+          // Eagerly populate model cache + variant matrix from initial config
+          // options before resolving the selected model, so a probe failure
+          // surfaces as a startSession error without leaving consumers seeing
+          // a ready session.
+          const initialConfigOptions = yield* acp.getConfigOptions;
+          const { models: extractedModels, matrix: sessionVariantMatrix } =
+            extractDevinModelsFromConfigOptions(initialConfigOptions);
+
+          const requestedModel =
             input.modelSelection?.provider === PROVIDER
               ? normalizeDevinModelSlug(input.modelSelection.model)
               : "";
+          // Resolve base + variant options to a full slug.
+          const selectedModel = requestedModel
+            ? (resolveDevinModelSlug(
+                requestedModel,
+                input.modelSelection?.options as
+                  | {
+                      reasoningEffort?: string;
+                      fastMode?: boolean;
+                      thinking?: boolean;
+                      contextWindow?: string;
+                    }
+                  | undefined,
+                sessionVariantMatrix,
+              ) ?? requestedModel)
+            : "";
           yield* applyDevinModeSelection({
             runtime: acp,
             threadId: input.threadId,
@@ -565,8 +627,9 @@ function makeProviderAdapter(
             activePromptFiber: undefined,
             activeTurnFailedToolDetail: undefined,
             lastTurnActivityAt: undefined,
-            cachedModels: undefined,
-            cachedModelsBinaryPath: undefined,
+            cachedModels: extractedModels,
+            cachedModelsBinaryPath: devinSettings.binaryPath,
+            variantMatrix: sessionVariantMatrix,
             stopped: false,
           };
 
@@ -688,13 +751,6 @@ function makeProviderAdapter(
             yield* stopSessionInternal(ctx, "error");
           }).pipe(Effect.forkIn(sessionScope));
 
-          // Eagerly populate model cache from initial config options before
-          // publishing any lifecycle events, so a probe failure surfaces as a
-          // startSession error without leaving consumers seeing a ready session.
-          const initialConfigOptions = yield* acp.getConfigOptions;
-          ctx.cachedModels = extractDevinModelsFromConfigOptions(initialConfigOptions);
-          ctx.cachedModelsBinaryPath = devinSettings.binaryPath;
-
           yield* publish({
             type: "session.started",
             ...(yield* makeEventStamp()),
@@ -805,10 +861,24 @@ function makeProviderAdapter(
             });
           }
 
-          const turnModel =
+          const requestedModel =
             input.modelSelection?.provider === PROVIDER
               ? normalizeDevinModelSlug(input.modelSelection.model)
               : "";
+          const turnModel = requestedModel
+            ? (resolveDevinModelSlug(
+                requestedModel,
+                input.modelSelection?.options as
+                  | {
+                      reasoningEffort?: string;
+                      fastMode?: boolean;
+                      thinking?: boolean;
+                      contextWindow?: string;
+                    }
+                  | undefined,
+                ctx.variantMatrix ?? new Map(),
+              ) ?? requestedModel)
+            : "";
           const model = turnModel || ctx.session.model;
           // Run mode/model preflight before claiming the active turn so a
           // preflight failure doesn't leave the session stuck with a turnId.
@@ -1183,10 +1253,12 @@ function makeProviderAdapter(
             }
             // Fallback: read config options if cache not yet populated.
             const configOptions = yield* ctx.acp.getConfigOptions;
-            const extractedModels = extractDevinModelsFromConfigOptions(configOptions);
+            const { models: extractedModels, matrix: extractedMatrix } =
+              extractDevinModelsFromConfigOptions(configOptions);
             if (extractedModels.length > 0) {
               ctx.cachedModels = extractedModels;
               ctx.cachedModelsBinaryPath = requestedBinaryPath;
+              ctx.variantMatrix = extractedMatrix;
               return {
                 models: extractedModels,
                 source: "devin.acp",
@@ -1224,7 +1296,7 @@ function makeProviderAdapter(
 
             // Check config options once
             const configOptions = yield* runtime.getConfigOptions;
-            const discoveredModels = extractDevinModelsFromConfigOptions(configOptions);
+            const { models: discoveredModels } = extractDevinModelsFromConfigOptions(configOptions);
 
             if (discoveredModels.length === 0) {
               return yield* new ProviderAdapterRequestError({

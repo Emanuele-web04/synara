@@ -494,12 +494,14 @@ describe("DevinAdapterLive", () => {
         },
       );
       assert.deepStrictEqual(
-        result.models.find((m) => m.slug === "claude-opus-4-8-medium"),
+        result.models.find((m) => m.slug === "claude-opus-4-8"),
         {
-          slug: "claude-opus-4-8-medium",
-          name: "Claude Opus 4.8 Medium",
+          slug: "claude-opus-4-8",
+          name: "Claude Opus 4.8",
           upstreamProviderId: "claude-opus-4-8",
           upstreamProviderName: "Claude Opus 4.8",
+          supportedReasoningEfforts: [{ value: "medium" }],
+          defaultReasoningEffort: "medium",
         },
       );
     }).pipe(
