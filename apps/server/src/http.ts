@@ -7,6 +7,7 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  ThreadId,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
@@ -29,6 +30,8 @@ import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { buildThreadArchiveBytes, threadArchiveFileName } from "./provider/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";
@@ -166,6 +169,7 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     ),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    threadExportEffectRouteLayer,
     siteFaviconEffectRouteLayer,
     editorIconEffectRouteLayer,
     localImageEffectRouteLayer,
@@ -443,6 +447,45 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
       status: 200,
       contentType: favicon.contentType ?? "image/x-icon",
       headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS },
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+// Builds a ZIP export of a single thread (thread.json + transcript.md) and streams
+// it back as a download. Reads the orchestration snapshot the same way getSnapshot
+// does; mirrors the auth shape of the other binary GET routes (favicon/attachments).
+const threadExportEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/thread-export",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    yield* requireAuthenticatedRequest.pipe(
+      Effect.catchTag("AuthError", (error) => Effect.fail(error)),
+    );
+
+    const threadIdParam = url.searchParams.get("threadId");
+    if (!threadIdParam)
+      return HttpServerResponse.text("Missing threadId parameter", { status: 400 });
+
+    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const readModel = yield* snapshotQuery.getSnapshot();
+    const thread = readModel.threads.find(
+      (candidate) => candidate.id === ThreadId.makeUnsafe(threadIdParam),
+    );
+    if (!thread) return HttpServerResponse.text("Not Found", { status: 404 });
+
+    const archive = yield* Effect.sync(() => buildThreadArchiveBytes(thread));
+    const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
+    return HttpServerResponse.uint8Array(archive, {
+      status: 200,
+      contentType: "application/zip",
+      headers: {
+        "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+        "Cache-Control": "no-store",
+      },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
