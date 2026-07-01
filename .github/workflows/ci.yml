@@ -62,15 +62,16 @@ jobs:
       - name: Test
         run: bun run test
 
-      # --yes keeps bunx from waiting on an interactive install prompt, and the
-      # step timeout stops apt/download stalls from eating the whole job budget.
+      # Run the workspace-local playwright binary directly: bunx stalled after
+      # the chromium download on hosted runners. The step timeout stops any
+      # remaining apt/download stalls from eating the whole job budget.
       - name: Install browser test runtime
         timeout-minutes: 15
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           cd apps/web
-          bunx --yes playwright install --with-deps chromium
+          ./node_modules/.bin/playwright install --with-deps chromium
 
       # Non-blocking: the ChatView geometry parity tests currently fail on headless
       # Linux (they were never exercised in CI while the runner queue was dead).
