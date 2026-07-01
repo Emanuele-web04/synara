@@ -7100,6 +7100,13 @@ export default function ChatView({
         sizeBytes: file.sizeBytes,
       })),
     ];
+    // Sending the first message flips the centered empty landing into a normal
+    // transcript, which would otherwise let the Environment panel's default-open
+    // policy pop it open. Keep it closed on send regardless of whether the user
+    // had opened it in the empty view.
+    if (isCenteredEmptyLanding) {
+      setEnvironmentPanelPreferenceOpen(false);
+    }
     setOptimisticUserMessages((existing) => [
       ...existing,
       {

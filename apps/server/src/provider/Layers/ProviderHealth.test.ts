@@ -1140,6 +1140,249 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         }),
     );
 
+    it.effect("trusts usable Claude OAuth credentials after the SDK probe validates them", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-auth-fallback-",
+        });
+        const claudeDir = path.join(homeDir, ".claude");
+        yield* fileSystem.makeDirectory(claudeDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(claudeDir, ".credentials.json"),
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "expired-access-token",
+              refreshToken: "refresh-token",
+              expiresAt: Date.now() - 60_000,
+              subscriptionType: "max",
+            },
+          }),
+        );
+
+        let sdkProbeCalls = 0;
+        const status = yield* makeCheckClaudeProviderStatus(
+          Effect.sync(() => {
+            sdkProbeCalls += 1;
+            return "max";
+          }),
+          "claude",
+          homeDir,
+        ).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(sdkProbeCalls, 1);
+        assert.strictEqual(status.provider, "claudeAgent");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.authType, "max");
+        assert.strictEqual(status.authLabel, "Claude Max Subscription");
+        assert.strictEqual(status.message, undefined);
+      }),
+    );
+
+    it.effect("does not trust local Claude OAuth token strings without a live SDK validation", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-claude-auth-fallback-no-probe-",
+        });
+        const claudeDir = path.join(homeDir, ".claude");
+        yield* fileSystem.makeDirectory(claudeDir, { recursive: true });
+        yield* fileSystem.writeFileString(
+          path.join(claudeDir, ".credentials.json"),
+          JSON.stringify({
+            claudeAiOauth: {
+              accessToken: "expired-access-token",
+              refreshToken: "stale-refresh-token",
+              expiresAt: Date.now() - 60_000,
+              subscriptionType: "max",
+            },
+          }),
+        );
+
+        const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") {
+                return { stdout: "2.1.197\n", stderr: "", code: 0 };
+              }
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        );
+
+        assert.strictEqual(status.provider, "claudeAgent");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.authStatus, "unauthenticated");
+        assert.strictEqual(status.authType, undefined);
+        assert.strictEqual(status.authLabel, undefined);
+      }),
+    );
+
+    it.effect(
+      "keeps Claude unauthenticated when auth status includes a textual login failure",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "provider-health-claude-auth-text-failure-",
+          });
+          const claudeDir = path.join(homeDir, ".claude");
+          yield* fileSystem.makeDirectory(claudeDir, { recursive: true });
+          yield* fileSystem.writeFileString(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "expired-access-token",
+                refreshToken: "refresh-token",
+                expiresAt: Date.now() - 60_000,
+                subscriptionType: "max",
+              },
+            }),
+          );
+
+          const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return { stdout: "2.1.197\n", stderr: "", code: 0 };
+                }
+                if (joined === "auth status")
+                  return {
+                    stdout: '{"loggedIn":false,"authMethod":"none","apiProvider":"firstParty"}\n',
+                    stderr: "Not logged in. Please run /login.\n",
+                    code: 0,
+                  };
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          );
+
+          assert.strictEqual(status.provider, "claudeAgent");
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.authStatus, "unauthenticated");
+          assert.strictEqual(status.authType, undefined);
+          assert.strictEqual(status.authLabel, undefined);
+          assert.match(status.message ?? "", /not authenticated/i);
+        }),
+    );
+
+    it.effect(
+      "re-probes auth status once when a structured false negative has no credential file to rescue it",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "provider-health-claude-auth-retry-",
+          });
+
+          let authStatusCalls = 0;
+          const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir, {
+            falseNegativeRetryDelayMs: 0,
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return { stdout: "2.1.197\n", stderr: "", code: 0 };
+                }
+                if (joined === "auth status") {
+                  authStatusCalls += 1;
+                  // First probe loses a refresh-token rotation race; the retry
+                  // observes the settled, rotated token.
+                  return authStatusCalls === 1
+                    ? {
+                        stdout: '{"loggedIn":false,"authMethod":"none"}\n',
+                        stderr: "",
+                        code: 0,
+                      }
+                    : {
+                        stdout:
+                          '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}\n',
+                        stderr: "",
+                        code: 0,
+                      };
+                }
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          );
+
+          assert.strictEqual(authStatusCalls, 2);
+          assert.strictEqual(status.provider, "claudeAgent");
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.authStatus, "authenticated");
+          assert.strictEqual(status.authType, "max");
+        }),
+    );
+
+    it.effect(
+      "stays unauthenticated when the structured false negative persists across the retry",
+      () =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const homeDir = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "provider-health-claude-auth-retry-persist-",
+          });
+
+          let authStatusCalls = 0;
+          const status = yield* makeCheckClaudeProviderStatus(undefined, "claude", homeDir, {
+            falseNegativeRetryDelayMs: 0,
+          }).pipe(
+            Effect.provide(
+              mockSpawnerLayer((args) => {
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return { stdout: "2.1.197\n", stderr: "", code: 0 };
+                }
+                if (joined === "auth status") {
+                  authStatusCalls += 1;
+                  return {
+                    stdout: '{"loggedIn":false,"authMethod":"none"}\n',
+                    stderr: "",
+                    code: 0,
+                  };
+                }
+                throw new Error(`Unexpected args: ${joined}`);
+              }),
+            ),
+          );
+
+          assert.strictEqual(authStatusCalls, 2);
+          assert.strictEqual(status.provider, "claudeAgent");
+          assert.strictEqual(status.status, "error");
+          assert.strictEqual(status.authStatus, "unauthenticated");
+          assert.match(status.message ?? "", /not authenticated/i);
+        }),
+    );
+
     it.effect("returns unavailable when claude is missing", () =>
       Effect.gen(function* () {
         const status = yield* checkClaudeProviderStatus;

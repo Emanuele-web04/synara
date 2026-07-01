@@ -104,6 +104,7 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
+    readonly checkpointStore?: Partial<CheckpointStoreShape>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -182,14 +183,16 @@ describe("ProviderCommandReactor", () => {
     const isGitRepository = vi.fn<CheckpointStoreShape["isGitRepository"]>(() =>
       Effect.succeed(false),
     );
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
     const checkpointStore: CheckpointStoreShape = {
       isGitRepository,
-      captureCheckpoint: () => Effect.void,
+      captureCheckpoint,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(false),
       restoreCheckpoint,
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
+      ...input?.checkpointStore,
     };
     const stopSession = vi.fn((input: unknown) =>
       Effect.sync(() => {
@@ -365,6 +368,7 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput,
       rollbackConversation,
       isGitRepository,
+      captureCheckpoint,
       restoreCheckpoint,
       stopSession,
       stopRuntimeSession,
@@ -1058,6 +1062,53 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("waits for the message-start checkpoint before sending the provider turn", async () => {
+    let releaseCapture: (() => void) | undefined;
+    const captureGate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+      Effect.promise(() => captureGate),
+    );
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
+        captureCheckpoint,
+      },
+    });
+    const now = new Date().toISOString();
+
+    const dispatch = Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-slow-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-checkpoint"),
+          role: "user",
+          text: "hello despite slow git",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => captureCheckpoint.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+
+    releaseCapture?.();
+    await dispatch;
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(captureCheckpoint.mock.calls.length).toBe(1);
+    expect(captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
+      cwd: "/tmp/provider-project",
+    });
+    expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
   });
 
   it("publishes a starting session status before the provider session is ready", async () => {

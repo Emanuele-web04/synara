@@ -63,7 +63,23 @@ import {
   resolveCursorAgentBinaryPath,
 } from "../acp/CursorAcpCommand";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
-import { buildClaudeProcessEnv } from "../claudeProcessEnv";
+import {
+  claudeAuthMetadata,
+  isStructuredClaudeAuthFalseNegativeCandidate,
+  parseClaudeAuthStatusFromOutput,
+} from "../claudeAuthStatus";
+import { acquireClaudeAuthStatusLock } from "../claudeAuthStatusLock";
+import { buildClaudeProcessEnv, readClaudeCliCredentialsSummary } from "../claudeProcessEnv";
+import {
+  detailFromResult,
+  extractAuthBoolean,
+  extractAuthMethod,
+  isCommandMissingCause,
+  nonEmptyTrimmed,
+  PROVIDER_COMMAND_TIMEOUT_DETAIL,
+  toTitleCaseWords,
+  type CommandResult,
+} from "../providerCliOutput";
 import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
 import {
   orderProviderStatuses,
@@ -84,10 +100,12 @@ import {
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 
+export { parseClaudeAuthStatusFromOutput } from "../claudeAuthStatus";
+export type { CommandResult } from "../providerCliOutput";
+
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
-const PROVIDER_COMMAND_TIMEOUT_DETAIL = "Timed out while running command.";
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
@@ -205,87 +223,9 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
 };
 
 // ── Pure helpers ────────────────────────────────────────────────────
-
-export interface CommandResult {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly code: number;
-}
-
-function nonEmptyTrimmed(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isCommandMissingCause(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  const lower = error.message.toLowerCase();
-  return lower.includes("enoent") || lower.includes("notfound");
-}
-
-function detailFromResult(
-  result: CommandResult & { readonly timedOut?: boolean },
-): string | undefined {
-  if (result.timedOut) return PROVIDER_COMMAND_TIMEOUT_DETAIL;
-  const stderr = nonEmptyTrimmed(result.stderr);
-  if (stderr) return stderr;
-  const stdout = nonEmptyTrimmed(result.stdout);
-  if (stdout) return stdout;
-  if (result.code !== 0) {
-    return `Command exited with code ${result.code}.`;
-  }
-  return undefined;
-}
-
-function extractAuthBoolean(value: unknown): boolean | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const nested = extractAuthBoolean(entry);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  if (!value || typeof value !== "object") return undefined;
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["authenticated", "isAuthenticated", "loggedIn", "isLoggedIn"] as const) {
-    if (typeof record[key] === "boolean") return record[key];
-  }
-  for (const key of ["auth", "status", "session", "account"] as const) {
-    const nested = extractAuthBoolean(record[key]);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
-}
-
-function extractAuthMethod(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const nested = extractAuthMethod(entry);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  if (!value || typeof value !== "object") return undefined;
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["authMethod", "auth_type", "authType"] as const) {
-    if (typeof record[key] === "string") {
-      const trimmed = record[key].trim();
-      if (trimmed.length > 0) {
-        return trimmed;
-      }
-    }
-  }
-  for (const key of ["auth", "status", "session", "account"] as const) {
-    const nested = extractAuthMethod(record[key]);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
-}
+//
+// Generic CLI-output parsing lives in ../providerCliOutput; Claude auth-status
+// interpretation lives in ../claudeAuthStatus.
 
 function resolveVoiceTranscriptionAvailability(
   authMethod: string | undefined,
@@ -373,60 +313,6 @@ function extractClaudeAuthMethodFromOutput(result: CommandResult): string | unde
   const parsed = decodeUnknownJson(result.stdout.trim());
   if (Result.isFailure(parsed)) return undefined;
   return Option.getOrUndefined(findAuthMethodDeep(parsed.success));
-}
-
-function toTitleCaseWords(value: string): string {
-  return value
-    .split(/[\s_-]+/g)
-    .filter(Boolean)
-    .map((part) => part[0]!.toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function claudeSubscriptionLabel(subscriptionType: string | undefined): string | undefined {
-  const normalized = subscriptionType?.toLowerCase().replace(/[\s_-]+/g, "");
-  if (!normalized) return undefined;
-  switch (normalized) {
-    case "max":
-    case "maxplan":
-    case "max5":
-    case "max20":
-      return "Max";
-    case "enterprise":
-      return "Enterprise";
-    case "team":
-      return "Team";
-    case "pro":
-      return "Pro";
-    case "free":
-      return "Free";
-    default:
-      return toTitleCaseWords(subscriptionType!);
-  }
-}
-
-function normalizeClaudeAuthMethod(authMethod: string | undefined): string | undefined {
-  const normalized = authMethod?.toLowerCase().replace(/[\s_-]+/g, "");
-  if (!normalized) return undefined;
-  if (normalized === "apikey") return "apiKey";
-  return undefined;
-}
-
-function claudeAuthMetadata(input: {
-  readonly subscriptionType: string | undefined;
-  readonly authMethod: string | undefined;
-}): { readonly type: string; readonly label: string } | undefined {
-  if (normalizeClaudeAuthMethod(input.authMethod) === "apiKey") {
-    return { type: "apiKey", label: "Claude API Key" };
-  }
-  if (input.subscriptionType) {
-    const subscriptionLabel = claudeSubscriptionLabel(input.subscriptionType);
-    return {
-      type: input.subscriptionType,
-      label: `Claude ${subscriptionLabel ?? toTitleCaseWords(input.subscriptionType)} Subscription`,
-    };
-  }
-  return undefined;
 }
 
 // ── Codex subscription label ────────────────────────────────────────
@@ -1081,92 +967,13 @@ export const checkCodexProviderStatus = makeCheckCodexProviderStatus();
 
 // ── Claude Agent health check ───────────────────────────────────────
 
-export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
-  readonly status: ServerProviderStatusState;
-  readonly authStatus: ServerProviderAuthStatus;
-  readonly message?: string;
-} {
-  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
-
-  if (
-    lowerOutput.includes("unknown command") ||
-    lowerOutput.includes("unrecognized command") ||
-    lowerOutput.includes("unexpected argument")
-  ) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Claude Agent authentication status command is unavailable in this version of Claude.",
-    };
-  }
-
-  if (
-    lowerOutput.includes("not logged in") ||
-    lowerOutput.includes("login required") ||
-    lowerOutput.includes("authentication required") ||
-    lowerOutput.includes("run `claude login`") ||
-    lowerOutput.includes("run claude login")
-  ) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-
-  // `claude auth status` returns JSON with a `loggedIn` boolean.
-  const parsedAuth = (() => {
-    const trimmed = result.stdout.trim();
-    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-    try {
-      return {
-        attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
-      };
-    } catch {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-  })();
-
-  if (parsedAuth.auth === true) {
-    return { status: "ready", authStatus: "authenticated" };
-  }
-  if (parsedAuth.auth === false) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-  if (parsedAuth.attemptedJsonParse) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Could not verify Claude authentication status from JSON output (missing auth marker).",
-    };
-  }
-  if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
-  }
-
-  const detail = detailFromResult(result);
-  return {
-    status: "warning",
-    authStatus: "unknown",
-    message: detail
-      ? `Could not verify Claude authentication status. ${detail}`
-      : "Could not verify Claude authentication status.",
-  };
-}
+const CLAUDE_AUTH_FALSE_NEGATIVE_RETRY_DELAY_MS = 1_000;
 
 export const makeCheckClaudeProviderStatus = (
   resolveSubscriptionType?: Effect.Effect<string | undefined>,
   binaryPath?: string,
   homeDir?: string,
+  options?: { readonly falseNegativeRetryDelayMs?: number },
 ): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
   Effect.gen(function* () {
     const checkedAt = new Date().toISOString();
@@ -1223,11 +1030,20 @@ export const makeCheckClaudeProviderStatus = (
     }
     const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
 
-    // Probe 2: `claude auth status` — is the user authenticated?
-    const authProbe = yield* runClaudeCommand(["auth", "status"], executable, claudeEnv).pipe(
-      Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
-      Effect.result,
-    );
+    // Probe 2: `claude auth status` — is the user authenticated? The command can
+    // redeem a single-use rotating OAuth refresh token, so it is serialized with
+    // every other `claude auth status` invocation in this process (credential
+    // keepalive, concurrent health probes) via the shared lock.
+    const runAuthStatusProbe = Effect.acquireUseRelease(
+      Effect.promise(() => acquireClaudeAuthStatusLock()),
+      () =>
+        runClaudeCommand(["auth", "status"], executable, claudeEnv).pipe(
+          Effect.timeoutOption(CLAUDE_HEALTH_TIMEOUT_MS),
+        ),
+      (release) => Effect.sync(release),
+    ).pipe(Effect.result);
+
+    const authProbe = yield* runAuthStatusProbe;
 
     if (Result.isFailure(authProbe)) {
       const error = authProbe.failure;
@@ -1257,30 +1073,77 @@ export const makeCheckClaudeProviderStatus = (
       };
     }
 
-    const authOutput = authProbe.success.value;
-    const parsed = parseClaudeAuthStatusFromOutput(authOutput);
+    let authOutput = authProbe.success.value;
+    let parsed = parseClaudeAuthStatusFromOutput(authOutput);
+    const credentialSummary = readClaudeCliCredentialsSummary(
+      homeDir ? { env: claudeEnv, homeDir } : { env: claudeEnv },
+    );
+    // A structured `loggedIn:false` with a clean exit and no local credential
+    // record to rescue it (macOS keeps OAuth in the Keychain, not on disk) is
+    // the signature of a lost refresh-token rotation race with a concurrent
+    // `claude auth status` invocation. Re-probe once after the rotation settles.
+    if (
+      !credentialSummary.usable &&
+      isStructuredClaudeAuthFalseNegativeCandidate(authOutput, parsed)
+    ) {
+      const retryDelayMs =
+        options?.falseNegativeRetryDelayMs ?? CLAUDE_AUTH_FALSE_NEGATIVE_RETRY_DELAY_MS;
+      if (retryDelayMs > 0) {
+        yield* Effect.sleep(retryDelayMs);
+      }
+      const retryProbe = yield* runAuthStatusProbe;
+      if (Result.isSuccess(retryProbe) && Option.isSome(retryProbe.success)) {
+        authOutput = retryProbe.success.value;
+        parsed = parseClaudeAuthStatusFromOutput(authOutput);
+      }
+    }
+    const structuredFalseNegative = isStructuredClaudeAuthFalseNegativeCandidate(
+      authOutput,
+      parsed,
+    );
+    const credentialProbeSubscriptionType =
+      credentialSummary.usable && structuredFalseNegative && resolveSubscriptionType
+        ? yield* resolveSubscriptionType
+        : undefined;
+    // Claude 2.1.x can report `loggedIn:false` from `auth status` while a live
+    // SDK init still reads account metadata. Token strings alone are not enough:
+    // require the SDK probe before treating the credential file as authenticated.
+    const effectiveParsed: ReturnType<typeof parseClaudeAuthStatusFromOutput> =
+      credentialProbeSubscriptionType !== undefined
+        ? { status: "ready", authStatus: "authenticated" }
+        : parsed;
+    const useCredentialMetadata = credentialProbeSubscriptionType !== undefined;
 
     // Determine subscription type from multiple sources (cheapest first):
     // 1. JSON output of `claude auth status` (may or may not contain it)
     // 2. Cached SDK probe (spawns a Claude process on miss, reads
     //    `initializationResult()` for account metadata, then aborts
     //    immediately — no API tokens are consumed)
-    let subscriptionType = extractSubscriptionTypeFromOutput(authOutput);
-    const authMethod = extractClaudeAuthMethodFromOutput(authOutput);
-    if (!subscriptionType && resolveSubscriptionType && parsed.authStatus === "authenticated") {
+    let subscriptionType =
+      extractSubscriptionTypeFromOutput(authOutput) ??
+      credentialProbeSubscriptionType ??
+      (useCredentialMetadata ? credentialSummary.subscriptionType : undefined);
+    const authMethod =
+      extractClaudeAuthMethodFromOutput(authOutput) ??
+      (useCredentialMetadata ? "claude.ai" : undefined);
+    if (
+      !subscriptionType &&
+      resolveSubscriptionType &&
+      effectiveParsed.authStatus === "authenticated"
+    ) {
       subscriptionType = yield* resolveSubscriptionType;
     }
     const authMetadata = claudeAuthMetadata({ subscriptionType, authMethod });
 
     return {
       provider: CLAUDE_AGENT_PROVIDER,
-      status: parsed.status,
+      status: effectiveParsed.status,
       available: true,
-      authStatus: parsed.authStatus,
+      authStatus: effectiveParsed.authStatus,
       version: parsedVersion,
       ...(authMetadata ? { authType: authMetadata.type, authLabel: authMetadata.label } : {}),
       checkedAt,
-      ...(parsed.message ? { message: parsed.message } : {}),
+      ...(effectiveParsed.message ? { message: effectiveParsed.message } : {}),
     } satisfies ServerProviderStatus;
   });
 

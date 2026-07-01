@@ -222,6 +222,7 @@ import {
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import { Button } from "./ui/button";
+import { DisclosureChevron } from "./ui/DisclosureChevron";
 import { Input } from "./ui/input";
 import {
   Dialog,
@@ -6599,93 +6600,103 @@ export default function Sidebar() {
             )}
           </>
         )}
+        {!isOnSettings && chatsSectionVisible ? (
+          <SidebarGroup className="px-1.5 pt-1 pb-2">
+            <div className="mx-2 mb-1.5 h-px bg-border/60" />
+            <div className="group/collapsible">
+              <div className="group/project-header relative">
+                <SidebarMenuButton
+                  size="sm"
+                  aria-expanded={chatSectionExpanded}
+                  className={cn(
+                    SIDEBAR_HEADER_ROW_CLASS_NAME,
+                    SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
+                    SIDEBAR_ROW_HOVER_CLASS_NAME,
+                    "cursor-pointer",
+                  )}
+                  onClick={() => setChatSectionExpanded((current) => !current)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter" && event.key !== " ") return;
+                    event.preventDefault();
+                    setChatSectionExpanded((current) => !current);
+                  }}
+                >
+                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+                    <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
+                      Chats
+                    </span>
+                    <DisclosureChevron
+                      open={chatSectionExpanded}
+                      className="text-muted-foreground/79"
+                    />
+                  </div>
+                </SidebarMenuButton>
+                <SidebarSectionToolbar placement="overlay" revealOnHover>
+                  <ChatSortMenu
+                    threadSortOrder={appSettings.sidebarThreadSortOrder}
+                    onThreadSortOrderChange={(sortOrder) => {
+                      updateSettings({ sidebarThreadSortOrder: sortOrder });
+                    }}
+                  />
+                  <SidebarIconButton
+                    icon={NewThreadIcon}
+                    label="Open new chat home"
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      void handleCreateHomeChat();
+                    }}
+                    tooltip={
+                      newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"
+                    }
+                    tooltipSide="top"
+                  />
+                </SidebarSectionToolbar>
+              </div>
+
+              <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
+                <div className={DISCLOSURE_INNER_CLASS}>
+                  <SidebarMenu
+                    className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
+                  >
+                    {visibleChatThreadRows.length > 0 ? (
+                      renderedChatEntries.map((entry) => renderChatItem(entry.row))
+                    ) : (
+                      <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
+                        No chats yet
+                      </div>
+                    )}
+                    {hasHiddenChatThreads && !chatThreadListExpanded ? (
+                      <SidebarMenuItem className="w-full">
+                        <SidebarMenuButton
+                          size="sm"
+                          className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                          onClick={() => setChatThreadListExpanded(true)}
+                        >
+                          <span>Show more</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ) : null}
+                    {hasHiddenChatThreads && chatThreadListExpanded ? (
+                      <SidebarMenuItem className="w-full">
+                        <SidebarMenuButton
+                          size="sm"
+                          className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                          onClick={() => setChatThreadListExpanded(false)}
+                        >
+                          <span>Show less</span>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ) : null}
+                  </SidebarMenu>
+                </div>
+              </div>
+            </div>
+          </SidebarGroup>
+        ) : null}
       </SidebarContent>
 
       <SidebarFooter className="gap-2 p-2 font-system-ui">
-        {!isOnSettings && chatsSectionVisible ? (
-          <div className="group/collapsible">
-            <div className="group/project-header relative">
-              <SidebarMenuButton
-                size="sm"
-                className={cn(
-                  SIDEBAR_HEADER_ROW_CLASS_NAME,
-                  SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME,
-                  SIDEBAR_ROW_HOVER_CLASS_NAME,
-                  "cursor-pointer",
-                )}
-                onClick={() => setChatSectionExpanded((current) => !current)}
-                onKeyDown={(event) => {
-                  if (event.key !== "Enter" && event.key !== " ") return;
-                  event.preventDefault();
-                  setChatSectionExpanded((current) => !current);
-                }}
-              >
-                <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
-                  <span className="truncate font-system-ui text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79">
-                    Chats
-                  </span>
-                </div>
-              </SidebarMenuButton>
-              <SidebarSectionToolbar placement="overlay" revealOnHover>
-                <ChatSortMenu
-                  threadSortOrder={appSettings.sidebarThreadSortOrder}
-                  onThreadSortOrderChange={(sortOrder) => {
-                    updateSettings({ sidebarThreadSortOrder: sortOrder });
-                  }}
-                />
-                <SidebarIconButton
-                  icon={NewThreadIcon}
-                  label="Open new chat home"
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    void handleCreateHomeChat();
-                  }}
-                  tooltip={newChatShortcutLabel ? `New chat (${newChatShortcutLabel})` : "New chat"}
-                  tooltipSide="top"
-                />
-              </SidebarSectionToolbar>
-            </div>
-
-            <div className={cn(disclosureShellClassName(chatSectionExpanded), "pt-1")}>
-              <div className={DISCLOSURE_INNER_CLASS}>
-                <SidebarMenu
-                  className={cn("gap-1", disclosureContentClassName(chatSectionExpanded))}
-                >
-                  {visibleChatThreadRows.length > 0 ? (
-                    renderedChatEntries.map((entry) => renderChatItem(entry.row))
-                  ) : (
-                    <div className="px-2 py-2 text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/48">
-                      No chats yet
-                    </div>
-                  )}
-                  {hasHiddenChatThreads && !chatThreadListExpanded ? (
-                    <SidebarMenuItem className="w-full">
-                      <SidebarMenuButton
-                        size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                        onClick={() => setChatThreadListExpanded(true)}
-                      >
-                        <span>Show more</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
-                  {hasHiddenChatThreads && chatThreadListExpanded ? (
-                    <SidebarMenuItem className="w-full">
-                      <SidebarMenuButton
-                        size="sm"
-                        className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                        onClick={() => setChatThreadListExpanded(false)}
-                      >
-                        <span>Show less</span>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ) : null}
-                </SidebarMenu>
-              </div>
-            </div>
-          </div>
-        ) : null}
         <SidebarMenu>
           <SidebarMenuItem>
             <div className="flex flex-col gap-1">

@@ -19,6 +19,14 @@ import { CheckpointRef } from "@t3tools/contracts";
 export interface CaptureCheckpointInput {
   readonly cwd: string;
   readonly checkpointRef: CheckpointRef;
+  /**
+   * Treat an already-existing ref as success and skip the capture.
+   *
+   * Used for pre-turn baseline refs where the first snapshot must win:
+   * overwriting an existing baseline with a later capture would record a
+   * working tree the agent may already have modified.
+   */
+  readonly skipIfExists?: boolean;
 }
 
 export interface CopyCheckpointRefInput {

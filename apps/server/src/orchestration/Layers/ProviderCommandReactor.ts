@@ -979,13 +979,15 @@ const make = Effect.gen(function* () {
       }
 
       // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not an async runtime event.
+      // the user's submit moment, not early provider edits. skipIfExists keeps
+      // a backup baseline from CheckpointReactor as the first-writer winner.
       yield* checkpointStore.captureCheckpoint({
         cwd,
         checkpointRef: checkpointRefForThreadMessageStart(
           input.threadId,
           MessageId.makeUnsafe(input.messageId),
         ),
+        skipIfExists: true,
       });
     }).pipe(
       Effect.catchCause((cause) =>
