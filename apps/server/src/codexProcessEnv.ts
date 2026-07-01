@@ -11,6 +11,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -26,6 +27,7 @@ import {
 
 import {
   resolveBaseCodexHomePath,
+  resolveCodexHomeOverlayAccountSegment,
   resolveDpCodeCodexHomeOverlayPath,
   shouldDisableDpCodeBrowserPlugin,
 } from "./codexHomePaths.ts";
@@ -34,6 +36,7 @@ const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+const CODEX_ACCOUNT_PRIVATE_STATE_FILES = new Set(["auth.json", "models_cache.json"]);
 
 export function resolveCodexBrowserUsePipePath(
   input: {
@@ -104,6 +107,7 @@ function ensureCodexOverlaySymlink(input: {
   readonly sourcePath: string;
   readonly targetPath: string;
   readonly type: "dir" | "file";
+  readonly force?: boolean;
 }): void {
   let targetStat: ReturnType<typeof lstatSync> | undefined;
   try {
@@ -118,6 +122,7 @@ function ensureCodexOverlaySymlink(input: {
     }
 
     if (
+      input.force ||
       targetStat.isSymbolicLink() ||
       /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName) ||
       CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)
@@ -136,9 +141,55 @@ function ensureCodexOverlaySymlink(input: {
 function prepareDpCodeCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
+  // An explicitly configured home is the account's own home; private state may
+  // mirror it. Env-derived homes are shared and must never leak private state.
+  const hasDedicatedAccountHome = Boolean(input.homePath?.trim());
+  const shadowHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
+    : undefined;
+  if (shadowHomePath) {
+    if (path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
+      throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+    }
+    // A symlinked shadow home aliases another account's credentials through the
+    // directory itself, bypassing the per-file symlink guard further down.
+    let shadowStat: ReturnType<typeof lstatSync> | undefined;
+    try {
+      shadowStat = lstatSync(shadowHomePath);
+    } catch {
+      shadowStat = undefined;
+    }
+    if (shadowStat?.isSymbolicLink()) {
+      throw new Error(
+        `Codex account shadow home at ${shadowHomePath} is a symlink; it must be a real directory so accounts cannot alias each other's auth.`,
+      );
+    }
+    const resolveRealPath = (candidate: string): string | undefined => {
+      try {
+        return realpathSync(candidate);
+      } catch {
+        return undefined;
+      }
+    };
+    const shadowRealPath = shadowStat ? resolveRealPath(shadowHomePath) : undefined;
+    if (shadowRealPath && shadowRealPath === resolveRealPath(sourceHomePath)) {
+      throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+    }
+  }
+  const accountSegment = resolveCodexHomeOverlayAccountSegment({
+    homePath: sourceHomePath,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(shadowHomePath ? { shadowHomePath } : {}),
+  });
+  const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(
+    input.env,
+    sourceHomePath,
+    accountSegment,
+  );
   if (path.resolve(sourceHomePath) === path.resolve(overlayHomePath)) {
     return undefined;
   }
@@ -148,6 +199,18 @@ function prepareDpCodeCodexHomeOverlay(input: {
   try {
     for (const entry of readdirSync(sourceHomePath)) {
       if (entry === "config.toml") {
+        continue;
+      }
+      // Account overlays only inherit account-private state when the source
+      // home is the account's own dedicated home. With a shadow home the
+      // private files are linked from there below; with a shared source home
+      // the account keeps its own login inside the overlay instead of
+      // silently reusing the default account's credentials.
+      if (
+        accountSegment &&
+        CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry) &&
+        (shadowHomePath || !hasDedicatedAccountHome)
+      ) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
@@ -165,6 +228,54 @@ function prepareDpCodeCodexHomeOverlay(input: {
     // overlay config and create any required state lazily.
   }
 
+  if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
+    for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
+      const targetPath = path.join(overlayHomePath, entry);
+      try {
+        // Earlier builds symlinked shared auth into account overlays; drop the
+        // stale alias so the account's own login (a real file) takes its place.
+        if (lstatSync(targetPath).isSymbolicLink()) {
+          rmSync(targetPath, { force: true });
+        }
+      } catch {
+        // Missing private state is created lazily by the account's own login.
+      }
+    }
+  }
+
+  if (shadowHomePath) {
+    for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
+      const sourcePath = path.join(shadowHomePath, entry);
+      let sourceStat: ReturnType<typeof lstatSync>;
+      try {
+        sourceStat = lstatSync(sourcePath);
+      } catch {
+        // Missing shadow homes should not prevent Codex from creating account
+        // state lazily, but existing private files must never be read or logged.
+        continue;
+      }
+      // A symlinked auth.json can silently alias another account's credentials,
+      // so account-private state must always be a real file in the shadow home.
+      if (sourceStat.isSymbolicLink()) {
+        throw new Error(
+          `Codex account private state at ${sourcePath} is a symlink; it must be a real file so accounts cannot alias each other's auth.`,
+        );
+      }
+      const targetPath = path.join(overlayHomePath, entry);
+      try {
+        ensureCodexOverlaySymlink({
+          entryName: entry,
+          sourcePath,
+          targetPath,
+          type: sourceStat.isDirectory() ? "dir" : "file",
+          force: true,
+        });
+      } catch {
+        // Transient overlay filesystem races must not block session start.
+      }
+    }
+  }
+
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
   writeFileSync(
@@ -180,6 +291,8 @@ export function buildCodexProcessEnv(
   input: {
     readonly env?: NodeJS.ProcessEnv;
     readonly homePath?: string;
+    readonly shadowHomePath?: string;
+    readonly accountId?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
   } = {},
@@ -189,11 +302,18 @@ export function buildCodexProcessEnv(
     ? prepareDpCodeCodexHomeOverlay({
         env: baseEnv,
         ...(input.homePath ? { homePath: input.homePath } : {}),
+        ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
       })
     : undefined;
+  const directAccountHomePath = input.shadowHomePath
+    ? resolveBaseCodexHomePath(baseEnv, input.shadowHomePath)
+    : input.homePath
+      ? resolveBaseCodexHomePath(baseEnv, input.homePath)
+      : undefined;
   const effectiveEnv =
-    overlayHomePath || input.homePath
-      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }
+    overlayHomePath || directAccountHomePath
+      ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? directAccountHomePath }
       : baseEnv;
   const platform = input.platform ?? process.platform;
 

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
@@ -18,6 +18,7 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { Cause, Deferred, Effect, Exit, Layer, Queue, Ref, Scope, Stream } from "effect";
 import type {
   Agent,
@@ -129,6 +130,7 @@ interface OpenCodeSessionContext {
   readonly client: OpencodeClient;
   readonly server: OpenCodeServerConnection;
   readonly directory: string;
+  readonly discoveryEnvelopeKey: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
@@ -183,6 +185,26 @@ export interface OpenCodeAdapterLiveOptions {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function hashDiscoveryEnvelopeValue(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+
+function normalizeDiscoveryEnvironment(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | undefined {
+  if (!environment) {
+    return undefined;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(environment)
+      .map(([name, value]) => [name.trim(), value] as const)
+      .filter(([name]) => name.length > 0)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([name, value]) => [name, hashDiscoveryEnvelopeValue(value)]),
+  );
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
 function toRequestError(
@@ -1771,6 +1793,22 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
       const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
       const sessions = new Map<ThreadId, OpenCodeSessionContext>();
+      const makeDiscoveryEnvelopeKey = (input: {
+        readonly binaryPath?: string | null;
+        readonly serverUrl?: string | null;
+        readonly serverPassword?: string | null;
+        readonly experimentalWebSockets?: boolean;
+        readonly environment?: Readonly<Record<string, string>>;
+      }): string =>
+        JSON.stringify({
+          binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
+          serverUrl: input.serverUrl?.trim() || null,
+          serverPassword: input.serverPassword?.trim()
+            ? hashDiscoveryEnvelopeValue(input.serverPassword.trim())
+            : null,
+          experimentalWebSockets: provider === "opencode" && input.experimentalWebSockets === true,
+          environment: normalizeDiscoveryEnvironment(input.environment) ?? null,
+        });
 
       yield* Effect.addFinalizer(() =>
         Effect.gen(function* () {
@@ -1787,8 +1825,15 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         }),
       );
 
+      const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
+        const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
+        return providerInstanceId && event.providerInstanceId !== providerInstanceId
+          ? { ...event, providerInstanceId }
+          : event;
+      };
+
       const emit = (event: ProviderRuntimeEvent) =>
-        Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+        Queue.offer(runtimeEvents, stampRuntimeEventForInstance(event)).pipe(Effect.asVoid);
       const writeNativeEvent = (
         threadId: ThreadId,
         event: {
@@ -3600,24 +3645,28 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
+          const environment = providerOptions?.environment;
           const experimentalWebSockets =
             adapterConfig.providerOptionsKey === "opencode"
               ? input.providerOptions?.opencode?.experimentalWebSockets
               : undefined;
+          const discoveryEnvelopeKey = makeDiscoveryEnvelopeKey({
+            binaryPath,
+            ...(serverUrl ? { serverUrl } : {}),
+            ...(serverPassword ? { serverPassword } : {}),
+            ...(experimentalWebSockets !== undefined ? { experimentalWebSockets } : {}),
+            ...(environment ? { environment } : {}),
+          });
           const resumeDirectory = extractResumeCwd(input.resumeCursor);
           const directory = input.cwd ?? resumeDirectory ?? serverConfig.cwd;
-          const initialParsedModel =
-            input.modelSelection?.provider === adapterConfig.provider
-              ? parseOpenCodeModelSlug(input.modelSelection.model)
-              : null;
-          const initialAgent =
-            input.modelSelection?.provider === adapterConfig.provider
-              ? input.modelSelection.options?.agent
-              : undefined;
-          const initialVariant =
-            input.modelSelection?.provider === adapterConfig.provider
-              ? input.modelSelection.options?.variant
-              : undefined;
+          const initialParsedModel = input.modelSelection
+            ? parseOpenCodeModelSlug(input.modelSelection.model)
+            : null;
+          const initialAgent = getModelSelectionStringOptionValue(input.modelSelection, "agent");
+          const initialVariant = getModelSelectionStringOptionValue(
+            input.modelSelection,
+            "variant",
+          );
           const existing = sessions.get(input.threadId);
           if (existing) {
             yield* stopOpenCodeContext(existing);
@@ -3635,6 +3684,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cliSpec: adapterConfig.cliSpec,
                   cwd: directory,
                   ...(serverUrl ? { serverUrl } : {}),
+                  ...(environment ? { environment } : {}),
                   ...(provider === "opencode" && experimentalWebSockets
                     ? { experimentalWebSockets: true }
                     : {}),
@@ -3713,6 +3763,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const createdAt = nowIso();
           const session: ProviderSession = {
             provider,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd: directory,
@@ -3728,6 +3779,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             client: started.client,
             server: started.server,
             directory,
+            discoveryEnvelopeKey,
             openCodeSessionId: started.openCodeSessionId,
             pendingPermissions: new Map(),
             pendingQuestions: new Map(),
@@ -3824,14 +3876,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
 
-        const agent =
-          input.modelSelection?.provider === provider
-            ? input.modelSelection.options?.agent
-            : undefined;
-        const variant =
-          input.modelSelection?.provider === provider
-            ? input.modelSelection.options?.variant
-            : undefined;
+        const agent = getModelSelectionStringOptionValue(input.modelSelection, "agent");
+        const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant");
 
         context.activeTurnId = turnId;
         context.activeTurnEventSerial = 0;
@@ -4043,17 +4089,33 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.scoped(
           Effect.gen(function* () {
             const directory = input.cwd ?? serverConfig.cwd;
+            const providerOptions = input.providerOptions?.[adapterConfig.providerOptionsKey];
+            const binaryPath =
+              providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+            const serverUrl = providerOptions?.serverUrl?.trim();
+            const serverPassword = providerOptions?.serverPassword?.trim();
+            const environment = providerOptions?.environment;
+            const experimentalWebSockets =
+              adapterConfig.providerOptionsKey === "opencode"
+                ? input.providerOptions?.opencode?.experimentalWebSockets
+                : undefined;
             const server = yield* openCodeRuntime
               .connectToOpenCodeServer({
-                binaryPath: adapterConfig.defaultBinaryPath,
+                binaryPath,
                 cliSpec: adapterConfig.cliSpec,
                 cwd: directory,
+                ...(serverUrl ? { serverUrl } : {}),
+                ...(environment ? { environment } : {}),
+                ...(provider === "opencode" && experimentalWebSockets
+                  ? { experimentalWebSockets: true }
+                  : {}),
               })
               .pipe(Effect.mapError(toAdapterRequestError));
             const client = openCodeRuntime.createOpenCodeSdkClient({
               baseUrl: server.url,
               directory,
               cliSpec: adapterConfig.cliSpec,
+              ...(server.external && serverPassword ? { serverPassword } : {}),
             });
             const session = yield* runOpenCodeSdk("session.get", () =>
               client.session.get({
@@ -4149,6 +4211,11 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
+          const environment = providerOptions?.environment;
+          const experimentalWebSockets =
+            adapterConfig.providerOptionsKey === "opencode"
+              ? input.providerOptions?.opencode?.experimentalWebSockets
+              : undefined;
           const persistedSourceDirectory =
             sourceContext?.directory ??
             input.sourceCwd ??
@@ -4175,6 +4242,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                     cliSpec: adapterConfig.cliSpec,
                     cwd: sourceDirectory,
                     ...(serverUrl ? { serverUrl } : {}),
+                    ...(environment ? { environment } : {}),
+                    ...(provider === "opencode" && experimentalWebSockets
+                      ? { experimentalWebSockets: true }
+                      : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 return openCodeRuntime.createOpenCodeSdkClient({
@@ -4226,6 +4297,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           readonly serverUrl?: string | null;
           readonly serverPassword?: string | null;
           readonly experimentalWebSockets?: boolean;
+          readonly environment?: Readonly<Record<string, string>>;
           readonly reuseAnyActiveContext?: boolean;
         },
         fn: (input: {
@@ -4236,15 +4308,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         Effect.gen(function* () {
           const requestedCwd = input.cwd?.trim();
           const requestedServerUrl = input.serverUrl?.trim();
+          const requestedEnvelopeKey = makeDiscoveryEnvelopeKey(input);
           const activeContext = input.threadId
             ? sessions.get(ThreadId.makeUnsafe(input.threadId))
             : input.reuseAnyActiveContext
-              ? [...sessions.values()][0]
+              ? [...sessions.values()].find(
+                  (context) => context.discoveryEnvelopeKey === requestedEnvelopeKey,
+                )
               : undefined;
           if (
             activeContext &&
             (!requestedCwd || requestedCwd === activeContext.directory) &&
-            (!requestedServerUrl || requestedServerUrl === activeContext.server.url)
+            (!requestedServerUrl || requestedServerUrl === activeContext.server.url) &&
+            activeContext.discoveryEnvelopeKey === requestedEnvelopeKey
           ) {
             return yield* fn({
               client: activeContext.client,
@@ -4262,6 +4338,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cliSpec: adapterConfig.cliSpec,
                   cwd: input.cwd?.trim() || serverConfig.cwd,
                   ...(serverUrl ? { serverUrl } : {}),
+                  ...(input.environment ? { environment: input.environment } : {}),
                   ...(provider === "opencode" && input.experimentalWebSockets
                     ? { experimentalWebSockets: true }
                     : {}),
@@ -4282,6 +4359,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         input: {
           readonly binaryPath?: string | null;
           readonly cwd?: string | null;
+          readonly serverUrl?: string | null;
+          readonly serverPassword?: string | null;
+          readonly experimentalWebSockets?: boolean;
+          readonly environment?: Readonly<Record<string, string>>;
         },
         fn: (input: {
           readonly client: OpencodeClient;
@@ -4327,6 +4408,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               binaryPath,
               cliSpec: adapterConfig.cliSpec,
               ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
             })
             .pipe(
               Effect.catch((error) =>
@@ -4337,7 +4419,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               ),
             );
           const inventoryEffect = withDiscoveryInventory(
-            { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+            {
+              binaryPath,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+              ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+              ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+              ...(input.experimentalWebSockets !== undefined
+                ? { experimentalWebSockets: input.experimentalWebSockets }
+                : {}),
+              ...(input.environment ? { environment: input.environment } : {}),
+            },
             ({ inventory, credentialProviderIDs }) =>
               Effect.succeed({
                 inventory,
@@ -4426,7 +4517,16 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         return withDiscoveryInventory(
-          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+          {
+            binaryPath,
+            ...(input.cwd ? { cwd: input.cwd } : {}),
+            ...(input.serverUrl ? { serverUrl: input.serverUrl } : {}),
+            ...(input.serverPassword ? { serverPassword: input.serverPassword } : {}),
+            ...(input.experimentalWebSockets !== undefined
+              ? { experimentalWebSockets: input.experimentalWebSockets }
+              : {}),
+            ...(input.environment ? { environment: input.environment } : {}),
+          },
           ({ inventory }) =>
             Effect.succeed({
               agents: flattenOpenCodeAgents(inventory.agents),
@@ -4446,6 +4546,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           ...(input.experimentalWebSockets !== undefined
             ? { experimentalWebSockets: input.experimentalWebSockets }
             : {}),
+          ...(input.environment !== undefined ? { environment: input.environment } : {}),
         };
 
         return withDiscoveryClient(discoveryInput, ({ client }) =>

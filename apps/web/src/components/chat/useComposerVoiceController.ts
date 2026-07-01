@@ -3,7 +3,12 @@
 // Layer: Chat composer hook
 // Depends on: useVoiceRecorder, ChatView voice helper logic, and the native API voice endpoint.
 
-import { type ProviderKind, type ServerProviderStatus, type ThreadId } from "@t3tools/contracts";
+import {
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { Project } from "../../types";
@@ -22,6 +27,7 @@ interface UseComposerVoiceControllerOptions {
   activeThreadId: ThreadId | null;
   threadId: ThreadId;
   selectedProvider: ProviderKind;
+  selectedProviderInstanceId: ProviderInstanceId;
   activeProviderStatus: ServerProviderStatus | null;
   pendingUserInputCount: number;
   onTranscriptReady: (transcript: string) => void;
@@ -48,6 +54,7 @@ export function useComposerVoiceController(
     activeThreadId,
     threadId,
     selectedProvider,
+    selectedProviderInstanceId,
     activeProviderStatus,
     pendingUserInputCount,
     onTranscriptReady,
@@ -65,8 +72,10 @@ export function useComposerVoiceController(
   const voiceTranscriptionRequestIdRef = useRef(0);
   const voiceThreadIdRef = useRef(threadId);
   const voiceProviderRef = useRef<ProviderKind>(selectedProvider);
+  const voiceProviderInstanceRef = useRef<ProviderInstanceId>(selectedProviderInstanceId);
   voiceThreadIdRef.current = threadId;
   voiceProviderRef.current = selectedProvider;
+  voiceProviderInstanceRef.current = selectedProviderInstanceId;
 
   const voiceRecordingDurationLabel = useMemo(
     () => formatVoiceRecordingDuration(voiceRecordingDurationMs),
@@ -166,10 +175,12 @@ export function useComposerVoiceController(
     voiceTranscriptionRequestIdRef.current = requestId;
     const requestThreadId = threadId;
     const requestProvider = selectedProvider;
+    const requestProviderInstanceId = selectedProviderInstanceId;
     const isCurrentVoiceRequest = () =>
       voiceTranscriptionRequestIdRef.current === requestId &&
       voiceThreadIdRef.current === requestThreadId &&
-      voiceProviderRef.current === requestProvider;
+      voiceProviderRef.current === requestProvider &&
+      voiceProviderInstanceRef.current === requestProviderInstanceId;
 
     try {
       const payload = await stopVoiceRecording();
@@ -183,8 +194,11 @@ export function useComposerVoiceController(
         });
         return;
       }
+      const transcriptionProviderInstanceId =
+        selectedProvider === "codex" ? selectedProviderInstanceId : ("codex" as ProviderInstanceId);
       const result = await api.server.transcribeVoice({
         provider: "codex",
+        providerInstanceId: transcriptionProviderInstanceId,
         cwd: activeProject.cwd,
         ...(activeThreadId ? { threadId: activeThreadId } : {}),
         ...payload,
@@ -234,6 +248,7 @@ export function useComposerVoiceController(
     onTranscriptReady,
     refreshVoiceStatus,
     selectedProvider,
+    selectedProviderInstanceId,
     stopVoiceRecording,
     threadId,
   ]);

@@ -235,12 +235,15 @@ export function parseGeminiDiscoveredModels(
 export const probeGeminiCapabilities = (input: {
   readonly binaryPath: string;
   readonly cwd: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly capabilities?: ModelCapabilities;
 }) =>
   Effect.tryPromise(
     () =>
       new Promise<GeminiCapabilityProbeResult>((resolve) => {
-        const env = buildGeminiProbeEnv();
+        const env = buildGeminiProbeEnv(
+          input.environment ? { ...process.env, ...input.environment } : process.env,
+        );
         const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--acp"], {
           cwd: input.cwd,
           env,

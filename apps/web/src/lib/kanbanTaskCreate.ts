@@ -15,6 +15,7 @@ import type {
   ThreadId,
 } from "@t3tools/contracts";
 
+import type { ProviderInstanceOption } from "../appSettings";
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
 import { dispatchKanbanDraftThread, type KanbanDraftDispatchResult } from "./kanbanDispatch";
 import { newThreadId } from "./utils";
@@ -66,6 +67,7 @@ export async function createAndSendKanbanTask(
     defaultProvider: ProviderKind;
     assistantDeliveryMode: AssistantDeliveryMode;
     providerOptions?: ProviderStartOptions | undefined;
+    providerInstances?: ReadonlyArray<Pick<ProviderInstanceOption, "instanceId" | "provider">>;
   },
 ): Promise<{ threadId: ThreadId; result: KanbanDraftDispatchResult }> {
   const threadId = createKanbanDraftTask(input);
@@ -76,6 +78,7 @@ export async function createAndSendKanbanTask(
     defaultProvider: input.defaultProvider,
     assistantDeliveryMode: input.assistantDeliveryMode,
     providerOptions: input.providerOptions,
+    providerInstances: input.providerInstances,
   });
   return { threadId, result };
 }

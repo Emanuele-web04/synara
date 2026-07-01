@@ -4,8 +4,8 @@
 // Exports: Vitest coverage for apps/server/src/provider/claudeProcessEnv.ts.
 import { describe, it, assert } from "@effect/vitest";
 
+import { buildClaudeProcessEnv } from "./claudeEnvironment.ts";
 import {
-  buildClaudeProcessEnv,
   hasUsableClaudeCliCredentials,
   hasUsableClaudeCliCredentialsContent,
   readClaudeCliCredentialsContentSummary,
@@ -71,6 +71,31 @@ describe("claudeProcessEnv", () => {
 
     assert.equal(result.ANTHROPIC_API_KEY, "proxy-api-key");
     assert.equal(result.ANTHROPIC_BASE_URL, "https://anthropic-proxy.example.test");
+  });
+
+  it("keeps direct credentials the provider instance sets explicitly", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        PATH: "/bin",
+        ANTHROPIC_API_KEY: "stale-inherited-key",
+      },
+      environment: { ANTHROPIC_AUTH_TOKEN: "instance-auth-token" },
+      hasClaudeCliCredentials: true,
+    });
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-auth-token");
+  });
+
+  it("overlays the instance home and looks up credentials there", () => {
+    const result = buildClaudeProcessEnv({
+      env: { HOME: "/home/default", ANTHROPIC_API_KEY: "stale-key" },
+      homePath: "/home/work-account",
+      hasClaudeCliCredentials: true,
+    });
+
+    assert.equal(result.HOME, "/home/work-account");
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
   });
 
   it("checks CLAUDE_CONFIG_DIR before the default Claude home", () => {

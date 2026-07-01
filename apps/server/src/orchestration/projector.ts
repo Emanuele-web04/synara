@@ -657,14 +657,8 @@ export function projectEvent(
           if (!thread) {
             return nextBase;
           }
-          const canAdoptFirstTurnProvider =
-            thread.latestTurn === null && thread.session === null && thread.messages.length <= 1;
           const modelSelectionPatch =
-            payload.modelSelection !== undefined &&
-            (payload.modelSelection.provider === thread.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
-              ? { modelSelection: payload.modelSelection }
-              : {};
+            payload.modelSelection !== undefined ? { modelSelection: payload.modelSelection } : {};
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {

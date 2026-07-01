@@ -23,7 +23,11 @@ import { attachmentRelativePath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  claudeHomeEnvironment,
+  makeClaudeAdapterLive,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
@@ -249,6 +253,40 @@ const THREAD_ID = ThreadId.makeUnsafe("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.makeUnsafe("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it.effect("passes provider instance environment to temporary command discovery", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      if (!adapter.listCommands) {
+        assert.fail("Expected ClaudeAdapter to expose command discovery");
+      }
+      yield* adapter.listCommands({
+        provider: "claudeAgent",
+        cwd: "/tmp/claude-work",
+        homePath: "/tmp/claude-home-work",
+        environment: { ANTHROPIC_AUTH_TOKEN: "work-token" },
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, "work-token");
+      assert.equal(createInput?.options.env?.HOME, "/tmp/claude-home-work");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it("sets Windows profile variables for configured Claude homes", () => {
+    assert.deepEqual(claudeHomeEnvironment("C:\\Users\\work\\.claude-work", "win32"), {
+      HOME: "C:\\Users\\work\\.claude-work",
+      USERPROFILE: "C:\\Users\\work\\.claude-work",
+      APPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Roaming",
+      LOCALAPPDATA: "C:\\Users\\work\\.claude-work\\AppData\\Local",
+      HOMEDRIVE: "C:",
+      HOMEPATH: "\\Users\\work\\.claude-work",
+    });
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -357,11 +395,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
-          options: {
-            effort: "max",
-          },
+          options: [{ id: "effort", value: "max" }],
         },
         runtimeMode: "full-access",
       });
@@ -382,11 +418,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
-          options: {
-            contextWindow: "1m",
-          },
+          options: [{ id: "contextWindow", value: "1m" }],
         },
         runtimeMode: "full-access",
       });
@@ -408,11 +442,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-7",
-          options: {
-            effort: "xhigh",
-          },
+          options: [{ id: "effort", value: "xhigh" }],
         },
         runtimeMode: "full-access",
       });
@@ -433,12 +465,12 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-5",
-          options: {
-            effort: "xhigh",
-            contextWindow: "1m",
-          },
+          options: [
+            { id: "effort", value: "xhigh" },
+            { id: "contextWindow", value: "1m" },
+          ],
         },
         runtimeMode: "full-access",
       });
@@ -462,9 +494,9 @@ describe("ClaudeAdapterLive", () => {
             threadId: THREAD_ID,
             provider: "claudeAgent",
             modelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-sonnet-5",
-              options: { effort },
+              options: [{ id: "effort", value: effort }],
             },
             runtimeMode: "full-access",
           });
@@ -485,11 +517,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-5",
-          options: {
-            effort: "ultracode",
-          },
+          options: [{ id: "effort", value: "ultracode" }],
         },
         runtimeMode: "full-access",
       });
@@ -514,11 +544,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
-          options: {
-            effort: "max",
-          },
+          options: [{ id: "effort", value: "max" }],
         },
         runtimeMode: "full-access",
       });
@@ -539,11 +567,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-haiku-4-5",
-          options: {
-            effort: "high",
-          },
+          options: [{ id: "effort", value: "high" }],
         },
         runtimeMode: "full-access",
       });
@@ -564,11 +590,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-haiku-4-5",
-          options: {
-            thinking: false,
-          },
+          options: [{ id: "thinking", value: false }],
         },
         runtimeMode: "full-access",
       });
@@ -591,11 +615,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
-          options: {
-            thinking: false,
-          },
+          options: [{ id: "thinking", value: false }],
         },
         runtimeMode: "full-access",
       });
@@ -616,11 +638,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
-          options: {
-            fastMode: true,
-          },
+          options: [{ id: "fastMode", value: true }],
         },
         runtimeMode: "full-access",
       });
@@ -643,11 +663,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
-          options: {
-            fastMode: true,
-          },
+          options: [{ id: "fastMode", value: true }],
         },
         runtimeMode: "full-access",
       });
@@ -668,11 +686,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
-          options: {
-            effort: "ultrathink",
-          },
+          options: [{ id: "effort", value: "ultrathink" }],
         },
         runtimeMode: "full-access",
       });
@@ -682,11 +698,9 @@ describe("ClaudeAdapterLive", () => {
         input: "Investigate the edge cases",
         attachments: [],
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-6",
-          options: {
-            effort: "ultrathink",
-          },
+          options: [{ id: "effort", value: "ultrathink" }],
         },
       });
 
@@ -779,7 +793,7 @@ describe("ClaudeAdapterLive", () => {
         threadId: THREAD_ID,
         provider: "claudeAgent",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-sonnet-4-5",
         },
         runtimeMode: "full-access",
@@ -3497,7 +3511,7 @@ describe("ClaudeAdapterLive", () => {
         threadId: session.threadId,
         input: "hello",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
         },
         attachments: [],
@@ -3526,11 +3540,9 @@ describe("ClaudeAdapterLive", () => {
           threadId: session.threadId,
           input: "hello",
           modelSelection: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-opus-4-6",
-            options: {
-              contextWindow: "1m",
-            },
+            options: [{ id: "contextWindow", value: "1m" }],
           },
           attachments: [],
         });
@@ -3562,11 +3574,9 @@ describe("ClaudeAdapterLive", () => {
         threadId: session.threadId,
         input: "hello",
         modelSelection: {
-          provider: "claudeAgent",
+          instanceId: "claudeAgent",
           model: "claude-opus-4-6",
-          options: {
-            contextWindow: "1m",
-          },
+          options: [{ id: "contextWindow", value: "1m" }],
         },
         attachments: [],
       });
@@ -3622,11 +3632,9 @@ describe("ClaudeAdapterLive", () => {
           threadId: session.threadId,
           input: "hello",
           modelSelection: {
-            provider: "claudeAgent",
+            instanceId: "claudeAgent",
             model: "claude-opus-4-6",
-            options: {
-              contextWindow: "1m",
-            },
+            options: [{ id: "contextWindow", value: "1m" }],
           },
           attachments: [],
         });

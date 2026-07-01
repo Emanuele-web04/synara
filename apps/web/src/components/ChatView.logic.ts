@@ -10,6 +10,7 @@ import {
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { buildSynaraBranchName } from "@t3tools/shared/git";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { isGenericTerminalThreadTitle } from "@t3tools/shared/terminalThreads";
@@ -397,7 +398,10 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   }
 
   const draftSelection = input.draftModelSelection;
-  if (draftSelection && draftSelection.provider === input.selectedProvider) {
+  if (
+    draftSelection &&
+    inferLegacyProviderKindFromModelSelection(draftSelection) === input.selectedProvider
+  ) {
     return false;
   }
 
@@ -406,7 +410,8 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
     return false;
   }
 
-  if (persistedSelection.provider !== input.selectedProvider) {
+  const persistedProvider = inferLegacyProviderKindFromModelSelection(persistedSelection);
+  if (persistedProvider !== input.selectedProvider) {
     return true;
   }
 
@@ -417,8 +422,7 @@ export function shouldShowComposerModelBootstrapSkeleton(input: {
   const normalizedSelectedModel =
     normalizeModelSlug(input.selectedModel, input.selectedProvider) ?? input.selectedModel;
   const normalizedPersistedModel =
-    normalizeModelSlug(persistedSelection.model, persistedSelection.provider) ??
-    persistedSelection.model;
+    normalizeModelSlug(persistedSelection.model, persistedProvider) ?? persistedSelection.model;
 
   return normalizedSelectedModel !== normalizedPersistedModel;
 }

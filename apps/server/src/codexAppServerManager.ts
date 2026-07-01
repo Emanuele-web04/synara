@@ -1,12 +1,12 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import path from "node:path";
 import readline from "node:readline";
 
 import {
   ApprovalRequestId,
   EventId,
+  type ProviderStartOptions,
   type ProviderComposerCapabilities,
   ProviderItemId,
   type ProviderListModelsResult,
@@ -16,6 +16,7 @@ import {
   type ProviderPluginDescriptor,
   type ProviderPluginDetail,
   type ProviderForkThreadInput,
+  type ProviderInstanceId,
   type ProviderReadPluginResult,
   type ProviderForkThreadResult,
   type ProviderListSkillsResult,
@@ -115,18 +116,27 @@ interface CodexSessionContext {
   reviewTurnIds: Set<TurnId>;
   nextRequestId: number;
   stopping: boolean;
+  codexOptions?: CodexDiscoveryOptions;
   discovery?: boolean;
+  discoveryKey?: string;
 }
 
 interface CodexSkillListInput {
   readonly cwd: string;
   readonly forceReload?: boolean;
   readonly threadId?: string;
+  readonly codexOptions?: CodexDiscoveryOptions;
 }
 
-interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {}
+interface CodexPluginListInput extends Omit<ProviderListPluginsInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
 
-interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {}
+interface CodexPluginReadInput extends Omit<ProviderReadPluginInput, "provider"> {
+  readonly codexOptions?: CodexDiscoveryOptions;
+}
+
+type CodexDiscoveryOptions = NonNullable<ProviderStartOptions["codex"]>;
 
 interface JsonRpcError {
   code?: number;
@@ -202,6 +212,7 @@ type CodexAppServerReviewTarget = ProviderStartReviewInput["target"];
 export interface CodexAppServerStartSessionInput {
   readonly threadId: ThreadId;
   readonly provider?: "codex";
+  readonly providerInstanceId?: ProviderInstanceId;
   readonly cwd?: string;
   readonly model?: string;
   readonly serviceTier?: string;
@@ -718,6 +729,69 @@ function setRecentCacheEntry<K, V>(
   }
 }
 
+function normalizeCodexDiscoveryOptions(
+  options: CodexDiscoveryOptions | undefined,
+): CodexDiscoveryOptions | undefined {
+  if (!options) {
+    return undefined;
+  }
+  const environment = normalizeProviderEnvironment(options.environment);
+  const normalized = {
+    ...(options.binaryPath?.trim() ? { binaryPath: options.binaryPath.trim() } : {}),
+    ...(options.homePath?.trim() ? { homePath: options.homePath.trim() } : {}),
+    ...(options.shadowHomePath?.trim() ? { shadowHomePath: options.shadowHomePath.trim() } : {}),
+    ...(options.accountId?.trim() ? { accountId: options.accountId.trim() } : {}),
+    ...(environment ? { environment } : {}),
+  } satisfies CodexDiscoveryOptions;
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderEnvironment(
+  environment: Readonly<Record<string, string>> | undefined,
+): Record<string, string> | undefined {
+  if (!environment) {
+    return undefined;
+  }
+  const normalized: Record<string, string> = {};
+  for (const [rawName, value] of Object.entries(environment)) {
+    const name = rawName.trim();
+    if (!name) {
+      continue;
+    }
+    normalized[name] = value;
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function hashCacheComponent(value: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function codexDiscoveryOptionsCacheSafe(options: CodexDiscoveryOptions): Record<string, unknown> {
+  return {
+    ...options,
+    ...(options.environment
+      ? {
+          environment: Object.fromEntries(
+            Object.entries(options.environment)
+              .toSorted(([left], [right]) => left.localeCompare(right))
+              .map(([name, value]) => [name, hashCacheComponent(value)]),
+          ),
+        }
+      : {}),
+  };
+}
+
+function codexDiscoveryOptionsCacheKey(options: CodexDiscoveryOptions | undefined): string {
+  const normalized = normalizeCodexDiscoveryOptions(options);
+  return normalized ? JSON.stringify(codexDiscoveryOptionsCacheSafe(normalized)) : "__default__";
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -772,6 +846,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const session: ProviderSession = {
         provider: "codex",
+        ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
@@ -782,18 +857,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
 
       const codexOptions = readCodexProviderOptions(input);
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
+      const codexEnvironment = codexOptions.environment;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(codexEnvironment ? { environment: codexEnvironment } : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
+          ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
+          ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+          ...(codexAccountId ? { accountId: codexAccountId } : {}),
         }),
       });
       const output = readline.createInterface({ input: child.stdout });
@@ -815,6 +900,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -1354,8 +1440,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readExternalThread(input: {
     externalThreadId: string;
     cwd?: string;
+    codexOptions?: CodexDiscoveryOptions;
   }): Promise<CodexThreadSnapshot> {
-    const context = await this.resolveContextForDiscovery(undefined, input.cwd);
+    const context = await this.resolveContextForDiscovery(
+      undefined,
+      input.cwd,
+      normalizeCodexDiscoveryOptions(input.codexOptions),
+    );
     const response = await this.sendRequest(context, "thread/read", {
       threadId: input.externalThreadId,
       includeTurns: true,
@@ -1384,10 +1475,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         provider: "codex",
         status: "connecting",
         runtimeMode: input.runtimeMode,
-        model:
-          input.modelSelection?.provider === "codex"
-            ? normalizeCodexModelSlug(input.modelSelection.model)
-            : undefined,
+        model: input.modelSelection
+          ? normalizeCodexModelSlug(input.modelSelection.model)
+          : undefined,
+        ...(input.modelSelection?.instanceId
+          ? { providerInstanceId: input.modelSelection.instanceId }
+          : {}),
         cwd: resolvedCwd,
         threadId,
         createdAt: now,
@@ -1400,18 +1493,28 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: input.runtimeMode,
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
+      const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
       const codexBinaryPath = codexOptions.binaryPath ?? "codex";
       const codexHomePath = codexOptions.homePath;
+      const codexShadowHomePath = codexOptions.shadowHomePath;
+      const codexAccountId = codexOptions.accountId;
+      const codexEnvironment = codexOptions.environment;
       this.assertSupportedCodexCliVersion({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
+        ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+        ...(codexAccountId ? { accountId: codexAccountId } : {}),
+        ...(codexEnvironment ? { environment: codexEnvironment } : {}),
       });
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
+          ...(codexEnvironment ? { env: { ...process.env, ...codexEnvironment } } : {}),
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
+          ...(codexShadowHomePath ? { shadowHomePath: codexShadowHomePath } : {}),
+          ...(codexAccountId ? { accountId: codexAccountId } : {}),
         }),
       });
       const output = readline.createInterface({ input: child.stdout });
@@ -1433,6 +1536,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         reviewTurnIds: new Set(),
         nextRequestId: 1,
         stopping: false,
+        ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       };
 
       this.sessions.set(threadId, context);
@@ -1449,15 +1553,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Fork can proceed without account metadata; model fallback will stay best-effort.
       }
 
-      const normalizedModel =
-        input.modelSelection?.provider === "codex"
-          ? resolveCodexModelForAccount(
-              normalizeCodexModelSlug(input.modelSelection.model),
-              context.account,
-            )
-          : undefined;
+      const normalizedModel = input.modelSelection
+        ? resolveCodexModelForAccount(
+            normalizeCodexModelSlug(input.modelSelection.model),
+            context.account,
+          )
+        : undefined;
       const useFastServiceTier =
-        input.modelSelection?.provider === "codex" &&
+        input.modelSelection !== undefined &&
         getModelSelectionBooleanOptionValue(input.modelSelection, "fastMode") === true;
       const forkParams = {
         threadId: sourceProviderThreadId,
@@ -1736,9 +1839,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async listSkills(input: CodexSkillListInput): Promise<ProviderListSkillsResult> {
     const cwd = input.cwd.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
@@ -1750,7 +1855,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd);
+    const context = await this.resolveContextForDiscovery(input.threadId, cwd, codexOptions);
     let response: Record<string, unknown>;
     try {
       response = await this.sendRequest<Record<string, unknown>>(context, "skills/list", {
@@ -1778,10 +1883,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   async listPlugins(input: CodexPluginListInput): Promise<ProviderListPluginsResult> {
     const cwd = input.cwd?.trim() || null;
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       cwd,
       threadId: input.threadId?.trim() || null,
       forceRemoteSync: input.forceRemoteSync === true,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     if (!input.forceReload) {
       const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
@@ -1793,7 +1900,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
     }
 
-    const context = await this.resolveContextForDiscovery(input.threadId, cwd ?? undefined);
+    const context = await this.resolveContextForDiscovery(
+      input.threadId,
+      cwd ?? undefined,
+      codexOptions,
+    );
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/list", {
       ...(cwd ? { cwds: [cwd] } : {}),
       ...(input.forceRemoteSync ? { forceRemoteSync: true } : {}),
@@ -1810,9 +1921,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   async readPlugin(input: CodexPluginReadInput): Promise<ProviderReadPluginResult> {
     const marketplacePath = input.marketplacePath.trim();
     const pluginName = input.pluginName.trim();
+    const codexOptions = normalizeCodexDiscoveryOptions(input.codexOptions);
     const cacheKey = JSON.stringify({
       marketplacePath,
       pluginName,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
     });
     const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
@@ -1822,7 +1935,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
     }
 
-    const context = await this.resolveContextForDiscovery(undefined);
+    const context = await this.resolveContextForDiscovery(undefined, undefined, codexOptions);
     const response = await this.sendRequest<Record<string, unknown>>(context, "plugin/read", {
       marketplacePath,
       pluginName,
@@ -1836,8 +1949,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return result;
   }
 
-  async listModels(threadId?: string): Promise<ProviderListModelsResult> {
-    const cacheKey = threadId?.trim() || "__default__";
+  async listModels(
+    input?:
+      | string
+      | {
+          readonly threadId?: string;
+          readonly cwd?: string;
+          readonly codexOptions?: CodexDiscoveryOptions;
+        },
+  ): Promise<ProviderListModelsResult> {
+    const threadId = typeof input === "string" ? input : input?.threadId;
+    const cwd = typeof input === "string" ? undefined : input?.cwd;
+    const codexOptions = typeof input === "string" ? undefined : input?.codexOptions;
+    const cacheKey = JSON.stringify({
+      threadId: threadId?.trim() || null,
+      cwd: cwd?.trim() || null,
+      account: codexDiscoveryOptionsCacheKey(codexOptions),
+    });
     const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
       return {
@@ -1846,7 +1974,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       };
     }
 
-    const context = await this.resolveContextForDiscovery(threadId);
+    const context = await this.resolveContextForDiscovery(threadId, cwd, codexOptions);
     const response = await this.sendRequest<Record<string, unknown>>(context, "model/list", {
       cursor: null,
       limit: 50,
@@ -1863,7 +1991,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   async transcribeVoice(
-    input: ServerVoiceTranscriptionInput,
+    input: ServerVoiceTranscriptionInput & { codexOptions?: CodexDiscoveryOptions },
   ): Promise<ServerVoiceTranscriptionResult> {
     return transcribeVoiceWithChatGptSession({
       request: input,
@@ -1871,6 +1999,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         this.resolveVoiceTranscriptionAuth({
           cwd: input.cwd,
           ...(input.threadId ? { threadId: input.threadId } : {}),
+          ...(input.codexOptions ? { codexOptions: input.codexOptions } : {}),
           refreshToken,
         }),
     });
@@ -1906,13 +2035,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private async resolveContextForDiscovery(
     threadId?: string,
     cwd?: string,
+    codexOptions?: CodexDiscoveryOptions,
   ): Promise<CodexSessionContext> {
     const normalizedThreadId = threadId?.trim();
     const normalizedCwd = cwd?.trim() || undefined;
+    const optionsKey = codexDiscoveryOptionsCacheKey(codexOptions);
+    const isCompatibleContext = (context: CodexSessionContext): boolean =>
+      codexDiscoveryOptionsCacheKey(context.codexOptions) === optionsKey;
     if (normalizedThreadId) {
       try {
         const session = this.requireSession(ThreadId.makeUnsafe(normalizedThreadId));
-        if (!normalizedCwd || session.session.cwd === normalizedCwd) {
+        if (
+          (!normalizedCwd || session.session.cwd === normalizedCwd) &&
+          isCompatibleContext(session)
+        ) {
           return session;
         }
       } catch {
@@ -1926,28 +2062,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         if (
           !activeSession.stopping &&
           !activeSession.child.killed &&
-          activeSession.session.cwd === normalizedCwd
+          activeSession.session.cwd === normalizedCwd &&
+          isCompatibleContext(activeSession)
         ) {
           return activeSession;
         }
       }
-      return this.getOrCreateDiscoverySession(normalizedCwd);
+      return this.getOrCreateDiscoverySession(normalizedCwd, codexOptions);
     }
     const firstActive = this.sessions.values().next().value;
-    if (firstActive) {
+    if (firstActive && isCompatibleContext(firstActive)) {
       return firstActive;
     }
-    return this.getOrCreateDiscoverySession(process.cwd());
+    return this.getOrCreateDiscoverySession(process.cwd(), codexOptions);
   }
 
   private async resolveVoiceTranscriptionAuth(input: {
     readonly cwd?: string;
     readonly threadId?: string;
+    readonly codexOptions?: CodexDiscoveryOptions;
     readonly refreshToken: boolean;
   }): Promise<CodexVoiceTranscriptionAuthContext> {
     // Voice transcription should always resolve auth from a fresh discovery context
     // instead of reusing a possibly stale thread-bound session token.
-    const context = await this.getOrCreateDiscoverySession(input.cwd?.trim() || process.cwd());
+    const context = await this.getOrCreateDiscoverySession(
+      input.cwd?.trim() || process.cwd(),
+      input.codexOptions,
+    );
     const readAuthStatus = async (refreshToken: boolean) => {
       const response = await this.sendRequest<Record<string, unknown>>(context, "getAuthStatus", {
         includeToken: true,
@@ -1978,23 +2119,51 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     };
   }
 
-  private async getOrCreateDiscoverySession(cwd: string): Promise<CodexSessionContext> {
+  private async getOrCreateDiscoverySession(
+    cwd: string,
+    codexOptions?: CodexDiscoveryOptions,
+  ): Promise<CodexSessionContext> {
     const normalizedCwd = cwd.trim() || process.cwd();
-    const existing = this.discoverySessions.get(normalizedCwd);
+    const normalizedCodexOptions = normalizeCodexDiscoveryOptions(codexOptions);
+    const discoveryKey = JSON.stringify({
+      cwd: normalizedCwd,
+      account: codexDiscoveryOptionsCacheKey(normalizedCodexOptions),
+    });
+    const existing = this.discoverySessions.get(discoveryKey);
     if (existing && !existing.stopping && !existing.child.killed) {
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return existing;
     }
 
     const now = new Date().toISOString();
+    const codexBinaryPath = normalizedCodexOptions?.binaryPath ?? "codex";
     this.assertSupportedCodexCliVersion({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
+      ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
+      ...(normalizedCodexOptions?.shadowHomePath
+        ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
+        : {}),
+      ...(normalizedCodexOptions?.accountId ? { accountId: normalizedCodexOptions.accountId } : {}),
+      ...(normalizedCodexOptions?.environment
+        ? { environment: normalizedCodexOptions.environment }
+        : {}),
     });
     const child = spawnCodexAppServer({
-      binaryPath: "codex",
+      binaryPath: codexBinaryPath,
       cwd: normalizedCwd,
-      env: buildCodexProcessEnv(),
+      env: buildCodexProcessEnv({
+        ...(normalizedCodexOptions?.environment
+          ? { env: { ...process.env, ...normalizedCodexOptions.environment } }
+          : {}),
+        ...(normalizedCodexOptions?.homePath ? { homePath: normalizedCodexOptions.homePath } : {}),
+        ...(normalizedCodexOptions?.shadowHomePath
+          ? { shadowHomePath: normalizedCodexOptions.shadowHomePath }
+          : {}),
+        ...(normalizedCodexOptions?.accountId
+          ? { accountId: normalizedCodexOptions.accountId }
+          : {}),
+      }),
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -2004,7 +2173,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         runtimeMode: "full-access",
         model: CODEX_DEFAULT_MODEL,
         cwd: normalizedCwd,
-        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${normalizedCwd}`),
+        threadId: ThreadId.makeUnsafe(`__codex_discovery__:${discoveryKey}`),
         createdAt: now,
         updatedAt: now,
       },
@@ -2023,10 +2192,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       reviewTurnIds: new Set(),
       nextRequestId: 1,
       stopping: false,
+      ...(normalizedCodexOptions ? { codexOptions: normalizedCodexOptions } : {}),
       discovery: true,
+      discoveryKey,
     };
 
-    this.discoverySessions.set(normalizedCwd, context);
+    this.discoverySessions.set(discoveryKey, context);
     this.attachProcessListeners(context);
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
@@ -2039,10 +2210,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         // Discovery can still function without account metadata.
       }
       this.updateSession(context, { status: "ready" });
-      this.scheduleDiscoverySessionIdleStop(normalizedCwd);
+      this.scheduleDiscoverySessionIdleStop(discoveryKey);
       return context;
     } catch (error) {
-      this.stopDiscoverySession(normalizedCwd);
+      this.stopDiscoverySession(discoveryKey);
       throw error;
     }
   }
@@ -2149,7 +2320,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
       this.emitLifecycleEvent(context, "session/exited", message);
       if (context.discovery) {
-        const discoveryKey = context.session.cwd ?? "";
+        const discoveryKey = context.discoveryKey ?? "";
         if (discoveryKey) {
           this.discoverySessions.delete(discoveryKey);
         }
@@ -2930,8 +3101,8 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   }
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
-    const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+    const latestReviewTurn = snapshot.turns
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }
@@ -3341,6 +3512,9 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
 } {
   const options = input.providerOptions?.codex;
   if (!options) {
@@ -3349,6 +3523,9 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   return {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.shadowHomePath ? { shadowHomePath: options.shadowHomePath } : {}),
+    ...(options.accountId ? { accountId: options.accountId } : {}),
+    ...(options.environment ? { environment: options.environment } : {}),
   };
 }
 
@@ -3356,9 +3533,15 @@ function assertSupportedCodexCliVersion(input: {
   readonly binaryPath: string;
   readonly cwd: string;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+  readonly environment?: Readonly<Record<string, string>>;
 }): void {
   const env = buildCodexProcessEnv({
+    ...(input.environment ? { env: { ...process.env, ...input.environment } } : {}),
     ...(input.homePath ? { homePath: input.homePath } : {}),
+    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+    ...(input.accountId ? { accountId: input.accountId } : {}),
   });
   const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,

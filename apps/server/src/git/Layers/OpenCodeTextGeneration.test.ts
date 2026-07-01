@@ -138,7 +138,7 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 };
 
 const DEFAULT_TEST_MODEL_SELECTION = {
-  provider: "opencode" as const,
+  instanceId: "opencode" as const,
   model: "openai/gpt-5",
 };
 
@@ -394,12 +394,12 @@ it.layer(OpenCodeTextGenerationTestLayer)("OpenCodeTextGenerationServiceLive", (
         cwd: process.cwd(),
         message: "which model are you",
         modelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "opencode/big-pickle",
-          options: {
-            agent: "build",
-            variant: "fast",
-          },
+          options: [
+            { id: "agent", value: "build" },
+            { id: "variant", value: "fast" },
+          ],
         },
       });
 

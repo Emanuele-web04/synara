@@ -33,6 +33,13 @@ import {
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
+import {
+  inferLegacyProviderKindFromModelSelection,
+  mergeProviderStartOptions,
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@t3tools/shared/providerInstances";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -92,6 +99,76 @@ type ProviderQueueDrainEvent = Extract<
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized && normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderOptionsForComparison(
+  provider: ProviderKind,
+  providerOptions: ProviderStartOptions | undefined,
+): Record<string, unknown> | undefined {
+  const rawOptions = providerOptions?.[provider];
+  if (!rawOptions || typeof rawOptions !== "object") {
+    return undefined;
+  }
+  const normalized = Object.fromEntries(
+    Object.entries(rawOptions)
+      .map(([key, value]) => [
+        key,
+        typeof value === "string" ? toNonEmptyProviderInput(value) : value,
+      ])
+      .filter(([, value]) => value !== undefined && value !== ""),
+  );
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function shouldRestartForProviderOptionsChange(input: {
+  readonly requestedProvider: ProviderKind;
+  readonly previousProviderOptions: ProviderStartOptions | undefined;
+  readonly requestedProviderOptions: ProviderStartOptions | undefined;
+}): boolean {
+  return !Equal.equals(
+    normalizeProviderOptionsForComparison(input.requestedProvider, input.previousProviderOptions),
+    normalizeProviderOptionsForComparison(input.requestedProvider, input.requestedProviderOptions),
+  );
+}
+
+function readNormalizedOption(options: Record<string, unknown> | undefined, key: string): string {
+  const value = options?.[key];
+  return typeof value === "string" ? value : "";
+}
+
+function shouldDropResumeCursorForProviderOptionsChange(input: {
+  readonly requestedProvider: ProviderKind;
+  readonly providerOptionsChanged: boolean;
+  readonly previousProviderOptions: ProviderStartOptions | undefined;
+  readonly requestedProviderOptions: ProviderStartOptions | undefined;
+}): boolean {
+  if (!input.providerOptionsChanged) {
+    return false;
+  }
+  const previous = normalizeProviderOptionsForComparison(
+    input.requestedProvider,
+    input.previousProviderOptions,
+  );
+  const requested = normalizeProviderOptionsForComparison(
+    input.requestedProvider,
+    input.requestedProviderOptions,
+  );
+  switch (input.requestedProvider) {
+    case "codex":
+      return (
+        readNormalizedOption(previous, "homePath") !==
+          readNormalizedOption(requested, "homePath") ||
+        readNormalizedOption(previous, "shadowHomePath") !==
+          readNormalizedOption(requested, "shadowHomePath") ||
+        readNormalizedOption(previous, "accountId") !== readNormalizedOption(requested, "accountId")
+      );
+    case "claudeAgent":
+      return (
+        readNormalizedOption(previous, "homePath") !== readNormalizedOption(requested, "homePath")
+      );
+    default:
+      return false;
+  }
 }
 
 function escapeRegExp(value: string): string {
@@ -268,6 +345,19 @@ const make = Effect.gen(function* () {
   const threadProviderOptions = new Map<string, ProviderStartOptions>();
   const threadModelSelections = new Map<string, ModelSelection>();
 
+  const cacheThreadProviderOptions = (
+    threadId: ThreadId,
+    provider: ProviderKind,
+    providerOptions: ProviderStartOptions | undefined,
+  ) => {
+    const normalized = normalizeProviderOptionsForComparison(provider, providerOptions);
+    if (normalized !== undefined && providerOptions !== undefined) {
+      threadProviderOptions.set(threadId, providerOptions);
+    } else {
+      threadProviderOptions.delete(threadId);
+    }
+  };
+
   const resolveThreadWorkspaceProject = Effect.fnUntraced(function* (
     thread: Pick<OrchestrationThread, "projectId">,
   ): Effect.fn.Return<OrchestrationProjectShell | undefined> {
@@ -311,6 +401,9 @@ const make = Effect.gen(function* () {
     const threadTextGenerationInput = resolveTextGenerationInputForSelection(
       modelSelection,
       providerOptions,
+      Schema.is(ProviderKind)(thread?.session?.providerName)
+        ? thread.session.providerName
+        : undefined,
     );
 
     if (threadTextGenerationInput || !input.useConfiguredFallback) {
@@ -319,9 +412,16 @@ const make = Effect.gen(function* () {
 
     // Non-generating chat providers still get AI titles via the configured git-writing model.
     const settings = yield* serverSettings.getSettings;
+    const fallbackInstance = resolveProviderInstance(settings, {
+      instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+    });
+    const fallbackProviderOptions = fallbackInstance
+      ? providerStartOptionsFromInstance(fallbackInstance)
+      : providerOptions;
     return resolveTextGenerationInputForSelection(
       settings.textGenerationModelSelection,
-      providerOptions,
+      fallbackProviderOptions,
+      fallbackInstance?.driver,
     );
   });
 
@@ -371,9 +471,41 @@ const make = Effect.gen(function* () {
       createdAt: input.createdAt,
     });
 
+  const resolveProviderForModelSelection = Effect.fnUntraced(function* (
+    modelSelection: ModelSelection,
+  ): Effect.fn.Return<ProviderKind> {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    const instance =
+      settings === null
+        ? undefined
+        : resolveProviderInstance(settings, {
+            instanceId: resolveModelSelectionInstanceId(modelSelection),
+          });
+    return instance?.driver ?? inferLegacyProviderKindFromModelSelection(modelSelection);
+  });
+
+  const resolveKnownProviderForModelSelection = Effect.fnUntraced(function* (
+    modelSelection: ModelSelection,
+  ): Effect.fn.Return<ProviderKind | undefined> {
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.catch(() => Effect.succeed(null)),
+    );
+    if (settings === null) {
+      return undefined;
+    }
+    return (
+      resolveProviderInstance(settings, {
+        instanceId: resolveModelSelectionInstanceId(modelSelection),
+      })?.driver ?? undefined
+    );
+  });
+
   const setThreadSessionError = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly runtimeMode?: RuntimeMode;
+    readonly modelSelection?: ModelSelection;
     readonly detail: string;
     readonly createdAt: string;
   }) {
@@ -381,12 +513,20 @@ const make = Effect.gen(function* () {
     if (!thread) {
       return;
     }
+    const errorModelSelection = input.modelSelection ?? thread.modelSelection;
+    const requestedProviderInstanceId = resolveModelSelectionInstanceId(errorModelSelection);
+    const resolvedProviderName = yield* resolveKnownProviderForModelSelection(errorModelSelection);
+    const existingBoundProviderName =
+      thread.session?.providerInstanceId !== requestedProviderInstanceId
+        ? thread.session?.providerName
+        : null;
     yield* setThreadSession({
       threadId: input.threadId,
       session: {
         threadId: input.threadId,
         status: "error",
-        providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+        providerName: existingBoundProviderName ?? resolvedProviderName ?? null,
+        providerInstanceId: thread.session?.providerInstanceId ?? requestedProviderInstanceId,
         runtimeMode: input.runtimeMode ?? thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: input.detail,
@@ -398,6 +538,44 @@ const make = Effect.gen(function* () {
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return Option.getOrUndefined(yield* projectionSnapshotQuery.getThreadDetailById(threadId));
+  });
+
+  const projectThreadStartingIfIdle = Effect.fnUntraced(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly threadId: ThreadId;
+    readonly modelSelection?: ModelSelection;
+    readonly runtimeMode?: RuntimeMode;
+    readonly createdAt: string;
+    readonly force?: boolean;
+  }) {
+    const activeRuntimeSession = yield* providerService
+      .listSessions()
+      .pipe(
+        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
+      );
+    const isLiveProjectedSession =
+      input.thread.session?.status === "running" ||
+      input.thread.session?.status === "starting" ||
+      activeRuntimeSession !== undefined;
+    if (isLiveProjectedSession && input.force !== true) {
+      return;
+    }
+
+    const projectedModelSelection = input.modelSelection ?? input.thread.modelSelection;
+    yield* setThreadSession({
+      threadId: input.threadId,
+      session: {
+        threadId: input.threadId,
+        status: "starting",
+        providerName: yield* resolveProviderForModelSelection(projectedModelSelection),
+        providerInstanceId: resolveModelSelectionInstanceId(projectedModelSelection),
+        runtimeMode: input.thread.session?.runtimeMode ?? input.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: input.createdAt,
+      },
+      createdAt: input.createdAt,
+    });
   });
 
   // Recovers the parent thread when older/local-only subagent rows are missing parentThreadId metadata.
@@ -653,19 +831,55 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
-    if (
+    const threadProvider: ProviderKind =
+      currentProvider ?? (yield* resolveProviderForModelSelection(thread.modelSelection));
+    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    const desiredProviderInstanceId = resolveModelSelectionInstanceId(desiredModelSelection);
+    const settings = yield* serverSettings.getSettings;
+    const desiredProviderInstance = resolveProviderInstance(settings, {
+      instanceId: desiredProviderInstanceId,
+    });
+    const desiredProvider =
+      desiredProviderInstance?.driver ??
+      inferLegacyProviderKindFromModelSelection(desiredModelSelection);
+    const desiredRoutedModelSelection = desiredProviderInstance
+      ? ({
+          ...desiredModelSelection,
+          instanceId: desiredProviderInstance.instanceId,
+        } as ModelSelection)
+      : desiredModelSelection;
+    const desiredInstanceProviderOptions = desiredProviderInstance
+      ? providerStartOptionsFromInstance(desiredProviderInstance)
+      : undefined;
+    const desiredEffectiveProviderOptions = mergeProviderStartOptions(
+      options?.providerOptions,
+      desiredInstanceProviderOptions,
+    );
+    const currentProviderInstanceId =
+      thread.session?.providerInstanceId ?? resolveModelSelectionInstanceId(thread.modelSelection);
+    const requestedProviderInstanceChanged =
       requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== threadProvider
+      desiredProviderInstanceId !== currentProviderInstanceId;
+    const hasBoundProviderSession = thread.session !== null && thread.session.status !== "stopped";
+    if (
+      hasBoundProviderSession &&
+      requestedModelSelection !== undefined &&
+      desiredProvider !== threadProvider
     ) {
       return yield* new ProviderAdapterRequestError({
         provider: threadProvider,
         method: "thread.turn.start",
-        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${desiredProvider}'.`,
       });
     }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
-    const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
+    if (hasBoundProviderSession && requestedProviderInstanceChanged) {
+      return yield* new ProviderAdapterRequestError({
+        provider: threadProvider,
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' is bound to provider instance '${currentProviderInstanceId}' and cannot switch to '${desiredProviderInstanceId}'.`,
+      });
+    }
+    const preferredProvider: ProviderKind = desiredProvider;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
       envMode: thread.envMode,
@@ -691,10 +905,11 @@ const make = Effect.gen(function* () {
       providerService.startSession(threadId, {
         threadId,
         ...(preferredProvider ? { provider: preferredProvider } : {}),
+        providerInstanceId: desiredProviderInstanceId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
+        modelSelection: desiredRoutedModelSelection,
+        ...(desiredEffectiveProviderOptions !== undefined
+          ? { providerOptions: desiredEffectiveProviderOptions }
           : {}),
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
@@ -707,6 +922,7 @@ const make = Effect.gen(function* () {
           threadId,
           status: mapProviderSessionStatusToOrchestrationStatus(session.status),
           providerName: session.provider,
+          providerInstanceId: session.providerInstanceId ?? desiredProviderInstanceId,
           runtimeMode: desiredRuntimeMode,
           // Provider turn ids are not orchestration turn ids.
           activeTurnId: null,
@@ -723,12 +939,17 @@ const make = Effect.gen(function* () {
     if (existingSessionThreadId) {
       const runtimeModeChanged = desiredRuntimeMode !== thread.session?.runtimeMode;
       const providerChanged =
+        requestedModelSelection !== undefined && desiredProvider !== currentProvider;
+      const currentActiveProviderInstanceId =
+        activeSession?.providerInstanceId ?? currentProviderInstanceId;
+      const providerInstanceChanged =
         requestedModelSelection !== undefined &&
-        requestedModelSelection.provider !== currentProvider;
+        desiredProviderInstanceId !== currentActiveProviderInstanceId;
       const sessionModelSwitch =
         currentProvider === undefined
           ? "in-session"
-          : (yield* providerService.getCapabilities(currentProvider)).sessionModelSwitch;
+          : (yield* providerService.getCapabilities(currentActiveProviderInstanceId))
+              .sessionModelSwitch;
       const modelChanged =
         requestedModelSelection !== undefined &&
         requestedModelSelection.model !== activeSession?.model;
@@ -738,25 +959,43 @@ const make = Effect.gen(function* () {
         (currentProvider === "claudeAgent" || currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const previousProviderOptions = threadProviderOptions.get(threadId);
+      const providerOptionsChanged = shouldRestartForProviderOptionsChange({
+        requestedProvider: desiredProvider,
+        previousProviderOptions,
+        requestedProviderOptions: desiredEffectiveProviderOptions,
+      });
 
       if (
         !runtimeModeChanged &&
         !providerChanged &&
+        !providerInstanceChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !providerOptionsChanged
       ) {
+        cacheThreadProviderOptions(threadId, desiredProvider, desiredEffectiveProviderOptions);
         return existingSessionThreadId;
       }
 
       const resumeCursor =
-        providerChanged || shouldRestartForModelChange || runtimeModeChanged
+        providerChanged ||
+        providerInstanceChanged ||
+        shouldRestartForModelChange ||
+        runtimeModeChanged ||
+        shouldDropResumeCursorForProviderOptionsChange({
+          requestedProvider: desiredProvider,
+          providerOptionsChanged,
+          previousProviderOptions,
+          requestedProviderOptions: desiredEffectiveProviderOptions,
+        })
           ? undefined
           : (activeSession?.resumeCursor ?? undefined);
       yield* Effect.logInfo("provider command reactor restarting provider session", {
         threadId,
         existingSessionThreadId,
         currentProvider,
-        desiredProvider: desiredModelSelection.provider,
+        desiredProvider,
         currentRuntimeMode: thread.session?.runtimeMode,
         desiredRuntimeMode,
         runtimeModeChanged,
@@ -764,6 +1003,7 @@ const make = Effect.gen(function* () {
         modelChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        providerOptionsChanged,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -777,6 +1017,7 @@ const make = Effect.gen(function* () {
         runtimeMode: restartedSession.runtimeMode,
       });
       yield* bindSessionToThread(restartedSession);
+      cacheThreadProviderOptions(threadId, desiredProvider, desiredEffectiveProviderOptions);
       return restartedSession.threadId;
     }
 
@@ -785,9 +1026,9 @@ const make = Effect.gen(function* () {
         sourceThreadId: thread.forkSourceThreadId,
         threadId,
         ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
-        modelSelection: desiredModelSelection,
-        ...(options?.providerOptions !== undefined
-          ? { providerOptions: options.providerOptions }
+        modelSelection: desiredRoutedModelSelection,
+        ...(desiredEffectiveProviderOptions !== undefined
+          ? { providerOptions: desiredEffectiveProviderOptions }
           : {}),
         runtimeMode: desiredRuntimeMode,
       });
@@ -806,6 +1047,7 @@ const make = Effect.gen(function* () {
             updatedAt: createdAt,
           } satisfies ProviderSession);
         yield* bindSessionToThread(forkedSession);
+        cacheThreadProviderOptions(threadId, desiredProvider, desiredEffectiveProviderOptions);
         return threadId;
       }
     }
@@ -816,6 +1058,7 @@ const make = Effect.gen(function* () {
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    cacheThreadProviderOptions(threadId, desiredProvider, desiredEffectiveProviderOptions);
     return startedSession.threadId;
   });
 
@@ -848,9 +1091,6 @@ const make = Effect.gen(function* () {
       ...(input.providerOptions !== undefined ? { providerOptions: input.providerOptions } : {}),
       ...(input.runtimeMode !== undefined ? { runtimeMode: input.runtimeMode } : {}),
     });
-    if (input.providerOptions !== undefined) {
-      threadProviderOptions.set(input.threadId, input.providerOptions);
-    }
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -876,10 +1116,10 @@ const make = Effect.gen(function* () {
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
     const selectedProvider =
-      input.modelSelection?.provider ??
-      threadModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
-      thread.modelSelection.provider;
+      (yield* resolveProviderForModelSelection(
+        input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection,
+      ));
     const shouldBootstrapPriorTranscriptContext =
       (selectedProvider === "kilo" || selectedProvider === "opencode") &&
       activeSessionBeforeEnsure === undefined &&
@@ -940,7 +1180,9 @@ const make = Effect.gen(function* () {
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"
-        : (yield* providerService.getCapabilities(activeSession.provider)).sessionModelSwitch;
+        : (yield* providerService.getCapabilities(
+            activeSession.providerInstanceId ?? activeSession.provider,
+          )).sessionModelSwitch;
     const requestedModelSelection =
       input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection;
     const modelForTurn =
@@ -1279,14 +1521,21 @@ const make = Effect.gen(function* () {
       ("model" in textGenerationInput ? textGenerationInput.model : null);
     const textGenerationProviderOptions =
       "providerOptions" in textGenerationInput ? textGenerationInput.providerOptions : undefined;
+    const threadProvider = yield* resolveProviderForModelSelection(thread.modelSelection);
+    const requestedProvider = input.modelSelection
+      ? yield* resolveProviderForModelSelection(input.modelSelection)
+      : null;
+    const textGenerationProvider = textGenerationSelection
+      ? yield* resolveProviderForModelSelection(textGenerationSelection)
+      : null;
     yield* Effect.logDebug("provider command reactor generating thread title", {
       threadId: input.threadId,
       cwd,
-      threadProvider: thread.modelSelection.provider,
+      threadProvider,
       threadModel: thread.modelSelection.model,
-      requestedProvider: input.modelSelection?.provider ?? null,
+      requestedProvider,
       requestedModel: input.modelSelection?.model ?? null,
-      textGenerationProvider: textGenerationSelection?.provider ?? null,
+      textGenerationProvider,
       textGenerationModel,
       textGenerationOptions: textGenerationSelection?.options ?? null,
       hasProviderOptions: Boolean(textGenerationProviderOptions),
@@ -1312,11 +1561,11 @@ const make = Effect.gen(function* () {
           threadId: input.threadId,
           cwd,
           reason: error.message,
-          threadProvider: thread.modelSelection.provider,
+          threadProvider,
           threadModel: thread.modelSelection.model,
-          requestedProvider: input.modelSelection?.provider ?? null,
+          requestedProvider,
           requestedModel: input.modelSelection?.model ?? null,
-          textGenerationProvider: textGenerationSelection?.provider ?? null,
+          textGenerationProvider,
           textGenerationModel,
           textGenerationOptions: textGenerationSelection?.options ?? null,
         }).pipe(Effect.as(fallbackTitle)),
@@ -1369,22 +1618,17 @@ const make = Effect.gen(function* () {
     // session's runtimeMode: ensureSessionForThread detects mode changes by
     // comparing against it, and adopting the requested mode here would mask
     // the restart.
-    if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
-      yield* setThreadSession({
-        threadId: event.payload.threadId,
-        session: {
-          threadId: event.payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          runtimeMode:
-            thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: event.payload.createdAt,
-        },
-        createdAt: event.payload.createdAt,
-      });
-    }
+    yield* projectThreadStartingIfIdle({
+      thread,
+      threadId: event.payload.threadId,
+      ...(event.payload.modelSelection !== undefined
+        ? { modelSelection: event.payload.modelSelection }
+        : {}),
+      ...(event.payload.runtimeMode !== undefined
+        ? { runtimeMode: event.payload.runtimeMode }
+        : {}),
+      createdAt: event.payload.createdAt,
+    });
 
     yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
       threadId: event.payload.threadId,
@@ -1412,9 +1656,11 @@ const make = Effect.gen(function* () {
         ? { providerOptions: event.payload.providerOptions }
         : {}),
     }).pipe(Effect.forkScoped);
+    const immediateDispatchProviderName = yield* resolveProviderForModelSelection(
+      event.payload.modelSelection ?? thread.modelSelection,
+    );
     const immediateDispatchMode =
-      event.payload.dispatchMode === "steer" &&
-      (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+      event.payload.dispatchMode === "steer" && immediateDispatchProviderName !== "codex"
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
@@ -1456,6 +1702,9 @@ const make = Effect.gen(function* () {
           yield* setThreadSessionError({
             threadId: event.payload.threadId,
             runtimeMode: event.payload.runtimeMode,
+            ...(event.payload.modelSelection !== undefined
+              ? { modelSelection: event.payload.modelSelection }
+              : {}),
             detail,
             createdAt: event.payload.createdAt,
           });
@@ -1700,6 +1949,7 @@ const make = Effect.gen(function* () {
       readonly preserveQueuedTurns?: boolean;
       readonly preserveThreadSession?: boolean;
       readonly activeTurnId?: TurnId | null;
+      readonly forceStartingProjection?: boolean;
     },
   ) {
     if (options?.preserveQueuedTurns !== true) {
@@ -1768,18 +2018,13 @@ const make = Effect.gen(function* () {
 
     const thread = yield* resolveThread(payload.threadId);
     if (thread && options?.preserveThreadSession !== true) {
-      yield* setThreadSession({
+      yield* projectThreadStartingIfIdle({
+        thread,
         threadId: payload.threadId,
-        session: {
-          threadId: payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          runtimeMode: payload.runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: payload.createdAt,
-        },
+        ...(payload.modelSelection !== undefined ? { modelSelection: payload.modelSelection } : {}),
+        runtimeMode: payload.runtimeMode,
         createdAt: payload.createdAt,
+        force: options?.forceStartingProjection === true,
       });
     }
 
@@ -1834,17 +2079,13 @@ const make = Effect.gen(function* () {
       event.payload.messageId,
     );
     if (thread && !isQueuedMessageEdit) {
-      yield* setThreadSession({
+      yield* projectThreadStartingIfIdle({
+        thread,
         threadId: event.payload.threadId,
-        session: {
-          threadId: event.payload.threadId,
-          status: "starting",
-          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
-          runtimeMode: event.payload.runtimeMode,
-          activeTurnId: null,
-          lastError: null,
-          updatedAt: event.payload.createdAt,
-        },
+        ...(event.payload.modelSelection !== undefined
+          ? { modelSelection: event.payload.modelSelection }
+          : {}),
+        runtimeMode: event.payload.runtimeMode,
         createdAt: event.payload.createdAt,
       });
     }
@@ -1860,6 +2101,7 @@ const make = Effect.gen(function* () {
       yield* processMessageEditResendPayload(event.payload, {
         skipProviderRollback: true,
         activeTurnId,
+        forceStartingProjection: true,
       });
       return;
     }
@@ -1915,6 +2157,7 @@ const make = Effect.gen(function* () {
           threadId: thread.id,
           status: "interrupted",
           providerName: thread.session.providerName ?? null,
+          providerInstanceId: thread.session.providerInstanceId ?? thread.modelSelection.instanceId,
           runtimeMode: thread.session.runtimeMode ?? DEFAULT_RUNTIME_MODE,
           // Preserve the active turn until the provider emits the terminal child event.
           activeTurnId: thread.session.activeTurnId,
@@ -1937,6 +2180,7 @@ const make = Effect.gen(function* () {
         threadId: thread.id,
         status: "stopped",
         providerName: thread.session?.providerName ?? null,
+        providerInstanceId: thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
@@ -2014,6 +2258,9 @@ const make = Effect.gen(function* () {
               setThreadSessionError({
                 threadId: event.payload.threadId,
                 runtimeMode: event.payload.runtimeMode,
+                ...(event.payload.modelSelection !== undefined
+                  ? { modelSelection: event.payload.modelSelection }
+                  : {}),
                 detail: Cause.pretty(cause),
                 createdAt: event.payload.createdAt,
               }),

@@ -125,6 +125,8 @@ export async function resolveAllowedLocalPreviewFile(input: {
   readonly requestedPath: string | null;
   readonly cwd: string | null;
   readonly codexHomePath?: string;
+  /** Additional configured Codex homes (per-instance dedicated homes). */
+  readonly codexHomePaths?: readonly string[];
   readonly allowAbsoluteLocalPreviewFile?: boolean;
   readonly previewGrant?: string | null;
 }): Promise<ResolvedLocalPreviewFile | null> {
@@ -189,8 +191,11 @@ export async function resolveAllowedLocalPreviewFile(input: {
   if (!isSupportedLocalImagePath(realFilePath)) {
     return null;
   }
+  const codexHomeCandidates = [input.codexHomePath, ...(input.codexHomePaths ?? [])];
   const generatedImagesRoots = await Promise.all(
-    resolveCodexGeneratedImagesRoots(input.codexHomePath).map(realpathOrNull),
+    [...new Set(codexHomeCandidates.flatMap((home) => resolveCodexGeneratedImagesRoots(home)))].map(
+      realpathOrNull,
+    ),
   ).then((roots) => roots.filter((root): root is string => root !== null));
   const allowed =
     generatedImagesRoots.some((root) => isPathInside(realFilePath, root)) ||

@@ -9,17 +9,19 @@ import {
   OrchestrationEventMetadata,
   OrchestrationEventType,
   ProjectId,
+  type ServerSettings,
   ThreadId,
 } from "@t3tools/contracts";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 
 import {
   toPersistenceDecodeError,
   toPersistenceSqlError,
   type OrchestrationEventStoreError,
 } from "../Errors.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
@@ -88,7 +90,10 @@ function readTrimmedString(record: Record<string, unknown>, key: string): string
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
+function normalizeLegacyEventRow(
+  row: PersistedEventRow,
+  settings?: ServerSettings,
+): PersistedEventRow {
   if (!isRecord(row.payload)) {
     return row;
   }
@@ -107,6 +112,7 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
   ) {
     payloadWithNormalizedModelSelection().defaultModelSelection = normalizePersistedModelSelection(
       originalPayload.defaultModelSelection,
+      settings,
     );
   }
 
@@ -116,6 +122,7 @@ function normalizeLegacyEventRow(row: PersistedEventRow): PersistedEventRow {
   ) {
     payloadWithNormalizedModelSelection().modelSelection = normalizePersistedModelSelection(
       originalPayload.modelSelection,
+      settings,
     );
   }
 
@@ -193,6 +200,12 @@ function toPersistenceSqlOrDecodeError(sqlOperation: string, decodeOperation: st
 
 const makeEventStore = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const maybeServerSettings = yield* Effect.serviceOption(ServerSettingsService);
+  const readSettingsForModelSelectionDecode = Option.match(maybeServerSettings, {
+    onNone: () => Effect.succeed(undefined as ServerSettings | undefined),
+    onSome: (serverSettings) =>
+      serverSettings.getSettings.pipe(Effect.orElseSucceed(() => undefined)),
+  });
 
   const appendEventRow = SqlSchema.findOne({
     Request: AppendEventRequestSchema,
@@ -327,11 +340,15 @@ const makeEventStore = Effect.gen(function* () {
             ),
           ),
           Effect.flatMap((rows) =>
-            Effect.forEach(rows, (row) =>
-              decodeEvent(normalizeLegacyEventRow(row)).pipe(
-                Effect.mapError(
-                  toPersistenceDecodeError(
-                    `OrchestrationEventStore.readFromSequence:rowToEvent(sequence=${row.sequence}, type=${row.type})`,
+            readSettingsForModelSelectionDecode.pipe(
+              Effect.flatMap((settings) =>
+                Effect.forEach(rows, (row) =>
+                  decodeEvent(normalizeLegacyEventRow(row, settings)).pipe(
+                    Effect.mapError(
+                      toPersistenceDecodeError(
+                        `OrchestrationEventStore.readFromSequence:rowToEvent(sequence=${row.sequence}, type=${row.type})`,
+                      ),
+                    ),
                   ),
                 ),
               ),

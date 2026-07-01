@@ -71,7 +71,6 @@ import {
   MAX_PINNED_PROJECTS,
   type DesktopUpdateState,
   type OrchestrationShellSnapshot,
-  PROVIDER_DISPLAY_NAMES,
   ProjectId,
   type ProviderKind,
   ThreadId,
@@ -82,6 +81,7 @@ import {
 } from "@t3tools/contracts";
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { getDefaultModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { pluralize } from "@t3tools/shared/text";
 import { localServerAddressLabel, localServerMatchesRun } from "@t3tools/shared/localServers";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
@@ -90,6 +90,7 @@ import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-
 import {
   type SidebarProjectSortOrder,
   type SidebarThreadSortOrder,
+  getProviderInstanceOptions,
   useAppSettings,
 } from "../appSettings";
 import { isElectron } from "../env";
@@ -311,8 +312,9 @@ import {
 import { getInitialBrowseQuery } from "~/lib/projectPaths";
 import {
   canCreateThreadHandoff,
-  resolveAvailableHandoffTargetProviders,
+  resolveAvailableHandoffTargets,
   resolveThreadHandoffBadgeLabel,
+  type ThreadHandoffTarget,
 } from "../lib/threadHandoff";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -2352,6 +2354,10 @@ export default function Sidebar() {
           ...(options.createIfMissing === undefined
             ? {}
             : { createIfMissing: options.createIfMissing }),
+          defaultModelSelection: {
+            instanceId: "codex",
+            model: getDefaultModel("codex"),
+          },
           loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
           maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
           delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
@@ -2509,11 +2515,12 @@ export default function Sidebar() {
 
       const providerDefaultModel = getDefaultModel(provider);
       const modelSelection =
-        activeProject.defaultModelSelection?.provider === provider
+        activeProject.defaultModelSelection &&
+        inferLegacyProviderKindFromModelSelection(activeProject.defaultModelSelection) === provider
           ? activeProject.defaultModelSelection
           : providerDefaultModel
             ? {
-                provider,
+                instanceId: provider,
                 model: providerDefaultModel,
               }
             : null;
@@ -2828,9 +2835,9 @@ export default function Sidebar() {
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
   const copyPathToClipboard = useCopyPathToClipboard();
   const handoffThread = useCallback(
-    async (thread: Thread, targetProvider: ProviderKind) => {
+    async (thread: Thread, target: ThreadHandoffTarget) => {
       try {
-        await createThreadHandoff(thread, targetProvider);
+        await createThreadHandoff(thread, target.provider, target.instanceId);
       } catch (error) {
         toastManager.add({
           type: "error",
@@ -3314,11 +3321,19 @@ export default function Sidebar() {
       });
       const threadStatus = threadSummary ? resolveThreadStatusForSidebar(threadSummary) : null;
       const handoffTargets = canHandoff
-        ? resolveAvailableHandoffTargetProviders(thread.modelSelection.provider)
+        ? resolveAvailableHandoffTargets({
+            sourceProvider: inferLegacyProviderKindFromModelSelection(thread.modelSelection),
+            sourceProviderInstanceId:
+              thread.session?.providerInstanceId ?? thread.modelSelection.instanceId,
+            providerInstances: getProviderInstanceOptions(appSettings),
+          })
         : [];
-      const handoffItems = handoffTargets.map((provider, index) => ({
-        id: `handoff:${provider}`,
-        label: `Handoff to ${PROVIDER_DISPLAY_NAMES[provider]}`,
+      const handoffTargetById = new Map(
+        handoffTargets.map((target) => [`handoff:${target.instanceId}`, target]),
+      );
+      const handoffItems = handoffTargets.map((target, index) => ({
+        id: `handoff:${target.instanceId}`,
+        label: `Handoff to ${target.label}`,
         separatorBefore: index === 0,
       }));
       const threadWorkspacePath = resolveThreadWorkspaceCwd({
@@ -3366,9 +3381,9 @@ export default function Sidebar() {
         return;
       }
       if (typeof clicked === "string" && clicked.startsWith("handoff:")) {
-        const targetProvider = clicked.slice("handoff:".length);
-        if (handoffTargets.includes(targetProvider as ProviderKind)) {
-          await handoffThread(thread, targetProvider as ProviderKind);
+        const target = handoffTargetById.get(clicked);
+        if (target) {
+          await handoffThread(thread, target);
         }
         return;
       }
@@ -3485,6 +3500,7 @@ export default function Sidebar() {
       await confirmAndDeleteThread(threadId);
     },
     [
+      appSettings,
       confirmAndArchiveThread,
       confirmAndDeleteThread,
       copyPathToClipboard,
@@ -4876,7 +4892,10 @@ export default function Sidebar() {
               <SidebarGlyph icon={TerminalIcon} variant="chrome" />
             ) : showThreadProviderAvatar ? (
               <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
+                provider={
+                  thread.session?.provider ??
+                  inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+                }
                 handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
                 handoffTooltip={handoffBadgeLabel}
                 terminalStatus={terminalStatus}
@@ -5127,7 +5146,10 @@ export default function Sidebar() {
               <SidebarGlyph icon={TerminalIcon} variant="chrome" />
             ) : showThreadProviderAvatar ? (
               <ProviderAvatarWithTerminal
-                provider={thread.session?.provider ?? thread.modelSelection.provider}
+                provider={
+                  thread.session?.provider ??
+                  inferLegacyProviderKindFromModelSelection(thread.modelSelection)
+                }
                 handoffSourceProvider={thread.handoff?.sourceProvider ?? null}
                 handoffTooltip={handoffBadgeLabel}
                 terminalStatus={terminalStatus}
@@ -7115,7 +7137,7 @@ function SidebarSearchPaletteController(props: {
           projectName: props.projectById.get(thread.projectId)?.name ?? "Unknown project",
           projectRemoteName:
             props.projectById.get(thread.projectId)?.remoteName ?? "Unknown project",
-          provider: thread.modelSelection.provider,
+          provider: inferLegacyProviderKindFromModelSelection(thread.modelSelection),
           createdAt: thread.createdAt,
           updatedAt: thread.updatedAt,
           messages: thread.messages.map((message) => ({

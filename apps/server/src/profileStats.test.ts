@@ -240,7 +240,7 @@ describe("ProfileStatsQuery", () => {
               'thread.turn-start-requested',
               '2026-06-13T09:35:00.000Z',
               'client',
-              '{"threadId":"thread-codex","modelSelection":{"provider":"codex","model":"gpt-5-codex","options":{"reasoningEffort":"high"}}}',
+              '{"threadId":"thread-codex","modelSelection":{"instanceId":"codex","model":"gpt-5-codex","options":[{"id":"reasoningEffort","value":"high"}]}}',
               '{}'
             ),
             (
@@ -267,7 +267,7 @@ describe("ProfileStatsQuery", () => {
         expect(stats.insights.topReasoning).toBe("high");
         expect(stats.insights.topReasoningPercent).toBeCloseTo(66.7);
         expect(stats.providerModels[0]).toMatchObject({
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
           turnCount: 2,
         });

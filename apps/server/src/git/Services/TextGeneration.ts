@@ -264,6 +264,14 @@ export class CodexTextGeneration extends ServiceMap.Service<
 >()("t3/git/Services/TextGeneration/CodexTextGeneration") {}
 
 /**
+ * ClaudeTextGeneration - Provider-specific Claude implementation for git text generation.
+ */
+export class ClaudeTextGeneration extends ServiceMap.Service<
+  ClaudeTextGeneration,
+  TextGenerationShape
+>()("t3/git/Services/TextGeneration/ClaudeTextGeneration") {}
+
+/**
  * OpenCodeTextGeneration - Provider-specific OpenCode implementation for git text generation.
  */
 export class OpenCodeTextGeneration extends ServiceMap.Service<

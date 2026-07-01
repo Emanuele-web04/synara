@@ -15,7 +15,7 @@ import type {
   ProviderForkThreadInput,
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
-  ProviderKind,
+  ProviderInstanceId,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
@@ -129,10 +129,10 @@ export interface ProviderServiceShape {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
-   * Read static capabilities for a provider adapter.
+   * Read static capabilities for a configured provider instance.
    */
   readonly getCapabilities: (
-    provider: ProviderKind,
+    instanceId: ProviderInstanceId,
   ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
 
   /**

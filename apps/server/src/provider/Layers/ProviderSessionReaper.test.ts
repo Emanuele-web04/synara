@@ -82,6 +82,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
           },
@@ -141,6 +142,7 @@ describe("ProviderSessionReaperLive", () => {
           {
             threadId,
             provider: "codex",
+            providerInstanceId: "codex",
             status: "running",
             lastSeenAt: "2026-01-01T00:00:00.000Z",
           },

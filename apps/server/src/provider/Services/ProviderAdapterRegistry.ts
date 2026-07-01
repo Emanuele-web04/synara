@@ -7,7 +7,7 @@
  *
  * @module ProviderAdapterRegistry
  */
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderInstanceId, ProviderKind } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -15,9 +15,16 @@ import type { ProviderAdapterError, ProviderUnsupportedError } from "../Errors.t
 import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
 
 /**
- * ProviderAdapterRegistryShape - Service API for adapter lookup by provider kind.
+ * ProviderAdapterRegistryShape - Service API for adapter lookup.
  */
 export interface ProviderAdapterRegistryShape {
+  /**
+   * Resolve an adapter facade for one configured provider instance.
+   */
+  readonly getByInstance?: (
+    instanceId: ProviderInstanceId,
+  ) => Effect.Effect<ProviderAdapterShape<ProviderAdapterError>, ProviderUnsupportedError>;
+
   /**
    * Resolve the adapter for a provider kind.
    */
@@ -29,6 +36,11 @@ export interface ProviderAdapterRegistryShape {
    * List provider kinds currently registered.
    */
   readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderKind>>;
+
+  /**
+   * List configured provider instance ids when the registry is settings-aware.
+   */
+  readonly listInstances?: () => Effect.Effect<ReadonlyArray<ProviderInstanceId>>;
 }
 
 /**

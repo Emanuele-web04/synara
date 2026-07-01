@@ -48,7 +48,7 @@ const project: OrchestrationProjectShell = {
   title: "Automation Project",
   workspaceRoot: "/tmp/automation-project",
   defaultModelSelection: {
-    provider: "codex",
+    instanceId: "codex",
     model: "gpt-5-codex",
   },
   scripts: [],
@@ -334,7 +334,7 @@ const createInput = (
   prompt: "Check stale dependencies.",
   schedule: { type: "manual" },
   modelSelection: {
-    provider: "codex",
+    instanceId: "codex",
     model: "gpt-5-codex",
   },
   worktreeMode,
@@ -1423,7 +1423,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -1488,7 +1488,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2000-01-01T00:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -2186,7 +2186,7 @@ layer("AutomationService", (it) => {
       threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
       yield* serverSettings.updateSettings({
         textGenerationModelSelection: {
-          provider: "cursor",
+          instanceId: "cursor",
           model: "composer-2",
         },
       });
@@ -2196,8 +2196,8 @@ layer("AutomationService", (it) => {
         mode: "heartbeat",
         targetThreadId,
         modelSelection: {
-          provider: "claudeAgent",
-          model: "claude-opus-4-8",
+          instanceId: "gemini",
+          model: "gemini-2.5-pro",
         },
         completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
       });
@@ -2218,7 +2218,7 @@ layer("AutomationService", (it) => {
       });
 
       assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
-        provider: "cursor",
+        instanceId: "cursor",
         model: "composer-2",
       });
     }),
@@ -3362,7 +3362,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -3419,7 +3419,7 @@ layer("AutomationService", (it) => {
         scheduledFor: "2026-06-16T10:00:00.000Z",
         permissionSnapshot: {
           provider: "codex",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           runtimeMode: "approval-required",
           interactionMode: "default",
           worktreeMode: "local",
@@ -3564,7 +3564,7 @@ layer("AutomationService", (it) => {
           scheduledFor,
           permissionSnapshot: {
             provider: "codex",
-            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
             runtimeMode: "approval-required",
             interactionMode: "default",
             worktreeMode: "local",

@@ -526,7 +526,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "openai/gpt-5-codex",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -541,7 +541,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "openai/gpt-5.4",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,
@@ -556,11 +556,11 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "opencode",
         selectedModel: "opencode/minimax-m2.5-free",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "opencode/minimax-m2.5-free",
         },
         providerModelsLoading: true,
@@ -574,7 +574,7 @@ describe("shouldShowComposerModelBootstrapSkeleton", () => {
         selectedProvider: "codex",
         selectedModel: "gpt-5.4",
         persistedModelSelection: {
-          provider: "opencode",
+          instanceId: "opencode",
           model: "openai/gpt-5.4",
         },
         draftModelSelection: null,

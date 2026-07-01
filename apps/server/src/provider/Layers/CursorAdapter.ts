@@ -9,6 +9,7 @@ import {
   ApprovalRequestId,
   type CursorModelOptions,
   EventId,
+  type ModelSelection,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
@@ -22,6 +23,10 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import {
+  getModelSelectionBooleanOptionValue,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   DateTime,
@@ -374,6 +379,22 @@ function resolveRequestedModeId(input: {
   );
 }
 
+function cursorModelOptionsFromSelection(
+  modelSelection: ModelSelection | null | undefined,
+): CursorModelOptions | undefined {
+  const reasoningEffort = getModelSelectionStringOptionValue(modelSelection, "reasoningEffort");
+  const contextWindow = getModelSelectionStringOptionValue(modelSelection, "contextWindow");
+  const fastMode = getModelSelectionBooleanOptionValue(modelSelection, "fastMode");
+  const thinking = getModelSelectionBooleanOptionValue(modelSelection, "thinking");
+  const options: CursorModelOptions = {
+    ...(reasoningEffort !== undefined ? { reasoningEffort } : {}),
+    ...(contextWindow !== undefined ? { contextWindow } : {}),
+    ...(fastMode !== undefined ? { fastMode } : {}),
+    ...(thinking !== undefined ? { thinking } : {}),
+  };
+  return Object.keys(options).length > 0 ? options : undefined;
+}
+
 function applyRequestedSessionConfiguration<E>(input: {
   readonly runtime: AcpSessionRuntimeShape;
   readonly runtimeMode: RuntimeMode;
@@ -462,8 +483,15 @@ export function makeCursorAdapter(
     const nextEventId = Effect.map(Random.nextUUIDv4, (id) => EventId.makeUnsafe(id));
     const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
+    const stampRuntimeEventForInstance = (event: ProviderRuntimeEvent): ProviderRuntimeEvent => {
+      const providerInstanceId = sessions.get(event.threadId)?.session.providerInstanceId;
+      return providerInstanceId && event.providerInstanceId !== providerInstanceId
+        ? { ...event, providerInstanceId }
+        : event;
+    };
+
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+      PubSub.publish(runtimeEventPubSub, stampRuntimeEventForInstance(event)).pipe(Effect.asVoid);
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -672,8 +700,7 @@ export function makeCursorAdapter(
             });
           }
 
-          const cursorModelSelection =
-            input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+          const cursorModelSelection = input.modelSelection;
           const existing = sessions.get(input.threadId);
           if (existing && !existing.stopped) {
             yield* stopSessionInternal(existing);
@@ -707,6 +734,9 @@ export function makeCursorAdapter(
               : {}),
             ...(providerCursorOptions?.apiEndpoint !== undefined
               ? { apiEndpoint: providerCursorOptions.apiEndpoint }
+              : {}),
+            ...(providerCursorOptions?.environment !== undefined
+              ? { environment: providerCursorOptions.environment }
               : {}),
           };
 
@@ -921,7 +951,12 @@ export function makeCursorAdapter(
             runtime: acp,
             runtimeMode: input.runtimeMode,
             interactionMode: undefined,
-            modelSelection: cursorModelSelection,
+            modelSelection: cursorModelSelection
+              ? {
+                  model: cursorModelSelection.model,
+                  options: cursorModelOptionsFromSelection(cursorModelSelection),
+                }
+              : undefined,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
@@ -929,6 +964,7 @@ export function makeCursorAdapter(
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
+            ...(input.providerInstanceId ? { providerInstanceId: input.providerInstanceId } : {}),
             status: "ready",
             runtimeMode: input.runtimeMode,
             cwd,
@@ -1117,8 +1153,7 @@ export function makeCursorAdapter(
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
-        const turnModelSelection =
-          input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
+        const turnModelSelection = input.modelSelection;
         const model = turnModelSelection?.model ?? ctx.session.model;
         const resolvedModel = resolveCursorAcpBaseModelId(model);
         yield* applyRequestedSessionConfiguration({
@@ -1130,7 +1165,7 @@ export function makeCursorAdapter(
               ? undefined
               : {
                   model,
-                  options: turnModelSelection?.options,
+                  options: cursorModelOptionsFromSelection(turnModelSelection),
                 },
           mapError: ({ cause, method }) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
@@ -1476,6 +1511,7 @@ export function makeCursorAdapter(
     const listModels: NonNullable<CursorAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim();
       const apiEndpoint = input.apiEndpoint?.trim();
+      const childEnv = input.environment ? { ...process.env, ...input.environment } : process.env;
       const effectiveBinaryPath = resolveCursorAgentBinaryPath(
         binaryPath || cursorSettings.binaryPath,
       );
@@ -1485,7 +1521,7 @@ export function makeCursorAdapter(
           binaryPath: effectiveBinaryPath,
           ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
         });
-        const env = buildCursorAgentHeadlessEnv();
+        const env = buildCursorAgentHeadlessEnv(childEnv);
         const prepared = prepareWindowsSafeProcess(command.command, command.args, {
           env,
         });

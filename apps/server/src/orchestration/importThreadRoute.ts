@@ -4,10 +4,17 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   CommandId,
+  type ModelSelection,
   type OrchestrationImportThreadInput,
+  type ProviderStartOptions,
   type ThreadHandoffImportedMessage,
   type ThreadId,
 } from "@t3tools/contracts";
+import {
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@t3tools/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
@@ -20,6 +27,7 @@ import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
 import type { ProviderAdapterRegistryShape } from "../provider/Services/ProviderAdapterRegistry";
 import type { ProviderServiceShape } from "../provider/Services/ProviderService";
+import type { ServerSettingsShape } from "../serverSettings";
 import { parseManagedWorktreeWorkspaceRoot } from "../workspace/managedWorktree";
 import {
   mapClaudeSessionMessages,
@@ -35,6 +43,57 @@ class ImportThreadError extends Data.TaggedError("ImportThreadError")<{
 
 function importMessagesError(message: string): ImportThreadError {
   return new ImportThreadError({ message });
+}
+
+let claudeHistoricalSessionEnvLock: Promise<void> = Promise.resolve();
+
+async function withSerializedProcessEnv<T>(
+  environment: Readonly<Record<string, string>> | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previousLock = claudeHistoricalSessionEnvLock;
+  let releaseLock: (() => void) | undefined;
+  claudeHistoricalSessionEnvLock = previousLock.then(
+    () =>
+      new Promise<void>((resolve) => {
+        releaseLock = resolve;
+      }),
+  );
+  await previousLock;
+
+  const environmentEntries = Object.entries(environment ?? {});
+  const previousValues = new Map<string, string | undefined>();
+  for (const [key, value] of environmentEntries) {
+    previousValues.set(key, process.env[key]);
+    process.env[key] = value;
+  }
+
+  try {
+    return await run();
+  } finally {
+    for (const [key, previousValue] of previousValues) {
+      if (previousValue === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previousValue;
+      }
+    }
+    releaseLock?.();
+  }
+}
+
+function claudeHistoricalSessionEnvironment(
+  providerOptions: ProviderStartOptions | undefined,
+): Readonly<Record<string, string>> | undefined {
+  const claudeOptions = providerOptions?.claudeAgent;
+  if (!claudeOptions) {
+    return undefined;
+  }
+  const environment = {
+    ...(claudeOptions.environment ?? {}),
+    ...(claudeOptions.homePath?.trim() ? { HOME: claudeOptions.homePath.trim() } : {}),
+  };
+  return Object.keys(environment).length > 0 ? environment : undefined;
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -63,6 +122,7 @@ export interface ImportThreadHandlerOptions {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
+  readonly serverSettings: ServerSettingsShape;
 }
 
 export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
@@ -84,9 +144,14 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
   const ensureClaudeThreadImportable = Effect.fn(function* (input: {
     readonly cwd: string | undefined;
     readonly externalId: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const claudeSessionInfo = yield* Effect.tryPromise({
-      try: () => getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+      try: () =>
+        withSerializedProcessEnv(historicalEnv, () =>
+          getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+        ),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -116,6 +181,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly externalId: string;
     readonly projectWorkspaceRoot: string;
     readonly fallbackCwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) {
     const adapter = yield* options.providerAdapterRegistry.getByProvider(input.provider);
     if (!adapter.readExternalThread) return null;
@@ -124,6 +190,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       .readExternalThread({
         externalThreadId: input.externalId,
         ...(input.fallbackCwd ? { cwd: input.fallbackCwd } : {}),
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
       })
       .pipe(Effect.catch(() => Effect.succeed(null)));
     const externalCwd = snapshot?.cwd?.trim();
@@ -229,11 +296,15 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly cwd: string | undefined;
     readonly externalId: string;
     readonly importedAt: string;
+    readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const sessionMessages = yield* Effect.tryPromise({
       try: () =>
-        getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+        withSerializedProcessEnv(historicalEnv, () =>
+          getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
+        ),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -282,6 +353,28 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     });
   });
 
+  const resolveThreadProviderOptions = Effect.fn(function* (input: {
+    readonly modelSelection: ModelSelection;
+  }) {
+    const settings = yield* options.serverSettings.getSettings.pipe(
+      Effect.mapError((cause) =>
+        importMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to load provider instance settings.",
+        ),
+      ),
+    );
+    const instanceId = resolveModelSelectionInstanceId(input.modelSelection);
+    const instance = resolveProviderInstance(settings, { instanceId });
+    if (!instance) {
+      return yield* Effect.fail(
+        importMessagesError(`Unknown provider instance '${instanceId}' for thread import.`),
+      );
+    }
+    return { instance, providerOptions: providerStartOptionsFromInstance(instance) };
+  });
+
   return Effect.fnUntraced(function* (body: ImportThreadRequest) {
     const threadOption = yield* options.projectionSnapshotQuery.getThreadDetailById(body.threadId);
     if (Option.isNone(threadOption)) {
@@ -311,17 +404,20 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : [],
     });
     const externalId = body.externalId.trim();
+    const resolvedProvider = yield* resolveThreadProviderOptions({
+      modelSelection: thread.modelSelection,
+    });
+    const provider = resolvedProvider.instance.driver;
+    const providerOptions = resolvedProvider.providerOptions;
 
     const importedProviderContext =
-      (thread.modelSelection.provider === "codex" ||
-        thread.modelSelection.provider === "kilo" ||
-        thread.modelSelection.provider === "opencode") &&
-      project
+      (provider === "codex" || provider === "kilo" || provider === "opencode") && project
         ? yield* resolveImportedProviderThreadContext({
-            provider: thread.modelSelection.provider,
+            provider,
             externalId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
+            ...(providerOptions ? { providerOptions } : {}),
           })
         : null;
 
@@ -334,48 +430,47 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
-    if (thread.modelSelection.provider === "claudeAgent") {
+    if (provider === "claudeAgent") {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
+        ...(providerOptions ? { providerOptions } : {}),
       });
     }
 
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
-      provider: thread.modelSelection.provider,
+      provider,
       ...((importedProviderContext?.runtimeCwd ?? cwd)
         ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
         : {}),
       modelSelection: thread.modelSelection,
+      ...(providerOptions ? { providerOptions } : {}),
       resumeCursor:
-        thread.modelSelection.provider === "claudeAgent"
+        provider === "claudeAgent"
           ? { resume: externalId }
-          : thread.modelSelection.provider === "kilo" ||
-              thread.modelSelection.provider === "opencode"
+          : provider === "kilo" || provider === "opencode"
             ? { openCodeSessionId: externalId }
             : { threadId: externalId },
       runtimeMode: thread.runtimeMode,
     });
 
-    if (thread.modelSelection.provider === "codex") {
+    if (provider === "codex") {
       yield* importCodexThreadHistory({
         threadId: thread.id,
         importedAt: session.updatedAt,
       });
-    } else if (thread.modelSelection.provider === "claudeAgent") {
+    } else if (provider === "claudeAgent") {
       yield* importClaudeThreadHistory({
         threadId: thread.id,
         externalId,
         cwd,
+        ...(providerOptions ? { providerOptions } : {}),
         importedAt: session.updatedAt,
       });
-    } else if (
-      thread.modelSelection.provider === "kilo" ||
-      thread.modelSelection.provider === "opencode"
-    ) {
+    } else if (provider === "kilo" || provider === "opencode") {
       yield* importOpenCodeCompatibleThreadHistory({
-        provider: thread.modelSelection.provider,
+        provider,
         threadId: thread.id,
         importedAt: session.updatedAt,
       });
@@ -389,6 +484,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         threadId: thread.id,
         status: mapProviderSessionStatusToOrchestrationStatus(session.status),
         providerName: session.provider,
+        providerInstanceId: session.providerInstanceId ?? thread.modelSelection.instanceId,
         runtimeMode: thread.runtimeMode,
         activeTurnId: null,
         lastError: session.lastError ?? null,

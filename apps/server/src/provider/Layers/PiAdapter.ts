@@ -31,6 +31,7 @@ import {
   TurnId,
   type UserInputQuestion,
 } from "@t3tools/contracts";
+import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -1618,12 +1619,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const sessionManager = sessionFile
           ? piSdk.SessionManager.open(sessionFile, undefined, cwd)
           : piSdk.SessionManager.create(cwd);
-        const modelId =
-          input.modelSelection?.provider === "pi" ? input.modelSelection.model : undefined;
-        const thinkingLevel =
-          input.modelSelection?.provider === "pi"
-            ? normalizePiThinkingLevel(input.modelSelection.options?.thinkingLevel)
-            : undefined;
+        const modelId = input.modelSelection?.model;
+        const thinkingLevel = normalizePiThinkingLevel(
+          getModelSelectionStringOptionValue(input.modelSelection, "thinkingLevel"),
+        );
         const existingContext = sessions.get(input.threadId);
         if (existingContext) {
           sessions.delete(input.threadId);
@@ -1821,7 +1820,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             issue: "A Pi turn is already active for this thread.",
           });
         }
-        if (input.modelSelection?.provider === "pi") {
+        if (input.modelSelection) {
           const model = findModelInRegistry(context.modelRegistry, input.modelSelection.model);
           if (!model) {
             return yield* new ProviderAdapterValidationError({
@@ -1841,7 +1840,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               }),
           });
           const thinkingLevel = normalizePiThinkingLevel(
-            input.modelSelection.options?.thinkingLevel,
+            getModelSelectionStringOptionValue(input.modelSelection, "thinkingLevel"),
           );
           if (thinkingLevel) {
             context.runtime.session.setThinkingLevel(thinkingLevel);

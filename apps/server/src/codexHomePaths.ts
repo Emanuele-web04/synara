@@ -8,22 +8,38 @@
 // Exports: overlay constants, base/overlay home resolvers, write-home + allowlist helpers.
 
 import { homedir } from "node:os";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 export const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
+export const DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR = "accounts";
 export const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
   "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
 
 export interface CodexHomePathsInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly shadowHomePath?: string;
+  readonly accountId?: string;
+}
+
+function expandHomePath(input: string): string {
+  if (input === "~") {
+    return homedir();
+  }
+  if (input.startsWith("~/")) {
+    return path.join(homedir(), input.slice(2));
+  }
+  return input;
 }
 
 export function resolveBaseCodexHomePath(
   env: NodeJS.ProcessEnv,
   explicitHomePath?: string,
 ): string {
-  return explicitHomePath?.trim() || env.CODEX_HOME?.trim() || path.join(homedir(), ".codex");
+  return expandHomePath(
+    explicitHomePath?.trim() || env.CODEX_HOME?.trim() || path.join(homedir(), ".codex"),
+  );
 }
 
 export function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolean {
@@ -34,10 +50,35 @@ export function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolea
 export function resolveDpCodeCodexHomeOverlayPath(
   env: NodeJS.ProcessEnv,
   sourceHomePath: string,
+  accountSegment?: string,
 ): string {
   const runtimeHome = env.SYNARA_HOME?.trim() || env.DPCODE_HOME?.trim() || env.T3CODE_HOME?.trim();
   const overlayRoot = runtimeHome || path.join(path.dirname(sourceHomePath), ".synara", "runtime");
-  return path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
+  const overlayHome = path.join(overlayRoot, DPCODE_CODEX_HOME_OVERLAY_DIR);
+  return accountSegment
+    ? path.join(overlayHome, DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR, accountSegment)
+    : overlayHome;
+}
+
+export function resolveCodexHomeOverlayAccountSegment(
+  input: Pick<CodexHomePathsInput, "accountId" | "homePath" | "shadowHomePath">,
+): string | undefined {
+  const accountId = input.accountId?.trim();
+  const shadowHomePath = input.shadowHomePath?.trim();
+  if ((!accountId || accountId === "default") && !shadowHomePath) {
+    return undefined;
+  }
+
+  const label = (accountId || "shadow").replace(/[^A-Za-z0-9_-]+/g, "-").slice(0, 32) || "codex";
+  const digest = createHash("sha256")
+    .update(accountId ?? "")
+    .update("\0")
+    .update(input.homePath ?? "")
+    .update("\0")
+    .update(shadowHomePath ?? "")
+    .digest("hex")
+    .slice(0, 12);
+  return `${label}-${digest}`;
 }
 
 /**
@@ -50,9 +91,19 @@ export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {})
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
   if (!shouldDisableDpCodeBrowserPlugin(env)) {
-    return source;
+    return input.shadowHomePath ? resolveBaseCodexHomePath(env, input.shadowHomePath) : source;
   }
-  const overlay = resolveDpCodeCodexHomeOverlayPath(env, source);
+  const overlay = resolveDpCodeCodexHomeOverlayPath(
+    env,
+    source,
+    resolveCodexHomeOverlayAccountSegment({
+      homePath: source,
+      ...(input.accountId ? { accountId: input.accountId } : {}),
+      ...(input.shadowHomePath
+        ? { shadowHomePath: resolveBaseCodexHomePath(env, input.shadowHomePath) }
+        : {}),
+    }),
+  );
   return path.resolve(source) === path.resolve(overlay) ? source : overlay;
 }
 
@@ -70,8 +121,29 @@ export function resolveCodexHomeAllowlistCandidates(
 ): readonly string[] {
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
+  const shadow = input.shadowHomePath
+    ? resolveBaseCodexHomePath(env, input.shadowHomePath)
+    : undefined;
+  const accountSegment = resolveCodexHomeOverlayAccountSegment({
+    homePath: source,
+    ...(input.accountId ? { accountId: input.accountId } : {}),
+    ...(shadow ? { shadowHomePath: shadow } : {}),
+  });
   const overlay = resolveDpCodeCodexHomeOverlayPath(env, source);
+  const accountOverlay = accountSegment
+    ? resolveDpCodeCodexHomeOverlayPath(env, source, accountSegment)
+    : undefined;
   const sourceResolved = path.resolve(source);
   const overlayResolved = path.resolve(overlay);
-  return sourceResolved === overlayResolved ? [source] : [source, overlay];
+  const candidates = sourceResolved === overlayResolved ? [source] : [source, overlay];
+  if (
+    accountOverlay &&
+    !candidates.some((candidate) => path.resolve(candidate) === path.resolve(accountOverlay))
+  ) {
+    candidates.push(accountOverlay);
+  }
+  if (shadow && !candidates.some((candidate) => path.resolve(candidate) === path.resolve(shadow))) {
+    candidates.push(shadow);
+  }
+  return candidates;
 }

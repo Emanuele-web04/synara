@@ -646,7 +646,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
     return {
       ...status,
       versionAdvisory: createProviderVersionAdvisory({
-        provider: status.provider,
+        provider: maintenanceCapabilities.provider,
         currentVersion: status.version ?? null,
         checkedAt: status.checkedAt,
         maintenanceCapabilities,
@@ -658,7 +658,7 @@ export const enrichProviderStatusWithVersionAdvisory = Effect.fn(
   return {
     ...status,
     versionAdvisory: createProviderVersionAdvisory({
-      provider: status.provider,
+      provider: maintenanceCapabilities.provider,
       currentVersion: status.version,
       latestVersion,
       checkedAt: DateTime.formatIso(yield* DateTime.now),

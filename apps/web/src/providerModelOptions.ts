@@ -21,11 +21,17 @@ import type {
   OpenCodeModelSelection,
   PiModelOptions,
   PiModelSelection,
+  ProviderInstanceId,
   ProviderKind,
   ProviderModelOptions,
+  ProviderOptionSelections,
 } from "@t3tools/contracts";
 
 export type ProviderOptions = ProviderModelOptions[ProviderKind];
+
+export interface ModelSelectionBuildMetadata {
+  readonly instanceId?: ProviderInstanceId | null | undefined;
+}
 
 export interface ProviderModelOption {
   slug: string;
@@ -313,120 +319,110 @@ export function buildProviderOptionPatch(
   return { [optionId]: value };
 }
 
+export function providerOptionsFromSelections(
+  provider: ProviderKind,
+  selections: ProviderOptionSelections | null | undefined,
+): ProviderOptions | null {
+  if (!selections || selections.length === 0) {
+    return null;
+  }
+
+  let options: ProviderOptions | null = null;
+  for (const selection of selections) {
+    options = buildNextProviderOptions(
+      provider,
+      options,
+      buildProviderOptionPatch(provider, selection.id, selection.value),
+    );
+  }
+  return options;
+}
+
 export function buildModelSelection(
   provider: "codex",
   model: string,
   options?: CodexModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CodexModelSelection;
 export function buildModelSelection(
   provider: "claudeAgent",
   model: string,
   options?: ClaudeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ClaudeModelSelection;
 export function buildModelSelection(
   provider: "cursor",
   model: string,
   options?: CursorModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): CursorModelSelection;
 export function buildModelSelection(
   provider: "gemini",
   model: string,
   options?: GeminiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GeminiModelSelection;
 export function buildModelSelection(
   provider: "grok",
   model: string,
   options?: GrokModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): GrokModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): OpenCodeModelSelection;
 export function buildModelSelection(
   provider: "kilo",
   model: string,
   options?: OpenCodeModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): KiloModelSelection;
 export function buildModelSelection(
   provider: "pi",
   model: string,
   options?: PiModelOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): PiModelSelection;
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection;
+
 export function buildModelSelection(
   provider: ProviderKind,
   model: string,
   options?: ProviderOptions | null | undefined,
+  metadata?: ModelSelectionBuildMetadata,
 ): ModelSelection {
-  switch (provider) {
-    case "codex":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CodexModelOptions,
-          }
-        : { provider, model };
-    case "claudeAgent":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as ClaudeModelOptions,
-          }
-        : { provider, model };
-    case "cursor":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as CursorModelOptions,
-          }
-        : { provider, model };
-    case "gemini":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GeminiModelOptions,
-          }
-        : { provider, model };
-    case "grok":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as GrokModelOptions,
-          }
-        : { provider, model };
-    case "kilo":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
-    case "opencode":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as OpenCodeModelOptions,
-          }
-        : { provider, model };
-    case "pi":
-      return options
-        ? {
-            provider,
-            model,
-            options: options as PiModelOptions,
-          }
-        : { provider, model };
+  const instanceId = metadata?.instanceId?.trim() || provider;
+  const selections = providerOptionsToSelections(options);
+  return selections ? { instanceId, model, options: selections } : { instanceId, model };
+}
+
+function providerOptionsToSelections(
+  options: ProviderOptions | null | undefined,
+): ProviderOptionSelections | undefined {
+  if (!options) {
+    return undefined;
   }
+  const selections: Array<{ id: string; value: string | boolean }> = [];
+  for (const [id, value] of Object.entries(options)) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      selections.push({ id, value: value.trim() });
+      continue;
+    }
+    if (typeof value === "boolean") {
+      selections.push({ id, value });
+      continue;
+    }
+    if (typeof value === "number" && Number.isFinite(value)) {
+      selections.push({ id, value: String(value) });
+    }
+  }
+  return selections.length > 0 ? selections : undefined;
 }

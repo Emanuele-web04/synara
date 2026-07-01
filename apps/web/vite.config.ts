@@ -120,9 +120,13 @@ export default defineConfig({
   ],
   optimizeDeps: {
     include: [
+      "@base-ui/react/preview-card",
       "@pierre/diffs",
       "@pierre/diffs/react",
       "@pierre/diffs/worker/worker.js",
+      "react",
+      "react-dom",
+      "react-dom/client",
       "react-icons/gr",
     ],
   },

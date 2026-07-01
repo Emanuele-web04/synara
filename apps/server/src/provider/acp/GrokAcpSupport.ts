@@ -22,6 +22,7 @@ export interface GrokAcpRuntimeSettings {
   readonly model?: string;
   readonly reasoningEffort?: GrokModelOptions["reasoningEffort"];
   readonly alwaysApprove?: boolean;
+  readonly environment?: Readonly<Record<string, string>>;
 }
 
 export interface GrokAcpRuntimeInput extends Omit<
@@ -78,6 +79,7 @@ export function buildGrokAcpSpawnInput(
     command: grokSettings?.binaryPath || "grok",
     args,
     cwd,
+    ...(grokSettings?.environment ? { env: grokSettings.environment } : {}),
   };
 }
 
@@ -87,26 +89,31 @@ function availableAuthMethodIds(
   return new Set((initializeResult.authMethods ?? []).map((method) => method.id.trim()));
 }
 
-export const resolveGrokAcpAuthMethodId = (
-  initializeResult: EffectAcpSchema.InitializeResponse,
-): Effect.Effect<string, EffectAcpErrors.AcpError> =>
-  Effect.gen(function* () {
-    const authMethodIds = availableAuthMethodIds(initializeResult);
-    if (hasGrokApiKeyEnv() && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
-      return GROK_API_KEY_AUTH_METHOD_ID;
-    }
-    if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
-      return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
-    }
-    return yield* new EffectAcpErrorsRuntime.AcpRequestError({
-      code: -32602,
-      errorMessage: "Grok ACP authentication is unavailable.",
-      data: {
-        authMethods: [...authMethodIds],
-        detail: "Run `grok` to authenticate locally, or set XAI_API_KEY.",
-      },
+export const resolveGrokAcpAuthMethodIdForEnv =
+  (environment?: Readonly<Record<string, string>> | undefined) =>
+  (
+    initializeResult: EffectAcpSchema.InitializeResponse,
+  ): Effect.Effect<string, EffectAcpErrors.AcpError> =>
+    Effect.gen(function* () {
+      const authMethodIds = availableAuthMethodIds(initializeResult);
+      const effectiveEnv = environment ? { ...process.env, ...environment } : process.env;
+      if (hasGrokApiKeyEnv(effectiveEnv) && authMethodIds.has(GROK_API_KEY_AUTH_METHOD_ID)) {
+        return GROK_API_KEY_AUTH_METHOD_ID;
+      }
+      if (authMethodIds.has(GROK_CACHED_TOKEN_AUTH_METHOD_ID)) {
+        return GROK_CACHED_TOKEN_AUTH_METHOD_ID;
+      }
+      return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+        code: -32602,
+        errorMessage: "Grok ACP authentication is unavailable.",
+        data: {
+          authMethods: [...authMethodIds],
+          detail: "Run `grok` to authenticate locally, or set XAI_API_KEY.",
+        },
+      });
     });
-  });
+
+export const resolveGrokAcpAuthMethodId = resolveGrokAcpAuthMethodIdForEnv();
 
 export const makeGrokAcpRuntime = (
   input: GrokAcpRuntimeInput,
@@ -116,7 +123,7 @@ export const makeGrokAcpRuntime = (
       AcpSessionRuntime.layer({
         ...input,
         spawn: buildGrokAcpSpawnInput(input.grokSettings, input.cwd),
-        resolveAuthMethodId: resolveGrokAcpAuthMethodId,
+        resolveAuthMethodId: resolveGrokAcpAuthMethodIdForEnv(input.grokSettings?.environment),
         authenticateMeta: { headless: true },
       }).pipe(
         Layer.provide(

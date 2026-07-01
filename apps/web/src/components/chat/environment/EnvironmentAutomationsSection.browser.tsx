@@ -20,7 +20,7 @@ const baseAutomation = (overrides: Partial<AutomationDefinition> = {}): Automati
   schedule: { type: "interval", everySeconds: 180 },
   enabled: true,
   nextRunAt: "2026-06-21T15:00:00.000Z",
-  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+  modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
   runtimeMode: "approval-required",
   interactionMode: "default",
   worktreeMode: "worktree",

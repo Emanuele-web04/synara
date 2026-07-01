@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import {
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -538,6 +539,88 @@ describe("buildCodexProcessEnv", () => {
       expect(readFileSync(overlayAuthPath, "utf8")).toContain("fresh");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("uses an account-scoped overlay with private files from the Codex shadow home", () => {
+    const sharedHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-shared-"));
+    const shadowHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-shadow-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      const sharedSessionsDir = path.join(sharedHome, "sessions");
+      mkdirSync(sharedSessionsDir, { recursive: true });
+      writeFileSync(path.join(sharedHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(sharedHome, "auth.json"), '{"source":"shared"}', "utf8");
+      writeFileSync(path.join(sharedHome, "models_cache.json"), '{"models":["shared"]}', "utf8");
+      writeFileSync(path.join(shadowHome, "auth.json"), '{"source":"shadow"}', "utf8");
+      writeFileSync(path.join(shadowHome, "models_cache.json"), '{"models":["shadow"]}', "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: sharedHome,
+        shadowHomePath: shadowHome,
+        accountId: "work",
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toContain(path.join("codex-home-overlay", "accounts"));
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(readFileSync(path.join(codexHome, "config.toml"), "utf8")).toContain(
+        '[plugins."dpcode-browser@local"]\nenabled = false',
+      );
+      expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(sharedSessionsDir);
+      expect(readlinkSync(path.join(codexHome, "auth.json"))).toBe(
+        path.join(shadowHome, "auth.json"),
+      );
+      expect(readlinkSync(path.join(codexHome, "models_cache.json"))).toBe(
+        path.join(shadowHome, "models_cache.json"),
+      );
+      expect(readFileSync(path.join(codexHome, "auth.json"), "utf8")).toContain("shadow");
+    } finally {
+      rmSync(sharedHome, { recursive: true, force: true });
+      rmSync(shadowHome, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("links configured account private auth files into account overlays without a shadow home", () => {
+    const accountHome = mkdtempSync(path.join(os.tmpdir(), "t3-codex-account-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      const accountSessionsDir = path.join(accountHome, "sessions");
+      mkdirSync(accountSessionsDir, { recursive: true });
+      writeFileSync(path.join(accountHome, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(path.join(accountHome, "auth.json"), '{"source":"account"}', "utf8");
+      writeFileSync(path.join(accountHome, "models_cache.json"), '{"models":["account"]}', "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: accountHome,
+        accountId: "work",
+        platform: "darwin",
+      });
+
+      const codexHome = env.CODEX_HOME;
+      if (typeof codexHome !== "string") {
+        throw new Error("Expected CODEX_HOME to be set.");
+      }
+      expect(codexHome).toContain(path.join("codex-home-overlay", "accounts"));
+      expect(lstatSync(path.join(codexHome, "sessions")).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(path.join(codexHome, "sessions"))).toBe(accountSessionsDir);
+      expect(readlinkSync(path.join(codexHome, "auth.json"))).toBe(
+        path.join(accountHome, "auth.json"),
+      );
+      expect(readlinkSync(path.join(codexHome, "models_cache.json"))).toBe(
+        path.join(accountHome, "models_cache.json"),
+      );
+      expect(readFileSync(path.join(codexHome, "auth.json"), "utf8")).toContain("account");
+    } finally {
+      rmSync(accountHome, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
@@ -1221,6 +1304,62 @@ describe("CodexAppServerManager discovery", () => {
     ]);
   });
 
+  it("passes explicit Codex account options to model discovery context resolution", async () => {
+    const manager = new CodexAppServerManager();
+    const context = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_1",
+        runtimeMode: "full-access",
+        model: "gpt-5.5",
+        resumeCursor: { threadId: "thread_1" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+    };
+
+    const resolveContextForDiscovery = vi
+      .spyOn(
+        manager as unknown as {
+          resolveContextForDiscovery: (
+            threadId?: string,
+            cwd?: string,
+            codexOptions?: unknown,
+          ) => unknown;
+        },
+        "resolveContextForDiscovery",
+      )
+      .mockReturnValue(context);
+    vi.spyOn(
+      manager as unknown as {
+        sendRequest: (...args: unknown[]) => Promise<unknown>;
+      },
+      "sendRequest",
+    ).mockResolvedValue({
+      result: {
+        items: [],
+      },
+    });
+
+    await manager.listModels({
+      codexOptions: {
+        accountId: "default",
+      },
+    });
+
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, undefined, {
+      accountId: "default",
+    });
+  });
+
   it("uses a cwd-scoped discovery session instead of an unrelated active session", async () => {
     const manager = new CodexAppServerManager();
     const activeContext = {
@@ -1318,9 +1457,93 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_missing",
     });
 
-    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo-b");
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo-b", undefined);
     expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "skills/list", {
       cwds: ["/repo-b"],
+    });
+  });
+
+  it("does not satisfy default discovery from an account-scoped active session", async () => {
+    const manager = new CodexAppServerManager();
+    const activeContext = {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: "thread_active",
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        cwd: "/repo",
+        resumeCursor: { threadId: "thread_active" },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      codexOptions: {
+        accountId: "work",
+        shadowHomePath: "/tmp/work-codex-auth",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      child: {
+        killed: false,
+      },
+      output: {
+        close: vi.fn(),
+      },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+    const discoveryContext = {
+      ...activeContext,
+      session: {
+        ...activeContext.session,
+        threadId: "__codex_discovery__:/repo",
+      },
+      codexOptions: undefined,
+      discovery: true,
+    };
+
+    (
+      manager as unknown as {
+        sessions: Map<string, unknown>;
+      }
+    ).sessions.set("thread_active", activeContext);
+
+    const getOrCreateDiscoverySession = vi
+      .spyOn(
+        manager as unknown as {
+          getOrCreateDiscoverySession: (cwd: string, codexOptions?: unknown) => Promise<unknown>;
+        },
+        "getOrCreateDiscoverySession",
+      )
+      .mockResolvedValue(discoveryContext);
+    const sendRequest = vi
+      .spyOn(
+        manager as unknown as {
+          sendRequest: (...args: unknown[]) => Promise<unknown>;
+        },
+        "sendRequest",
+      )
+      .mockResolvedValue({
+        result: {
+          items: [],
+        },
+      });
+
+    await manager.listModels({ cwd: "/repo" });
+
+    expect(getOrCreateDiscoverySession).toHaveBeenCalledWith("/repo", undefined);
+    expect(sendRequest).toHaveBeenCalledWith(discoveryContext, "model/list", {
+      cursor: null,
+      limit: 50,
+      includeHidden: false,
     });
   });
 
@@ -1398,7 +1621,7 @@ describe("CodexAppServerManager discovery", () => {
       threadId: "thread_1",
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo", undefined);
     expect(sendRequest).toHaveBeenCalledWith(context, "skills/list", {
       cwds: ["/repo"],
     });
@@ -1575,7 +1798,7 @@ describe("CodexAppServerManager discovery", () => {
       forceRemoteSync: true,
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo");
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith("thread_1", "/repo", undefined);
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/list", {
       cwds: ["/repo"],
       forceRemoteSync: true,
@@ -1724,7 +1947,7 @@ describe("CodexAppServerManager discovery", () => {
       pluginName: "github",
     });
 
-    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined);
+    expect(resolveContextForDiscovery).toHaveBeenCalledWith(undefined, undefined, undefined);
     expect(sendRequest).toHaveBeenCalledWith(context, "plugin/read", {
       marketplacePath: "/Users/test/.agents/plugins/marketplace.json",
       pluginName: "github",

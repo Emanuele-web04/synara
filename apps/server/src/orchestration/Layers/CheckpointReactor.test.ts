@@ -44,6 +44,7 @@ import {
   checkpointRefForThreadTurnStart,
 } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
@@ -284,6 +285,7 @@ describe("CheckpointReactor", () => {
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(CheckpointStoreLive.pipe(Layer.provide(GitCoreLive))),
       Layer.provideMerge(ServerConfigLayer),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
     );
@@ -305,7 +307,7 @@ describe("CheckpointReactor", () => {
         title: "Test Project",
         workspaceRoot: options?.projectWorkspaceRoot ?? cwd,
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         createdAt,
@@ -319,7 +321,7 @@ describe("CheckpointReactor", () => {
         projectId: asProjectId("project-1"),
         title: "Thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5-codex",
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,

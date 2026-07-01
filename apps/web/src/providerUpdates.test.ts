@@ -19,6 +19,8 @@ function providerStatus(
 ): ServerProviderStatus {
   return {
     provider,
+    instanceId: provider,
+    driver: provider,
     status: "ready",
     available: true,
     authStatus: "authenticated",
@@ -49,10 +51,16 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
     enableProviderUpdateChecks: true,
     defaultThreadEnvMode: "local",
     addProjectBaseDirectory: "",
-    textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+    textGenerationModelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
     providers: {
-      codex: { ...provider, binaryPath: "codex", homePath: "" },
-      claudeAgent: { ...provider, binaryPath: "claude", launchArgs: "" },
+      codex: {
+        ...provider,
+        binaryPath: "codex",
+        homePath: "",
+        selectedAccountId: "default",
+        accounts: [],
+      },
+      claudeAgent: { ...provider, binaryPath: "claude", homePath: "", launchArgs: "" },
       cursor: { ...provider, binaryPath: "cursor-agent", apiEndpoint: "" },
       gemini: { ...provider, binaryPath: "gemini" },
       grok: { ...provider, binaryPath: "grok" },
@@ -67,6 +75,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       pi: { ...provider, binaryPath: "pi", agentDir: "" },
       ...overrides,
     },
+    providerInstances: {},
     skills: { disabled: [] },
   };
 }
@@ -91,6 +100,47 @@ describe("getVisibleProviderUpdateStatuses", () => {
     });
 
     expect(result.map((provider) => provider.provider)).toEqual(["codex"]);
+  });
+
+  it("uses exact provider-instance enabled state for custom instance updates", () => {
+    const settings = serverSettings({
+      claudeAgent: {
+        enabled: false,
+        binaryPath: "claude",
+        homePath: "",
+        launchArgs: "",
+        customModels: [],
+      },
+    });
+    const result = getVisibleProviderUpdateStatuses({
+      providers: [
+        providerStatus("claudeAgent", {
+          instanceId: "claude_work",
+          driver: "claudeAgent",
+        }),
+        providerStatus("claudeAgent", {
+          instanceId: "claude_disabled",
+          driver: "claudeAgent",
+        }),
+      ],
+      serverSettings: {
+        ...settings,
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            enabled: true,
+            config: { homePath: "/tmp/claude-work" },
+          },
+          claude_disabled: {
+            driver: "claudeAgent",
+            enabled: false,
+            config: { homePath: "/tmp/claude-disabled" },
+          },
+        },
+      },
+    });
+
+    expect(result.map((provider) => provider.instanceId)).toEqual(["claude_work"]);
   });
 
   it("waits for server settings before showing provider updates", () => {
@@ -170,7 +220,14 @@ describe("shouldShowProviderUpdateStatus", () => {
     const codex = providerStatus("codex");
     const hiddenPi = providerStatus("pi");
     const settings = serverSettings({
-      codex: { enabled: false, binaryPath: "codex", homePath: "", customModels: [] },
+      codex: {
+        enabled: false,
+        binaryPath: "codex",
+        homePath: "",
+        selectedAccountId: "default",
+        accounts: [],
+        customModels: [],
+      },
     });
 
     expect(

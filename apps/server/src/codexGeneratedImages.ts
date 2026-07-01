@@ -4,19 +4,25 @@
 // Exports: Codex image path, payload sanitization, and markdown helpers
 // Depends on: node path/os, image MIME allowlist, provider runtime artifact contract
 
+import { readdirSync } from "node:fs";
 import path from "node:path";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
+  type ServerSettings,
   type ThreadId,
 } from "@t3tools/contracts";
 import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localPreviewFiles";
+import { deriveProviderInstances } from "@t3tools/shared/providerInstances";
 
 import {
+  DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR,
   resolveActiveCodexHomeWritePath,
+  resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
+  resolveDpCodeCodexHomeOverlayPath,
 } from "./codexHomePaths.ts";
 
 export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND };
@@ -88,8 +94,54 @@ export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
  * overlay `<SYNARA_HOME>/codex-home-overlay/generated_images` so we serve
  * images regardless of which home Codex wrote them under.
  */
+/**
+ * Every Codex home configured in settings (default override plus per-instance
+ * dedicated homes). Dedicated homes anchor their own overlay roots, so the
+ * local-image route must enumerate them to allowlist those accounts' images.
+ */
+export function codexConfiguredHomePathsFromSettings(settings: ServerSettings): readonly string[] {
+  const homePaths = new Set<string>();
+  const defaultHomePath = settings.providers.codex.homePath?.trim();
+  if (defaultHomePath) {
+    homePaths.add(defaultHomePath);
+  }
+  for (const instance of deriveProviderInstances(settings)) {
+    if (instance.driver !== "codex") {
+      continue;
+    }
+    const instanceHomePath = instance.config.homePath;
+    if (typeof instanceHomePath === "string" && instanceHomePath.trim()) {
+      homePaths.add(instanceHomePath.trim());
+    }
+    // With the browser-plugin overlay disabled, shadow-home accounts run with
+    // the shadow directory as CODEX_HOME and write images beneath it.
+    const instanceShadowHomePath = instance.config.shadowHomePath;
+    if (typeof instanceShadowHomePath === "string" && instanceShadowHomePath.trim()) {
+      homePaths.add(instanceShadowHomePath.trim());
+    }
+  }
+  return [...homePaths];
+}
+
 export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
-  const homes = resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {});
+  const homes = [...resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {})];
+  // Per-account sessions write images under Synara-managed account overlays
+  // (<overlay>/accounts/<segment>/generated_images). The local-image route has
+  // no instance context, so enumerate the existing account overlays instead.
+  const overlayHome = resolveDpCodeCodexHomeOverlayPath(
+    process.env,
+    resolveBaseCodexHomePath(process.env, homePath?.trim() ? homePath : undefined),
+  );
+  const accountsRoot = path.join(overlayHome, DPCODE_CODEX_HOME_ACCOUNT_OVERLAYS_DIR);
+  let accountSegments: readonly string[] = [];
+  try {
+    accountSegments = readdirSync(accountsRoot);
+  } catch {
+    accountSegments = [];
+  }
+  for (const segment of accountSegments) {
+    homes.push(path.join(accountsRoot, segment));
+  }
   return homes.map((home) => path.join(home, "generated_images"));
 }
 

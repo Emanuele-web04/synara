@@ -14,7 +14,7 @@ export default Effect.gen(function* () {
     SET default_model_selection_json = CASE
       WHEN default_model IS NULL THEN NULL
       ELSE json_object(
-        'provider',
+        'instanceId',
         CASE
           WHEN lower(default_model) LIKE '%claude%' THEN 'claudeAgent'
           ELSE 'codex'
@@ -34,7 +34,7 @@ export default Effect.gen(function* () {
   yield* sql`
     UPDATE projection_threads
     SET model_selection_json = json_object(
-      'provider',
+      'instanceId',
       COALESCE(
         (
           SELECT provider_name
@@ -78,7 +78,7 @@ export default Effect.gen(function* () {
           '$.defaultModelSelection',
           json_patch(
             json_object(
-              'provider',
+              'instanceId',
               CASE
                 WHEN json_extract(payload_json, '$.defaultProvider') IS NOT NULL
                 THEN json_extract(payload_json, '$.defaultProvider')
@@ -155,7 +155,7 @@ export default Effect.gen(function* () {
         '$.modelSelection',
         json_patch(
           json_object(
-            'provider',
+            'instanceId',
             CASE
               WHEN json_extract(payload_json, '$.provider') IS NOT NULL
               THEN json_extract(payload_json, '$.provider')
@@ -226,7 +226,7 @@ export default Effect.gen(function* () {
     SET payload_json = json_set(
       payload_json,
       '$.modelSelection',
-      json(json_object('provider', 'codex', 'model', 'gpt-5.5'))
+      json(json_object('instanceId', 'codex', 'model', 'gpt-5.5'))
     )
     WHERE event_type = 'thread.created'
       AND json_type(payload_json, '$.modelSelection') IS NULL

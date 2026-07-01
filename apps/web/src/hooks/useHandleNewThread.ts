@@ -1,8 +1,8 @@
-import { type ProjectId, ThreadId } from "@t3tools/contracts";
+import { type ProjectId, type ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { getDefaultModel } from "@t3tools/shared/model";
 import { useNavigate } from "@tanstack/react-router";
-import { useCallback } from "react";
-import { useAppSettings } from "../appSettings";
+import { useCallback, useMemo } from "react";
+import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
 import {
   type ComposerThreadDraftState,
   type DraftThreadState,
@@ -37,6 +37,7 @@ export interface NewThreadNavigationOptions {
 export function useHandleNewThread() {
   const projects = useStore((store) => store.projects);
   const { settings } = useAppSettings();
+  const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const navigate = useNavigate();
   const { activeDraftThread, activeProjectId, activeThread, focusedThreadId, routeThreadId } =
     useFocusedChatContext();
@@ -61,7 +62,7 @@ export function useHandleNewThread() {
           return;
         }
         setModelSelection(threadId, {
-          provider: options.provider,
+          instanceId: options.provider,
           model: defaultModel,
         });
       };
@@ -138,6 +139,8 @@ export function useHandleNewThread() {
         activeDraftThread,
         projectId,
       );
+      const resolveProviderForInstanceId = (instanceId: ProviderInstanceId) =>
+        providerInstances.find((instance) => instance.instanceId === instanceId)?.provider ?? null;
       const resolveCreationState = (
         targetThreadId: ThreadId,
         draftThread: DraftThreadState | null,
@@ -153,6 +156,7 @@ export function useHandleNewThread() {
           options: creationOptions,
           projectDefaultModelSelection,
           projectId,
+          resolveProviderForInstanceId,
         });
       // Terminal-first threads need a real orchestration thread immediately so
       // the sidebar can render them as durable rows instead of draft-only routes.
@@ -306,6 +310,7 @@ export function useHandleNewThread() {
       openTerminalThreadPage,
       focusedThreadId,
       markTemporaryThread,
+      providerInstances,
       settings.defaultProvider,
     ],
   );

@@ -253,6 +253,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
+      Layer.provide(ServerSettingsService.layerTest()),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
@@ -280,11 +281,13 @@ export const makeOrchestrationIntegrationHarness = (
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(realCodexRegistry),
           Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
         )
       : makeProviderServiceLive().pipe(
           Layer.provide(providerSessionDirectoryLayer),
           Layer.provide(fakeRegistry!),
           Layer.provide(AnalyticsService.layerTest),
+          Layer.provide(ServerSettingsService.layerTest()),
         );
 
     const checkpointStoreLayer = CheckpointStoreLive.pipe(Layer.provide(GitCoreLive));
@@ -325,6 +328,7 @@ export const makeOrchestrationIntegrationHarness = (
     const layer = orchestrationReactorLayer.pipe(
       Layer.provide(persistenceLayer),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(NodeServices.layer),
     );
 

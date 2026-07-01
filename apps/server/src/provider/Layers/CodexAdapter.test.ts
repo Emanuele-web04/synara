@@ -5,6 +5,10 @@ import {
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderListModelsResult,
+  type ProviderListPluginsResult,
+  type ProviderListSkillsResult,
+  type ProviderReadPluginResult,
   type ProviderSession,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
@@ -33,6 +37,8 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(value);
 
 class FakeCodexManager extends CodexAppServerManager {
+  public sessionSnapshots: ProviderSession[] = [];
+
   public startSessionImpl = vi.fn(
     async (input: CodexAppServerStartSessionInput): Promise<ProviderSession> => {
       const now = new Date().toISOString();
@@ -95,6 +101,64 @@ class FakeCodexManager extends CodexAppServerManager {
 
   public stopAllImpl = vi.fn(() => undefined);
 
+  public listSkillsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listSkills"]>[0],
+    ): Promise<ProviderListSkillsResult> => ({
+      skills: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listPluginsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listPlugins"]>[0],
+    ): Promise<ProviderListPluginsResult> => ({
+      marketplaces: [],
+      marketplaceLoadErrors: [],
+      remoteSyncError: null,
+      featuredPluginIds: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public readPluginImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["readPlugin"]>[0],
+    ): Promise<ProviderReadPluginResult> => ({
+      plugin: {
+        marketplaceName: "local",
+        marketplacePath: "/marketplace",
+        summary: {
+          id: "plugin",
+          name: "plugin",
+          source: { type: "local", path: "/marketplace/plugin" },
+          installed: true,
+          enabled: true,
+          installPolicy: "INSTALLED_BY_DEFAULT",
+          authPolicy: "ON_USE",
+        },
+        skills: [],
+        apps: [],
+        mcpServers: [],
+      },
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
+  public listModelsImpl = vi.fn(
+    async (
+      _input: Parameters<CodexAppServerManager["listModels"]>[0],
+    ): Promise<ProviderListModelsResult> => ({
+      models: [],
+      source: "fake-codex",
+      cached: false,
+    }),
+  );
+
   override startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
     return this.startSessionImpl(input);
   }
@@ -142,7 +206,7 @@ class FakeCodexManager extends CodexAppServerManager {
   override stopSession(_threadId: ThreadId): void {}
 
   override listSessions(): ProviderSession[] {
-    return [];
+    return this.sessionSnapshots;
   }
 
   override hasSession(_threadId: ThreadId): boolean {
@@ -151,6 +215,22 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override stopAll(): void {
     this.stopAllImpl();
+  }
+
+  override listSkills(input: Parameters<CodexAppServerManager["listSkills"]>[0]) {
+    return this.listSkillsImpl(input);
+  }
+
+  override listPlugins(input: Parameters<CodexAppServerManager["listPlugins"]>[0]) {
+    return this.listPluginsImpl(input);
+  }
+
+  override readPlugin(input: Parameters<CodexAppServerManager["readPlugin"]>[0]) {
+    return this.readPluginImpl(input);
+  }
+
+  override listModels(input: Parameters<CodexAppServerManager["listModels"]>[0]) {
+    return this.listModelsImpl(input);
   }
 }
 
@@ -206,12 +286,12 @@ validationLayer("CodexAdapterLive validation", (it) => {
         provider: "codex",
         threadId: asThreadId("thread-1"),
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5.3-codex",
-          options: {
-            reasoningEffort: "high",
-            fastMode: true,
-          },
+          options: [
+            { id: "reasoningEffort", value: "high" },
+            { id: "fastMode", value: true },
+          ],
         },
         runtimeMode: "full-access",
       });
@@ -224,6 +304,65 @@ validationLayer("CodexAdapterLive validation", (it) => {
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
+    }),
+  );
+
+  it.effect("forwards Codex discovery environment options to the manager", () =>
+    Effect.gen(function* () {
+      validationManager.listSkillsImpl.mockClear();
+      validationManager.listPluginsImpl.mockClear();
+      validationManager.readPluginImpl.mockClear();
+      validationManager.listModelsImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const environment = { CODEX_PROFILE: "work" };
+
+      const listSkills = adapter.listSkills;
+      const listPlugins = adapter.listPlugins;
+      const readPlugin = adapter.readPlugin;
+      const listModels = adapter.listModels;
+      if (!listSkills || !listPlugins || !readPlugin || !listModels) {
+        throw new Error("Expected Codex adapter to expose discovery APIs.");
+      }
+
+      yield* listSkills({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* listPlugins({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+      yield* readPlugin({
+        provider: "codex",
+        marketplacePath: "/marketplace",
+        pluginName: "plugin",
+        environment,
+      });
+      yield* listModels({
+        provider: "codex",
+        cwd: "/repo",
+        environment,
+      });
+
+      assert.deepStrictEqual(
+        validationManager.listSkillsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.listPluginsImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        validationManager.readPluginImpl.mock.calls[0]?.[0]?.codexOptions?.environment,
+        environment,
+      );
+      assert.deepStrictEqual(
+        (validationManager.listModelsImpl.mock.calls[0]?.[0] as { codexOptions?: unknown })
+          ?.codexOptions,
+        { environment },
+      );
     }),
   );
 });
@@ -277,12 +416,12 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
           threadId: asThreadId("sess-missing"),
           input: "hello",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.3-codex",
-            options: {
-              reasoningEffort: "high",
-              fastMode: true,
-            },
+            options: [
+              { id: "reasoningEffort", value: "high" },
+              { id: "fastMode", value: true },
+            ],
           },
           attachments: [],
         }),
@@ -582,6 +721,43 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       assert.equal(firstEvent.value.threadId, "thread-1");
       assert.equal(firstEvent.value.payload.reason, "Session stopped");
+    }),
+  );
+
+  it.effect("stamps untagged Codex events with the live session provider instance", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      lifecycleManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-1"),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ];
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-session-closed-work"),
+        kind: "session",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: new Date().toISOString(),
+        method: "session/closed",
+        message: "Work session stopped",
+      } satisfies ProviderEvent);
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      lifecycleManager.sessionSnapshots = [];
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "session.exited");
+      assert.equal(firstEvent.value.providerInstanceId, "codex_work");
     }),
   );
 

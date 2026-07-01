@@ -140,6 +140,10 @@
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
     },
+    "./providerInstances": {
+      "types": "./src/providerInstances.ts",
+      "import": "./src/providerInstances.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"

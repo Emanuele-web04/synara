@@ -9,11 +9,13 @@ import type {
   ProfileQuota,
   ProfileStats,
   ProfileTokenStats,
+  ProviderInstanceId,
   ProviderKind,
   StatsGetProfileStatsInput,
   StatsGetProfileTokenStatsInput,
 } from "@t3tools/contracts";
 import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
+import { inferLegacyProviderKindFromInstanceId } from "@t3tools/shared/providerInstances";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -390,9 +392,18 @@ function arcName(startHour: number): string {
 
 function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
   const provider = nonEmptyString(value);
-  return provider && PROVIDER_KINDS.has(provider as ProviderKind)
-    ? (provider as ProviderKind)
-    : "unknown";
+  if (!provider) {
+    return "unknown";
+  }
+  if (PROVIDER_KINDS.has(provider as ProviderKind)) {
+    return provider as ProviderKind;
+  }
+  return inferLegacyProviderKindFromInstanceId(provider) ?? "unknown";
+}
+
+function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | "unknown" {
+  const instanceId = nonEmptyString(value);
+  return instanceId ? (instanceId as ProviderInstanceId) : "unknown";
 }
 
 function computeStreaks(
@@ -585,7 +596,11 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             CASE
               WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
-              THEN COALESCE(json_extract(th.model_selection_json, '$.provider'), 'unknown')
+              THEN COALESCE(
+                json_extract(th.model_selection_json, '$.provider'),
+                json_extract(th.model_selection_json, '$.instanceId'),
+                'unknown'
+              )
               ELSE 'unknown'
             END AS provider,
             CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
@@ -658,10 +673,16 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN json_extract(e.payload_json, '$.modelSelection.provider')
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.instanceId'),
+                json_extract(e.payload_json, '$.modelSelection.provider')
+              )
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN json_extract(t.model_selection_json, '$.provider')
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.instanceId'),
+                  json_extract(t.model_selection_json, '$.provider')
+                )
               END
             END AS provider,
             CASE
@@ -674,16 +695,44 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             END AS model,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN COALESCE(
-                json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
-                json_extract(e.payload_json, '$.modelSelection.options.effort')
-              )
+              THEN CASE
+                -- Model selections persist options either as a legacy object or
+                -- as the canonical array of {id, value} option selections.
+                WHEN json_type(e.payload_json, '$.modelSelection.options') = 'array'
+                THEN (
+                  SELECT json_extract(option_entry.value, '$.value')
+                  FROM json_each(e.payload_json, '$.modelSelection.options') AS option_entry
+                  WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                  ORDER BY CASE json_extract(option_entry.value, '$.id')
+                    WHEN 'reasoningEffort' THEN 0
+                    ELSE 1
+                  END
+                  LIMIT 1
+                )
+                ELSE COALESCE(
+                  json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+                  json_extract(e.payload_json, '$.modelSelection.options.effort')
+                )
+              END
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN COALESCE(
-                  json_extract(t.model_selection_json, '$.options.reasoningEffort'),
-                  json_extract(t.model_selection_json, '$.options.effort')
-                )
+                THEN CASE
+                  WHEN json_type(t.model_selection_json, '$.options') = 'array'
+                  THEN (
+                    SELECT json_extract(option_entry.value, '$.value')
+                    FROM json_each(t.model_selection_json, '$.options') AS option_entry
+                    WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                    ORDER BY CASE json_extract(option_entry.value, '$.id')
+                      WHEN 'reasoningEffort' THEN 0
+                      ELSE 1
+                    END
+                    LIMIT 1
+                  )
+                  ELSE COALESCE(
+                    json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                    json_extract(t.model_selection_json, '$.options.effort')
+                  )
+                END
               END
             END AS reasoning
           FROM orchestration_events e
@@ -925,6 +974,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         const count = num(row.count);
         return {
           provider: normalizeProviderKind(row.provider),
+          instanceId: normalizeProviderInstanceId(row.provider),
           model: nonEmptyString(row.model) ?? "unknown",
           turnCount: count,
           percent: percent1(count, totalModelTurns),

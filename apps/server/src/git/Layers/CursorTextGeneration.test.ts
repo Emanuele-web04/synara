@@ -105,13 +105,13 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             stagedPatch:
               "diff --git a/apps/server/src/git/Layers/CursorTextGeneration.ts b/apps/server/src/git/Layers/CursorTextGeneration.ts",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "gpt-5.4",
-              options: {
-                reasoningEffort: "xhigh",
-                fastMode: true,
-                contextWindow: "1m",
-              },
+              options: [
+                { id: "reasoningEffort", value: "xhigh" },
+                { id: "fastMode", value: true },
+                { id: "contextWindow", value: "1m" },
+              ],
             },
             providerOptions: {
               cursor: {
@@ -188,7 +188,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             stagedSummary: "M README.md",
             stagedPatch: "diff --git a/README.md b/README.md",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -219,7 +219,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             patch: "diff --git a/file.ts b/file.ts",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -247,7 +247,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Improve sidebar thread row spacing and hover states.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -275,7 +275,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Fix the websocket reconnect backoff.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {
@@ -305,7 +305,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
               cwd: process.cwd(),
               message: "Fix the websocket reconnect backoff.",
               modelSelection: {
-                provider: "cursor",
+                instanceId: "cursor",
                 model: "composer-2",
               },
               providerOptions: {
@@ -351,7 +351,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             cwd: process.cwd(),
             message: "Fix the reconnect spinner after a resumed session.",
             modelSelection: {
-              provider: "cursor",
+              instanceId: "cursor",
               model: "composer-2",
             },
             providerOptions: {

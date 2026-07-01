@@ -33,6 +33,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ServerVoiceTranscriptionInput,
   ServerVoiceTranscriptionResult,
   ThreadId,
@@ -159,6 +160,7 @@ export interface ProviderAdapterShape<TError> {
   readonly readExternalThread?: (input: {
     readonly externalThreadId: string;
     readonly cwd?: string;
+    readonly providerOptions?: ProviderStartOptions;
   }) => Effect.Effect<ProviderThreadSnapshot, TError>;
 
   /**

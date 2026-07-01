@@ -62,7 +62,7 @@ it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
           projectId: "project-1",
           title: "Thread 1",
           modelSelection: {
-            provider: "codex",
+            instanceId: "codex",
             model: "gpt-5.5",
           },
           interactionMode: "default",
@@ -137,8 +137,105 @@ it.effect("preserves Pi model selections when decoding model selections", () =>
     });
 
     assert.deepStrictEqual(parsed, {
-      provider: "pi",
+      instanceId: "pi",
       model: "openai/gpt-5.5",
+    });
+  }),
+);
+
+it.effect("preserves provider instance ids when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "claudeAgent",
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+  }),
+);
+
+it.effect("normalizes mixed legacy option payloads when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      options: {
+        effort: "max",
+        fastMode: true,
+        budget: 12,
+        nullish: null,
+        nested: { foo: 1 },
+      },
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "claudeAgent",
+      model: "claude-sonnet-4-6",
+      options: [
+        { id: "effort", value: "max" },
+        { id: "fastMode", value: true },
+        { id: "budget", value: "12" },
+      ],
+    });
+  }),
+);
+
+it.effect("decodes providerless instance-id model selections from newer T3 payloads", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "claude_work",
+      model: "claude-sonnet-4-6",
+    });
+  }),
+);
+
+it.effect("infers Claude for providerless opaque Sonnet instance selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      instanceId: "work",
+      model: "sonnet-4",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "work",
+      model: "sonnet-4",
+    });
+  }),
+);
+
+it.effect("infers OpenCode for providerless OpenCode model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      instanceId: "work",
+      model: "opencode/minimax-m2.5-free",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "work",
+      model: "opencode/minimax-m2.5-free",
+    });
+  }),
+);
+
+it.effect("decodes providerless Codex account selections from newer T3 payloads", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      instanceId: "codex_personal",
+      model: "gpt-5.4",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      instanceId: "codex_personal",
+      model: "gpt-5.4",
     });
   }),
 );
@@ -154,7 +251,7 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
     );
 
     assert.deepStrictEqual(parsed, {
-      provider: "pi",
+      instanceId: "pi",
       model: "openai/gpt-5.5",
     });
   }),
@@ -251,7 +348,7 @@ it.effect("trims branded ids and command string fields at decode boundaries", ()
     assert.strictEqual(parsed.title, "Project Title");
     assert.strictEqual(parsed.workspaceRoot, "/tmp/workspace");
     assert.deepStrictEqual(parsed.defaultModelSelection, {
-      provider: "codex",
+      instanceId: "codex",
       model: "gpt-5.2",
     });
   }),
@@ -271,7 +368,7 @@ it.effect("decodes historical project.created payloads with a default provider",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.defaultModelSelection?.provider, "codex");
+    assert.strictEqual(parsed.defaultModelSelection?.instanceId, "codex");
     assert.strictEqual(parsed.isPinned, false);
   }),
 );
@@ -287,7 +384,7 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
       isPinned: true,
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
+    assert.strictEqual(parsed.defaultModelSelection?.instanceId, "claudeAgent");
     assert.strictEqual(parsed.isPinned, true);
   }),
 );
@@ -348,7 +445,7 @@ it.effect("preserves explicit provider and runtime mode in thread.turn.start", (
       runtimeMode: "full-access",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.modelSelection?.provider, "codex");
+    assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
     assert.strictEqual(parsed.runtimeMode, "full-access");
     assert.strictEqual(parsed.interactionMode, DEFAULT_PROVIDER_INTERACTION_MODE);
   }),
@@ -372,7 +469,7 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
     });
 
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-    assert.strictEqual(parsed.modelSelection.provider, "codex");
+    assert.strictEqual(parsed.modelSelection.instanceId, "codex");
   }),
 );
 
@@ -447,7 +544,7 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
       },
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
+    assert.strictEqual(parsed.modelSelection?.instanceId, "claudeAgent");
   }),
 );
 
@@ -598,9 +695,11 @@ it.effect("accepts provider-scoped model options in thread.turn.start", () =>
       },
       createdAt: "2026-01-01T00:00:00.000Z",
     });
-    assert.strictEqual(parsed.modelSelection?.provider, "codex");
-    assert.strictEqual(parsed.modelSelection?.options?.reasoningEffort, "high");
-    assert.strictEqual(parsed.modelSelection?.options?.fastMode, true);
+    assert.strictEqual(parsed.modelSelection?.instanceId, "codex");
+    assert.deepStrictEqual(parsed.modelSelection?.options, [
+      { id: "reasoningEffort", value: "high" },
+      { id: "fastMode", value: true },
+    ]);
   }),
 );
 

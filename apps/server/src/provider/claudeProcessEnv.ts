@@ -1,12 +1,12 @@
 // FILE: claudeProcessEnv.ts
-// Purpose: Builds Claude subprocess environments that prefer valid local Claude CLI OAuth.
+// Purpose: Detects usable local Claude CLI OAuth credentials for env sanitization decisions.
 // Layer: Provider utility shared by Claude runtime sessions and provider health probes.
-// Exports: Claude credentials parsing, path resolution, and env sanitization helpers.
+// Exports: Claude credentials parsing, path resolution, and credential env key sets.
 import { readFileSync } from "node:fs";
 import OS from "node:os";
 import nodePath from "node:path";
 
-const CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS = [
+export const CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_AUTH_TOKEN",
   "CLAUDE_CODE_OAUTH_TOKEN",
@@ -29,7 +29,7 @@ function envFlagEnabled(value: string | undefined): boolean {
   return Boolean(normalized && normalized !== "0" && normalized !== "false");
 }
 
-function hasClaudeExternalAuthEnv(env: NodeJS.ProcessEnv): boolean {
+export function hasClaudeExternalAuthEnv(env: NodeJS.ProcessEnv): boolean {
   return CLAUDE_EXTERNAL_AUTH_ENV_KEYS.some((key) => envFlagEnabled(env[key]));
 }
 
@@ -123,29 +123,4 @@ export function readClaudeCliCredentialsSummary(input?: {
     }
   }
   return { usable: false };
-}
-
-export function buildClaudeProcessEnv(input?: {
-  readonly env?: NodeJS.ProcessEnv;
-  readonly homeDir?: string;
-  readonly hasClaudeCliCredentials?: boolean;
-}): NodeJS.ProcessEnv {
-  const env = { ...(input?.env ?? process.env) };
-  if (input?.homeDir) {
-    env.HOME = input.homeDir;
-  }
-  const credentialInput = input?.homeDir ? { env, homeDir: input.homeDir } : { env };
-  const hasLocalClaudeAuth =
-    input?.hasClaudeCliCredentials ?? hasUsableClaudeCliCredentials(credentialInput);
-
-  if (!hasLocalClaudeAuth || hasClaudeExternalAuthEnv(env)) {
-    return env;
-  }
-
-  // Claude gives direct request credentials precedence over local OAuth. Drop stale
-  // app-process keys when a real Claude CLI login can satisfy the subprocess.
-  for (const key of CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS) {
-    delete env[key];
-  }
-  return env;
 }

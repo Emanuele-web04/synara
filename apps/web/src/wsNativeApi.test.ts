@@ -106,6 +106,8 @@ function getWindowForTest(): Window & typeof globalThis & { desktopBridge?: unkn
 const defaultProviders: ReadonlyArray<ServerProviderStatus> = [
   {
     provider: "codex",
+    instanceId: "codex",
+    driver: "codex",
     status: "ready",
     available: true,
     authStatus: "authenticated",
@@ -290,10 +292,23 @@ describe("wsNativeApi", () => {
         enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
-        textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
+        textGenerationModelSelection: { instanceId: "codex", model: "gpt-5.4-mini" },
         providers: {
-          codex: { enabled: true, binaryPath: "codex", homePath: "", customModels: [] },
-          claudeAgent: { enabled: true, binaryPath: "claude", launchArgs: "", customModels: [] },
+          codex: {
+            enabled: true,
+            binaryPath: "codex",
+            homePath: "",
+            selectedAccountId: "default",
+            accounts: [],
+            customModels: [],
+          },
+          claudeAgent: {
+            enabled: true,
+            binaryPath: "claude",
+            homePath: "",
+            launchArgs: "",
+            customModels: [],
+          },
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
@@ -314,6 +329,7 @@ describe("wsNativeApi", () => {
           },
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
+        providerInstances: {},
         skills: { disabled: [] },
       },
     } as const;
@@ -457,7 +473,7 @@ describe("wsNativeApi", () => {
       title: "Project",
       workspaceRoot: "/tmp/project",
       defaultModelSelection: {
-        provider: "codex",
+        instanceId: "codex",
         model: "gpt-5-codex",
       },
       createdAt: "2026-02-24T00:00:00.000Z",

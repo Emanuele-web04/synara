@@ -2,14 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { ServerProviderStatus } from "@t3tools/contracts";
 import {
+  findProviderStatus,
   isProviderUsable,
   normalizeProviderStatusForLocalConfig,
   providerUnavailableReason,
+  resolveProviderSendAvailability,
   resolveProviderSendAvailabilityWithRefresh,
 } from "./providerAvailability";
 
 const BASE_STATUS: ServerProviderStatus = {
   provider: "gemini",
+  instanceId: "gemini",
+  driver: "gemini",
   status: "error",
   available: false,
   authStatus: "unknown",
@@ -48,6 +52,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "claudeAgent",
+          instanceId: "claudeAgent",
+          driver: "claudeAgent",
           message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
         },
         customBinaryPath: "/opt/homebrew/bin/claude",
@@ -55,6 +61,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "claudeAgent",
+      instanceId: "claudeAgent",
+      driver: "claudeAgent",
       available: true,
       status: "warning",
       message:
@@ -69,6 +77,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode",
@@ -76,6 +86,35 @@ describe("normalizeProviderStatusForLocalConfig", () => {
       }),
     ).toEqual({
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
+      authStatus: "unknown",
+      available: true,
+      checkedAt: BASE_STATUS.checkedAt,
+      status: "ready",
+    });
+  });
+
+  it("preserves provider instance metadata when a confirmed custom path becomes ready", () => {
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "claudeAgent",
+        status: {
+          ...BASE_STATUS,
+          provider: "claudeAgent",
+          driver: "claudeAgent",
+          instanceId: "claude_work",
+          displayName: "Claude Work",
+          message: "Claude Code CLI (`claude`) is not installed or not on PATH.",
+        },
+        customBinaryPath: "/custom/bin/claude",
+        confirmedCustomBinaryPath: "/custom/bin/claude",
+      }),
+    ).toEqual({
+      provider: "claudeAgent",
+      driver: "claudeAgent",
+      instanceId: "claude_work",
+      displayName: "Claude Work",
       authStatus: "unknown",
       available: true,
       checkedAt: BASE_STATUS.checkedAt,
@@ -90,6 +129,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
         status: {
           ...BASE_STATUS,
           provider: "opencode",
+          instanceId: "opencode",
+          driver: "opencode",
           message: "OpenCode CLI (`opencode`) is not installed or not on PATH.",
         },
         customBinaryPath: "/custom/bin/opencode-next",
@@ -98,6 +139,8 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     ).toEqual({
       ...BASE_STATUS,
       provider: "opencode",
+      instanceId: "opencode",
+      driver: "opencode",
       available: true,
       status: "warning",
       message:
@@ -132,9 +175,40 @@ describe("isProviderUsable", () => {
     expect(
       isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "unauthenticated" }),
     ).toBe(false);
-    expect(isProviderUsable({ ...BASE_STATUS, available: true, authStatus: "authenticated" })).toBe(
-      true,
-    );
+    // Advisory warnings the health layer marks available (Pi bundled SDK,
+    // Cursor model-discovery warnings) stay sendable.
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "warning",
+        authStatus: "authenticated",
+      }),
+    ).toBe(true);
+    expect(
+      isProviderUsable({
+        ...BASE_STATUS,
+        available: true,
+        status: "ready",
+        authStatus: "authenticated",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows the local custom-binary confirmation fallback to start a session", () => {
+    const normalized = normalizeProviderStatusForLocalConfig({
+      provider: "gemini",
+      status: BASE_STATUS,
+      customBinaryPath: "/opt/homebrew/bin/gemini",
+    });
+
+    expect(normalized?.status).toBe("warning");
+    expect(isProviderUsable(normalized)).toBe(true);
+    expect(
+      resolveProviderSendAvailability({ provider: "gemini", statuses: [normalized!] }),
+    ).toMatchObject({
+      usable: true,
+    });
   });
 });
 
@@ -194,6 +268,32 @@ describe("resolveProviderSendAvailabilityWithRefresh", () => {
       unavailableReason: "Gemini is not authenticated yet.",
     });
   });
+
+  it("keeps resolving the selected instance after a refresh", async () => {
+    const readyWorkInstance: ServerProviderStatus = {
+      ...READY_STATUS,
+      instanceId: "gemini_work",
+    };
+    const blockedDefaultInstance: ServerProviderStatus = {
+      ...BASE_STATUS,
+      authStatus: "unauthenticated",
+      available: true,
+    };
+    const refreshStatuses = vi.fn(async () => [blockedDefaultInstance, readyWorkInstance]);
+
+    await expect(
+      resolveProviderSendAvailabilityWithRefresh({
+        provider: "gemini",
+        instanceId: "gemini_work",
+        statuses: [blockedDefaultInstance],
+        refreshStatuses,
+      }),
+    ).resolves.toMatchObject({
+      usable: true,
+      status: { instanceId: "gemini_work" },
+    });
+    expect(refreshStatuses).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("providerUnavailableReason", () => {
@@ -202,5 +302,82 @@ describe("providerUnavailableReason", () => {
       "Gemini is not authenticated yet.",
     );
     expect(providerUnavailableReason(BASE_STATUS)).toBe(BASE_STATUS.message);
+  });
+
+  it("uses provider instance display names when available", () => {
+    expect(
+      providerUnavailableReason({
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        driver: "claudeAgent",
+        displayName: "Claude Work",
+        authStatus: "unauthenticated",
+      }),
+    ).toBe("Claude Work is not authenticated yet.");
+  });
+});
+
+describe("findProviderStatus", () => {
+  it("selects the exact provider instance when multiple instances share a provider", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude",
+        driver: "claudeAgent",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        driver: "claudeAgent",
+        displayName: "Work",
+        message: "Work account is disabled.",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toEqual(statuses[1]);
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Work account is disabled.",
+    });
+  });
+
+  it("does not fall back to the default provider status when an explicit instance is missing", () => {
+    const statuses: ServerProviderStatus[] = [
+      {
+        ...BASE_STATUS,
+        provider: "claudeAgent",
+        instanceId: "claudeAgent",
+        driver: "claudeAgent",
+        displayName: "Claude",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+      },
+    ];
+
+    expect(findProviderStatus(statuses, "claudeAgent", "claude_work")).toBeNull();
+    expect(
+      resolveProviderSendAvailability({
+        provider: "claudeAgent",
+        instanceId: "claude_work",
+        statuses,
+      }),
+    ).toMatchObject({
+      usable: false,
+      unavailableReason: "Provider status is still loading.",
+    });
   });
 });

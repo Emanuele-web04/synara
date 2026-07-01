@@ -55,6 +55,8 @@ function createBaseServerConfig(): ServerConfig {
     providers: [
       {
         provider: "codex",
+        instanceId: "codex",
+        driver: "codex",
         status: "ready",
         available: true,
         authStatus: "authenticated",
@@ -75,7 +77,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         title: "Project",
         workspaceRoot: "/repo/project",
         defaultModelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         scripts: [],
@@ -90,7 +92,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         projectId: PROJECT_ID,
         title: "Test thread",
         modelSelection: {
-          provider: "codex",
+          instanceId: "codex",
           model: "gpt-5",
         },
         interactionMode: "default",

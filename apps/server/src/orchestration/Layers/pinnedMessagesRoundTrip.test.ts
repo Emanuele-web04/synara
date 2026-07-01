@@ -13,6 +13,7 @@ import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Lay
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { ServerConfig } from "../../config.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -31,6 +32,7 @@ async function createSystem() {
     Layer.provideMerge(OrchestrationCommandReceiptRepositoryLive),
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(ServerConfigLayer),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(NodeServices.layer),
   );
   const runtime = ManagedRuntime.make(layer);
@@ -61,7 +63,7 @@ describe("pinned messages round-trip", () => {
           projectId,
           title: "Pins project",
           workspaceRoot: "/tmp/project-pins",
-          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          defaultModelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           createdAt,
         }),
       );
@@ -72,7 +74,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           projectId,
           title: "Pins thread",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,
@@ -165,7 +167,7 @@ describe("pinned messages round-trip", () => {
           projectId,
           title: "Markers project",
           workspaceRoot: "/tmp/project-markers",
-          defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+          defaultModelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           createdAt,
         }),
       );
@@ -176,7 +178,7 @@ describe("pinned messages round-trip", () => {
           threadId,
           projectId,
           title: "Markers thread",
-          modelSelection: { provider: "codex", model: "gpt-5-codex" },
+          modelSelection: { instanceId: "codex", model: "gpt-5-codex" },
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "approval-required",
           branch: null,

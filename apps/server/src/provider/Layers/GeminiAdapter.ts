@@ -17,6 +17,7 @@ import {
   type CanonicalItemType,
   type CanonicalRequestType,
   EventId,
+  type GeminiModelOptions,
   type GeminiThinkingBudget,
   type GeminiThinkingLevel,
   MODEL_OPTIONS_BY_PROVIDER,
@@ -33,9 +34,11 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import {
+  geminiModelOptionsFromEffortValue,
   getModelCapabilities,
   getGeminiThinkingConfigKind,
   getGeminiThinkingModelAlias,
+  getModelSelectionStringOptionValue,
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
@@ -155,6 +158,7 @@ interface GeminiStoredTurn {
 interface GeminiSessionContext {
   session: ProviderSession;
   readonly binaryPath: string;
+  readonly environment: Readonly<Record<string, string>> | undefined;
   readonly child: ChildProcessWithoutNullStreams;
   readonly stdout: readline.Interface;
   readonly stderr: readline.Interface;
@@ -254,6 +258,19 @@ export function buildGeminiThinkingModelConfigAliases(
   }
 
   return aliases;
+}
+
+function geminiModelOptionsFromSelection(
+  modelSelection: ProviderSendTurnInput["modelSelection"],
+): GeminiModelOptions | undefined {
+  return (
+    geminiModelOptionsFromEffortValue(
+      getModelSelectionStringOptionValue(modelSelection, "thinkingLevel"),
+    ) ??
+    geminiModelOptionsFromEffortValue(
+      getModelSelectionStringOptionValue(modelSelection, "thinkingBudget"),
+    )
+  );
 }
 
 export function geminiRequestTimeoutMs(method: string): number {
@@ -724,7 +741,9 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   const prepareGeminiLaunchConfig = Effect.fn("prepareGeminiLaunchConfig")(function* (input: {
     readonly threadId: ThreadId;
     readonly selectedModel?: string;
+    readonly environment?: Readonly<Record<string, string>>;
   }) {
+    const baseEnv = input.environment ? { ...process.env, ...input.environment } : process.env;
     const candidateModels = [
       ...MODEL_OPTIONS_BY_PROVIDER.gemini.map((option) => option.slug),
       ...(input.selectedModel ? [input.selectedModel] : []),
@@ -733,7 +752,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 
     if (Object.keys(aliases).length === 0) {
       return {
-        env: process.env,
+        env: baseEnv,
         systemSettingsPath: undefined,
       };
     }
@@ -771,7 +790,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     return {
       systemSettingsPath,
       env: {
-        ...process.env,
+        ...baseEnv,
         GEMINI_CLI_SYSTEM_SETTINGS_PATH: systemSettingsPath,
       },
     };
@@ -814,6 +833,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     runtimeModeId: string;
     cwd: string;
     binaryPath: string;
+    environment?: Readonly<Record<string, string>>;
     child: ChildProcessWithoutNullStreams;
     turns?: ReadonlyArray<GeminiStoredTurn>;
     sessionFilePath?: string;
@@ -831,6 +851,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         updatedAt: now,
       },
       binaryPath: input.binaryPath,
+      environment: input.environment,
       child: input.child,
       stdout: readline.createInterface({ input: input.child.stdout }),
       stderr: readline.createInterface({ input: input.child.stderr }),
@@ -2116,13 +2137,14 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       }
 
       const cwd = input.cwd ?? process.cwd();
-      const binaryPath = trimToUndefined(input.providerOptions?.gemini?.binaryPath) ?? "gemini";
+      const providerOptions = input.providerOptions?.gemini;
+      const binaryPath = trimToUndefined(providerOptions?.binaryPath) ?? "gemini";
       const runtimeModeId = runtimeModeToGeminiModeId(input.runtimeMode);
-      const selectedGeminiModel =
-        input.modelSelection?.provider === PROVIDER ? input.modelSelection.model : undefined;
+      const selectedGeminiModel = input.modelSelection?.model;
       const launchConfig = yield* prepareGeminiLaunchConfig({
         threadId: input.threadId,
         ...(selectedGeminiModel ? { selectedModel: selectedGeminiModel } : {}),
+        ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
       });
       const child = yield* spawnGeminiProcess(
         input.threadId,
@@ -2148,6 +2170,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         runtimeModeId,
         cwd,
         binaryPath,
+        ...(providerOptions?.environment ? { environment: providerOptions.environment } : {}),
         child,
         turns: resumeTurns,
         ...(launchConfig.systemSettingsPath
@@ -2160,12 +2183,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       const bootstrapInput = {
         allowResumeFallback: true,
         ...(requestedResumeSessionId ? { resumeSessionId: requestedResumeSessionId } : {}),
-        ...(input.modelSelection?.provider === PROVIDER
+        ...(input.modelSelection
           ? {
               model: input.modelSelection.model,
               apiModelId: resolveGeminiApiModelId(
                 input.modelSelection.model,
-                input.modelSelection.options,
+                geminiModelOptionsFromSelection(input.modelSelection),
               ),
             }
           : {}),
@@ -2219,12 +2242,12 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       });
     }
 
-    if (input.modelSelection?.provider === PROVIDER) {
+    if (input.modelSelection) {
       yield* setGeminiModel(context, {
         model: input.modelSelection.model,
         acpModelId: resolveGeminiApiModelId(
           input.modelSelection.model,
-          input.modelSelection.options,
+          geminiModelOptionsFromSelection(input.modelSelection),
         ),
       });
     }
@@ -2260,7 +2283,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     updateGeminiSession(context, {
       status: "running",
       activeTurnId: turnId,
-      ...(input.modelSelection?.provider === PROVIDER ? { model: input.modelSelection.model } : {}),
+      ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
     });
 
     yield* emitSessionState(context, "running");
@@ -2457,6 +2480,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
       const launchConfig = yield* prepareGeminiLaunchConfig({
         threadId,
         ...(context.session.model ? { selectedModel: context.session.model } : {}),
+        ...(context.environment ? { environment: context.environment } : {}),
       });
       const child = yield* spawnGeminiProcess(
         threadId,
@@ -2480,6 +2504,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         runtimeModeId: context.runtimeModeId,
         cwd,
         binaryPath: context.binaryPath,
+        ...(context.environment ? { environment: context.environment } : {}),
         child,
         turns: nextTurns,
         ...(sessionFilePath ? { sessionFilePath } : {}),
@@ -2525,6 +2550,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     probeGeminiCapabilities({
       binaryPath: trimToUndefined(input.binaryPath) ?? "gemini",
       cwd: os.homedir(),
+      ...(input.environment ? { environment: input.environment } : {}),
     }).pipe(
       Effect.map(
         (result) =>

@@ -13,7 +13,12 @@ import {
   type ProviderKind,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/shared/model";
+import {
+  applyClaudePromptEffortPrefix,
+  getModelCapabilities,
+  getModelSelectionStringOptionValue,
+} from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 
 import type {
   ComposerAssistantSelectionAttachment,
@@ -177,24 +182,24 @@ export function formatOutgoingComposerPrompt(params: {
 export function resolvePromptEffortFromModelSelection(
   modelSelection: ModelSelection,
 ): string | null {
-  switch (modelSelection.provider) {
+  const provider = inferLegacyProviderKindFromModelSelection(modelSelection);
+  switch (provider) {
     case "codex":
-      return modelSelection.options?.reasoningEffort ?? null;
+      return getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ?? null;
     case "claudeAgent":
-      return modelSelection.options?.effort ?? null;
+      return getModelSelectionStringOptionValue(modelSelection, "effort") ?? null;
     case "cursor":
-      return modelSelection.options?.reasoningEffort ?? null;
+      return getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ?? null;
     case "gemini":
       return (
-        modelSelection.options?.thinkingLevel ??
-        (modelSelection.options?.thinkingBudget !== undefined
-          ? String(modelSelection.options.thinkingBudget)
-          : null)
+        getModelSelectionStringOptionValue(modelSelection, "thinkingLevel") ??
+        getModelSelectionStringOptionValue(modelSelection, "thinkingBudget") ??
+        null
       );
     case "grok":
-      return modelSelection.options?.reasoningEffort ?? null;
+      return getModelSelectionStringOptionValue(modelSelection, "reasoningEffort") ?? null;
     case "pi":
-      return modelSelection.options?.thinkingLevel ?? null;
+      return getModelSelectionStringOptionValue(modelSelection, "thinkingLevel") ?? null;
     case "kilo":
     case "opencode":
       return null;

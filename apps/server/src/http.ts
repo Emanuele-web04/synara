@@ -9,7 +9,7 @@ import {
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
-import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
+import { DateTime, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -24,9 +24,11 @@ import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import type { SessionCredentialServiceShape } from "./auth/Services/SessionCredentialService";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
+import { codexConfiguredHomePathsFromSettings } from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { ServerSettingsService } from "./serverSettings.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
@@ -503,10 +505,22 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
+    // Dedicated per-account Codex homes anchor their own generated-image roots;
+    // resolve them from settings when the service is available so those images
+    // stay servable. The route keeps working without settings (e.g. tests).
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    const codexHomePaths = Option.isSome(settingsService)
+      ? yield* settingsService.value.getSettings.pipe(
+          Effect.map(codexConfiguredHomePathsFromSettings),
+          Effect.catch(() => Effect.succeed<readonly string[]>([])),
+        )
+      : [];
+
     const previewFile = yield* Effect.promise(() =>
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        codexHomePaths,
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),

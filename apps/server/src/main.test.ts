@@ -18,6 +18,7 @@ import { Open, type OpenShape } from "./open";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
 import { Server, type ServerShape } from "./effectServer";
+import { ServerSettingsService } from "./serverSettings";
 
 vi.mock("./threadRetention", async () => {
   const Effect = await import("effect/Effect");
@@ -70,6 +71,7 @@ const testLayer = Layer.mergeAll(
     openBrowser: (_target: string) => Effect.void,
     openInEditor: () => Effect.void,
   } satisfies OpenShape),
+  ServerSettingsService.layerTest(),
   AnalyticsService.layerTest,
   FetchHttpClient.layer,
   NodeServices.layer,

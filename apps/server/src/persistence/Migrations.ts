@@ -64,6 +64,8 @@ import Migration0045 from "./Migrations/045_AutomationPolicies.ts";
 import Migration0046 from "./Migrations/046_AutomationCompletionPolicy.ts";
 import Migration0047 from "./Migrations/047_AutomationCompletionPolicyVersion.ts";
 import Migration0048 from "./Migrations/048_AutomationCompletionEvaluationBacklog.ts";
+import Migration0049 from "./Migrations/049_ProjectionThreadSessionProviderInstance.ts";
+import Migration0050 from "./Migrations/050_ProviderSessionRuntimeInstanceId.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -124,6 +126,8 @@ export const migrationEntries = [
   [46, "AutomationCompletionPolicy", Migration0046],
   [47, "AutomationCompletionPolicyVersion", Migration0047],
   [48, "AutomationCompletionEvaluationBacklog", Migration0048],
+  [49, "ProjectionThreadSessionProviderInstance", Migration0049],
+  [50, "ProviderSessionRuntimeInstanceId", Migration0050],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

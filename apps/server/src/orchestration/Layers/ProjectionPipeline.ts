@@ -11,6 +11,7 @@ import {
   setPinnedMessageDone,
   setPinnedMessageLabel,
 } from "@t3tools/shared/pinnedMessages";
+import { resolveModelSelectionInstanceId } from "@t3tools/shared/providerInstances";
 import {
   addThreadMarker,
   removeThreadMarker,
@@ -892,6 +893,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // The provider reactor may still reject an instance switch for a
+          // bound thread after this event is projected. Only adopt a selection
+          // routed at another instance on a fresh thread, so a rejected switch
+          // cannot overwrite the thread's working selection.
           const [messages, session] = yield* Effect.all([
             projectionThreadMessageRepository.listByThreadId({
               threadId: event.payload.threadId,
@@ -900,14 +905,15 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               threadId: event.payload.threadId,
             }),
           ]);
-          const canAdoptFirstTurnProvider =
+          const canAdoptFirstTurnInstance =
             existingRow.value.latestTurnId === null &&
             Option.isNone(session) &&
             messages.length <= 1;
           const modelSelectionPatch =
             event.payload.modelSelection !== undefined &&
-            (event.payload.modelSelection.provider === existingRow.value.modelSelection.provider ||
-              canAdoptFirstTurnProvider)
+            (resolveModelSelectionInstanceId(event.payload.modelSelection) ===
+              resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+              canAdoptFirstTurnInstance)
               ? { modelSelection: event.payload.modelSelection }
               : {};
           yield* projectionThreadRepository.upsert({
@@ -1350,6 +1356,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
         threadId: event.payload.threadId,
         status: event.payload.session.status,
         providerName: event.payload.session.providerName,
+        providerInstanceId: event.payload.session.providerInstanceId ?? null,
         runtimeMode: event.payload.session.runtimeMode,
         activeTurnId: event.payload.session.activeTurnId,
         lastError: event.payload.session.lastError,

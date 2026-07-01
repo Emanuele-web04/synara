@@ -20,6 +20,7 @@ import type {
   RuntimeMode,
   ThreadId,
 } from "@t3tools/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 
 import {
   completionPolicyFromStopWhen,
@@ -33,7 +34,7 @@ import {
 } from "./automationDraft";
 
 export const defaultModelSelection: ModelSelection = {
-  provider: "codex",
+  instanceId: "codex",
   model: "gpt-5-codex",
 };
 
@@ -489,14 +490,21 @@ function modelSelectionsMatch(left: ModelSelection, right: ModelSelection): bool
   const leftOptions = "options" in left ? left.options : undefined;
   const rightOptions = "options" in right ? right.options : undefined;
   return (
-    left.provider === right.provider &&
+    inferLegacyProviderKindFromModelSelection(left) ===
+      inferLegacyProviderKindFromModelSelection(right) &&
+    left.instanceId === right.instanceId &&
     left.model === right.model &&
     JSON.stringify(leftOptions ?? null) === JSON.stringify(rightOptions ?? null)
   );
 }
 
 function modelIdentityMatches(left: ModelSelection, right: ModelSelection): boolean {
-  return left.provider === right.provider && left.model === right.model;
+  return (
+    inferLegacyProviderKindFromModelSelection(left) ===
+      inferLegacyProviderKindFromModelSelection(right) &&
+    left.instanceId === right.instanceId &&
+    left.model === right.model
+  );
 }
 
 // Automation edits keep saved provider start options unless the provider/model identity changes.

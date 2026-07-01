@@ -8,18 +8,21 @@ import type {
   ModelSlug,
   ProjectId,
   ProviderInteractionMode,
+  ProviderInstanceId,
   ProviderKind,
   ProviderStartOptions,
   RuntimeMode,
   ServerProviderStatus,
   ThreadId,
 } from "@t3tools/contracts";
+import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 
+import type { ProviderInstanceOption } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
 import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
@@ -30,6 +33,7 @@ interface UseKanbanTaskSubmitInput {
   readonly selectedProjectId: ProjectId | null;
   readonly hasSendableContent: boolean;
   readonly selectedProvider: ProviderKind;
+  readonly selectedProviderInstanceId: ProviderInstanceId;
   readonly selectedModel: ModelSlug | null;
   readonly taskPreview: string;
   readonly trimmedPrompt: string;
@@ -41,6 +45,9 @@ interface UseKanbanTaskSubmitInput {
   readonly defaultProvider: ProviderKind;
   readonly assistantDeliveryMode: AssistantDeliveryMode;
   readonly providerOptionsForDispatch: ProviderStartOptions | undefined;
+  readonly providerInstances: ReadonlyArray<
+    Pick<ProviderInstanceOption, "instanceId" | "provider">
+  >;
   readonly providerStatuses: readonly ServerProviderStatus[];
   readonly onOpenChange: (open: boolean) => void;
 }
@@ -50,6 +57,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     selectedProjectId,
     hasSendableContent,
     selectedProvider,
+    selectedProviderInstanceId,
     selectedModel,
     taskPreview,
     trimmedPrompt,
@@ -61,6 +69,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     defaultProvider,
     assistantDeliveryMode,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     onOpenChange,
   } = input;
@@ -90,9 +99,17 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     // The scratch draft carries the full selection (model + reasoning effort +
     // speed) set through the picker; fall back to a bare selection otherwise.
     const scratchState = useComposerDraftStore.getState().draftsByThreadId[scratchThreadId];
+    const draftModelSelection =
+      scratchState?.modelSelectionByProvider[
+        providerInstanceModelSelectionKey(selectedProvider, selectedProviderInstanceId)
+      ];
     const modelSelection =
-      scratchState?.modelSelectionByProvider[selectedProvider] ??
-      buildModelSelection(selectedProvider, selectedModel);
+      draftModelSelection &&
+      inferLegacyProviderKindFromModelSelection(draftModelSelection) === selectedProvider
+        ? { ...draftModelSelection, instanceId: selectedProviderInstanceId }
+        : buildModelSelection(selectedProvider, selectedModel, null, {
+            instanceId: selectedProviderInstanceId,
+          });
     const taskInput = {
       projectId: selectedProjectId,
       prompt: trimmedPrompt,
@@ -116,7 +133,8 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
 
     // Send now: create + promote + dispatch straight to In Progress.
     const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
-      provider: modelSelection.provider,
+      provider: selectedProvider,
+      instanceId: modelSelection.instanceId,
       statuses: providerStatuses,
       refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
@@ -135,6 +153,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
       defaultProvider,
       assistantDeliveryMode,
       providerOptions: providerOptionsForDispatch,
+      providerInstances,
     })
       .then(({ threadId, result }) => {
         if (result.kind === "dispatched") {
@@ -191,11 +210,13 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     navigate,
     onOpenChange,
     providerOptionsForDispatch,
+    providerInstances,
     providerStatuses,
     refreshProviderStatuses,
     runtimeMode,
     scratchThreadId,
     selectedModel,
+    selectedProviderInstanceId,
     selectedProjectId,
     selectedProvider,
     sendAsDraft,

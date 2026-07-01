@@ -22,6 +22,12 @@ import {
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
+import {
+  inferLegacyProviderKindFromModelSelection,
+  providerStartOptionsFromInstance,
+  resolveModelSelectionInstanceId,
+  resolveProviderInstance,
+} from "@t3tools/shared/providerInstances";
 
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { TextGeneration } from "../../git/Services/TextGeneration.ts";
@@ -262,7 +268,7 @@ function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAll
 
 function makePermissionSnapshot(definition: AutomationDefinition, now: string) {
   return {
-    provider: definition.modelSelection.provider,
+    provider: inferLegacyProviderKindFromModelSelection(definition.modelSelection),
     modelSelection: definition.modelSelection,
     ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
     completionPolicyVersion: completionPolicyVersionForDefinition(definition),
@@ -1259,6 +1265,7 @@ export const AutomationServiceLive = Layer.effect(
         const directInput = resolveTextGenerationInputForSelection(
           definition.modelSelection,
           definition.providerOptions,
+          inferLegacyProviderKindFromModelSelection(definition.modelSelection),
         );
         if (directInput) {
           return directInput;
@@ -1267,10 +1274,17 @@ export const AutomationServiceLive = Layer.effect(
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
+        const fallbackInstance = resolveProviderInstance(settings, {
+          instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+        });
+        const fallbackProviderOptions = fallbackInstance
+          ? providerStartOptionsFromInstance(fallbackInstance)
+          : definition.providerOptions;
         return (
           resolveTextGenerationInputForSelection(
             settings.textGenerationModelSelection,
-            definition.providerOptions,
+            fallbackProviderOptions,
+            fallbackInstance?.driver,
           ) ?? {}
         );
       });

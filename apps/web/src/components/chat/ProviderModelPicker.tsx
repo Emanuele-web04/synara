@@ -3,8 +3,14 @@
 // Layer: Chat composer presentation
 // Depends on: provider availability metadata, shared menu primitives, and picker trigger styling.
 
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
+import {
+  type ModelSlug,
+  type ProviderInstanceId,
+  ProviderKind,
+  type ServerProviderStatus,
+} from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
+import { inferLegacyProviderKindFromInstanceId } from "@t3tools/shared/providerInstances";
 import * as Schema from "effect/Schema";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
@@ -14,6 +20,7 @@ import {
   Menu,
   MenuItem,
   MenuRadioGroup,
+  MenuRadioItem,
   MenuSeparator,
   MenuSub,
   MenuSubTrigger,
@@ -40,6 +47,7 @@ import {
 } from "../../providerModelOptions";
 import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { Skeleton } from "../ui/skeleton";
+import { isProviderUsable } from "../../lib/providerAvailability";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderKind;
@@ -74,10 +82,25 @@ function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefi
     };
   }
 
+  if (!isProviderUsable(provider)) {
+    return {
+      disabled: true,
+      label: provider.status === "warning" ? "Check" : "Unavailable",
+    };
+  }
+
   return {
     disabled: false,
     label: null,
   };
+}
+
+function isUnsupportedProviderInstanceStatus(status: ServerProviderStatus): boolean {
+  return (
+    status.availability === "unavailable" &&
+    status.driver !== undefined &&
+    !Schema.is(ProviderKind)(status.driver)
+  );
 }
 
 export const AVAILABLE_PROVIDER_OPTIONS = PROVIDER_OPTIONS.filter(isAvailableProviderOption);
@@ -117,21 +140,160 @@ const FAVORITE_MODEL_STORAGE_KEYS = {
   opencode: "synara:opencode-favourite-models:v1",
   pi: "synara:pi-favourite-models:v1",
 } as const;
-const FavoriteModelSlugs = Schema.Array(Schema.String);
-type FavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
+const FavoriteModelKeys = Schema.Array(Schema.String);
+type LegacyFavoriteModelProvider = keyof typeof FAVORITE_MODEL_STORAGE_KEYS;
+type FavoriteModelProvider = ProviderKind;
 
-function supportsModelFavorites(provider: ProviderKind): provider is FavoriteModelProvider {
+function supportsLegacyModelFavorites(
+  provider: ProviderKind,
+): provider is LegacyFavoriteModelProvider {
   return (
     provider === "cursor" || provider === "kilo" || provider === "opencode" || provider === "pi"
   );
 }
 
-// Keeps persisted favorite slugs compact and stable while preserving the user's order.
-function toggleFavoriteModelSlug(current: ReadonlyArray<string>, slug: string): string[] {
-  const normalizedCurrent = Array.from(new Set(current.filter((entry) => entry.trim().length > 0)));
-  return normalizedCurrent.includes(slug)
-    ? normalizedCurrent.filter((entry) => entry !== slug)
-    : [...normalizedCurrent, slug];
+export interface ProviderModelFavorite {
+  readonly provider: ProviderInstanceId;
+  readonly model: string;
+}
+
+export interface ProviderModelPickerInstance {
+  readonly instanceId: ProviderInstanceId;
+  readonly provider: ProviderKind;
+  readonly label: string;
+  readonly enabled: boolean;
+  readonly isDefault: boolean;
+}
+
+export type ProviderModelOptionsByProviderInstance = Partial<
+  Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption>>
+>;
+
+function defaultProviderInstance(provider: ProviderKind): ProviderModelPickerInstance {
+  return {
+    instanceId: provider,
+    provider,
+    label: provider === "claudeAgent" ? "Claude" : provider,
+    enabled: true,
+    isDefault: true,
+  };
+}
+
+function findProviderStatusForInstance(input: {
+  providers: ReadonlyArray<ServerProviderStatus> | undefined;
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+}): ServerProviderStatus | undefined {
+  return input.providers?.find(
+    (entry) =>
+      entry.provider === input.provider &&
+      (entry.instanceId ?? entry.provider) === input.instanceId,
+  );
+}
+
+function resolveModelOptionsForProviderInstance(input: {
+  provider: ProviderKind;
+  instanceId: ProviderInstanceId;
+  modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance | undefined;
+}): ReadonlyArray<ProviderModelOption> {
+  return (
+    input.modelOptionsByProviderInstance?.[input.instanceId] ??
+    input.modelOptionsByProvider[input.provider]
+  );
+}
+
+function favoriteModelKey(instanceId: ProviderInstanceId, slug: string): string {
+  return `${instanceId}:${slug}`;
+}
+
+function normalizeFavoriteModels(
+  favorites: ReadonlyArray<ProviderModelFavorite>,
+): ProviderModelFavorite[] {
+  const result: ProviderModelFavorite[] = [];
+  const seen = new Set<string>();
+  for (const favorite of favorites) {
+    const model = favorite.model.trim();
+    if (!model) {
+      continue;
+    }
+    const key = favoriteModelKey(favorite.provider, model);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push({ provider: favorite.provider, model });
+  }
+  return result;
+}
+
+function favoriteModelKeySetsFromSettings(
+  favorites: ReadonlyArray<ProviderModelFavorite>,
+  providerInstances: ReadonlyArray<ProviderModelPickerInstance> | undefined,
+): Partial<Record<FavoriteModelProvider, ReadonlySet<string>>> {
+  const result: Partial<Record<FavoriteModelProvider, Set<string>>> = {};
+  const providerByInstanceId = new Map<ProviderInstanceId, ProviderKind>();
+  for (const instance of providerInstances ?? []) {
+    providerByInstanceId.set(instance.instanceId, instance.provider);
+  }
+  for (const favorite of normalizeFavoriteModels(favorites)) {
+    const provider =
+      providerByInstanceId.get(favorite.provider) ??
+      inferLegacyProviderKindFromInstanceId(favorite.provider);
+    if (!provider) {
+      continue;
+    }
+    (result[provider] ??= new Set()).add(favoriteModelKey(favorite.provider, favorite.model));
+  }
+  return result;
+}
+
+function normalizeFavoriteModelKeys(
+  provider: LegacyFavoriteModelProvider,
+  entries: ReadonlyArray<string>,
+): string[] {
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0)
+        .map((entry) =>
+          entry.includes(":") ? entry : favoriteModelKey(provider as ProviderInstanceId, entry),
+        ),
+    ),
+  );
+}
+
+// Keeps persisted favorite model keys compact and stable while preserving the user's order.
+function toggleFavoriteModelKey(
+  current: ReadonlyArray<string>,
+  provider: LegacyFavoriteModelProvider,
+  instanceId: ProviderInstanceId,
+  slug: string,
+): string[] {
+  const normalizedCurrent = normalizeFavoriteModelKeys(provider, current);
+  const key = favoriteModelKey(instanceId, slug);
+  return normalizedCurrent.includes(key)
+    ? normalizedCurrent.filter((entry) => entry !== key)
+    : [...normalizedCurrent, key];
+}
+
+function favoriteModelSlugsForInstance(input: {
+  provider: FavoriteModelProvider;
+  instanceId: ProviderInstanceId;
+  keys: ReadonlySet<string>;
+}): ReadonlySet<string> {
+  const prefix = `${input.instanceId}:`;
+  const slugs = new Set<string>();
+  for (const key of input.keys) {
+    const normalizedKey = key.includes(":")
+      ? key
+      : favoriteModelKey(input.provider as ProviderInstanceId, key);
+    if (normalizedKey.startsWith(prefix)) {
+      slugs.add(normalizedKey.slice(prefix.length));
+    }
+  }
+  return slugs;
 }
 
 function stripParameterizedModelSuffix(model: string): string {
@@ -175,11 +337,20 @@ type ProviderModelMenuItemsProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
+  onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   disabled?: boolean;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
   // Invoked after a model selection commits so callers can close ancestor
   // menus and refocus the composer.
   onAfterSelection?: () => void;
@@ -196,25 +367,26 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [cursorFavoriteModelSlugs, setCursorFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.cursor,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [openCodeFavoriteModelSlugs, setOpenCodeFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.opencode,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const [piFavoriteModelSlugs, setPiFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.pi,
     [],
-    FavoriteModelSlugs,
+    FavoriteModelKeys,
   );
   const deferredModelSearchQuery = useDeferredValue(modelSearchQuery);
   const activeProvider = props.lockedProvider ?? props.provider;
+  const selectedProviderInstanceId = props.selectedProviderInstanceId ?? props.provider;
   const hiddenProviders = props.hiddenProviders;
   const providerOrder = props.providerOrder;
   const hiddenProviderSet = useMemo(
@@ -231,7 +403,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const visibleAvailableProviderOptions = useMemo(
     () =>
       filterProviderOptionsByVisibility(
-        [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+        AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
           compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
         ),
         hiddenProviderSet,
@@ -242,13 +414,17 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const visibleUnavailableProviderOptions = useMemo(
     () =>
       filterProviderOptionsByVisibility(
-        [...UNAVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+        UNAVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
           compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
         ),
         hiddenProviderSet,
         protectedProviderSet,
       ),
     [hiddenProviderSet, protectedProviderSet, providerOrder],
+  );
+  const visibleUnsupportedProviderInstances = useMemo(
+    () => (props.providers ?? []).filter(isUnsupportedProviderInstanceStatus),
+    [props.providers],
   );
   const kiloFavoriteModelSlugSet = useMemo(
     () => new Set(kiloFavoriteModelSlugs),
@@ -266,34 +442,227 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
     () => new Set(piFavoriteModelSlugs),
     [piFavoriteModelSlugs],
   );
+  const settingsFavoriteModelSlugSets = useMemo(
+    () =>
+      props.favoriteModels !== undefined
+        ? favoriteModelKeySetsFromSettings(props.favoriteModels, props.providerInstances)
+        : null,
+    [props.favoriteModels, props.providerInstances],
+  );
   const favoriteModelSlugSets = useMemo(
-    () => ({
-      cursor: cursorFavoriteModelSlugSet,
-      kilo: kiloFavoriteModelSlugSet,
-      opencode: openCodeFavoriteModelSlugSet,
-      pi: piFavoriteModelSlugSet,
-    }),
+    (): Partial<Record<FavoriteModelProvider, ReadonlySet<string>>> =>
+      settingsFavoriteModelSlugSets ?? {
+        cursor: cursorFavoriteModelSlugSet,
+        kilo: kiloFavoriteModelSlugSet,
+        opencode: openCodeFavoriteModelSlugSet,
+        pi: piFavoriteModelSlugSet,
+      },
     [
       cursorFavoriteModelSlugSet,
       kiloFavoriteModelSlugSet,
       openCodeFavoriteModelSlugSet,
       piFavoriteModelSlugSet,
+      settingsFavoriteModelSlugSets,
     ],
   );
-  const handleModelChange = (provider: ProviderKind, value: string) => {
+
+  const providerInstancesByProvider = useMemo(() => {
+    const map = new Map<ProviderKind, ProviderModelPickerInstance[]>();
+    for (const provider of AVAILABLE_PROVIDER_OPTIONS.map((option) => option.value)) {
+      map.set(provider, []);
+    }
+    for (const instance of props.providerInstances ?? []) {
+      const entries = map.get(instance.provider);
+      if (entries) {
+        entries.push(instance);
+      }
+    }
+    for (const provider of AVAILABLE_PROVIDER_OPTIONS.map((option) => option.value)) {
+      const entries = map.get(provider);
+      if (!entries || entries.length === 0) {
+        map.set(provider, [defaultProviderInstance(provider)]);
+        continue;
+      }
+      entries.sort((left, right) => {
+        if (left.isDefault !== right.isDefault) {
+          return left.isDefault ? -1 : 1;
+        }
+        return left.label.localeCompare(right.label);
+      });
+    }
+    return map;
+  }, [props.providerInstances]);
+
+  const getProviderInstances = useCallback(
+    (provider: ProviderKind): ReadonlyArray<ProviderModelPickerInstance> =>
+      providerInstancesByProvider.get(provider) ?? [defaultProviderInstance(provider)],
+    [providerInstancesByProvider],
+  );
+
+  const isInstanceSelectable = useCallback(
+    (instance: ProviderModelPickerInstance): boolean => {
+      if (!instance.enabled) {
+        return false;
+      }
+      return !resolveLiveProviderAvailability(
+        findProviderStatusForInstance({
+          providers: props.providers,
+          provider: instance.provider,
+          instanceId: instance.instanceId,
+        }),
+      ).disabled;
+    },
+    [props.providers],
+  );
+
+  const getSelectedInstanceIdForProvider = useCallback(
+    (provider: ProviderKind): ProviderInstanceId => {
+      const instances = getProviderInstances(provider);
+      if (
+        activeProvider === provider &&
+        instances.some((instance) => instance.instanceId === selectedProviderInstanceId)
+      ) {
+        return selectedProviderInstanceId;
+      }
+      return (
+        instances.find(isInstanceSelectable)?.instanceId ??
+        instances.find((instance) => instance.isDefault)?.instanceId ??
+        instances[0]!.instanceId
+      );
+    },
+    [activeProvider, getProviderInstances, isInstanceSelectable, selectedProviderInstanceId],
+  );
+
+  const getModelOptionsForProviderInstance = useCallback(
+    (provider: ProviderKind, instanceId: ProviderInstanceId): ReadonlyArray<ProviderModelOption> =>
+      resolveModelOptionsForProviderInstance({
+        provider,
+        instanceId,
+        modelOptionsByProvider: props.modelOptionsByProvider,
+        modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+      }),
+    [props.modelOptionsByProvider, props.modelOptionsByProviderInstance],
+  );
+
+  const resolveInstanceAvailability = useCallback(
+    (instance: ProviderModelPickerInstance): { disabled: boolean; label: string | null } => {
+      if (!instance.enabled) {
+        return { disabled: true, label: "Disabled" };
+      }
+      return resolveLiveProviderAvailability(
+        findProviderStatusForInstance({
+          providers: props.providers,
+          provider: instance.provider,
+          instanceId: instance.instanceId,
+        }),
+      );
+    },
+    [props.providers],
+  );
+
+  const resolveProviderOptionAvailability = useCallback(
+    (provider: ProviderKind): { disabled: boolean; label: string | null } => {
+      const instanceAvailabilities = getProviderInstances(provider).map(
+        resolveInstanceAvailability,
+      );
+      if (instanceAvailabilities.some((availability) => !availability.disabled)) {
+        return { disabled: false, label: null };
+      }
+      return instanceAvailabilities[0] ?? { disabled: true, label: "Unavailable" };
+    },
+    [getProviderInstances, resolveInstanceAvailability],
+  );
+
+  const handleModelChange = (
+    provider: ProviderKind,
+    value: string,
+    instanceId = getSelectedInstanceIdForProvider(provider),
+  ) => {
     if (props.disabled) return;
     if (!value) return;
-    const resolvedModel = resolveSelectableModel(
-      provider,
-      value,
-      props.modelOptionsByProvider[provider],
-    );
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
+    const resolvedModel = resolveSelectableModel(provider, value, providerOptions);
     if (!resolvedModel) return;
-    props.onProviderModelChange(provider, resolvedModel);
+    props.onProviderModelChange(provider, resolvedModel, instanceId);
     onAfterSelection?.();
   };
+
+  const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
+    if (props.disabled || !instanceId) return;
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
+    const model = activeProvider === provider ? props.model : (providerOptions[0]?.slug ?? "");
+    if (!model) return;
+    const resolvedModel = resolveSelectableModel(provider, model, providerOptions);
+    props.onProviderModelChange(
+      provider,
+      resolvedModel ?? providerOptions[0]?.slug ?? model,
+      instanceId,
+    );
+  };
+
+  const renderProviderInstanceRadioGroup = (provider: ProviderKind) => {
+    const instances = getProviderInstances(provider);
+    if (instances.length <= 1) {
+      return null;
+    }
+    return (
+      <>
+        <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
+          Instance
+        </div>
+        <MenuRadioGroup
+          value={getSelectedInstanceIdForProvider(provider)}
+          onValueChange={(value) => {
+            if (props.disabled || !value) {
+              return;
+            }
+            handleInstanceChange(provider, value);
+          }}
+        >
+          {instances.map((instance) => {
+            const availability = resolveInstanceAvailability(instance);
+            return (
+              <MenuRadioItem
+                key={instance.instanceId}
+                value={instance.instanceId}
+                disabled={availability.disabled}
+              >
+                <span className="truncate">{instance.label}</span>
+                {availability.label ? (
+                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                    {availability.label}
+                  </span>
+                ) : null}
+              </MenuRadioItem>
+            );
+          })}
+        </MenuRadioGroup>
+        <MenuSeparator />
+      </>
+    );
+  };
+  const favoriteModels = props.favoriteModels;
+  const onFavoriteModelsChange = props.onFavoriteModelsChange;
   const toggleFavoriteModel = useCallback(
-    (provider: FavoriteModelProvider, slug: string) => {
+    (provider: FavoriteModelProvider, instanceId: ProviderInstanceId, slug: string) => {
+      if (onFavoriteModelsChange) {
+        const normalizedFavorites = normalizeFavoriteModels(favoriteModels ?? []);
+        const key = favoriteModelKey(instanceId, slug);
+        const hasFavorite = normalizedFavorites.some(
+          (favorite) => favoriteModelKey(favorite.provider, favorite.model) === key,
+        );
+        onFavoriteModelsChange(
+          hasFavorite
+            ? normalizedFavorites.filter(
+                (favorite) => favoriteModelKey(favorite.provider, favorite.model) !== key,
+              )
+            : [...normalizedFavorites, { provider: instanceId, model: slug }],
+        );
+        return;
+      }
+      if (!supportsLegacyModelFavorites(provider)) {
+        return;
+      }
       const setFavoriteModelSlugs =
         provider === "cursor"
           ? setCursorFavoriteModelSlugs
@@ -302,9 +671,13 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             : provider === "pi"
               ? setPiFavoriteModelSlugs
               : setOpenCodeFavoriteModelSlugs;
-      setFavoriteModelSlugs((current) => toggleFavoriteModelSlug(current, slug));
+      setFavoriteModelSlugs((current) =>
+        toggleFavoriteModelKey(current, provider, instanceId, slug),
+      );
     },
     [
+      favoriteModels,
+      onFavoriteModelsChange,
       setCursorFavoriteModelSlugs,
       setKiloFavoriteModelSlugs,
       setOpenCodeFavoriteModelSlugs,
@@ -326,7 +699,10 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
       );
     }
 
-    const providerOptions = props.modelOptionsByProvider[provider];
+    const providerOptions = getModelOptionsForProviderInstance(
+      provider,
+      getSelectedInstanceIdForProvider(provider),
+    );
     const shouldShowSearch =
       (provider === "kilo" ||
         provider === "opencode" ||
@@ -340,9 +716,19 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             buildModelSearchText(option).includes(normalizedModelSearchQuery),
           )
         : providerOptions;
-    const favoriteProvider = supportsModelFavorites(provider) ? provider : null;
-    const favoriteModelSlugSet =
+    const favoriteProvider =
+      props.onFavoriteModelsChange || supportsLegacyModelFavorites(provider) ? provider : null;
+    const selectedInstanceId = getSelectedInstanceIdForProvider(provider);
+    const favoriteModelKeySet =
       favoriteProvider !== null ? favoriteModelSlugSets[favoriteProvider] : undefined;
+    const favoriteModelSlugSet =
+      favoriteProvider !== null && favoriteModelKeySet !== undefined
+        ? favoriteModelSlugsForInstance({
+            provider: favoriteProvider,
+            instanceId: selectedInstanceId,
+            keys: favoriteModelKeySet,
+          })
+        : undefined;
     const groupedOptions =
       favoriteModelSlugSet !== undefined
         ? groupProviderModelOptionsWithFavorites({
@@ -362,6 +748,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             provider={provider}
             activeModel={props.model}
             isSearching={normalizedModelSearchQuery.length > 0}
+            instanceId={selectedInstanceId}
             favoriteProvider={favoriteProvider}
             favoriteModelSlugSet={favoriteModelSlugSet}
             onToggleFavorite={toggleFavoriteModel}
@@ -413,15 +800,19 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   };
 
   if (props.lockedProvider !== null) {
-    return <>{renderModelRadioGroup(props.lockedProvider)}</>;
+    return (
+      <>
+        {renderProviderInstanceRadioGroup(props.lockedProvider)}
+        {renderModelRadioGroup(props.lockedProvider)}
+      </>
+    );
   }
 
   return (
     <>
       {visibleAvailableProviderOptions.map((option) => {
         const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
-        const liveProvider = props.providers?.find((entry) => entry.provider === option.value);
-        const availability = resolveLiveProviderAvailability(liveProvider);
+        const availability = resolveProviderOptionAvailability(option.value);
         if (availability.disabled) {
           return (
             <MenuItem key={option.value} disabled>
@@ -455,6 +846,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               fixedWidth
               className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
             >
+              {renderProviderInstanceRadioGroup(option.value)}
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
@@ -474,6 +866,23 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           </MenuItem>
         );
       })}
+      {visibleUnsupportedProviderInstances.length > 0 && <MenuSeparator />}
+      {visibleUnsupportedProviderInstances.map((providerStatus) => (
+        <MenuItem
+          key={providerStatus.instanceId ?? providerStatus.driver ?? providerStatus.provider}
+          disabled
+        >
+          <span className="truncate">
+            {providerStatus.displayName ??
+              providerStatus.instanceId ??
+              providerStatus.driver ??
+              providerStatus.provider}
+          </span>
+          <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+            Missing driver
+          </span>
+        </MenuItem>
+      ))}
     </>
   );
 });
@@ -484,13 +893,40 @@ export function resolveProviderModelLabel(input: {
   lockedProvider: ProviderKind | null;
   model: ModelSlug;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance | undefined;
+  selectedProviderInstanceId?: ProviderInstanceId | undefined;
 }): string {
   const activeProvider = input.lockedProvider ?? input.provider;
+  const activeInstanceId = input.selectedProviderInstanceId ?? activeProvider;
   return resolveSelectedModelLabel({
     provider: activeProvider,
     model: input.model,
-    options: input.modelOptionsByProvider[activeProvider],
+    options: resolveModelOptionsForProviderInstance({
+      provider: activeProvider,
+      instanceId: activeInstanceId,
+      modelOptionsByProvider: input.modelOptionsByProvider,
+      modelOptionsByProviderInstance: input.modelOptionsByProviderInstance,
+    }),
   });
+}
+
+export function resolveProviderInstanceLabel(input: {
+  provider: ProviderKind;
+  selectedProviderInstanceId?: ProviderInstanceId | undefined;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
+}): string | null {
+  const instances =
+    input.providerInstances?.filter((instance) => instance.provider === input.provider) ?? [];
+  if (instances.length <= 1) {
+    return null;
+  }
+  const selectedInstanceId = input.selectedProviderInstanceId ?? input.provider;
+  return (
+    instances.find((instance) => instance.instanceId === selectedInstanceId)?.label ??
+    instances.find((instance) => instance.isDefault)?.label ??
+    instances[0]?.label ??
+    null
+  );
 }
 
 export function getProviderIconClassName(
@@ -506,9 +942,14 @@ type ProviderModelPickerProps = {
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<ProviderModelOption>>;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   hiddenProviders?: ReadonlyArray<ProviderKind>;
   providerOrder?: ReadonlyArray<ProviderKind>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
+  onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   activeProviderIconClassName?: string;
   compact?: boolean;
   // Icon-only trigger for narrow composers; the model name moves to title/sr-only.
@@ -518,7 +959,11 @@ type ProviderModelPickerProps = {
   onOpenChange?: (open: boolean) => void;
   onSelectionCommitted?: () => void;
   shortcutLabel?: string | null;
-  onProviderModelChange: (provider: ProviderKind, model: ModelSlug) => void;
+  onProviderModelChange: (
+    provider: ProviderKind,
+    model: ModelSlug,
+    instanceId?: ProviderInstanceId,
+  ) => void;
 };
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(
@@ -534,7 +979,17 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
     lockedProvider: props.lockedProvider,
     model: props.model,
     modelOptionsByProvider: props.modelOptionsByProvider,
+    modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
+  const selectedInstanceLabel = resolveProviderInstanceLabel({
+    provider: activeProvider,
+    selectedProviderInstanceId: props.selectedProviderInstanceId,
+    providerInstances: props.providerInstances,
+  });
+  const triggerLabel = selectedInstanceLabel
+    ? `${selectedInstanceLabel} · ${selectedModelLabel}`
+    : selectedModelLabel;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = useCallback(
@@ -585,7 +1040,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           )}
         />
       }
-      label={selectedModelLabel}
+      label={triggerLabel}
     />
   );
 
@@ -603,7 +1058,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
       {props.shortcutLabel ? (
         <Tooltip>
           <TooltipTrigger render={<MenuTrigger render={triggerButton} />}>
-            <span className="sr-only">{selectedModelLabel}</span>
+            <span className="sr-only">{triggerLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
@@ -619,7 +1074,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
         </Tooltip>
       ) : (
         <MenuTrigger render={triggerButton}>
-          <span className="sr-only">{selectedModelLabel}</span>
+          <span className="sr-only">{triggerLabel}</span>
         </MenuTrigger>
       )}
       <ComposerPickerMenuPopup align="start" fixedWidth={props.lockedProvider !== null}>
@@ -629,11 +1084,22 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           lockedProvider={props.lockedProvider}
           {...(props.providers ? { providers: props.providers } : {})}
           modelOptionsByProvider={props.modelOptionsByProvider}
+          {...(props.modelOptionsByProviderInstance
+            ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+            : {})}
           {...(props.loadingModelProviders
             ? { loadingModelProviders: props.loadingModelProviders }
             : {})}
           {...(props.hiddenProviders ? { hiddenProviders: props.hiddenProviders } : {})}
           {...(props.providerOrder ? { providerOrder: props.providerOrder } : {})}
+          {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+          {...(props.selectedProviderInstanceId
+            ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+            : {})}
+          {...(props.favoriteModels ? { favoriteModels: props.favoriteModels } : {})}
+          {...(props.onFavoriteModelsChange
+            ? { onFavoriteModelsChange: props.onFavoriteModelsChange }
+            : {})}
           {...(props.disabled !== undefined ? { disabled: props.disabled } : {})}
           onProviderModelChange={props.onProviderModelChange}
           onAfterSelection={handleAfterSelection}

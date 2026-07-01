@@ -205,11 +205,11 @@ layer("016_CanonicalizeModelSelections", (it) => {
           assert.deepStrictEqual(projectRows, [
             {
               projectId: "project-claude",
-              defaultModelSelection: '{"provider":"claudeAgent","model":"claude-opus-4-6"}',
+              defaultModelSelection: '{"instanceId":"claudeAgent","model":"claude-opus-4-6"}',
             },
             {
               projectId: "project-codex",
-              defaultModelSelection: '{"provider":"codex","model":"gpt-5.4"}',
+              defaultModelSelection: '{"instanceId":"codex","model":"gpt-5.4"}',
             },
             { projectId: "project-null", defaultModelSelection: null },
           ]);
@@ -227,19 +227,19 @@ layer("016_CanonicalizeModelSelections", (it) => {
           assert.deepStrictEqual(threadRows, [
             {
               threadId: "thread-claude",
-              modelSelection: '{"provider":"claudeAgent","model":"claude-opus-4-6"}',
+              modelSelection: '{"instanceId":"claudeAgent","model":"claude-opus-4-6"}',
             },
             {
               threadId: "thread-codex",
-              modelSelection: '{"provider":"codex","model":"gpt-5.4"}',
+              modelSelection: '{"instanceId":"codex","model":"gpt-5.4"}',
             },
             {
               threadId: "thread-legacy-options",
-              modelSelection: '{"provider":"claudeAgent","model":"claude-opus-4-6"}',
+              modelSelection: '{"instanceId":"claudeAgent","model":"claude-opus-4-6"}',
             },
             {
               threadId: "thread-session",
-              modelSelection: '{"provider":"claudeAgent","model":"gpt-5.4"}',
+              modelSelection: '{"instanceId":"claudeAgent","model":"gpt-5.4"}',
             },
           ]);
 
@@ -256,7 +256,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             title: "Project",
             workspaceRoot: "/tmp/project",
             defaultModelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-opus-4-6",
               options: {
                 effort: "max",
@@ -272,7 +272,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             title: "Fallback Project",
             workspaceRoot: "/tmp/project-2",
             defaultModelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-opus-4-6",
               options: {
                 reasoningEffort: "low",
@@ -288,7 +288,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             projectId: "project-1",
             title: "Thread",
             modelSelection: {
-              provider: "claudeAgent",
+              instanceId: "claudeAgent",
               model: "claude-opus-4-6",
               options: {
                 effort: "max",
@@ -308,7 +308,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             projectId: "project-1",
             title: "Fallback Thread",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.4",
               options: {
                 effort: "max",
@@ -327,7 +327,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             turnId: "turn-1",
             input: "hi",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.4",
               options: {
                 fastMode: true,
@@ -341,7 +341,7 @@ layer("016_CanonicalizeModelSelections", (it) => {
             projectId: "project-1",
             title: "Ancient Thread",
             modelSelection: {
-              provider: "codex",
+              instanceId: "codex",
               model: "gpt-5.5",
             },
             runtimeMode: "full-access",
