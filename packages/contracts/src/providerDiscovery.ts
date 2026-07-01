@@ -58,6 +58,7 @@ export const ProviderComposerCapabilities = Schema.Struct({
   supportsRuntimeModelList: Schema.Boolean,
   supportsThreadCompaction: Schema.optional(Schema.Boolean),
   supportsThreadImport: Schema.optional(Schema.Boolean),
+  supportsRollback: Schema.optional(Schema.Boolean),
 });
 export type ProviderComposerCapabilities = typeof ProviderComposerCapabilities.Type;
 

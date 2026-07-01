@@ -91,6 +91,7 @@ import {
   supportsPluginDiscovery,
   supportsSkillDiscovery,
   supportsThreadCompaction,
+  supportsRollback,
 } from "~/lib/providerDiscoveryReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
@@ -2873,7 +2874,12 @@ export default function ChatView({
       messages: messagesForDiffAnchoring,
     });
   }, [turnDiffSummaries, timelineMessages]);
+  const providerComposerCapabilitiesQuery = useQuery(
+    providerComposerCapabilitiesQueryOptions(selectedProvider),
+  );
+  const providerSupportsRollback = supportsRollback(providerComposerCapabilitiesQuery.data);
   const revertTurnCountByUserMessageId = useMemo(() => {
+    if (!providerSupportsRollback) return new Map<MessageId, number>();
     const byUserMessageId = new Map<MessageId, number>();
     for (let index = 0; index < timelineEntries.length; index += 1) {
       const entry = timelineEntries[index];
@@ -2904,7 +2910,12 @@ export default function ChatView({
     }
 
     return byUserMessageId;
-  }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  }, [
+    inferredCheckpointTurnCountByTurnId,
+    providerSupportsRollback,
+    timelineEntries,
+    turnDiffSummaryByAssistantMessageId,
+  ]);
 
   const threadWorkspaceCwd = activeProject
     ? resolveSharedThreadWorkspaceCwd({
@@ -2942,9 +2953,6 @@ export default function ChatView({
   );
   const effectiveMentionQuery = mentionTriggerQuery.length > 0 ? debouncedPathQuery : "";
   const composerSkillCwd = providerModelDiscoveryCwd;
-  const providerComposerCapabilitiesQuery = useQuery(
-    providerComposerCapabilitiesQueryOptions(selectedProvider),
-  );
   const providerCommandsQuery = useQuery(
     providerCommandsQueryOptions({
       provider: selectedProvider,
@@ -5882,6 +5890,13 @@ export default function ChatView({
       const api = readNativeApi();
       if (!api || !activeThread || isRevertingCheckpoint) return;
 
+      if (!providerSupportsRollback) {
+        setThreadError(
+          activeThread.id,
+          "Checkpoint revert cannot be performed for this provider. The Agent Client Protocol does not support session rollback, so the session cannot be rewound to match the filesystem restore. Restoring files without also rolling back the session would cause the files and session context to be out of sync. To revert changes, start a new session from the desired git checkpoint.",
+        );
+        return;
+      }
       if (hasLiveTurn || isSendBusy || isConnecting) {
         setThreadError(activeThread.id, "Interrupt the current turn before reverting checkpoints.");
         return;
@@ -5915,7 +5930,15 @@ export default function ChatView({
       }
       setIsRevertingCheckpoint(false);
     },
-    [activeThread, hasLiveTurn, isConnecting, isRevertingCheckpoint, isSendBusy, setThreadError],
+    [
+      activeThread,
+      hasLiveTurn,
+      isConnecting,
+      isRevertingCheckpoint,
+      isSendBusy,
+      providerSupportsRollback,
+      setThreadError,
+    ],
   );
 
   const onCreateHandoffThread = useCallback(
@@ -7753,6 +7776,13 @@ export default function ChatView({
       if (!api || !activeThread || !isServerThread || isRevertingCheckpoint) {
         return false;
       }
+      if (!providerSupportsRollback) {
+        setThreadError(
+          activeThread.id,
+          "This provider does not support editing and resending messages.",
+        );
+        return false;
+      }
       const editTarget = resolveTailUserMessageEditTarget({
         messages: activeThread.messages,
         messageId,
@@ -7834,6 +7864,7 @@ export default function ChatView({
       selectedModelSelection,
       selectedPromptEffort,
       selectedProvider,
+      providerSupportsRollback,
       setThreadError,
       assistantDeliveryMode,
     ],
@@ -10327,7 +10358,7 @@ export default function ChatView({
                     onOpenAutomation={onOpenAutomation}
                     revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                     onRevertUserMessage={onRevertUserMessage}
-                    onEditUserMessage={onEditUserMessage}
+                    {...(providerSupportsRollback ? { onEditUserMessage } : {})}
                     isRevertingCheckpoint={isRevertingCheckpoint}
                     onExpandTimelineImage={onExpandTimelineImage}
                     followLiveOutput={hasStreamingAssistantText}

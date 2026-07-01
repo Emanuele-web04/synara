@@ -839,6 +839,84 @@ describe("DevinAdapterLive", () => {
     ),
   );
 
+  it.effect("composer capabilities advertise rollback as unsupported", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const capabilities = yield* adapter.getComposerCapabilities!();
+
+      assert.strictEqual(capabilities.supportsRollback, false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("adapter capabilities declare rollback as unsupported", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+
+      assert.strictEqual(adapter.capabilities.supportsRollback, false);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("compactThread sends /compact as a prompt", () => {
+    const promptCalls: Array<ReadonlyArray<unknown>> = [];
+    return Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      yield* adapter.startSession({
+        threadId,
+        provider: "devin",
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.compactThread!(threadId);
+      assert.strictEqual(promptCalls.length, 1);
+      const prompt = promptCalls[0]![0] as ReadonlyArray<{ type: string; text: string }>;
+      assert.strictEqual(prompt[0]?.type, "text");
+      assert.strictEqual(prompt[0]?.text, "/compact");
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () =>
+            Effect.succeed(
+              makeMockRuntime({
+                prompt: (payload) => {
+                  promptCalls.push([payload.prompt]);
+                  return Effect.succeed({
+                    stopReason: "end_turn",
+                  } as EffectAcpSchema.PromptResponse);
+                },
+              }),
+            ),
+        }),
+      ),
+    );
+  });
+
+  it.effect("composer capabilities advertise thread compaction", () =>
+    Effect.gen(function* () {
+      const adapter = yield* DevinAdapter;
+      const capabilities = yield* adapter.getComposerCapabilities!();
+
+      assert.strictEqual(capabilities.supportsThreadCompaction, true);
+    }).pipe(
+      Effect.provide(
+        makeDevinAdapterLive({
+          makeRuntime: () => Effect.succeed(makeMockRuntime()),
+        }),
+      ),
+    ),
+  );
+
   it.effect("respondToUserInput fails for unknown request id", () =>
     Effect.gen(function* () {
       const adapter = yield* DevinAdapter;

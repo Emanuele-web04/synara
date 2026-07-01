@@ -316,3 +316,7 @@ export function supportsThreadImport(
 ): boolean {
   return capabilities?.supportsThreadImport === true;
 }
+
+export function supportsRollback(capabilities: ProviderComposerCapabilities | undefined): boolean {
+  return capabilities?.supportsRollback !== false;
+}

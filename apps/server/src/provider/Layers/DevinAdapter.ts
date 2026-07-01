@@ -90,13 +90,8 @@ import serverPackageJson from "../../../package.json" with { type: "json" };
 
 const PROVIDER = "devin" as const;
 const DEVIN_RESUME_VERSION = 1 as const;
-/**
- * Devin's backend gate-checks `session/prompt` against `clientInfo.name`.
- * Only `"windsurf"` passes. Non-matching names receive "Your Windsurf version
- * is out of date" on every message. This is a known workaround.
- * TODO: Request Devin add Synara to the allowlist or remove the gate.
- */
-const DEVIN_CLIENT_INFO_NAME = "windsurf";
+/** clientInfo.name identifies Synara to the Devin ACP backend. */
+const DEVIN_CLIENT_INFO_NAME = "synara";
 /** Maximum turns retained in-memory per session to prevent unbounded growth. */
 const MAX_TURNS_PER_SESSION = 200;
 /** Timeout for pending approvals/elicitations before auto-cancelling (5 minutes). */
@@ -1014,6 +1009,7 @@ function makeProviderAdapter(
         sessionModelSwitch: "in-session",
         supportsRuntimeModelList: true,
         supportsNativeSlashCommandDiscovery: true,
+        supportsRollback: false,
       },
       startSession,
       sendTurn,
@@ -1112,6 +1108,17 @@ function makeProviderAdapter(
               "Devin ACP rollback is unsupported until Synara can map rollback to a native Devin session revert, fork, or rewind operation.",
           });
         }),
+      compactThread: (threadId) =>
+        Effect.gen(function* () {
+          const ctx = yield* requireSession(threadId);
+          yield* ctx.acp
+            .prompt({ prompt: [{ type: "text", text: "/compact" }] })
+            .pipe(
+              Effect.mapError((error) =>
+                mapAcpToAdapterError(PROVIDER, threadId, "session/prompt", error),
+              ),
+            );
+        }),
       stopAll: () =>
         Effect.gen(function* () {
           const contexts = [...sessions.values()];
@@ -1132,9 +1139,12 @@ function makeProviderAdapter(
           supportsPluginMentions: false,
           supportsPluginDiscovery: false,
           supportsRuntimeModelList: true,
-          // Thread compaction and import are not yet mapped to Devin ACP operations.
-          supportsThreadCompaction: false,
+          // Compaction sends /compact as a prompt via compactThread. Import is not yet mapped.
+          supportsThreadCompaction: true,
           supportsThreadImport: false,
+          // ACP has no session/revert or session/rollback method, and Devin has
+          // no revert slash command. Rollback is genuinely unsupported.
+          supportsRollback: false,
         } satisfies ProviderComposerCapabilities),
       listModels: (input: ProviderListModelsInput) =>
         Effect.gen(function* () {

@@ -196,6 +196,63 @@ describe("resolveDevinModeId", () => {
     });
     assert.strictEqual(result, "plan");
   });
+
+  // Tests using real Devin ACP mode IDs (accept-edits, ask, plan, bypass).
+  it("real Devin modes: full-access picks bypass", () => {
+    const modes = [
+      makeMode("accept-edits", "Code"),
+      makeMode("ask", "Ask"),
+      makeMode("plan", "Plan"),
+      makeMode("bypass", "Bypass Permissions"),
+    ];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+    });
+    assert.strictEqual(result, "bypass");
+  });
+
+  it("real Devin modes: plan interactionMode picks plan", () => {
+    const modes = [
+      makeMode("accept-edits", "Code"),
+      makeMode("ask", "Ask"),
+      makeMode("plan", "Plan"),
+      makeMode("bypass", "Bypass Permissions"),
+    ];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+      interactionMode: "plan",
+    });
+    assert.strictEqual(result, "plan");
+  });
+
+  it("real Devin modes: approval-required returns undefined (does not force accept-edits)", () => {
+    const modes = [
+      makeMode("accept-edits", "Code"),
+      makeMode("ask", "Ask"),
+      makeMode("plan", "Plan"),
+      makeMode("bypass", "Bypass Permissions"),
+    ];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "approval-required",
+    });
+    assert.strictEqual(result, undefined);
+  });
+
+  it("real Devin modes: full-access falls back to accept-edits when bypass is absent", () => {
+    const modes = [
+      makeMode("accept-edits", "Code"),
+      makeMode("ask", "Ask"),
+      makeMode("plan", "Plan"),
+    ];
+    const result = resolveDevinModeId({
+      modes,
+      runtimeMode: "full-access",
+    });
+    assert.strictEqual(result, "accept-edits");
+  });
 });
 
 describe("applyDevinModeSelection", () => {

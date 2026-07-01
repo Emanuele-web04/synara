@@ -618,30 +618,8 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       },
     },
     {
-      slug: "swe-1-6",
-      name: "SWE 1.6",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "swe-1-6-fast",
-      name: "SWE 1.6 Fast",
-      capabilities: {
-        reasoningEffortLevels: [],
-        supportsFastMode: false,
-        supportsThinkingToggle: false,
-        promptInjectedEffortLevels: [],
-        contextWindowOptions: [],
-      },
-    },
-    {
-      slug: "claude-sonnet-4-6",
-      name: "Claude Sonnet 4.6",
+      slug: "claude-5-fable-medium",
+      name: "Claude Fable 5 Medium",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -653,6 +631,17 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "claude-opus-4-8-medium",
       name: "Claude Opus 4.8 Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "claude-sonnet-5-medium",
+      name: "Claude Sonnet 5 Medium",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -686,6 +675,28 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "gemini-3-5-flash-medium",
       name: "Gemini 3.5 Flash Medium",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "swe-1-6",
+      name: "SWE 1.6",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "deepseek-v4",
+      name: "DeepSeek V4",
       capabilities: {
         reasoningEffortLevels: [],
         supportsFastMode: false,
@@ -770,10 +781,13 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
   devin: {
     swe: "swe-1-6",
     opus: "claude-opus-4-8-medium",
-    sonnet: "claude-sonnet-4-6",
+    sonnet: "claude-sonnet-5-medium",
+    fable: "claude-5-fable-medium",
+    "fable-5": "claude-5-fable-medium",
     gpt: "gpt-5-5-medium",
     codex: "gpt-5-3-codex-medium",
     gemini: "gemini-3-5-flash-medium",
+    deepseek: "deepseek-v4",
   },
   gemini: {
     auto: "auto-gemini-3",
