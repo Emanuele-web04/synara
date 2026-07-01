@@ -4,6 +4,7 @@
 // Exports: Codex image path, payload sanitization, and markdown helpers
 // Depends on: node path/os, image MIME allowlist, provider runtime artifact contract
 
+import { readdirSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -15,8 +16,11 @@ import {
 import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@synara/shared/localPreviewFiles";
 
 import {
+  SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR,
   resolveActiveCodexHomeWritePath,
+  resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
+  resolveSynaraCodexHomeOverlayPath,
 } from "./codexHomePaths.ts";
 
 export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND };
@@ -87,7 +91,24 @@ export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
  * images regardless of which home Codex wrote them under.
  */
 export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
-  const homes = resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {});
+  const homes = [...resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {})];
+  // Per-account sessions write images under Synara-managed account overlays
+  // (<overlay>/accounts/<segment>/generated_images). The local-image route has
+  // no instance context, so enumerate the existing account overlays instead.
+  const overlayHome = resolveSynaraCodexHomeOverlayPath(
+    process.env,
+    resolveBaseCodexHomePath(process.env, homePath?.trim() ? homePath : undefined),
+  );
+  const accountsRoot = path.join(overlayHome, SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR);
+  let accountSegments: readonly string[] = [];
+  try {
+    accountSegments = readdirSync(accountsRoot);
+  } catch {
+    accountSegments = [];
+  }
+  for (const segment of accountSegments) {
+    homes.push(path.join(accountsRoot, segment));
+  }
   return homes.map((home) => path.join(home, "generated_images"));
 }
 

@@ -270,6 +270,7 @@ describe("buildCodexProcessEnv account overlays", () => {
     mkdirSync(homePath, { recursive: true });
     mkdirSync(shadowHomePath, { recursive: true });
     writeFileSync(path.join(homePath, "auth.json"), '{"account":"default"}', "utf8");
+    writeFileSync(path.join(homePath, "models_cache.json"), '{"models":[]}', "utf8");
     writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
     return {
       root,
@@ -348,4 +349,136 @@ describe("buildCodexProcessEnv account overlays", () => {
       }
     },
   );
+
+  it("rejects a shadow home directory that is itself a symlink", async () => {
+    const fixture = makeAccountFixture();
+    const aliasedShadowHome = path.join(path.dirname(fixture.shadowHomePath), "codex-shadow-alias");
+    rmSync(fixture.shadowHomePath, { recursive: true, force: true });
+    symlinkSync(fixture.homePath, aliasedShadowHome);
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: aliasedShadowHome,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/shadow home/i);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a shadow home reached through a parent symlink that aliases CODEX_HOME", async () => {
+    const fixture = makeAccountFixture();
+    const aliasedParent = path.join(fixture.root, "aliased-parent");
+    symlinkSync(fixture.root, aliasedParent);
+
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: path.join(aliasedParent, path.basename(fixture.homePath)),
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/different from CODEX_HOME/);
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps shared auth out of account overlays without a shadow home", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const overlayHomePath = env.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      expect(path.resolve(overlayHomePath!)).not.toBe(path.resolve(fixture.homePath));
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(() => lstatSync(path.join(overlayHomePath!, entry))).toThrow();
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors private auth from an account's own dedicated home", async () => {
+    const fixture = makeAccountFixture();
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const overlayHomePath = env.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        const overlayPrivateStatePath = path.join(overlayHomePath!, entry);
+        expect(lstatSync(overlayPrivateStatePath).isSymbolicLink()).toBe(true);
+        expect(path.resolve(readlinkSync(overlayPrivateStatePath))).toBe(
+          path.resolve(path.join(fixture.homePath, entry)),
+        );
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("drops legacy shared-auth aliases from account overlays and keeps own logins", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    try {
+      const firstEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      const overlayHomePath = firstEnv.CODEX_HOME;
+      expect(overlayHomePath).toBeTruthy();
+      // Simulate legacy overlay state that symlinked shared private files in.
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        symlinkSync(path.join(fixture.homePath, entry), path.join(overlayHomePath!, entry));
+      }
+
+      const secondEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(secondEnv.CODEX_HOME).toBe(overlayHomePath);
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(() => lstatSync(path.join(overlayHomePath!, entry))).toThrow();
+      }
+
+      // The account's own real private files must survive re-preparation.
+      writeFileSync(path.join(overlayHomePath!, "auth.json"), '{"account":"work"}', "utf8");
+      writeFileSync(path.join(overlayHomePath!, "models_cache.json"), '{"models":[]}', "utf8");
+      const thirdEnv = await buildCodexProcessEnv({
+        env: sharedEnv,
+        accountId: "work",
+        platform: "win32",
+      });
+      expect(thirdEnv.CODEX_HOME).toBe(overlayHomePath);
+      for (const entry of ["auth.json", "models_cache.json"]) {
+        expect(lstatSync(path.join(overlayHomePath!, entry)).isFile()).toBe(true);
+      }
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
 });

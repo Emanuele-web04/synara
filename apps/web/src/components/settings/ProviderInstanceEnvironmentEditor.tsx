@@ -119,9 +119,12 @@ export function ProviderInstanceEnvironmentEditor({
               id={`provider-instance-${instanceId}-env-${index}-name`}
               disabled={redacted}
               name={entry.name}
+              // The server stores redacted secrets by name and cannot move them
+              // to a new key, so renaming a saved secret would silently drop it.
               onCommit={(nextName) => {
                 const trimmed = nextName.trim();
                 if (
+                  redacted ||
                   trimmed === entry.name ||
                   !isEnvironmentVariableName(trimmed) ||
                   entries.some(

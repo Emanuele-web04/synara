@@ -659,11 +659,45 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly appendConfigToml?: string;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
+  // An explicitly configured home is the account's own home; private state may
+  // mirror it. Env-derived homes are shared and must never leak private state.
+  const hasDedicatedAccountHome = Boolean(input.homePath?.trim());
   const shadowHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
     : undefined;
-  if (shadowHomePath && path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
-    throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+  if (shadowHomePath) {
+    if (path.resolve(sourceHomePath) === path.resolve(shadowHomePath)) {
+      throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+    }
+    // A symlinked shadow home aliases another account's credentials through the
+    // directory itself, bypassing the per-file symlink guard further down.
+    let shadowStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    try {
+      shadowStat = await fs.lstat(shadowHomePath);
+    } catch {
+      shadowStat = undefined;
+    }
+    if (shadowStat?.isSymbolicLink()) {
+      throw new Error(
+        `Codex account shadow home at ${shadowHomePath} is a symlink; it must be a real directory so accounts cannot alias each other's auth.`,
+      );
+    }
+    const resolveRealPath = async (candidate: string): Promise<string | undefined> => {
+      try {
+        return await fs.realpath(candidate);
+      } catch {
+        return undefined;
+      }
+    };
+    const shadowRealPath = shadowStat ? await resolveRealPath(shadowHomePath) : undefined;
+    const sourceRealPath = await resolveRealPath(sourceHomePath);
+    if (
+      shadowRealPath &&
+      sourceRealPath &&
+      path.resolve(shadowRealPath) === path.resolve(sourceRealPath)
+    ) {
+      throw new Error("Codex account shadow home must be different from CODEX_HOME.");
+    }
   }
   const accountSegment = resolveCodexHomeOverlayAccountSegment({
     homePath: sourceHomePath,
@@ -689,7 +723,16 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
       if (entry === "config.toml" || isCodexSqliteStateEntry(entry)) {
         continue;
       }
-      if (accountSegment && shadowHomePath && CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry)) {
+      // Account overlays only inherit account-private state when the source
+      // home is the account's own dedicated home. With a shadow home the
+      // private files are linked from there below; with a shared source home
+      // the account keeps its own login inside the overlay instead of
+      // silently reusing the default account's credentials.
+      if (
+        accountSegment &&
+        CODEX_ACCOUNT_PRIVATE_STATE_FILES.has(entry) &&
+        (shadowHomePath || !hasDedicatedAccountHome)
+      ) {
         continue;
       }
       const sourcePath = path.join(sourceHomePath, entry);
@@ -705,6 +748,21 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   } catch {
     // If the source home is partially missing, Codex can still start with the
     // overlay config and create any required state lazily.
+  }
+
+  if (accountSegment && !shadowHomePath && !hasDedicatedAccountHome) {
+    for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
+      const targetPath = path.join(overlayHomePath, entry);
+      try {
+        // Earlier builds symlinked shared auth into account overlays; drop the
+        // stale alias so the account's own login (a real file) takes its place.
+        if ((await fs.lstat(targetPath)).isSymbolicLink()) {
+          await fs.rm(targetPath, { force: true });
+        }
+      } catch {
+        // Missing private state is created lazily by the account's own login.
+      }
+    }
   }
 
   if (shadowHomePath) {
