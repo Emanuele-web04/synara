@@ -141,9 +141,7 @@ function GitFileSection(props: {
   return (
     <section className="min-w-0">
       <header className="flex items-center gap-2 px-1.5 py-1">
-        <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          {props.title}
-        </span>
+        <span className="text-[11px] font-semibold text-muted-foreground">{props.title}</span>
         <span className="rounded-full bg-muted px-1.5 text-[10px] font-medium text-muted-foreground">
           {props.files.length}
         </span>

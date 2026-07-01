@@ -1170,6 +1170,80 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("moves an empty draft to another project while preserving composer content", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/old",
+      worktreePath: "/tmp/old-worktree",
+      envMode: "worktree",
+    });
+    store.setPrompt(threadId, "keep this draft");
+
+    store.moveDraftThreadToProject(threadId, otherProjectId, {
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+      lastKnownPr: null,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "keep this draft",
+    );
+  });
+
+  it("clears the replaced target draft when moving a draft to another project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/old",
+      worktreePath: "/tmp/old-worktree",
+      envMode: "worktree",
+    });
+    store.setPrompt(threadId, "move this draft");
+    store.setProjectDraftThreadId(otherProjectId, otherThreadId);
+    store.setPrompt(otherThreadId, "replace this draft");
+    store.enqueueQueuedTurn(
+      otherThreadId,
+      makeQueuedChatTurn(
+        "queued-target-replaced",
+        makeImage({ id: "queued-target-replaced", previewUrl: "blob:queued-target-replaced" }),
+      ),
+    );
+
+    store.moveDraftThreadToProject(threadId, otherProjectId, {
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+      lastKnownPr: null,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "move this draft",
+    );
+    expect(useComposerDraftStore.getState().getDraftThread(otherThreadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[otherThreadId]).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:queued-target-replaced");
+  });
+
   it("preserves existing branch and worktree when setProjectDraftThreadId receives undefined", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId, {

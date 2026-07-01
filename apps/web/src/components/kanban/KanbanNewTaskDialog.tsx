@@ -250,6 +250,9 @@ export function KanbanNewTaskDialog({
     providerStatuses,
     onOpenChange,
   });
+  const handleCreateRequest = useCallback(() => {
+    void handleCreate();
+  }, [handleCreate]);
   const {
     composerCursor,
     composerTrigger,
@@ -293,7 +296,7 @@ export function KanbanNewTaskDialog({
     piAgentDir: providerOptionsForDispatch?.pi?.agentDir ?? null,
     handleProviderModelChange,
     setInteractionMode,
-    onCreate: handleCreate,
+    onCreate: handleCreateRequest,
   });
 
   // Providers without a static default (e.g. Pi) resolve their model once
@@ -357,10 +360,10 @@ export function KanbanNewTaskDialog({
     (event: React.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        handleCreate();
+        handleCreateRequest();
       }
     },
-    [handleCreate],
+    [handleCreateRequest],
   );
 
   const {
@@ -621,7 +624,7 @@ export function KanbanNewTaskDialog({
                 />
                 Send as draft
               </label>
-              <Button size="sm" onClick={handleCreate} disabled={!canCreate}>
+              <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
                 {isCreating ? "Creating..." : "Create task"}
               </Button>
             </div>

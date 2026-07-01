@@ -1,8 +1,15 @@
+// FILE: MessagesTimeline.test.tsx
+// Purpose: Covers transcript row rendering and SSR-safe presentation contracts.
+// Layer: Web chat component tests
+// Depends on: renderToStaticMarkup and a mocked LegendList.
+
 import { MessageId, TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+
+const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -197,7 +204,7 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-[8px]");
+    expect(markup).toContain("py-1.5");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
@@ -1676,13 +1683,13 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('data-tool-detail-trigger="true"');
-    expect(markup).toContain('title="View tool details"');
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain('data-tool-details-inline="true"');
     expect(markup).not.toContain("Diff");
     expect(markup).not.toContain("Details");
   });
 
-  it("renders command rows with a readable summary and keeps the full command on hover", async () => {
+  it("renders command rows with a readable summary and styled hover tooltip trigger", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1726,11 +1733,69 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Searched");
     expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
-    expect(markup).toContain(
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
+  });
+
+  it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-git-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-git-command",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Checked",
+              command: "git status --short",
+            },
+          },
+          {
+            id: "entry-gh-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-gh-command",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Ran",
+              command: "gh pr view 274 --repo owner/repo",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-tool-icon="github"/g)).toHaveLength(2);
+    expect(markup).not.toContain("/central-icons-reversed/git.svg");
   });
 
   it("marks command rows with captured details as clickable", async () => {
@@ -1923,7 +1988,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Listed");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("apps/web/src");
+    expect(markup).toContain("web/src");
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain(">Listed web<");
   });
 

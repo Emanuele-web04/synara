@@ -23,8 +23,9 @@ import type { ProviderInstanceOption } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
 import type { DraftThreadEnvMode } from "~/composerDraftStore";
 import { providerInstanceModelSelectionKey, useComposerDraftStore } from "~/composerDraftStore";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { createAndSendKanbanTask, createKanbanDraftTask } from "~/lib/kanbanTaskCreate";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { buildModelSelection } from "~/providerModelOptions";
 import { truncateKanbanTaskPreview } from "./KanbanNewTaskDialog.logic";
 
@@ -74,6 +75,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   } = input;
   const navigate = useNavigate();
   const [isCreating, setIsCreating] = useState(false);
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   // Synchronous re-entry guard: repeated Cmd+Enter can fire before React flushes
   // the loading state, and two passes here would create two tasks.
   const isCreatingRef = useRef(false);
@@ -81,7 +83,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
   const canCreate =
     selectedProjectId !== null && hasSendableContent && selectedModel !== null && !isCreating;
 
-  const handleCreate = useCallback(() => {
+  const handleCreate = useCallback(async () => {
     if (
       !selectedProjectId ||
       !hasSendableContent ||
@@ -130,10 +132,11 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     }
 
     // Send now: create + promote + dispatch straight to In Progress.
-    const sendAvailability = resolveProviderSendAvailability({
+    const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
       provider: selectedProvider,
       instanceId: modelSelection.instanceId,
       statuses: providerStatuses,
+      refreshStatuses: () => refreshProviderStatuses({ silent: true }),
     });
     if (!sendAvailability.usable) {
       toastManager.add({
@@ -209,6 +212,7 @@ export function useKanbanTaskSubmit(input: UseKanbanTaskSubmitInput) {
     providerOptionsForDispatch,
     providerInstances,
     providerStatuses,
+    refreshProviderStatuses,
     runtimeMode,
     scratchThreadId,
     selectedModel,

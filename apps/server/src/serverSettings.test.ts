@@ -36,6 +36,7 @@ describe("ServerSettingsService", () => {
     expect(settings.providers.codex.binaryPath).toBe("codex");
     expect(settings.providers.grok.binaryPath).toBe("grok");
     expect(settings.defaultThreadEnvMode).toBe("local");
+    expect(settings.enableProviderUpdateChecks).toBe(true);
   });
 
   it("persists updates and reloads them", async () => {
@@ -48,6 +49,7 @@ describe("ServerSettingsService", () => {
 
         const updated = yield* service.updateSettings({
           enableAssistantStreaming: true,
+          enableProviderUpdateChecks: false,
           providers: {
             codex: {
               binaryPath: "/usr/local/bin/codex",
@@ -61,9 +63,11 @@ describe("ServerSettingsService", () => {
     );
 
     expect(result.updated.enableAssistantStreaming).toBe(true);
+    expect(result.updated.enableProviderUpdateChecks).toBe(false);
     expect(result.updated.providers.codex.binaryPath).toBe("/usr/local/bin/codex");
     expect(result.parsed).toMatchObject({
       enableAssistantStreaming: true,
+      enableProviderUpdateChecks: false,
       providers: {
         codex: {
           binaryPath: "/usr/local/bin/codex",

@@ -72,18 +72,50 @@ function isRunningStatus(status: ThreadSessionStatus | null | undefined): boolea
   return status === "running" || status === "connecting";
 }
 
-// Build a short body from the latest assistant message without dumping long output into OS chrome.
+const NOTIFICATION_SUMMARY_MAX_LENGTH = 140;
+
+// Normalize + cap a message body so long output never leaks into OS chrome.
+function summarizeAssistantText(text: string): string | null {
+  const trimmed = text.trim().replace(/\s+/g, " ");
+  if (trimmed.length === 0) {
+    return null;
+  }
+  return trimmed.length <= NOTIFICATION_SUMMARY_MAX_LENGTH
+    ? trimmed
+    : `${trimmed.slice(0, NOTIFICATION_SUMMARY_MAX_LENGTH - 3)}...`;
+}
+
+// Build a short body from the turn's *final* assistant message — the end-of-turn reply
+// that lands after the work/compaction, not the opening preamble. Prefer the canonical
+// `latestTurn.assistantMessageId`; if it's missing/empty, fall back to the last non-empty
+// assistant message of that turn so we still surface the latest reply.
 function summarizeLatestAssistantMessage(thread: Thread): string | null {
+  const latestTurnId = thread.latestTurn?.turnId ?? null;
+  const finalAssistantMessageId = thread.latestTurn?.assistantMessageId ?? null;
+
+  if (finalAssistantMessageId) {
+    const finalMessage = thread.messages.find((message) => message.id === finalAssistantMessageId);
+    if (finalMessage) {
+      const summary = summarizeAssistantText(finalMessage.text);
+      if (summary) {
+        return summary;
+      }
+    }
+  }
+
   for (let index = thread.messages.length - 1; index >= 0; index -= 1) {
     const message = thread.messages[index];
     if (!message || message.role !== "assistant") {
       continue;
     }
-    const trimmed = message.text.trim().replace(/\s+/g, " ");
-    if (trimmed.length === 0) {
+    // Stay within the just-completed turn so an earlier/other-turn preamble can't win.
+    if (latestTurnId && message.turnId && message.turnId !== latestTurnId) {
       continue;
     }
-    return trimmed.length <= 140 ? trimmed : `${trimmed.slice(0, 137)}...`;
+    const summary = summarizeAssistantText(message.text);
+    if (summary) {
+      return summary;
+    }
   }
   return null;
 }

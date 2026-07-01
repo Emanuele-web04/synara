@@ -4,11 +4,11 @@
 
 import {
   ArchiveIcon,
+  CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
   ClockIcon,
   CopyIcon,
-  DisposableThreadIcon,
   ExternalLinkIcon,
   FolderIcon,
   FolderOpenIcon,
@@ -23,6 +23,7 @@ import {
   SearchIcon,
   SettingsIcon,
   StopFilledIcon,
+  TemporaryThreadIcon,
   TerminalIcon,
   Trash2,
   TriangleAlertIcon,
@@ -34,7 +35,7 @@ import { ensureNativeApi } from "~/nativeApi";
 import { autoAnimate } from "@formkit/auto-animate";
 import { FiGitBranch, FiPlus } from "react-icons/fi";
 import { GoRepoForked } from "react-icons/go";
-import { HiOutlineArchiveBox, HiOutlineCheckCircle } from "react-icons/hi2";
+import { HiOutlineArchiveBox } from "react-icons/hi2";
 import { TbArrowsDiagonal, TbArrowsDiagonalMinimize2, TbCursorText } from "react-icons/tb";
 import { IoFilter } from "react-icons/io5";
 import {
@@ -95,7 +96,7 @@ import {
 import { isElectron } from "../env";
 import { showConfirmDialogFallback } from "../confirmDialogFallback";
 import { formatRelativeTime } from "../lib/relativeTime";
-import { isMacPlatform, newCommandId, newProjectId, newThreadId, randomUUID } from "../lib/utils";
+import { isMacPlatform, newCommandId, newThreadId, randomUUID } from "../lib/utils";
 import {
   reconcileDeletedThreadFromClient,
   reconcileDeletedThreadsFromClient,
@@ -133,13 +134,16 @@ import {
 import { resolveCurrentProjectTargetId } from "../lib/projectShortcutTargets";
 import { projectDiscoverScriptsQueryOptions } from "../lib/projectReactQuery";
 import {
-  LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS,
-  LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS,
   serverConfigQueryOptions,
-  serverLocalServersQueryOptions,
   serverQueryKeys,
+  sidebarLocalServersQueryOptions,
 } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
+import {
+  archiveThreadFromClient,
+  isThreadAlreadyUnarchivedError,
+  unarchiveThreadFromClient,
+} from "../lib/threadArchive";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
@@ -209,7 +213,7 @@ import {
   getDesktopUpdateAlreadyCurrentNotice,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
-  getDesktopUpdateButtonVariant,
+  getDesktopUpdateDownloadPercent,
   getDesktopUpdateErrorSignature,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
@@ -256,7 +260,6 @@ import {
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
-import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
   describeAddProjectError,
   buildSettingsBackAvailableThreadIds,
@@ -265,7 +268,6 @@ import {
   deriveSidebarProjectData,
   derivePinnedThreadIdsForSidebar,
   createSidebarThreadHoverAnchorId,
-  extractDuplicateProjectCreateProjectId,
   findDeepestWorkspaceRootMatch,
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
@@ -288,7 +290,6 @@ import {
   resolveThreadRowTrailingReserveClass,
   resolveThreadStatusPill,
   type ThreadStatusPill,
-  isDuplicateProjectCreateError,
   type SidebarDerivedProjectData,
   shouldShowDebugFeatureFlagsMenu,
   resolvePrStatePresentation,
@@ -351,13 +352,17 @@ import type {
   SidebarSearchThread,
 } from "./SidebarSearchPalette.logic";
 import { useFocusedChatContext } from "../focusedChatContext";
+import { waitForRecoverableProjectInReadModel } from "../lib/projectCreateRecovery";
 import {
-  waitForRecoverableProjectForDuplicateCreate,
-  waitForRecoverableProjectInReadModel,
-} from "../lib/projectCreateRecovery";
+  createOrRecoverProjectFromPath,
+  PROJECT_CREATE_EXISTING_SYNC_ERROR,
+} from "../lib/projectCreation";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
+// How long the "Undo archive" toast lingers (visible time only — it pauses while
+// the tab is hidden) before auto-dismissing.
+const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -375,8 +380,6 @@ const EMPTY_THREAD_JUMP_LABELS = new Map<ThreadId, string>();
 const EMPTY_SHORTCUT_PARTS: readonly string[] = [];
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS = 6;
 const ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS = 50;
-const ADD_PROJECT_EXISTING_SYNC_ERROR =
-  "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 const DebugFeatureFlagsMenu = import.meta.env.DEV
   ? lazy(() =>
       import("./DebugFeatureFlagsMenu").then((module) => ({
@@ -522,30 +525,29 @@ function WorktreeBadgeGlyph({ className }: { className?: string }) {
   return <WorktreeIcon aria-hidden="true" className={sidebarGlyphClass("meta", className)} />;
 }
 
-// Trailing status indicator shown in the timestamp slot: spinner while working,
-// check when completed, otherwise a colored status dot. Replaces the relative
-// timestamp whenever the thread has an active/unseen status.
-function ThreadStatusTrailingGlyph({ threadStatus }: { threadStatus: ThreadStatusPill }) {
-  if (threadStatus.label === "Completed") {
+// Trailing row status: spinner while working, check when completed, otherwise a
+// colored status dot. Thread rows and project headers use the same glyph so a
+// collapsed project still advertises active child chats.
+function SidebarStatusTrailingGlyph({ status }: { status: ThreadStatusPill }) {
+  if (status.label === "Completed") {
+    // Match the worktree/other trailing chips' optical size (15px) so the green
+    // check reads as part of the same right-side icon cluster.
     return (
-      <HiOutlineCheckCircle
+      <CheckCircle2Icon
         aria-hidden="true"
-        className={cn("size-3.5 shrink-0", threadStatus.colorClass)}
+        className={cn(SIDEBAR_TRAILING_ICON_CLASS, status.colorClass)}
       />
     );
   }
-  if (threadStatus.pulse) {
+  if (status.pulse) {
     return <ThreadRunningSpinner />;
   }
   return (
-    <span
-      aria-hidden="true"
-      className={cn("size-1.5 shrink-0 rounded-full", threadStatus.dotClass)}
-    />
+    <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", status.dotClass)} />
   );
 }
 
-/** Pulsing green dot shown before a thread or project name while a dev run is live. */
+/** Pulsing green dot shown before a project name while a dev run is live. */
 function ProjectRunIndicatorDot({ className }: { className?: string }) {
   return (
     <span
@@ -565,13 +567,17 @@ const THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME = cn(
   sidebarHoverRevealHideClassName("thread-row"),
 );
 
-/** Fixed-width timestamp/status column; fades on hover so pin/archive can overlay this slot. */
+/** Fixed-width status column; fades on hover so pin/archive can overlay this slot. */
 function threadRowTimestampSlotClassName(
   isSubagentThread: boolean,
   toneClassName?: string,
 ): string {
   return cn(
-    "mr-1 flex shrink-0 items-center justify-end leading-none tabular-nums",
+    // No right margin: the timestamp moved to the hover card, so this column now
+    // only carries the status glyph (check/spinner/dot). It must sit flush at the
+    // row's right padding like the meta chips (worktree, fork) — a leftover `mr-1`
+    // pushed the completed check ~4px past them and broke the trailing-cluster line.
+    "flex shrink-0 items-center justify-end leading-none tabular-nums",
     sidebarHoverRevealHideClassName("thread-row"),
     isSubagentThread
       ? "w-[1.2rem] text-[10px]"
@@ -599,7 +605,7 @@ type ThreadMetaChip = {
 
 /**
  * Back-to-front order: first = behind, last = in front.
- * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/disposable
+ * Priority lowest -> highest: handoff -> fork -> worktree. Sidechats skip fork/temporary
  * badges because the "Sidechat:" title already identifies them.
  */
 function resolveThreadRowMetaChips(input: {
@@ -1443,8 +1449,8 @@ export default function Sidebar() {
     [addProjectError],
   );
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
-  const [pendingArchiveConfirmationThreadId, setPendingArchiveConfirmationThreadId] =
-    useState<ThreadId | null>(null);
+  const archivePendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
+  const archiveUndoPendingThreadIdsRef = useRef<Set<ThreadId>>(new Set());
   const [renameDialogThreadId, setRenameDialogThreadId] = useState<ThreadId | null>(null);
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
@@ -1953,7 +1959,7 @@ export default function Sidebar() {
   );
 
   const openOrCreateProjectThreadFromSnapshot = useCallback(
-    async (projectId: ProjectId, snapshot: OrchestrationShellSnapshot) => {
+    async (projectId: ProjectId, snapshot: OrchestrationShellSnapshot): Promise<boolean> => {
       const latestThread = sortThreadsForSidebar(
         snapshot.threads
           .filter(
@@ -1972,12 +1978,13 @@ export default function Sidebar() {
           to: "/$threadId",
           params: { threadId: latestThread.id },
         });
-        return;
+        return true;
       }
 
       void handleNewThread(projectId, {
         envMode: appSettings.defaultThreadEnvMode,
       }).catch(() => undefined);
+      return true;
     },
     [
       appSettings.defaultThreadEnvMode,
@@ -2067,25 +2074,6 @@ export default function Sidebar() {
   );
 
   // Keep add-project recovery on the same fresh-snapshot path for create, duplicate, and existing-project flows.
-  const recoverProjectThreadFromServer = useCallback(
-    async (
-      api: NonNullable<ReturnType<typeof readNativeApi>>,
-      projectId: ProjectId,
-    ): Promise<boolean> => {
-      const { project, snapshot } = await waitForProjectInSnapshot(api, projectId);
-      if (snapshot) {
-        syncServerShellSnapshot(snapshot);
-      }
-      if (!project || !snapshot) {
-        return false;
-      }
-
-      await openOrCreateProjectThreadFromSnapshot(project.id, snapshot);
-      return true;
-    },
-    [openOrCreateProjectThreadFromSnapshot, syncServerShellSnapshot, waitForProjectInSnapshot],
-  );
-
   const recoverExistingProjectFromServer = useCallback(
     async (
       api: NonNullable<ReturnType<typeof readNativeApi>>,
@@ -2359,34 +2347,54 @@ export default function Sidebar() {
           // Continue to project.create so re-adding the folder revives it instead of opening a dead shell.
         }
 
-        const projectId = newProjectId();
-        const createdAt = new Date().toISOString();
-        const title = cwd.split(/[/\\]/).findLast(isNonEmptyString) ?? cwd;
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
-          projectId,
-          kind: "project",
-          title,
+        const creationResult = await createOrRecoverProjectFromPath({
+          api,
           workspaceRoot: cwd,
-          createWorkspaceRootIfMissing: options.createIfMissing === true,
+          ...(options.createIfMissing === undefined
+            ? {}
+            : { createIfMissing: options.createIfMissing }),
           defaultModelSelection: {
             instanceId: "codex",
             model: getDefaultModel("codex"),
           },
-          createdAt,
+          loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
+          maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
+          delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
         });
-        const recovered = await recoverProjectThreadFromServer(api, projectId);
-        if (recovered) {
-          finishAddingProject();
-          return;
+        if (creationResult.snapshot) {
+          syncServerShellSnapshot(creationResult.snapshot);
+        }
+        if (creationResult.project && creationResult.snapshot) {
+          const recovered = creationResult.created
+            ? await openOrCreateProjectThreadFromSnapshot(
+                creationResult.project.id,
+                creationResult.snapshot,
+              )
+            : await openExistingProjectFromSnapshot(
+                creationResult.project.id,
+                creationResult.snapshot,
+              );
+          if (recovered) {
+            finishAddingProject();
+            return;
+          }
+        }
+
+        if (!creationResult.created) {
+          const recovered = await recoverExistingProjectFromServer(api, creationResult.projectId);
+          if (recovered) {
+            finishAddingProject();
+            return;
+          }
+          setIsAddingProject(false);
+          throw new Error(PROJECT_CREATE_EXISTING_SYNC_ERROR);
         }
 
         // The command already committed successfully at this point. If the projection
         // snapshot is just slow to catch up, continue with the local new-thread flow
         // instead of surfacing a false-negative sidebar sync error.
-        setProjectExpanded(projectId, true);
-        void handleNewThread(projectId, {
+        setProjectExpanded(creationResult.projectId, true);
+        void handleNewThread(creationResult.projectId, {
           envMode: appSettings.defaultThreadEnvMode,
         }).catch(() => undefined);
         finishAddingProject();
@@ -2394,45 +2402,6 @@ export default function Sidebar() {
       } catch (error) {
         const description =
           error instanceof Error ? error.message : "An error occurred while adding the project.";
-        if (isDuplicateProjectCreateError(description)) {
-          try {
-            const { project, snapshot } = await waitForRecoverableProjectForDuplicateCreate({
-              message: description,
-              workspaceRoot: cwd,
-              loadSnapshot: () => api.orchestration.getShellSnapshot().catch(() => null),
-              maxAttempts: ADD_PROJECT_SNAPSHOT_CATCH_UP_MAX_ATTEMPTS,
-              delayMs: ADD_PROJECT_SNAPSHOT_CATCH_UP_DELAY_MS,
-            });
-            if (snapshot) {
-              syncServerShellSnapshot(snapshot);
-            }
-            if (project && snapshot) {
-              const recovered = await openExistingProjectFromSnapshot(project.id, snapshot);
-              if (recovered) {
-                finishAddingProject();
-                return;
-              }
-            }
-
-            const duplicateProjectId = extractDuplicateProjectCreateProjectId(description);
-            const recovered = duplicateProjectId
-              ? await recoverExistingProjectFromServer(
-                  api,
-                  ProjectId.makeUnsafe(duplicateProjectId),
-                )
-              : await recoverExistingProjectByWorkspaceRootFromServer(api, cwd);
-            if (recovered) {
-              finishAddingProject();
-              return;
-            }
-
-            setIsAddingProject(false);
-            throw new Error(ADD_PROJECT_EXISTING_SYNC_ERROR, { cause: error });
-          } catch (recoveryError) {
-            setIsAddingProject(false);
-            throw recoveryError;
-          }
-        }
         setIsAddingProject(false);
         throw error instanceof Error ? error : new Error(description);
       }
@@ -2444,7 +2413,7 @@ export default function Sidebar() {
       projects,
       recoverExistingProjectFromServer,
       recoverExistingProjectByWorkspaceRootFromServer,
-      recoverProjectThreadFromServer,
+      openOrCreateProjectThreadFromSnapshot,
       openExistingProjectFromSnapshot,
       setProjectExpanded,
       syncServerShellSnapshot,
@@ -2904,15 +2873,15 @@ export default function Sidebar() {
   );
 
   /**
-   * Archive a thread: stop any running session first, then dispatch archive command.
+   * Archive a thread when it is idle, then move the active view away if needed.
    * Archived threads are hidden from the sidebar but can be restored later.
    */
   const archiveThread = useCallback(
-    async (threadId: ThreadId): Promise<void> => {
+    async (threadId: ThreadId): Promise<boolean> => {
       const api = readNativeApi();
-      if (!api) return;
+      if (!api) return false;
       const thread = getThreadFromState(useStore.getState(), threadId);
-      if (!thread) return;
+      if (!thread) return false;
 
       // Cannot archive a running thread
       if (isThreadRunningTurn(thread)) {
@@ -2921,37 +2890,154 @@ export default function Sidebar() {
           title: "Cannot archive",
           description: "Stop the running session before archiving this thread.",
         });
-        return;
+        return false;
       }
 
-      await api.orchestration.dispatchCommand({
-        type: "thread.archive",
-        commandId: newCommandId(),
-        threadId,
-      });
+      const pendingThreadIds = archivePendingThreadIdsRef.current;
+      if (pendingThreadIds.has(threadId)) return false;
 
-      // Navigate away if viewing the archived thread
-      if (routeThreadId === threadId) {
-        const fallbackThreadId = getFallbackThreadIdAfterDelete({
-          threads: sidebarThreads,
-          deletedThreadId: threadId,
-          deletedThreadIds: new Set<ThreadId>(),
-          sortOrder: appSettings.sidebarThreadSortOrder,
-        });
-        if (fallbackThreadId) {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: fallbackThreadId },
-            replace: true,
+      pendingThreadIds.add(threadId);
+      try {
+        await archiveThreadFromClient(api.orchestration, threadId);
+
+        // Navigate away before surfacing Undo so a quick restore cannot be
+        // overwritten by the fallback route change for the archived thread.
+        if (routeThreadId === threadId) {
+          const fallbackThreadId = getFallbackThreadIdAfterDelete({
+            threads: sidebarThreads,
+            deletedThreadId: threadId,
+            deletedThreadIds: new Set<ThreadId>(),
+            sortOrder: appSettings.sidebarThreadSortOrder,
           });
-        } else {
-          void handleNewChat({ fresh: true });
+          if (fallbackThreadId) {
+            await navigate({
+              to: "/$threadId",
+              params: { threadId: fallbackThreadId },
+              replace: true,
+            });
+          } else {
+            await handleNewChat({ fresh: true });
+          }
         }
+
+        return true;
+      } finally {
+        pendingThreadIds.delete(threadId);
       }
     },
     [appSettings.sidebarThreadSortOrder, handleNewChat, navigate, routeThreadId, sidebarThreads],
   );
 
+  // Restore an archived thread (used by the inline "Undo" affordance).
+  const unarchiveArchivedThread = useCallback(async (threadId: ThreadId): Promise<void> => {
+    const api = readNativeApi();
+    if (!api) {
+      throw new Error("Unable to connect to the app server.");
+    }
+    await unarchiveThreadFromClient(api.orchestration, threadId);
+  }, []);
+
+  // Serializes restore attempts per thread so repeated Undo clicks do not race
+  // into duplicate unarchive commands.
+  const restoreArchivedThreadFromToast = useCallback(
+    async (input: { threadId: ThreadId; returnToThreadOnUndo: boolean }): Promise<boolean> => {
+      const pendingThreadIds = archiveUndoPendingThreadIdsRef.current;
+      if (pendingThreadIds.has(input.threadId)) return false;
+
+      pendingThreadIds.add(input.threadId);
+      try {
+        const currentThread = getThreadFromState(useStore.getState(), input.threadId);
+        if (!currentThread) {
+          toastManager.add({
+            type: "error",
+            title: "Could not restore thread",
+            description: "The thread no longer exists.",
+          });
+          return false;
+        }
+        try {
+          await unarchiveArchivedThread(input.threadId);
+        } catch (error) {
+          // The archive event reaches the browser store asynchronously. Undo must
+          // still send the server command, then treat an already-restored thread as success.
+          if (!isThreadAlreadyUnarchivedError(error, input.threadId)) {
+            throw error;
+          }
+        }
+        if (input.returnToThreadOnUndo) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: input.threadId },
+            replace: true,
+          });
+        }
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not restore thread",
+          description: error instanceof Error ? error.message : "Unable to restore the thread.",
+        });
+        return false;
+      } finally {
+        pendingThreadIds.delete(input.threadId);
+      }
+    },
+    [navigate, unarchiveArchivedThread],
+  );
+
+  // Surface the "Undo or view archived chats in Settings" toast after an archive.
+  // The toast is global (cross-thread) since archiving navigates away from the row.
+  const showArchiveUndoToast = useCallback(
+    (threadId: ThreadId, options?: { returnToThreadOnUndo?: boolean }) => {
+      // Use a fresh instance id so Base UI never revives a closing toast with
+      // stale local state such as a pending Undo button.
+      const toastId = `archive-undo:${threadId}:${randomUUID()}`;
+      toastManager.add({
+        id: toastId,
+        timeout: 0,
+        data: {
+          allowCrossThreadVisibility: true,
+          dismissAfterVisibleMs: ARCHIVE_UNDO_TOAST_DURATION_MS,
+          archiveUndo: {
+            onUndo: () =>
+              restoreArchivedThreadFromToast({
+                threadId,
+                returnToThreadOnUndo: options?.returnToThreadOnUndo === true,
+              }),
+            onViewArchived: () => {
+              void navigate({ to: "/settings", search: { section: "archived" } });
+            },
+          },
+        },
+      });
+    },
+    [navigate, restoreArchivedThreadFromToast],
+  );
+
+  // Archive immediately and surface the Undo toast. The toast is the safety net,
+  // so the inline row affordance archives instantly without a confirmation step.
+  const archiveThreadWithUndo = useCallback(
+    async (threadId: ThreadId) => {
+      try {
+        const returnToThreadOnUndo = routeThreadId === threadId;
+        const archived = await archiveThread(threadId);
+        if (archived) {
+          showArchiveUndoToast(threadId, { returnToThreadOnUndo });
+        }
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not archive thread",
+          description: error instanceof Error ? error.message : "Unable to archive the thread.",
+        });
+      }
+    },
+    [archiveThread, routeThreadId, showArchiveUndoToast],
+  );
+
+  // Context-menu archive still honors the opt-in `confirmThreadArchive` dialog
+  // before archiving; the undo toast follows either way.
   const confirmAndArchiveThread = useCallback(
     async (threadId: ThreadId) => {
       const thread = sidebarThreadSummaryById[threadId];
@@ -2969,23 +3055,10 @@ export default function Sidebar() {
         if (!confirmed) return;
       }
 
-      await archiveThread(threadId);
-      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
+      await archiveThreadWithUndo(threadId);
     },
-    [appSettings.confirmThreadArchive, archiveThread, sidebarThreadSummaryById],
+    [appSettings.confirmThreadArchive, archiveThreadWithUndo, sidebarThreadSummaryById],
   );
-
-  const inlineConfirmArchiveThread = useCallback(
-    async (threadId: ThreadId) => {
-      setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
-      await archiveThread(threadId);
-    },
-    [archiveThread],
-  );
-
-  const dismissPendingArchiveConfirmation = useCallback((threadId: ThreadId) => {
-    setPendingArchiveConfirmationThreadId((current) => (current === threadId ? null : current));
-  }, []);
 
   /**
    * Archive every non-archived thread for a given project in one pass.
@@ -3049,8 +3122,12 @@ export default function Sidebar() {
       let failureCount = 0;
       for (const thread of archivableThreads) {
         try {
-          await archiveThread(thread.id);
-          archivedCount += 1;
+          const archived = await archiveThread(thread.id);
+          if (archived) {
+            archivedCount += 1;
+          } else {
+            failureCount += 1;
+          }
         } catch (error) {
           failureCount += 1;
           console.error("Failed to archive thread during bulk archive", {
@@ -4021,20 +4098,16 @@ export default function Sidebar() {
     return commandByProjectId;
   }, [discoveredScriptTargetsByProjectId, standardProjects]);
   projectRunCommandByProjectIdRef.current = projectRunCommandByProjectId;
-  // Keep manual server attribution alive, but slow the always-on folder scan
-  // when no Synara-owned run needs near-real-time reconciliation.
+  // Keep manual server attribution alive without repeating the expensive
+  // port/process scan while no Synara-owned run needs near-real-time status.
   const hasActiveProjectRun = useMemo(
     () => Object.keys(projectRunsByProjectId).length > 0,
     [projectRunsByProjectId],
   );
-  const shouldTrackLocalServers = standardProjects.length > 0 || hasActiveProjectRun;
-  const localServersRefetchInterval = hasActiveProjectRun
-    ? LOCAL_SERVERS_VISIBLE_REFETCH_INTERVAL_MS
-    : LOCAL_SERVERS_BACKGROUND_REFETCH_INTERVAL_MS;
   const projectRunLocalServersQuery = useQuery(
-    serverLocalServersQueryOptions({
-      enabled: shouldTrackLocalServers,
-      refetchInterval: localServersRefetchInterval,
+    sidebarLocalServersQueryOptions({
+      hasActiveProjectRun,
+      hasProjects: standardProjects.length > 0,
     }),
   );
   const projectRunServerByProjectId = useMemo(() => {
@@ -4564,34 +4637,6 @@ export default function Sidebar() {
     },
   ) {
     const compact = options?.compact === true;
-    const isPendingConfirmation = pendingArchiveConfirmationThreadId === threadId;
-
-    if (isPendingConfirmation) {
-      return (
-        <button
-          type="button"
-          aria-label="Confirm archive"
-          title="Confirm archive"
-          className={cn(
-            "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
-            "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
-            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
-            compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
-          )}
-          onMouseDown={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-          }}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void inlineConfirmArchiveThread(threadId);
-          }}
-        >
-          <span>Confirm</span>
-        </button>
-      );
-    }
 
     return (
       <SidebarIconButton
@@ -4611,7 +4656,7 @@ export default function Sidebar() {
         onClick={(event) => {
           event.preventDefault();
           event.stopPropagation();
-          setPendingArchiveConfirmationThreadId(threadId);
+          void archiveThreadWithUndo(threadId);
         }}
       />
     );
@@ -4626,59 +4671,32 @@ export default function Sidebar() {
   }) {
     const compact = input.compact === true;
     const includePinToggle = input.includePinToggle !== false;
-    const isPendingConfirmation = pendingArchiveConfirmationThreadId === input.threadId;
 
     return (
-      <SidebarRowHoverActions threadId={input.threadId} pinnedVisible={isPendingConfirmation}>
-        {isPendingConfirmation ? (
-          <button
-            type="button"
-            aria-label="Confirm archive"
-            title="Confirm archive"
-            className={cn(
-              "pointer-events-auto inline-flex h-5 items-center rounded-full px-2.5 text-[10px] font-normal leading-none tracking-[-0.01em] opacity-100 transition-colors",
-              "bg-red-400/12 text-red-400 hover:bg-red-400/16 hover:text-red-300",
-              "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-red-400/45",
-              compact ? "h-4.5 px-1.5 text-[10px]" : undefined,
-            )}
-            onMouseDown={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              void inlineConfirmArchiveThread(input.threadId);
-            }}
-          >
-            <span>Confirm</span>
-          </button>
-        ) : (
-          <div className="pointer-events-auto inline-flex items-center gap-2">
-            {includePinToggle ? (
-              <ThreadPinToggleButton
-                pinned={input.isPinned}
-                presentation="inline"
-                toneClassName={input.toneClassName}
-                onToggle={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  toggleThreadPinned(input.threadId);
-                }}
-              />
-            ) : null}
-            {renderThreadArchiveAction(input.threadId, input.toneClassName, {
-              compact,
-            })}
-          </div>
-        )}
+      <SidebarRowHoverActions threadId={input.threadId}>
+        <div className="pointer-events-auto inline-flex items-center gap-2">
+          {includePinToggle ? (
+            <ThreadPinToggleButton
+              pinned={input.isPinned}
+              presentation="inline"
+              toneClassName={input.toneClassName}
+              onToggle={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                toggleThreadPinned(input.threadId);
+              }}
+            />
+          ) : null}
+          {renderThreadArchiveAction(input.threadId, input.toneClassName, {
+            compact,
+          })}
+        </div>
       </SidebarRowHoverActions>
     );
   }
 
   function renderThreadRowTrailingCluster(input: {
     isSubagentThread: boolean;
-    isPendingArchiveConfirmation: boolean;
     threadJumpLabel: string | null;
     threadJumpLabelParts: readonly string[];
     rightMetaChips: ThreadMetaChip[];
@@ -4688,19 +4706,19 @@ export default function Sidebar() {
   }) {
     return (
       <div className="relative flex shrink-0 items-center justify-end gap-1">
-        {!input.isPendingArchiveConfirmation && input.rightMetaChips.length > 0 ? (
+        {input.rightMetaChips.length > 0 ? (
           <div className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
             <SidebarMetaChipStack chips={input.rightMetaChips} />
           </div>
         ) : null}
-        {!input.isPendingArchiveConfirmation && input.threadJumpLabel ? (
+        {input.threadJumpLabel ? (
           <KbdGroup className={THREAD_ROW_META_CHIP_HOVER_FADE_CLASS_NAME}>
             {input.threadJumpLabelParts.map((part) => (
               <Kbd key={part}>{part}</Kbd>
             ))}
           </KbdGroup>
         ) : null}
-        {!input.isPendingArchiveConfirmation && !input.threadJumpLabel && input.threadStatus ? (
+        {!input.threadJumpLabel && input.threadStatus ? (
           // The relative time now lives in the row hover card, so the trailing
           // slot only carries the live status/loader glyph; when idle it
           // collapses and the hover action icons sit flush at the end.
@@ -4710,7 +4728,7 @@ export default function Sidebar() {
               input.timestampToneClassName,
             )}
           >
-            <ThreadStatusTrailingGlyph threadStatus={input.threadStatus} />
+            <SidebarStatusTrailingGlyph status={input.threadStatus} />
           </span>
         ) : null}
         {input.hoverActions}
@@ -4782,7 +4800,6 @@ export default function Sidebar() {
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
     });
     const terminalCount = threadTerminalState.terminalIds.length;
-    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
     const isActive = visualActiveSidebarThreadId === thread.id;
     const projectLabel = resolvePinnedThreadProjectLabel(thread.projectId);
     const rightMetaChips = resolveThreadRowMetaChips({
@@ -4818,7 +4835,6 @@ export default function Sidebar() {
             <div
               data-thread-hover-anchor={hoverAnchorId}
               className="group/thread-row relative w-full"
-              onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
             />
           }
         >
@@ -4927,7 +4943,6 @@ export default function Sidebar() {
             <div className="absolute top-1/2 right-1.5 flex -translate-y-1/2 items-center">
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
-                isPendingArchiveConfirmation,
                 threadJumpLabel,
                 threadJumpLabelParts,
                 rightMetaChips,
@@ -4961,7 +4976,6 @@ export default function Sidebar() {
   ) {
     const threadTerminalState = selectThreadTerminalState(terminalStateByThreadId, thread.id);
     const threadEntryPoint = threadTerminalState.entryPoint;
-    const isPendingArchiveConfirmation = pendingArchiveConfirmationThreadId === thread.id;
     const isActive = visualActiveSidebarThreadId === thread.id;
     const isPinned = pinnedThreadIdSet.has(thread.id);
     const isSelected = selectedThreadIds.has(thread.id);
@@ -4973,7 +4987,7 @@ export default function Sidebar() {
       terminalAttentionStatesById: threadTerminalState.terminalAttentionStatesById,
     });
     const terminalCount = threadTerminalState.terminalIds.length;
-    const isDisposableThread =
+    const isTemporaryThread =
       temporaryThreadIds[thread.id] === true ||
       draftThreadsByThreadId[thread.id]?.isTemporary === true;
     const secondaryMetaClass = isHighlighted
@@ -4981,7 +4995,7 @@ export default function Sidebar() {
       : "text-muted-foreground/34";
     const rightMetaChips = resolveThreadRowMetaChips({
       thread,
-      includeHandoffBadge: !isDisposableThread,
+      includeHandoffBadge: !isTemporaryThread,
       handoffShownInAvatar:
         threadEntryPoint !== "terminal" &&
         !isGenericChatThreadTitle(thread.title) &&
@@ -5029,7 +5043,6 @@ export default function Sidebar() {
         data-thread-hover-anchor={hoverAnchorId}
         className="group/thread-row w-full"
         data-thread-item
-        onPointerLeave={() => dismissPendingArchiveConfirmation(thread.id)}
       >
         {leadingPrStatus ? (
           <ThreadPrStatusBadge
@@ -5208,23 +5221,22 @@ export default function Sidebar() {
                   )}
                 </button>
               ) : null}
-              {showCompactMeta && isDisposableThread && !thread.sidechatSourceThreadId ? (
+              {showCompactMeta && isTemporaryThread && !thread.sidechatSourceThreadId ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
                       <span className="inline-flex shrink-0 items-center text-muted-foreground/55">
-                        <DisposableThreadIcon />
+                        <TemporaryThreadIcon />
                       </span>
                     }
                   />
-                  <TooltipPopup side="top">Disposable chat</TooltipPopup>
+                  <TooltipPopup side="top">Temporary chat</TooltipPopup>
                 </Tooltip>
               ) : null}
             </div>
             <div className={cn("absolute top-1/2 flex -translate-y-1/2 items-center", "right-1.5")}>
               {renderThreadRowTrailingCluster({
                 isSubagentThread,
-                isPendingArchiveConfirmation,
                 threadJumpLabel,
                 threadJumpLabelParts,
                 rightMetaChips: showCompactMeta ? rightMetaChips : [],
@@ -5285,6 +5297,7 @@ export default function Sidebar() {
     // A project reads as "running" when Synara tracks a run for it or when a
     // local server (possibly started outside Synara) is attributed by cwd.
     const isProjectRunning = projectRun !== null || projectRunServer !== null;
+    const collapsedProjectStatus = project.expanded ? null : projectStatus;
     // The "open dev server" affordance now lives in the project context menu, so
     // the hover toolbar always reserves space for the three thread actions. The
     // reserve lives on the *name* container (not the button) so only the truncating
@@ -5333,21 +5346,10 @@ export default function Sidebar() {
                 className={projectFolderIconClassName}
               >
                 <ProjectSidebarIcon cwd={project.cwd} expanded={project.expanded} />
-                {projectStatus ? (
-                  <span
-                    aria-hidden="true"
-                    title={projectStatus.label}
-                    className={cn(
-                      "absolute -right-0.5 top-0.5 size-1.5 rounded-full",
-                      projectStatus.dotClass,
-                      projectStatus.pulse ? "animate-pulse" : "",
-                    )}
-                  />
-                ) : null}
               </SidebarLeadingIcon>
               <div
                 className={cn(
-                  "flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
+                  "flex min-w-0 flex-1 items-center gap-2 overflow-hidden transition-[padding] duration-150 ease-out",
                   projectToolbarReserveClassName,
                 )}
               >
@@ -5365,24 +5367,25 @@ export default function Sidebar() {
                   </span>
                 ) : null}
               </div>
-              {/* Run status sits at the trailing edge (like the thread archive zone),
-                  not wedged between the pin and the name. It fades out the moment the
-                  hover toolbar reveals so the actions replace it instead of crowding
-                  it — same rule as thread rows.
-
-                  The fade lives on this wrapper, not on the dot: the dot pulses via
-                  `animate-pulse`, whose keyframes animate `opacity` and would override a
-                  static `opacity-0` set on the same element. Collapsing the parent's
-                  opacity hides the whole subtree regardless of the child animation —
-                  the same reason the leading status dot hides via its container. */}
-              {isProjectRunning ? (
+              {/* Closed folders surface child-chat status on the project row; open
+                  folders leave that signal to their visible child thread rows. */}
+              {isProjectRunning || collapsedProjectStatus ? (
                 <span
+                  aria-label={
+                    collapsedProjectStatus
+                      ? `Project status: ${collapsedProjectStatus.label}`
+                      : undefined
+                  }
+                  title={collapsedProjectStatus?.label}
                   className={cn(
-                    "ml-auto inline-flex shrink-0 self-center",
+                    "ml-auto flex min-w-[1.625rem] shrink-0 items-center justify-end gap-2 self-center",
                     sidebarHoverRevealHideClassName("project-header"),
                   )}
                 >
-                  <ProjectRunIndicatorDot />
+                  {isProjectRunning ? <ProjectRunIndicatorDot /> : null}
+                  {collapsedProjectStatus ? (
+                    <SidebarStatusTrailingGlyph status={collapsedProjectStatus} />
+                  ) : null}
                 </span>
               ) : null}
             </SidebarMenuButton>
@@ -5428,23 +5431,6 @@ export default function Sidebar() {
                       defaultEnvMode: appSettings.defaultThreadEnvMode,
                     }),
                     entryPoint: "terminal",
-                  });
-                }}
-              />
-              <SidebarIconButton
-                icon={DisposableThreadIcon}
-                glyph="chromeLu"
-                label={`Create disposable thread in ${project.name}`}
-                tooltip="New disposable thread"
-                tooltipSide="top"
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  void handleNewThread(project.id, {
-                    envMode: resolveSidebarNewThreadEnvMode({
-                      defaultEnvMode: appSettings.defaultThreadEnvMode,
-                    }),
-                    temporary: true,
                   });
                 }}
               />
@@ -5869,24 +5855,13 @@ export default function Sidebar() {
   const desktopUpdateButtonInteractivityClasses = desktopUpdateButtonDisabled
     ? "cursor-not-allowed opacity-60"
     : "hover:brightness-110";
-  const desktopUpdateButtonVariant = getDesktopUpdateButtonVariant(desktopUpdateState, {
-    installing: installingDesktopUpdate,
-  });
-  const desktopUpdateButtonClasses =
-    desktopUpdateButtonVariant === "installing" || desktopUpdateButtonVariant === "progress"
-      ? "bg-sky-500 hover:bg-sky-600"
-      : desktopUpdateButtonVariant === "ready"
-        ? "bg-emerald-500 hover:bg-emerald-600"
-        : desktopUpdateButtonVariant === "error"
-          ? "bg-rose-500 hover:bg-rose-600"
-          : "bg-[var(--info)] hover:brightness-110";
   const desktopUpdateButtonHasSecondaryLabel =
     desktopUpdateButtonPresentation.secondaryLabel !== null;
+  const desktopUpdateDownloadPercent = getDesktopUpdateDownloadPercent(desktopUpdateState);
   const desktopUpdateRowButtonClasses = cn(
-    "inline-flex h-7 shrink-0 items-center justify-center gap-1.5 rounded-full px-3 font-system-ui text-[length:var(--app-font-size-ui-sm,11px)] font-medium leading-none text-white transition-colors",
-    desktopUpdateButtonHasSecondaryLabel && "min-h-7 py-1",
+    "inline-flex h-6 shrink-0 items-center justify-center gap-1.5 rounded-full bg-[var(--info)] px-2.5 font-system-ui text-[length:var(--app-font-size-ui-xs,10px)] font-medium leading-none text-white transition-colors",
+    desktopUpdateButtonHasSecondaryLabel && "min-h-6 py-0.5",
     desktopUpdateButtonInteractivityClasses,
-    desktopUpdateButtonClasses,
   );
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.new") ??
@@ -6753,7 +6728,7 @@ export default function Sidebar() {
                     )}
                     onClick={() => void navigate({ to: "/settings" })}
                   >
-                    <SidebarLeadingIcon size="sm">
+                    <SidebarLeadingIcon size="sm" tone={SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME}>
                       <SidebarGlyph icon={SettingsIcon} variant="leading" />
                     </SidebarLeadingIcon>
                     <span>Settings</span>
@@ -6781,9 +6756,9 @@ export default function Sidebar() {
                               </span>
                             ) : null}
                           </span>
-                          {desktopUpdateButtonPresentation.progressPercent !== null ? (
+                          {desktopUpdateDownloadPercent !== null ? (
                             <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[9px] font-semibold tabular-nums text-white/95">
-                              {desktopUpdateButtonPresentation.progressPercent}%
+                              {desktopUpdateDownloadPercent}%
                             </span>
                           ) : null}
                         </button>
@@ -6982,7 +6957,7 @@ export default function Sidebar() {
           <DialogPanel className="space-y-2">
             <label
               htmlFor="project-run-command-input"
-              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium uppercase tracking-[0.08em] text-[var(--color-text-foreground-secondary)]"
+              className="block text-[length:var(--app-font-size-ui-xs,10px)] font-medium text-[var(--color-text-foreground-secondary)]"
             >
               Command
             </label>

@@ -60,8 +60,9 @@ describe("dockPaneActivation", () => {
     expect(DOCK_PANE_DEFERRED_HYDRATION_FRAMES).toBe(2);
   });
 
-  it("keeps only the terminal pane mounted across tab switches", () => {
+  it("keeps stateful panes mounted across tab switches", () => {
     expect(isKeepMountedPaneKind("terminal")).toBe(true);
+    expect(isKeepMountedPaneKind("explorer")).toBe(true);
     expect(isKeepMountedPaneKind("browser")).toBe(false);
     expect(isKeepMountedPaneKind("sidechat")).toBe(false);
     expect(isKeepMountedPaneKind("diff")).toBe(false);
@@ -71,6 +72,7 @@ describe("dockPaneActivation", () => {
   describe("reconcileKeepMountedPaneIds", () => {
     const panes = [
       { id: "term", kind: "terminal" as const },
+      { id: "explorer", kind: "explorer" as const },
       { id: "diff", kind: "diff" as const },
     ];
 
@@ -88,20 +90,30 @@ describe("dockPaneActivation", () => {
         ...reconcileKeepMountedPaneIds({
           previous: new Set(),
           panes,
+          activePaneId: "explorer",
+          activePaneKind: "explorer",
+        }),
+      ]).toEqual(["explorer"]);
+
+      expect([
+        ...reconcileKeepMountedPaneIds({
+          previous: new Set(),
+          panes,
           activePaneId: "diff",
           activePaneKind: "diff",
         }),
       ]).toEqual([]);
     });
 
-    it("retains a previously mounted terminal after another tab becomes active", () => {
+    it("retains previously mounted stateful panes after another tab becomes active", () => {
       const result = reconcileKeepMountedPaneIds({
-        previous: new Set(["term"]),
+        previous: new Set(["term", "explorer"]),
         panes,
         activePaneId: "diff",
         activePaneKind: "diff",
       });
       expect(result.has("term")).toBe(true);
+      expect(result.has("explorer")).toBe(true);
     });
 
     it("drops kept ids that no longer exist (closed pane or thread switch)", () => {

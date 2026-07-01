@@ -344,6 +344,9 @@ export interface DesktopBridge {
   shell?: {
     showInFolder: (path: string) => Promise<void>;
   };
+  clipboard?: {
+    writeImagePngDataUrl: (dataUrl: string) => Promise<boolean>;
+  };
   windowControls?: {
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<DesktopWindowState>;

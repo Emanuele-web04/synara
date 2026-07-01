@@ -84,7 +84,10 @@ function resolveClaudeEnvironment(input: {
   >[0]["providerOptions"];
 }): NodeJS.ProcessEnv {
   const claudeOptions = input.providerOptions?.claudeAgent;
-  return buildClaudeProcessEnv(claudeOptions?.homePath, claudeOptions?.environment);
+  return buildClaudeProcessEnv({
+    homePath: claudeOptions?.homePath,
+    environment: claudeOptions?.environment,
+  });
 }
 
 function resolveClaudeEffort(

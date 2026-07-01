@@ -86,13 +86,17 @@ import {
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
   fetchCursorAcpModelDescriptors,
   makeCursorAcpRuntime,
   parseCursorCliModelList,
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
-import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
+import {
+  buildCursorAgentHeadlessEnv,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -1513,17 +1517,18 @@ export function makeCursorAdapter(
       );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
-        const args = [
-          ...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []),
-          "models",
-        ];
-        const prepared = prepareWindowsSafeProcess(effectiveBinaryPath, args, {
-          env: childEnv,
+        const command = buildCursorCliModelListCommand({
+          binaryPath: effectiveBinaryPath,
+          ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        });
+        const env = buildCursorAgentHeadlessEnv(childEnv);
+        const prepared = prepareWindowsSafeProcess(command.command, command.args, {
+          env,
         });
         const child = yield* childProcessSpawner.spawn(
           ChildProcess.make(prepared.command, prepared.args, {
             shell: prepared.shell,
-            env: childEnv,
+            env,
           }),
         );
         const [stdout, stderr, exitCode] = yield* Effect.all(
@@ -1540,7 +1545,7 @@ export function makeCursorAdapter(
             method: "model/list",
             detail:
               stderr.trim() ||
-              `Cursor model discovery failed because '${effectiveBinaryPath} models' exited with code ${exitCode}.`,
+              `Cursor model discovery failed because '${[command.command, ...command.args].join(" ")}' exited with code ${exitCode}.`,
           });
         }
         const models = parseCursorCliModelList(stdout);

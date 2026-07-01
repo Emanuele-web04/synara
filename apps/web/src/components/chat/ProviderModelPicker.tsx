@@ -824,7 +824,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-[11px] text-muted-foreground/80">
                 {availability.label}
               </span>
             </MenuItem>
@@ -862,9 +862,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
             />
             <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-              Coming soon
-            </span>
+            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
           </MenuItem>
         );
       })}

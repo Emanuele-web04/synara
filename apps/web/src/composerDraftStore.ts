@@ -422,6 +422,20 @@ export interface DraftThreadState {
   promotedTo?: ThreadId;
 }
 
+interface DraftThreadMutationOptions {
+  branch?: string | null;
+  worktreePath?: string | null;
+  lastKnownPr?: OrchestrationThreadPullRequest | null;
+  createdAt?: string;
+  envMode?: DraftThreadEnvMode;
+  runtimeMode?: RuntimeMode;
+  interactionMode?: ProviderInteractionMode;
+  entryPoint?: ThreadPrimarySurface;
+  isTemporary?: boolean;
+}
+
+type DraftThreadCreatedAtMode = "accept-empty" | "preserve-existing-on-empty";
+
 interface ProjectDraftThread extends DraftThreadState {
   threadId: ThreadId;
 }
@@ -440,17 +454,7 @@ export interface ComposerDraftStoreState {
   setProjectDraftThreadId: (
     projectId: ProjectId,
     threadId: ThreadId,
-    options?: {
-      branch?: string | null;
-      worktreePath?: string | null;
-      lastKnownPr?: OrchestrationThreadPullRequest | null;
-      createdAt?: string;
-      envMode?: DraftThreadEnvMode;
-      runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
-      entryPoint?: ThreadPrimarySurface;
-      isTemporary?: boolean;
-    },
+    options?: DraftThreadMutationOptions,
   ) => void;
   /**
    * Registers a standalone chat draft thread without claiming the project's
@@ -473,18 +477,16 @@ export interface ComposerDraftStoreState {
   ) => void;
   setDraftThreadContext: (
     threadId: ThreadId,
-    options: {
-      branch?: string | null;
-      worktreePath?: string | null;
-      lastKnownPr?: OrchestrationThreadPullRequest | null;
-      projectId?: ProjectId;
-      createdAt?: string;
-      envMode?: DraftThreadEnvMode;
-      runtimeMode?: RuntimeMode;
-      interactionMode?: ProviderInteractionMode;
-      entryPoint?: ThreadPrimarySurface;
-      isTemporary?: boolean;
-    },
+    options: DraftThreadMutationOptions & { projectId?: ProjectId },
+  ) => void;
+  /**
+   * Moves an existing draft into a project's primary draft slot while deleting
+   * the draft that used to occupy that slot, if no other project still maps it.
+   */
+  moveDraftThreadToProject: (
+    threadId: ThreadId,
+    projectId: ProjectId,
+    options?: DraftThreadMutationOptions,
   ) => void;
   clearProjectDraftThreadId: (projectId: ProjectId, entryPoint?: ThreadPrimarySurface) => void;
   clearProjectDraftThreads: (projectId: ProjectId) => void;
@@ -716,6 +718,146 @@ function projectIdFromDraftThreadMappingKey(key: string): ProjectId {
       ? key.slice(0, -TERMINAL_DRAFT_THREAD_MAPPING_SUFFIX.length)
       : key
   ) as ProjectId;
+}
+
+function resolveDraftThreadCreatedAt(input: {
+  createdAt: string | undefined;
+  existingThread: DraftThreadState | undefined;
+  mode: DraftThreadCreatedAtMode;
+}): string {
+  if (input.createdAt === undefined) {
+    return input.existingThread?.createdAt ?? new Date().toISOString();
+  }
+  if (input.mode === "preserve-existing-on-empty") {
+    return input.createdAt || input.existingThread?.createdAt || new Date().toISOString();
+  }
+  return input.createdAt;
+}
+
+function buildDraftThreadState(input: {
+  projectId: ProjectId;
+  existingThread?: DraftThreadState | undefined;
+  options?: DraftThreadMutationOptions | undefined;
+  createdAtMode: DraftThreadCreatedAtMode;
+}): DraftThreadState {
+  const { existingThread, options } = input;
+  const nextWorktreePath =
+    options?.worktreePath === undefined
+      ? (existingThread?.worktreePath ?? null)
+      : (options.worktreePath ?? null);
+  const nextEntryPoint = normalizeDraftThreadEntryPoint(
+    options?.entryPoint,
+    existingThread?.entryPoint ?? "chat",
+  );
+  const nextIsTemporary =
+    options?.isTemporary === true
+      ? true
+      : options?.isTemporary === false
+        ? false
+        : existingThread?.isTemporary === true;
+  const nextPromotedTo = existingThread?.promotedTo;
+
+  return {
+    projectId: input.projectId,
+    createdAt: resolveDraftThreadCreatedAt({
+      createdAt: options?.createdAt,
+      existingThread,
+      mode: input.createdAtMode,
+    }),
+    runtimeMode: options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+    interactionMode:
+      options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
+    entryPoint: nextEntryPoint,
+    branch:
+      options?.branch === undefined ? (existingThread?.branch ?? null) : (options.branch ?? null),
+    worktreePath: nextWorktreePath,
+    lastKnownPr:
+      options?.lastKnownPr === undefined
+        ? (existingThread?.lastKnownPr ?? null)
+        : (options.lastKnownPr ?? null),
+    envMode:
+      options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
+    ...(nextIsTemporary ? { isTemporary: true } : {}),
+    ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
+  };
+}
+
+function draftThreadStatesEqual(
+  left: DraftThreadState | undefined,
+  right: DraftThreadState,
+): boolean {
+  if (!left) {
+    return false;
+  }
+
+  return (
+    left.projectId === right.projectId &&
+    left.createdAt === right.createdAt &&
+    left.runtimeMode === right.runtimeMode &&
+    left.interactionMode === right.interactionMode &&
+    left.entryPoint === right.entryPoint &&
+    left.branch === right.branch &&
+    left.worktreePath === right.worktreePath &&
+    Equal.equals(left.lastKnownPr ?? null, right.lastKnownPr ?? null) &&
+    left.envMode === right.envMode &&
+    (left.isTemporary === true) === (right.isTemporary === true) &&
+    left.promotedTo === right.promotedTo
+  );
+}
+
+function removeProjectDraftMappingsForThread(
+  projectDraftThreadIdByProjectId: Record<string, ThreadId>,
+  threadId: ThreadId,
+): Record<string, ThreadId> {
+  let nextProjectDraftThreadIdByProjectId = projectDraftThreadIdByProjectId;
+  for (const [mappingKey, mappedThreadId] of Object.entries(projectDraftThreadIdByProjectId)) {
+    if (mappedThreadId !== threadId) {
+      continue;
+    }
+    if (nextProjectDraftThreadIdByProjectId === projectDraftThreadIdByProjectId) {
+      nextProjectDraftThreadIdByProjectId = { ...projectDraftThreadIdByProjectId };
+    }
+    delete nextProjectDraftThreadIdByProjectId[mappingKey];
+  }
+  return nextProjectDraftThreadIdByProjectId;
+}
+
+// Deletes a displaced draft only when no remaining project slot points at it.
+function removeDraftThreadIfUnmapped(input: {
+  threadId: ThreadId | undefined;
+  projectDraftThreadIdByProjectId: Record<string, ThreadId>;
+  draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
+  draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
+}): {
+  draftThreadsByThreadId: Record<ThreadId, DraftThreadState>;
+  draftsByThreadId: Record<ThreadId, ComposerThreadDraftState>;
+} {
+  if (
+    !input.threadId ||
+    Object.values(input.projectDraftThreadIdByProjectId).includes(input.threadId)
+  ) {
+    return {
+      draftThreadsByThreadId: input.draftThreadsByThreadId,
+      draftsByThreadId: input.draftsByThreadId,
+    };
+  }
+
+  const nextDraftThreadsByThreadId = { ...input.draftThreadsByThreadId };
+  delete nextDraftThreadsByThreadId[input.threadId];
+  if (input.draftsByThreadId[input.threadId] === undefined) {
+    return {
+      draftThreadsByThreadId: nextDraftThreadsByThreadId,
+      draftsByThreadId: input.draftsByThreadId,
+    };
+  }
+
+  revokeDraftPreviewUrls(input.draftsByThreadId[input.threadId]);
+  const nextDraftsByThreadId = { ...input.draftsByThreadId };
+  delete nextDraftsByThreadId[input.threadId];
+  return {
+    draftThreadsByThreadId: nextDraftThreadsByThreadId,
+    draftsByThreadId: nextDraftsByThreadId,
+  };
 }
 
 const EMPTY_IMAGES: ComposerImageAttachment[] = [];
@@ -2791,63 +2933,16 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
         }
         set((state) => {
           const existingThread = state.draftThreadsByThreadId[threadId];
-          const entryPoint = normalizeDraftThreadEntryPoint(
-            options?.entryPoint,
-            existingThread?.entryPoint ?? "chat",
-          );
-          const mappingKey = projectDraftThreadMappingKey(projectId, entryPoint);
-          const previousThreadIdForProject = state.projectDraftThreadIdByProjectId[mappingKey];
-          const nextWorktreePath =
-            options?.worktreePath === undefined
-              ? (existingThread?.worktreePath ?? null)
-              : (options.worktreePath ?? null);
-          const nextIsTemporary =
-            options?.isTemporary === true
-              ? true
-              : options?.isTemporary === false
-                ? false
-                : existingThread?.isTemporary === true;
-          const nextPromotedTo = existingThread?.promotedTo;
-          const nextDraftThread: DraftThreadState = {
+          const nextDraftThread = buildDraftThreadState({
             projectId,
-            createdAt: options?.createdAt ?? existingThread?.createdAt ?? new Date().toISOString(),
-            runtimeMode:
-              options?.runtimeMode ?? existingThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-            interactionMode:
-              options?.interactionMode ??
-              existingThread?.interactionMode ??
-              DEFAULT_INTERACTION_MODE,
-            entryPoint,
-            branch:
-              options?.branch === undefined
-                ? (existingThread?.branch ?? null)
-                : (options.branch ?? null),
-            worktreePath: nextWorktreePath,
-            lastKnownPr:
-              options?.lastKnownPr === undefined
-                ? (existingThread?.lastKnownPr ?? null)
-                : (options.lastKnownPr ?? null),
-            envMode:
-              options?.envMode ??
-              (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
-            ...(nextIsTemporary ? { isTemporary: true } : {}),
-            ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
-          };
+            existingThread,
+            options,
+            createdAtMode: "accept-empty",
+          });
+          const mappingKey = projectDraftThreadMappingKey(projectId, nextDraftThread.entryPoint);
+          const previousThreadIdForProject = state.projectDraftThreadIdByProjectId[mappingKey];
           const hasSameProjectMapping = previousThreadIdForProject === threadId;
-          const hasSameDraftThread =
-            existingThread &&
-            existingThread.projectId === nextDraftThread.projectId &&
-            existingThread.createdAt === nextDraftThread.createdAt &&
-            existingThread.runtimeMode === nextDraftThread.runtimeMode &&
-            existingThread.interactionMode === nextDraftThread.interactionMode &&
-            existingThread.entryPoint === nextDraftThread.entryPoint &&
-            existingThread.branch === nextDraftThread.branch &&
-            existingThread.worktreePath === nextDraftThread.worktreePath &&
-            Equal.equals(existingThread.lastKnownPr ?? null, nextDraftThread.lastKnownPr ?? null) &&
-            existingThread.envMode === nextDraftThread.envMode &&
-            (existingThread.isTemporary === true) === (nextDraftThread.isTemporary === true) &&
-            existingThread.promotedTo === nextDraftThread.promotedTo;
-          if (hasSameProjectMapping && hasSameDraftThread) {
+          if (hasSameProjectMapping && draftThreadStatesEqual(existingThread, nextDraftThread)) {
             return state;
           }
           const nextProjectDraftThreadIdByProjectId: Record<string, ThreadId> = {
@@ -2858,22 +2953,21 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
             ...state.draftThreadsByThreadId,
             [threadId]: nextDraftThread,
           };
-          let nextDraftsByThreadId = state.draftsByThreadId;
-          if (
-            previousThreadIdForProject &&
-            previousThreadIdForProject !== threadId &&
-            !Object.values(nextProjectDraftThreadIdByProjectId).includes(previousThreadIdForProject)
-          ) {
-            delete nextDraftThreadsByThreadId[previousThreadIdForProject];
-            if (state.draftsByThreadId[previousThreadIdForProject] !== undefined) {
-              revokeDraftPreviewUrls(state.draftsByThreadId[previousThreadIdForProject]);
-              nextDraftsByThreadId = { ...state.draftsByThreadId };
-              delete nextDraftsByThreadId[previousThreadIdForProject];
-            }
-          }
+          const cleanedDrafts =
+            previousThreadIdForProject === threadId
+              ? {
+                  draftThreadsByThreadId: nextDraftThreadsByThreadId,
+                  draftsByThreadId: state.draftsByThreadId,
+                }
+              : removeDraftThreadIfUnmapped({
+                  threadId: previousThreadIdForProject,
+                  projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+                  draftThreadsByThreadId: nextDraftThreadsByThreadId,
+                  draftsByThreadId: state.draftsByThreadId,
+                });
           return {
-            draftsByThreadId: nextDraftsByThreadId,
-            draftThreadsByThreadId: nextDraftThreadsByThreadId,
+            draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
             projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
           };
         });
@@ -2919,74 +3013,86 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (nextProjectId.length === 0) {
             return state;
           }
-          const nextWorktreePath =
-            options.worktreePath === undefined
-              ? existing.worktreePath
-              : (options.worktreePath ?? null);
-          const nextEntryPoint = normalizeDraftThreadEntryPoint(
-            options.entryPoint,
-            existing.entryPoint,
-          );
-          const nextIsTemporary =
-            options.isTemporary === true
-              ? true
-              : options.isTemporary === false
-                ? false
-                : existing.isTemporary === true;
-          const nextPromotedTo = existing.promotedTo;
-          const nextDraftThread: DraftThreadState = {
+          const nextDraftThread = buildDraftThreadState({
             projectId: nextProjectId,
-            createdAt:
-              options.createdAt === undefined
-                ? existing.createdAt
-                : options.createdAt || existing.createdAt,
-            runtimeMode: options.runtimeMode ?? existing.runtimeMode,
-            interactionMode: options.interactionMode ?? existing.interactionMode,
-            entryPoint: nextEntryPoint,
-            branch: options.branch === undefined ? existing.branch : (options.branch ?? null),
-            worktreePath: nextWorktreePath,
-            lastKnownPr:
-              options.lastKnownPr === undefined
-                ? (existing.lastKnownPr ?? null)
-                : (options.lastKnownPr ?? null),
-            envMode:
-              options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
-            ...(nextIsTemporary ? { isTemporary: true } : {}),
-            ...(nextPromotedTo ? { promotedTo: nextPromotedTo } : {}),
-          };
-          const isUnchanged =
-            nextDraftThread.projectId === existing.projectId &&
-            nextDraftThread.createdAt === existing.createdAt &&
-            nextDraftThread.runtimeMode === existing.runtimeMode &&
-            nextDraftThread.interactionMode === existing.interactionMode &&
-            nextDraftThread.entryPoint === existing.entryPoint &&
-            nextDraftThread.branch === existing.branch &&
-            nextDraftThread.worktreePath === existing.worktreePath &&
-            Equal.equals(nextDraftThread.lastKnownPr ?? null, existing.lastKnownPr ?? null) &&
-            nextDraftThread.envMode === existing.envMode &&
-            (nextDraftThread.isTemporary === true) === (existing.isTemporary === true) &&
-            nextDraftThread.promotedTo === existing.promotedTo;
-          if (isUnchanged) {
+            existingThread: existing,
+            options,
+            createdAtMode: "preserve-existing-on-empty",
+          });
+          if (draftThreadStatesEqual(existing, nextDraftThread)) {
             return state;
           }
           const nextProjectDraftThreadIdByProjectId: Record<string, ThreadId> = {
-            ...state.projectDraftThreadIdByProjectId,
+            ...removeProjectDraftMappingsForThread(state.projectDraftThreadIdByProjectId, threadId),
+            [projectDraftThreadMappingKey(nextProjectId, nextDraftThread.entryPoint)]: threadId,
           };
-          for (const [mappingKey, mappedThreadId] of Object.entries(
-            nextProjectDraftThreadIdByProjectId,
-          )) {
-            if (mappedThreadId === threadId) {
-              delete nextProjectDraftThreadIdByProjectId[mappingKey];
-            }
-          }
-          nextProjectDraftThreadIdByProjectId[
-            projectDraftThreadMappingKey(nextProjectId, nextEntryPoint)
-          ] = threadId;
           return {
             draftThreadsByThreadId: {
               ...state.draftThreadsByThreadId,
               [threadId]: nextDraftThread,
             },
+            projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+          };
+        });
+      },
+      moveDraftThreadToProject: (threadId, projectId, options) => {
+        if (threadId.length === 0 || projectId.length === 0) {
+          return;
+        }
+        set((state) => {
+          const existing = state.draftThreadsByThreadId[threadId];
+          if (!existing) {
+            return state;
+          }
+          const nextDraftThread = buildDraftThreadState({
+            projectId,
+            existingThread: existing,
+            options,
+            createdAtMode: "preserve-existing-on-empty",
+          });
+          const targetMappingKey = projectDraftThreadMappingKey(
+            projectId,
+            nextDraftThread.entryPoint,
+          );
+          const previousThreadIdForProject =
+            state.projectDraftThreadIdByProjectId[targetMappingKey];
+          const hasOnlyTargetMapping = Object.entries(state.projectDraftThreadIdByProjectId).every(
+            ([mappingKey, mappedThreadId]) =>
+              mappedThreadId !== threadId || mappingKey === targetMappingKey,
+          );
+          if (
+            previousThreadIdForProject === threadId &&
+            hasOnlyTargetMapping &&
+            draftThreadStatesEqual(existing, nextDraftThread)
+          ) {
+            return state;
+          }
+
+          const nextProjectDraftThreadIdByProjectId: Record<string, ThreadId> = {
+            ...removeProjectDraftMappingsForThread(state.projectDraftThreadIdByProjectId, threadId),
+            [targetMappingKey]: threadId,
+          };
+
+          const nextDraftThreadsByThreadId: Record<ThreadId, DraftThreadState> = {
+            ...state.draftThreadsByThreadId,
+            [threadId]: nextDraftThread,
+          };
+          const cleanedDrafts =
+            previousThreadIdForProject === threadId
+              ? {
+                  draftThreadsByThreadId: nextDraftThreadsByThreadId,
+                  draftsByThreadId: state.draftsByThreadId,
+                }
+              : removeDraftThreadIfUnmapped({
+                  threadId: previousThreadIdForProject,
+                  projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+                  draftThreadsByThreadId: nextDraftThreadsByThreadId,
+                  draftsByThreadId: state.draftsByThreadId,
+                });
+
+          return {
+            draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
             projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
           };
         });
@@ -3004,21 +3110,15 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const { [mappingKey]: _removed, ...restProjectMappingsRaw } =
             state.projectDraftThreadIdByProjectId;
           const restProjectMappings = restProjectMappingsRaw as Record<string, ThreadId>;
-          const nextDraftThreadsByThreadId: Record<ThreadId, DraftThreadState> = {
-            ...state.draftThreadsByThreadId,
-          };
-          let nextDraftsByThreadId = state.draftsByThreadId;
-          if (!Object.values(restProjectMappings).includes(threadId)) {
-            delete nextDraftThreadsByThreadId[threadId];
-            if (state.draftsByThreadId[threadId] !== undefined) {
-              revokeDraftPreviewUrls(state.draftsByThreadId[threadId]);
-              nextDraftsByThreadId = { ...state.draftsByThreadId };
-              delete nextDraftsByThreadId[threadId];
-            }
-          }
+          const cleanedDrafts = removeDraftThreadIfUnmapped({
+            threadId,
+            projectDraftThreadIdByProjectId: restProjectMappings,
+            draftThreadsByThreadId: state.draftThreadsByThreadId,
+            draftsByThreadId: state.draftsByThreadId,
+          });
           return {
-            draftsByThreadId: nextDraftsByThreadId,
-            draftThreadsByThreadId: nextDraftThreadsByThreadId,
+            draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
             projectDraftThreadIdByProjectId: restProjectMappings,
           };
         });
@@ -3042,25 +3142,21 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           if (removedThreadIds.size === 0) {
             return state;
           }
-          const retainedThreadIds = new Set(Object.values(nextProjectDraftThreadIdByProjectId));
-          const nextDraftThreadsByThreadId: Record<ThreadId, DraftThreadState> = {
-            ...state.draftThreadsByThreadId,
+          let cleanedDrafts = {
+            draftThreadsByThreadId: state.draftThreadsByThreadId,
+            draftsByThreadId: state.draftsByThreadId,
           };
-          let nextDraftsByThreadId = state.draftsByThreadId;
           for (const threadId of removedThreadIds) {
-            if (retainedThreadIds.has(threadId)) continue;
-            delete nextDraftThreadsByThreadId[threadId];
-            if (state.draftsByThreadId[threadId] !== undefined) {
-              revokeDraftPreviewUrls(state.draftsByThreadId[threadId]);
-              if (nextDraftsByThreadId === state.draftsByThreadId) {
-                nextDraftsByThreadId = { ...state.draftsByThreadId };
-              }
-              delete nextDraftsByThreadId[threadId];
-            }
+            cleanedDrafts = removeDraftThreadIfUnmapped({
+              threadId,
+              projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
+              draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
+              draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            });
           }
           return {
-            draftsByThreadId: nextDraftsByThreadId,
-            draftThreadsByThreadId: nextDraftThreadsByThreadId,
+            draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
             projectDraftThreadIdByProjectId: nextProjectDraftThreadIdByProjectId,
           };
         });
@@ -3081,21 +3177,15 @@ export const useComposerDraftStore = create<ComposerDraftStoreState>()(
           const { [matchingMappingKey]: _removed, ...restProjectMappingsRaw } =
             state.projectDraftThreadIdByProjectId;
           const restProjectMappings = restProjectMappingsRaw as Record<string, ThreadId>;
-          const nextDraftThreadsByThreadId: Record<ThreadId, DraftThreadState> = {
-            ...state.draftThreadsByThreadId,
-          };
-          let nextDraftsByThreadId = state.draftsByThreadId;
-          if (!Object.values(restProjectMappings).includes(threadId)) {
-            delete nextDraftThreadsByThreadId[threadId];
-            if (state.draftsByThreadId[threadId] !== undefined) {
-              revokeDraftPreviewUrls(state.draftsByThreadId[threadId]);
-              nextDraftsByThreadId = { ...state.draftsByThreadId };
-              delete nextDraftsByThreadId[threadId];
-            }
-          }
+          const cleanedDrafts = removeDraftThreadIfUnmapped({
+            threadId,
+            projectDraftThreadIdByProjectId: restProjectMappings,
+            draftThreadsByThreadId: state.draftThreadsByThreadId,
+            draftsByThreadId: state.draftsByThreadId,
+          });
           return {
-            draftsByThreadId: nextDraftsByThreadId,
-            draftThreadsByThreadId: nextDraftThreadsByThreadId,
+            draftsByThreadId: cleanedDrafts.draftsByThreadId,
+            draftThreadsByThreadId: cleanedDrafts.draftThreadsByThreadId,
             projectDraftThreadIdByProjectId: restProjectMappings,
           };
         });

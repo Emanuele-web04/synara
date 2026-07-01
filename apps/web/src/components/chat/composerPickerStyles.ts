@@ -14,6 +14,14 @@ export const COMPOSER_SURFACE_SHADOW_CLASS_NAME =
 export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
   "text-[length:var(--app-font-size-ui-sm,11px)] text-[var(--color-text-foreground-secondary)] sm:text-[length:var(--app-font-size-ui-sm,11px)] font-normal hover:text-[var(--color-text-foreground)] data-pressed:text-[var(--color-text-foreground)]";
 
+/**
+ * Compact pill trigger for the composer-footer toolbar pickers (environment + branch).
+ * Matches `PickerTriggerButton` sizing (ui-sm label) so the project / environment / branch
+ * row in the empty-state footer reads as one set. Pair with a `size-3.5` leading icon and a
+ * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
+ */
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
   "[--available-height:min(20rem,55vh)]";
@@ -40,7 +48,7 @@ export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.65rem]";
 export const COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME = "rounded-[0.5rem]";
 
 /** Collapsible section headers inside model provider lists. */
-export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
+export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
 
 /** Indents model row labels under collapsible group headers. */
 export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
@@ -85,9 +93,8 @@ export const CHAT_CONTENT_CARD_CLASS_NAME = "chat-content-card relative z-[15] o
  *  `CHAT_CONTENT_CARD_CLASS_NAME` with their own background token instead. */
 export const CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME = `${CHAT_BACKGROUND_CLASS_NAME} ${CHAT_CONTENT_CARD_CLASS_NAME}`;
 
-/** Full-height inset shell for chat-style routes (settings, workspace, single thread pane).
- *  The opaque card lives on the SidebarInset `surfaceClassName`, never on this transparent
- *  shell, so it never covers/blocks the sidebar. */
+/** Clipped full-height inset shell for routes that already own an outer card wrapper.
+ *  Default RouteInsetSurface card routes use an unclipped inset so seam shadows can bleed. */
 export const CHAT_ROUTE_INSET_SHELL_CLASS_NAME =
   "h-dvh min-h-0 overflow-hidden overscroll-y-none text-foreground";
 
@@ -107,9 +114,9 @@ export const CHAT_COLUMN_FRAME_CLASS_NAME = `mx-auto w-full min-w-0 ${COMPOSER_M
 export const COMPOSER_COLUMN_FRAME_CLASS_NAME = CHAT_COLUMN_FRAME_CLASS_NAME;
 
 /**
- * Frame for rows stacked above the composer (queued steer/queue rows, active task
- * list). Keeps stacked activity on the same width as the composer input so wide
- * screens do not make plan/task rows drift wider than the field they belong to.
+ * Frame for rows stacked above the composer (queued steer/queue rows, live file
+ * changes, active task list). Sits at `w-11/12` and is centered (`mx-auto`) so the
+ * stack reads as an inset rail above the full-width composer input.
  *
  * Prefer ComposerStackedPanel inside ComposerColumnFrame instead of using this
  * token directly so chrome and attached-radius behavior stay centralized.
@@ -137,7 +144,10 @@ export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
  *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
 export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${RAISED_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
+/** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
+ *  dark mode using the same `border-border` token as the Environment panel, instead
+ *  of dropping to shadow-only separation. */
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
 /** Active segment fill in the sidebar Threads/Workspace picker. */
 export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
@@ -180,8 +190,12 @@ export const COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME = `relative z-1 w-full m
 export const COMPOSER_PICKER_MENU_POPUP_VIEWPORT_CLASS_NAME =
   "relative min-w-(--anchor-width) max-h-[min(var(--available-height),28rem)]";
 
-/** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars. */
-export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-'])]:opacity-80 [&>svg]:pointer-events-none [&>svg]:shrink-0`;
+/** Option row shared by composer menus and composer-surface select popups. Sizing via picker size CSS vars.
+ *  Leading-icon rules are declared for both `<svg>` (Tabler/Lucide) and the Central
+ *  icon `<span data-slot=central-icon>` so a masked Central glyph (e.g. the Explorer
+ *  "folders" or Terminal "console" icon) lines up and dims exactly like the SVG icons
+ *  instead of sitting brighter and 2px out of alignment. */
+export const COMPOSER_PICKER_MENU_OPTION_CLASS_NAME = `[&>svg,&>[data-slot=central-icon]]:-mx-0.5 flex cursor-default select-none items-center ${COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME} text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] outline-none data-disabled:pointer-events-none data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)] data-disabled:opacity-64 [&>svg:not([class*='opacity-']),&>[data-slot=central-icon]:not([class*='opacity-'])]:opacity-80 [&>svg,&>[data-slot=central-icon]]:pointer-events-none [&>svg,&>[data-slot=central-icon]]:shrink-0`;
 
 /** Same as menu options, adapted for select item grid layout. */
 export const COMPOSER_PICKER_SELECT_OPTION_CLASS_NAME = `${COMPOSER_PICKER_MENU_OPTION_CLASS_NAME} grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]`;

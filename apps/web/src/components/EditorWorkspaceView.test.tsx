@@ -9,7 +9,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { EditorWorkspaceView, WorkspaceSearchSidebar } from "./EditorWorkspaceView";
+import { EditorWorkspaceView } from "./EditorWorkspaceView";
+import { WorkspaceSearchSidebar } from "./chat/workspaceExplorer";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { SidebarProvider } from "./ui/sidebar";
 

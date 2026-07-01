@@ -9,6 +9,7 @@ import { type ProviderInstanceId, type ProviderKind } from "@t3tools/contracts";
 import { inferLegacyProviderKindFromModelSelection } from "@t3tools/shared/providerInstances";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
+import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
@@ -16,7 +17,7 @@ import {
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
-import { resolveProviderSendAvailability } from "../lib/providerAvailability";
+import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -27,6 +28,7 @@ export function useThreadHandoff() {
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
 
   const createThreadHandoff = useCallback(
     async (
@@ -56,10 +58,11 @@ export function useThreadHandoff() {
       if (targetProvider === sourceProvider && targetInstanceId === sourceProviderInstanceId) {
         throw new Error("This handoff target is not available for the current thread.");
       }
-      const targetAvailability = resolveProviderSendAvailability({
+      const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: targetProvider,
         ...(targetProviderInstanceId ? { instanceId: targetProviderInstanceId } : {}),
         statuses: providerStatuses,
+        refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       });
       if (!targetAvailability.usable) {
         throw new Error(targetAvailability.unavailableReason);
@@ -121,7 +124,7 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, providerStatuses, syncServerShellSnapshot],
+    [navigate, projects, providerStatuses, refreshProviderStatuses, syncServerShellSnapshot],
   );
 
   return {

@@ -1,5 +1,186 @@
 # Changelog
 
+## 0.3.6 - 2026-06-30
+
+### Added
+
+- Added safer Cursor ACP command discovery and launcher fallback coverage for bundled sibling shims, legacy shims, and fallback ordering.
+- Added Muxy Open In support through editor metadata, server open handling, and focused tests.
+- Added live message trail rendering, shared trail logic, browser coverage, and timeline integration for active transcript updates.
+- Added desktop clipboard image sharing for share-card/profile exports.
+- Added Claude credential keepalive coverage to keep macOS OAuth credentials fresh across longer sessions.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.6` across the server, desktop, web, and contracts packages.
+- Refined Cursor agent command resolution so fallback launchers prefer known-safe agent paths and reject unsafe editor fallbacks.
+- Refined checkpoint and transcript handling around turn completion, live trail rendering, and message timeline integration.
+- Refined Sonnet 5 model variant metadata, sidebar status icons, command-row branding, tool-call labels, chat bubble padding, and model effort picker copy.
+- Refined task-completion notification logic and share-card export behavior around desktop clipboard support.
+
+### Fixed
+
+- Fixed Cursor ACP CLI path resolution for packaged/bundled Cursor layouts and legacy shim paths.
+- Fixed unsafe Cursor editor fallback behavior by rejecting launch paths that do not match the expected agent command shape.
+- Fixed Claude sessions becoming stale after long macOS OAuth credential idle periods.
+- Fixed file-change checkpoint timing around completed turns so summaries attach after the relevant assistant message is known.
+- Fixed formatting drift in ProviderHealth, Cursor ACP, and shared model test files caught by the release gate.
+
+### Verification
+
+- Initial `bun run fmt:check` failed on `apps/server/src/provider/Layers/ProviderHealth.test.ts`, `apps/server/src/provider/Layers/ProviderHealth.ts`, `apps/server/src/provider/acp/CursorAcpCommand.ts`, `apps/server/src/provider/acp/CursorAcpSupport.ts`, and `packages/shared/src/model.test.ts`; after targeted `bunx oxfmt` on those files, the final formatter check passed.
+- `bun run lint` passed with 158 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m38.929s. `@t3tools/web` passed 191 files / 2273 tests. `t3` passed 138 files with 1 skipped file, 1517 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` and `npm run lint` passed.
+
+## 0.3.5 - 2026-06-30
+
+### Added
+
+- Added temporary-thread promotion coverage and renamed disposable-thread helpers around the temporary-thread lifecycle.
+- Added undo-toast archive behavior for sidebar thread archive actions, backed by shared thread archive helpers and toast coverage.
+- Added macOS desktop icon-cache refresh logic with startup/update integration and focused platform-gated tests.
+- Added focused coverage for queued composer headers, timeline work-row grouping, diff rendering, thread archive undo, and desktop update button presentation.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.5` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace package versions.
+- Reworked temporary chat promotion so draft/temporary threads move into durable chat flow more predictably across ChatView, sidebar state, session logic, and route activation.
+- Replaced archive confirmation friction with immediate archive plus undo toast, including sidebar row actions, settings primitives, and shared error messaging polish.
+- Refined pending user-input panels, queued composer state, work rows, tool details, markdown spacing, composer picker styling, model/traits pickers, and chat timeline presentation.
+- Cleaned up activity heatmap export, share cards, diff-rendering helpers, sidebar labels, and several compact toolbar/control labels.
+
+### Fixed
+
+- Fixed dark-mode composer input surface border styling after the recent composer picker polish.
+- Fixed stale macOS Dock/Finder icon behavior after app icon changes by refreshing icon caches from the desktop process when needed.
+- Fixed archive recovery ergonomics by replacing the blocking confirmation path with a reversible toast action.
+- Fixed temporary-thread naming and lifecycle drift left over from disposable-thread terminology.
+- Fixed small UI inconsistencies in pending approvals, pending inputs, PDF toolbar, terminal chrome, settings routes, and What's New popout sizing.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 155 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state. It reported a slow filesystem warning for the Bun install cache during the final pass.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 6m9.469s. `@t3tools/web` passed 190 files / 2229 tests. `t3` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.5`, and `npm run lint` passed.
+
+## 0.3.4 - 2026-06-29
+
+### Added
+
+- Added assistant streaming as the default for fresh app/server settings so new installs start with live assistant output enabled.
+- Added smoother transcript auto-follow coverage for optimistic sends, streaming assistant text, message entry animations, and tool detail interactions.
+- Added broader provider-health coverage for Claude local CLI credentials, Cursor ACP/headless probing, OpenCode model/runtime handling, and provider model-probe failures.
+- Added focused OpenCode retry-warning ingestion and web session coverage so retry notices stay attached to work-log rows and collapse consistently across turns.
+- Added tool-call label coverage and refined central icon usage for agent mentions, task rows, and file-change entries.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.4` across the server, desktop, web, and contracts packages.
+- Refined transcript streaming and session-state handling so live assistant output, tool rows, and bottom-stick behavior stay separated more predictably.
+- Made Claude provider health prefer usable local CLI credentials before inheriting direct credential env keys into subprocesses.
+- Made Cursor provider probing use a safer headless environment for ACP commands.
+- Improved chat card contrast, agent glyph consistency, file-change icon choices, and shared switch sizing/thumb animation.
+
+### Fixed
+
+- Fixed OpenCode retry warnings being projected into the wrong conversation surface or failing to collapse consistently across turns.
+- Fixed provider-health status handling so model-probe failures can keep an authenticated provider available with a warning instead of degrading it too aggressively.
+- Fixed transcript browser test type drift by normalizing `scrollTo` test-helper options without explicit `undefined` optional fields.
+- Fixed Claude provider-health type drift by only passing `homeDir` to the Claude env builder when it exists.
+- Fixed ProviderHealth test type drift by using the Effect platform `"Unknown"` system error tag supported by this workspace.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with 155 warnings, 0 errors.
+- Initial `bun run typecheck` failed in `@t3tools/web` on `apps/web/src/components/ChatView.browser.tsx` because a browser `scrollTo` test helper produced explicit `undefined` optional fields; after that fix it failed in `t3` on `apps/server/src/provider/Layers/ProviderHealth.ts` and `ProviderHealth.test.ts` for the same exact-optional pattern and an unsupported Effect platform error tag; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- Initial `bun run test` failed in `@t3tools/web` on `apps/web/src/appSettings.test.ts` because the persisted-settings decode-default fixture still expected `enableAssistantStreaming: false`; after updating the fixture to the new default, the targeted app settings test passed.
+- Final `bun run test` passed: 10 tasks successful in 6m5.217s. `t3` passed 137 files with 1 skipped file, 1492 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.4`, and `npm run lint` passed.
+
+## 0.3.3 - 2026-06-28
+
+### Added
+
+- Added Windows packaged-app editor discovery so VS Code and VS Code Insiders installed from the Microsoft Store can be launched from Synara.
+- Added Windows editor URI fallback handling when the normal editor command is unavailable or unsuitable.
+- Added a provider update-check preference across server settings, web app settings, settings search, provider health, and update notification filtering.
+- Added shared workspace explorer keyboard navigation coverage and a dedicated keyboard shortcuts settings panel.
+- Added focused release-gate coverage updates for server settings push payloads and Windows editor launch behavior.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.3` across the server, desktop, web, and contracts packages.
+- Refreshed Synara icon and logo assets across desktop resources, marketing assets, web favicons, app icons, and shared brand assets.
+- Corrected macOS app icon packaging after the Ventura rounded-icon pass and removed the temporary literal Dock icon workaround.
+- Unified workspace explorer presentation, file row styling, diff stat labels, DockExplorerPane behavior, and shortcut settings navigation.
+- Reduced idle local server polling by giving server React Query a calmer idle refresh cadence while preserving active-session refresh behavior.
+- Aligned menu checkbox switch styling with the shared switch primitive track/thumb classes so compact switch-shaped controls stay visually consistent.
+
+### Fixed
+
+- Fixed VS Code Store editor launch on Windows by resolving packaged app identities and falling back to URI activation when needed.
+- Fixed provider update notification behavior so disabled update checks suppress background notices instead of continuing to surface provider updates.
+- Fixed release-blocking server typecheck drift in `apps/server/src/open.ts` by using the Effect error handler API available in this workspace.
+- Fixed release-blocking web typecheck drift in `apps/web/src/wsNativeApi.test.ts` by including `enableProviderUpdateChecks` in the mocked server settings payload.
+- Fixed formatting drift in `apps/server/src/editorAppDiscovery.ts`, `apps/server/src/open.test.ts`, and `scripts/build-desktop-artifact.ts` caught by the release gate.
+
+### Verification
+
+- Initial `bun run fmt:check` failed on `apps/server/src/editorAppDiscovery.ts`, `apps/server/src/open.test.ts`, and `scripts/build-desktop-artifact.ts`; after targeted `bunx oxfmt` on those files, `bun run fmt:check` passed.
+- `bun run lint` passed with 155 warnings, 0 errors.
+- Initial `bun run typecheck` failed in `@t3tools/web` because `wsNativeApi.test.ts` missed the new `enableProviderUpdateChecks` setting; after that fix it failed in `t3` because `apps/server/src/open.ts` used unavailable `Effect.catchAll`; after both fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m8.962s. `@t3tools/web` passed 188 files / 2212 tests. `t3` passed 136 files with 1 skipped file, 1475 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.3`, and `npm run lint` passed.
+
+## 0.3.2 - 2026-06-27
+
+### Added
+
+- Added project selection to the branch toolbar so project, branch, and worktree context can be managed from the active chat surface.
+- Added preview grants for absolute local files, including local image route coverage, trusted-origin checks, workspace file-system normalization, and web preview/download handling.
+- Added a collapsible review file tree for the diff panel, backed by shared file-diff tree logic and shared disclosure motion.
+- Added focused coverage for branch toolbar project selection, chat-project container selection, project creation recovery, local file preview grants, review file trees, route inset surfaces, provider availability, and workspace file openers.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.2` across the server, desktop, web, and contracts packages.
+- Refactored transcript scrolling and session-state handling so ChatView owns less browser-specific behavior directly and live transcript/layout state has clearer boundaries.
+- Refactored composer chrome measurement, right-dock metadata, workspace preview headers, and the workspace explorer into reusable pieces.
+- Made project and home-chat container selection more explicit by sharing project creation/recovery, draft-thread mapping, and chat-container selection helpers across sidebar and toolbar entrypoints.
+- Refined provider send readiness by refreshing provider status before chat, Kanban, handoff, and route-driven sends, then returning focus to the composer more consistently.
+- Unified explorer icons, working shimmer styles, compact route inset surfaces, composer picker styling, and sidebar visual details.
+
+### Fixed
+
+- Fixed absolute local file previews that could fail to open or download when agent output referenced files outside the immediate workspace preview path.
+- Fixed review-heavy diff navigation by adding a tree view instead of forcing users to scan a flat patch list.
+- Fixed stale provider availability before send paths that could leave chat or Kanban actions using outdated provider state.
+- Fixed release-blocking exact-optional typecheck drift in `apps/web/src/components/Sidebar.tsx`, `apps/web/src/composerDraftStore.ts`, and `apps/web/src/lib/chatProjects.ts`.
+- Fixed formatting drift in `apps/web/src/components/RouteInsetSurface.tsx` caught by the release gate.
+
+### Verification
+
+- Initial `bun run fmt:check` failed on `apps/web/src/components/RouteInsetSurface.tsx`; after targeted `bunx oxfmt` on that file, `bun run fmt:check` passed.
+- `bun run lint` passed with 154 warnings, 0 errors.
+- Initial `bun run typecheck` failed in `@t3tools/web` on exact optional property handling in `Sidebar.tsx`, `composerDraftStore.ts`, and `chatProjects.ts`; after targeted fixes, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON messages.
+- `bun run release:smoke` passed. It refreshed install/lockfile state during `bun install`, with no remaining `bun.lock` diff.
+- `bun run build` passed. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, and large Vite chunk warnings.
+- `bun run test` passed: 10 tasks successful in 5m44.64s. `@t3tools/web` passed 187 files / 2205 tests. `t3` passed 136 files with 1 skipped file, 1464 passed tests, and 6 skipped tests.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.2`, and `npm run lint` passed.
+
 ## 0.3.1 - 2026-06-26
 
 ### Added

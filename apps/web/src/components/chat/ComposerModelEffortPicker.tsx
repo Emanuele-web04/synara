@@ -15,9 +15,8 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { memo, useCallback, useState } from "react";
-import { IoFlash } from "react-icons/io5";
 
-import { ChevronDownIcon } from "~/lib/icons";
+import { ChevronDownIcon, FastModeIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
 import { buildNextProviderOptions, type ProviderModelOption } from "../../providerModelOptions";
@@ -243,9 +242,9 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         </span>
       )}
       {showsFastBadge ? (
-        <IoFlash
+        <FastModeIcon
           aria-hidden="true"
-          className="size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)]"
+          className={cn("size-3.5 shrink-0", COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME)}
         />
       ) : null}
       {triggerStatusLabel ? (
@@ -356,7 +355,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         {supportsFastModeControl ? (
           <MenuSub>
             <MenuSubTrigger>
-              <IoFlash
+              <FastModeIcon
                 aria-hidden="true"
                 className={cn(
                   "size-3 shrink-0",

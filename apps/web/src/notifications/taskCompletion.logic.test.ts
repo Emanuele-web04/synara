@@ -110,6 +110,102 @@ describe("collectCompletedThreadCandidates", () => {
     ]);
   });
 
+  it("summarizes the turn's final assistant message, not the opening preamble", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-preamble"),
+            role: "assistant",
+            text: "Alright, I'll take the hint and start inspecting the work.",
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt: "2026-04-05T10:00:01.500Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "Done — separated the risky changes from the in-progress ones.",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)[0]?.assistantSummary).toBe(
+      "Done — separated the risky changes from the in-progress ones.",
+    );
+  });
+
+  it("falls back to the turn's last non-empty reply when the final message is still empty", () => {
+    const previous = [makeThread({})];
+    const next = [
+      makeThread({
+        session: {
+          provider: "codex",
+          status: "ready",
+          orchestrationStatus: "ready",
+          createdAt: "2026-04-05T10:00:00.000Z",
+          updatedAt: "2026-04-05T10:00:06.000Z",
+        },
+        latestTurn: {
+          turnId: TurnId.makeUnsafe("turn-1"),
+          state: "completed",
+          requestedAt: "2026-04-05T10:00:00.000Z",
+          startedAt: "2026-04-05T10:00:00.000Z",
+          completedAt: "2026-04-05T10:00:06.000Z",
+          assistantMessageId: MessageId.makeUnsafe("msg-final"),
+          sourceProposedPlan: undefined,
+        },
+        messages: [
+          {
+            id: MessageId.makeUnsafe("msg-preamble"),
+            role: "assistant",
+            text: "Working on it now.",
+            createdAt: "2026-04-05T10:00:01.000Z",
+            completedAt: "2026-04-05T10:00:01.500Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+          {
+            id: MessageId.makeUnsafe("msg-final"),
+            role: "assistant",
+            text: "   ",
+            createdAt: "2026-04-05T10:00:05.500Z",
+            completedAt: "2026-04-05T10:00:06.000Z",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            streaming: false,
+          },
+        ],
+      }),
+    ];
+
+    expect(collectCompletedThreadCandidates(previous, next)[0]?.assistantSummary).toBe(
+      "Working on it now.",
+    );
+  });
+
   it("returns threads that settle after skipping the visible running-to-ready transition", () => {
     const previous = [
       makeThread({

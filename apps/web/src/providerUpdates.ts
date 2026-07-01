@@ -13,7 +13,7 @@ type ProviderUpdateFilterInput = {
   readonly providers: ReadonlyArray<ServerProviderStatus>;
   readonly hiddenProviders?: ReadonlyArray<ProviderKind>;
   readonly serverSettings?:
-    | Pick<ServerSettings, "providers" | "providerInstances">
+    | Pick<ServerSettings, "providers" | "providerInstances" | "enableProviderUpdateChecks">
     | null
     | undefined;
   readonly oneClickOnly?: boolean;
@@ -24,7 +24,7 @@ type ProviderUpdateVisibilityInput = {
   readonly hiddenProviders?: ReadonlyArray<ProviderKind>;
   readonly hiddenProviderSet?: ReadonlySet<ProviderKind>;
   readonly serverSettings?:
-    | Pick<ServerSettings, "providers" | "providerInstances">
+    | Pick<ServerSettings, "providers" | "providerInstances" | "enableProviderUpdateChecks">
     | null
     | undefined;
   readonly oneClickOnly?: boolean;
@@ -62,6 +62,7 @@ export function shouldShowProviderUpdateStatus(input: ProviderUpdateVisibilityIn
   const hiddenProviderSet = input.hiddenProviderSet ?? new Set(input.hiddenProviders ?? []);
   if (
     !advisory ||
+    input.serverSettings?.enableProviderUpdateChecks === false ||
     advisory.status !== "behind_latest" ||
     advisory.latestVersion === null ||
     !isProviderKind(input.provider.provider) ||

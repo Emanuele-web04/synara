@@ -324,7 +324,7 @@ describe("resolveAppModelSelection", () => {
         },
         "sonnet",
       ),
-    ).toBe("claude-sonnet-4-6");
+    ).toBe("claude-sonnet-5");
   });
 
   it("resolves transient selected custom models included in app model options", () => {
@@ -1401,7 +1401,7 @@ describe("provider-indexed custom model settings", () => {
       modelOptionsByProvider.claudeAgent.filter((option) => option.slug === "claude/custom-opus"),
     ).toHaveLength(1);
     expect(
-      modelOptionsByProvider.claudeAgent.some((option) => option.slug === "claude-sonnet-4-6"),
+      modelOptionsByProvider.claudeAgent.some((option) => option.slug === "claude-sonnet-5"),
     ).toBe(true);
     expect(
       modelOptionsByProvider.gemini.filter((option) => option.slug === "gemini/custom-flash"),
@@ -1505,7 +1505,7 @@ describe("AppSettingsSchema", () => {
       defaultThreadEnvMode: "local",
       confirmThreadDelete: false,
       confirmTerminalTabClose: true,
-      enableAssistantStreaming: false,
+      enableAssistantStreaming: true,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
       timestampFormat: DEFAULT_TIMESTAMP_FORMAT,

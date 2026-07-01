@@ -742,6 +742,7 @@ export function openCodeQuestionId(
   return header.length > 0 ? `question-${index}-${header}` : `question-${index}`;
 }
 
+// OpenCode file parts reject many document MIME types; keep native parts to images.
 export function toOpenCodeFileParts(input: {
   readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
   readonly resolveAttachmentPath: (attachment: ChatAttachment) => string | null;
@@ -749,7 +750,7 @@ export function toOpenCodeFileParts(input: {
   const parts: Array<FilePartInput> = [];
 
   for (const attachment of input.attachments ?? []) {
-    if (attachment.type !== "image" && attachment.type !== "file") {
+    if (attachment.type !== "image") {
       continue;
     }
 

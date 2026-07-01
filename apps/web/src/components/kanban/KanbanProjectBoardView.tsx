@@ -26,7 +26,8 @@ import {
 } from "~/appSettings";
 import { toastManager } from "~/components/ui/toast";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import {
   dispatchKanbanDraftCard,
   resolveKanbanDraftDispatchTarget,
@@ -67,6 +68,7 @@ export function KanbanProjectBoardView({
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const setDraftOrder = useKanbanUiStore((state) => state.setDraftOrder);
   const [activeCard, setActiveCard] = useState<KanbanCard | null>(null);
   // A completed drag still emits a click on the source card; swallow exactly that one
@@ -105,10 +107,11 @@ export function KanbanProjectBoardView({
         defaultProvider: settings.defaultProvider,
         providerInstances,
       });
-      const sendAvailability = resolveProviderSendAvailability({
+      const sendAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: dispatchTarget.provider,
         instanceId: dispatchTarget.instanceId,
         statuses: providerStatuses,
+        refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       });
       if (!sendAvailability.usable) {
         toastManager.add({
@@ -163,7 +166,14 @@ export function KanbanProjectBoardView({
         description: result.message,
       });
     },
-    [assistantDeliveryMode, onOpenCard, providerInstances, providerStatuses, settings],
+    [
+      assistantDeliveryMode,
+      onOpenCard,
+      providerInstances,
+      providerStatuses,
+      refreshProviderStatuses,
+      settings,
+    ],
   );
 
   const handleDragStart = useCallback(

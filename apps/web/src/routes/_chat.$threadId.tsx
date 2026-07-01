@@ -93,6 +93,7 @@ import {
   RIGHT_DOCK_ADD_MENU_KINDS,
   getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
+import { DockExplorerPane } from "../components/chat/DockExplorerPane";
 import { DockFilePane } from "../components/chat/DockFilePane";
 import { readEditorViewState, storeEditorViewState } from "../editorViewState";
 import { basenameOfPath } from "../file-icons";
@@ -155,9 +156,9 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
+import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
@@ -2018,6 +2019,15 @@ function SingleChatSurface(props: {
               onClose={() => closePane(props.threadId, pane.id)}
             />
           );
+        case "explorer":
+          return (
+            <DockExplorerPane
+              workspaceRoot={workspaceRoot}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+            />
+          );
         case "file":
           return (
             <DockFilePane
@@ -2212,10 +2222,7 @@ function SingleChatSurface(props: {
           onDrop={handleDropThread}
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
-          <SidebarInset
-            className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-            surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-          >
+          <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId="single"
@@ -2234,7 +2241,7 @@ function SingleChatSurface(props: {
                 onClick: handleOpenEditorView,
               }}
             />
-          </SidebarInset>
+          </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock
           state={dockState}

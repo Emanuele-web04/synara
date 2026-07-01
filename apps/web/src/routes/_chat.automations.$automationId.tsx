@@ -21,14 +21,10 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "~/components/chat/chatHeaderControls";
-import {
-  CHAT_BACKGROUND_CLASS_NAME,
-  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
-} from "~/components/chat/composerPickerStyles";
+import { CHAT_BACKGROUND_CLASS_NAME } from "~/components/chat/composerPickerStyles";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
-import { SidebarInset } from "~/components/ui/sidebar";
+import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import {
   automationApprovalGaps,
   hasBlockingAutomationDraftWarnings,
@@ -208,10 +204,7 @@ function AutomationDetailView() {
 
   if (!definition) {
     return (
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
-      >
+      <RouteInsetSurface>
         <div
           className={cn(
             "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -246,7 +239,7 @@ function AutomationDetailView() {
             </Button>
           </main>
         </div>
-      </SidebarInset>
+      </RouteInsetSurface>
     );
   }
 
@@ -371,10 +364,7 @@ function AutomationDetailView() {
   };
 
   return (
-    <SidebarInset
-      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-      surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
-    >
+    <RouteInsetSurface>
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden",
@@ -795,7 +785,7 @@ function AutomationDetailView() {
           busy={updateMutation.isPending}
         />
       ) : null}
-    </SidebarInset>
+    </RouteInsetSurface>
   );
 }
 

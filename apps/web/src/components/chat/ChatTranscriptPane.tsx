@@ -7,6 +7,10 @@ import { type MessageId, type ThreadId, type ThreadMarker, type TurnId } from "@
 import { type LegendListRef } from "@legendapp/list/react";
 import {
   memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
   type ComponentProps,
   type CSSProperties,
   type MouseEventHandler,
@@ -20,9 +24,12 @@ import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary } from "../../types";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ChatEmptyStateHero } from "./ChatEmptyStateHero";
 import { MessagesTimeline, type MessagesTimelineController } from "./MessagesTimeline";
+import { MessageTrail } from "./MessageTrail";
+import { createActiveTrailStore, deriveMessageTrailItems } from "./messageTrail.logic";
 import { AgentActivityDetailView } from "./AgentActivityDetailView";
 import type { AgentActivityDetail } from "./agentActivity.logic";
 
@@ -48,6 +55,7 @@ interface ChatTranscriptPaneProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
   onMessagesClickCapture: MouseEventHandler<HTMLDivElement>;
@@ -102,6 +110,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers,
+  enteringUserMessageIds,
   markdownCwd,
   onExpandTimelineImage,
   onMessagesClickCapture,
@@ -136,6 +145,27 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
     ? { paddingRight: contentInsetRightPx }
     : undefined;
+
+  // Left-edge navigation trail: one tick per sent message. Current + visible
+  // highlights are pushed up from MessagesTimeline as the viewport scrolls. They
+  // flow through a stable store (not pane state) so scroll updates re-render only
+  // the trail, not the memoized timeline; reset on thread switch so stale
+  // highlights can't linger.
+  const trailItems = useMemo(() => deriveMessageTrailItems(timelineEntries), [timelineEntries]);
+  const activeTrailStoreRef = useRef<ReturnType<typeof createActiveTrailStore> | null>(null);
+  if (activeTrailStoreRef.current === null) {
+    activeTrailStoreRef.current = createActiveTrailStore();
+  }
+  const activeTrailStore = activeTrailStoreRef.current;
+  useEffect(() => {
+    activeTrailStore.set(null);
+  }, [activeThreadId, activeTrailStore]);
+  const handleTrailSelect = useCallback(
+    (messageId: MessageId) => {
+      timelineControllerRef?.current?.scrollToMessage(messageId);
+    },
+    [timelineControllerRef],
+  );
 
   return (
     <div
@@ -173,6 +203,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
             onOpenTurnDiff={onOpenTurnDiff}
@@ -185,6 +216,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             onImageExpand={onExpandTimelineImage}
             followLiveOutput={followLiveOutput}
             onIsAtEndChange={onIsAtEndChange}
+            onTrailHighlightsChange={activeTrailStore.set}
             onMessagesScroll={onMessagesScroll}
             onMessagesClickCapture={onMessagesClickCapture}
             onMessagesMouseUp={onMessagesMouseUp}
@@ -215,9 +247,17 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
           />
         )}
 
-        {scrollButtonVisible && !agentActivityDetail ? (
+        {!agentActivityDetail ? (
           <div
-            className="pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1"
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-6 z-30 flex justify-center py-1",
+              // Reuse the shared disclosure motion so the arrow fades + drifts in/out with
+              // the same 220ms ease-out curve (and motion-reduce fallback) as every other
+              // show/hide in the app. The wrapper stays pointer-events-none; only the
+              // button re-enables pointer events while visible.
+              DISCLOSURE_CONTENT_MOTION_CLASS,
+              scrollButtonVisible ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0",
+            )}
             // Follow the same right inset as transcript rows so the button centers in the
             // visible chat column while the side panel overlays the viewport edge.
             style={scrollButtonFrameStyle}
@@ -227,11 +267,24 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
               aria-label="Scroll to bottom"
-              className="pointer-events-auto flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]"
+              aria-hidden={!scrollButtonVisible}
+              tabIndex={scrollButtonVisible ? 0 : -1}
+              className={cn(
+                "flex size-8 items-center justify-center rounded-full border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] text-[var(--color-text-foreground)] backdrop-blur-md transition-colors hover:cursor-pointer hover:bg-[var(--color-background-elevated-secondary)]",
+                scrollButtonVisible ? "pointer-events-auto" : "pointer-events-none",
+              )}
             >
               <ArrowDownIcon className="size-3.5" />
             </button>
           </div>
+        ) : null}
+
+        {!agentActivityDetail ? (
+          <MessageTrail
+            items={trailItems}
+            activeStore={activeTrailStore}
+            onSelect={handleTrailSelect}
+          />
         ) : null}
       </div>
     </div>
