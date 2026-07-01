@@ -1,0 +1,54 @@
+# Codex provider accounts
+
+Synara can run multiple Codex accounts side by side. Each account is a provider
+instance (Settings → Provider tools → Codex → Provider instances) with its own
+auth state, so you log in to each account **once** and never need to log out to
+switch — sessions, model discovery, health checks, and git text generation all
+route to the account selected for the thread.
+
+## How isolation works
+
+Codex reads state from `CODEX_HOME`. Synara prepares a generated overlay under
+`$SYNARA_HOME/codex-home-overlay` (or the corresponding Synara runtime
+directory) and uses an account-specific subdirectory for isolated instances:
+
+- Shared non-database state is linked from the base Codex home. SQLite files
+  are not mirrored; `CODEX_SQLITE_HOME` keeps every process opening them from
+  the base home through one stable path.
+- Account-private state (`auth.json`, `models_cache.json`) comes from the
+  account's **shadow auth home** instead. Missing files are allowed so Codex
+  can create new account state lazily, while an existing private file that is
+  itself a symlink is rejected to prevent accounts from aliasing credentials.
+- Synara writes the generated `config.toml` only inside the overlay and leaves
+  the source configuration untouched.
+
+The default instance uses the same overlay mechanism, with authentication and
+other shared state sourced from the configured Codex home (`~/.codex` by
+default).
+
+## Adding a second account
+
+1. Pick a directory for the account's private auth state, e.g. `~/.codex_work`.
+2. Log the Codex CLI into that account once, redirecting its home:
+
+   ```sh
+   CODEX_HOME=~/.codex_work codex login
+   ```
+
+3. In Synara, open Settings → Provider tools → Codex → Provider instances →
+   Add, give the instance a label (e.g. "Work"), and set **Shadow auth home**
+   to `~/.codex_work`.
+4. Pick the account from the model picker's instance selector when composing.
+
+The login persists in `~/.codex_work/auth.json`. Synara links it into the
+account overlay when possible, with a file-copy fallback on systems where file
+symlinks are unavailable, and never logs its contents. The overlay is refreshed
+when Synara prepares a new Codex process environment.
+
+## Caveats
+
+- An instance with only a label/account id but **no shadow auth home** shares
+  the default account's `auth.json` — it is a launch profile, not an isolated
+  account.
+- Threads keep the instance they started with; switching the account of a
+  thread with a live session restarts the provider session.

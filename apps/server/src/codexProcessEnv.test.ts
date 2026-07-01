@@ -1,4 +1,13 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readlinkSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -251,4 +260,92 @@ describe("buildCodexProcessEnv", () => {
       rmSync(runtimeHome, { recursive: true, force: true });
     }
   });
+});
+
+describe("buildCodexProcessEnv account overlays", () => {
+  function makeAccountFixture() {
+    const root = mkdtempSync(path.join(os.tmpdir(), "synara-codex-account-overlay-"));
+    const homePath = path.join(root, "codex-home");
+    const shadowHomePath = path.join(root, "codex-shadow-work");
+    mkdirSync(homePath, { recursive: true });
+    mkdirSync(shadowHomePath, { recursive: true });
+    writeFileSync(path.join(homePath, "auth.json"), '{"account":"default"}', "utf8");
+    writeFileSync(path.join(homePath, "config.toml"), "", "utf8");
+    return {
+      root,
+      homePath,
+      shadowHomePath,
+      env: {
+        HOME: root,
+        SYNARA_HOME: path.join(root, "synara-runtime"),
+      } satisfies NodeJS.ProcessEnv,
+    };
+  }
+
+  it("links account-private auth from the shadow home instead of the shared home", async () => {
+    const fixture = makeAccountFixture();
+    const shadowAuthPath = path.join(fixture.shadowHomePath, "auth.json");
+    writeFileSync(shadowAuthPath, '{"account":"work"}', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      expect(env.CODEX_HOME).toBeTruthy();
+      expect(path.resolve(env.CODEX_HOME!)).not.toBe(path.resolve(fixture.homePath));
+      const overlayAuthPath = path.join(env.CODEX_HOME!, "auth.json");
+      expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
+      expect(path.resolve(readlinkSync(overlayAuthPath))).toBe(path.resolve(shadowAuthPath));
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("tolerates shadow homes with no auth state yet", async () => {
+    const fixture = makeAccountFixture();
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: fixture.env,
+        homePath: fixture.homePath,
+        shadowHomePath: fixture.shadowHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      expect(env.CODEX_HOME).toBeTruthy();
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(["auth.json", "models_cache.json"] as const)(
+    "rejects shadow-home %s state that is itself a symlink",
+    async (entryName) => {
+      const fixture = makeAccountFixture();
+      symlinkSync(
+        path.join(fixture.homePath, "auth.json"),
+        path.join(fixture.shadowHomePath, entryName),
+      );
+
+      try {
+        await expect(
+          buildCodexProcessEnv({
+            env: fixture.env,
+            homePath: fixture.homePath,
+            shadowHomePath: fixture.shadowHomePath,
+            accountId: "work",
+            platform: "win32",
+          }),
+        ).rejects.toThrow(/is a symlink/);
+      } finally {
+        rmSync(fixture.root, { recursive: true, force: true });
+      }
+    },
+  );
 });
