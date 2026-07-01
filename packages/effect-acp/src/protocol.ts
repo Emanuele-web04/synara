@@ -167,6 +167,31 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const terminationHandled = yield* Ref.make(false);
   const incomingDecoder = new TextDecoder();
   let incomingTextBuffer = "";
+
+  // ACP peers (e.g. Devin) may send responses/requests with UUID string IDs.
+  // Effect's RPC parser coerces `id` to BigInt, which crashes on non-numeric
+  // strings. Pre-replace non-numeric string IDs with synthetic numeric IDs
+  // before the parser sees them, then restore the originals after decoding.
+  const syntheticIdMap = new Map<string, string>();
+  let nextSyntheticId = -1_000_000_000n;
+
+  const replaceNonNumericIds = (line: string): string => {
+    if (!line.includes('"id"')) return line;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!isJsonObject(parsed) || !("id" in parsed)) return line;
+      const id = parsed.id;
+      if (typeof id !== "string" || isEffectNumericRequestId(id)) return line;
+      const synthetic = nextSyntheticId--;
+      syntheticIdMap.set(String(synthetic), id);
+      return `${JSON.stringify({ ...parsed, id: String(synthetic) })}\n`;
+    } catch {
+      return line;
+    }
+  };
+
+  const normalizeLine = (line: string): string =>
+    replaceNonNumericIds(normalizeTopLevelAcpJsonRpcLine(line));
   const extPending = yield* Ref.make(
     new Map<string, Deferred.Deferred<unknown, AcpError.AcpError>>(),
   );
@@ -197,7 +222,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
     incomingTextBuffer = incomingTextBuffer.slice(lastNewlineIndex + 1);
     const normalized = completeText
       .split(/(?<=\n)/)
-      .map((line) => (line.trim().length === 0 ? line : normalizeTopLevelAcpJsonRpcLine(line)))
+      .map((line) => (line.trim().length === 0 ? line : normalizeLine(line)))
       .join("");
     return typeof data === "string" ? normalized : textEncoder.encode(normalized);
   };
@@ -208,7 +233,7 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
       incomingTextBuffer = "";
       return undefined;
     }
-    const normalized = normalizeTopLevelAcpJsonRpcLine(`${incomingTextBuffer}\n`);
+    const normalized = normalizeLine(`${incomingTextBuffer}\n`);
     incomingTextBuffer = "";
     return textEncoder.encode(normalized);
   };
@@ -525,6 +550,15 @@ export const makeAcpPatchedProtocol = Effect.fn("makeAcpPatchedProtocol")(functi
   const routeDecodedMessage = (
     message: RpcMessage.FromClientEncoded | RpcMessage.FromServerEncoded,
   ): Effect.Effect<void, AcpError.AcpError> => {
+    // Restore original non-numeric string IDs that were replaced before decoding.
+    // Request messages use `id`, response/chunk messages use `requestId`.
+    const idField = message._tag === "Request" ? "id" : "requestId";
+    const syntheticKey = String(message[idField]);
+    if (syntheticIdMap.has(syntheticKey)) {
+      const originalId = syntheticIdMap.get(syntheticKey)!;
+      syntheticIdMap.delete(syntheticKey);
+      return routeDecodedMessage({ ...message, [idField]: originalId });
+    }
     switch (message._tag) {
       case "Request":
         return handleRequestEncoded(message);

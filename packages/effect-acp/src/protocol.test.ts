@@ -312,6 +312,47 @@ it.layer(NodeServices.layer)("effect-acp protocol", (it) => {
     }),
   );
 
+  it.effect("does not crash on UUID-string response ids from ACP peers", () =>
+    Effect.gen(function* () {
+      const { stdio, input } = yield* makeInMemoryStdio();
+      const dropped = yield* Deferred.make<AcpProtocol.AcpProtocolLogEvent>();
+      yield* AcpProtocol.makeAcpPatchedProtocol({
+        stdio,
+        serverRequestMethods: new Set(),
+        logIncoming: true,
+        logger: (event) =>
+          event.stage === "dropped"
+            ? Deferred.succeed(dropped, event).pipe(Effect.asVoid)
+            : Effect.void,
+      });
+
+      // Devin sends UUID-string IDs that would crash BigInt() before the fix.
+      yield* Queue.offer(
+        input,
+        textEncoder.encode(
+          '{"jsonrpc":"2.0","id":"88371720-a263-49fd-8015-8337c6711ae7","result":{"ok":true}}\n',
+        ),
+      );
+
+      const maybeEvent = yield* Deferred.await(dropped).pipe(Effect.timeoutOption(1000));
+      assert.equal(Option.isSome(maybeEvent), true);
+      if (Option.isSome(maybeEvent)) {
+        assert.deepEqual(maybeEvent.value.payload, {
+          reason: "untracked-string-response-id",
+          requestId: "88371720-a263-49fd-8015-8337c6711ae7",
+          message: {
+            _tag: "Exit",
+            requestId: "88371720-a263-49fd-8015-8337c6711ae7",
+            exit: {
+              _tag: "Success",
+              value: { ok: true },
+            },
+          },
+        });
+      }
+    }),
+  );
+
   it.effect("accepts agent response metadata with primitive extension values", () =>
     Effect.gen(function* () {
       const { stdio, input, output } = yield* makeInMemoryStdio();
