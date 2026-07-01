@@ -1865,10 +1865,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        // Late background progress usually arrives after the spawning turn
-        // completed; stamp it with that turn's id anyway — the web work-log
-        // filter hides turn-less activities once turn-stamped messages exist.
-        const progressTurnId = context.turnState?.turnId ?? taskInfo.turnId;
+        // Late background progress belongs to the turn that spawned the task,
+        // not whatever turn happens to be open when it arrives — and it must
+        // carry a turn id at all, or the web work-log filter hides it. Fall
+        // back to the active turn only when the spawning turn is unknown.
+        const progressTurnId = taskInfo.turnId ?? context.turnState?.turnId;
         const stamp = yield* makeEventStamp();
         yield* offerRuntimeEvent({
           type: "task.progress",
@@ -2224,6 +2225,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               : undefined;
             if (message.tool_use_id) {
               context.knownTasksByToolUseId.delete(message.tool_use_id);
+            } else {
+              // Notifications may omit the tool id; clean by task id so the
+              // entry cannot leak or keep routing late subagent output.
+              for (const [toolUseId, taskInfo] of context.knownTasksByToolUseId) {
+                if (taskInfo.taskId === message.task_id) {
+                  context.knownTasksByToolUseId.delete(toolUseId);
+                  break;
+                }
+              }
             }
             if (context.hiddenTaskIds.delete(message.task_id) || message.skip_transcript === true) {
               return;
@@ -2459,6 +2469,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* handleSystemMessage(context, message);
             return;
           case "tool_progress":
+            // Progress for tools running inside a subagent stays with the
+            // parent Task (task_progress covers it); leaking it here would put
+            // subagent-internal tool rows in the main turn's work log.
+            if (parentToolUseId !== undefined) {
+              return;
+            }
+            yield* handleSdkTelemetryMessage(context, message);
+            return;
           case "tool_use_summary":
           case "auth_status":
           case "rate_limit_event":
@@ -3191,11 +3209,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         );
 
         if (context.turnState) {
-          // Auto-close a still-open turn (usually a background continuation)
-          // so it cannot block the user's next turn. Its SDK result has not
-          // arrived yet — the next result must settle that closed work, not
-          // the turn we are about to start.
-          context.staleResultsExpected += 1;
+          // Auto-close a still-open turn so it cannot block the user's next
+          // turn. Only user-origin turns provably owe an SDK result (their
+          // prompt is queued and will run to completion), so only they arm the
+          // stale-result debt. A synthetic background continuation may fold its
+          // result into the idle signal instead — arming debt for it risks
+          // swallowing (and mislabeling) the new user turn's own result.
+          if (context.turnState.origin === "user") {
+            context.staleResultsExpected += 1;
+          }
           yield* completeTurn(context, "completed");
         }
 
