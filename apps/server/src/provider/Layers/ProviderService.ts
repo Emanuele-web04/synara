@@ -10,6 +10,7 @@
  * @module ProviderServiceLive
  */
 import {
+  defaultInstanceIdForDriver,
   EventId,
   ProviderCompactThreadInput,
   ProviderForkThreadInput,
@@ -1896,13 +1897,29 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             const persistedCwd = readPersistedCwd(binding.runtimePayload);
             const persistedModelSelection = readPersistedModelSelection(binding.runtimePayload);
             const persistedProviderOptions = readPersistedProviderOptions(binding.runtimePayload);
+            const persistedPayloadProviderInstanceId = readPersistedProviderInstanceId(
+              binding.runtimePayload,
+            );
             const persistedProviderInstanceId = providerInstanceIdFromBinding(binding);
+            // getBinding materializes the default instance id onto legacy rows,
+            // so only a non-default binding id proves an explicit instance
+            // binding. Explicitly stamped bindings also persist the id in the
+            // payload; legacy/default bindings keep seeding recovery with their
+            // persisted launch options.
+            const hasProviderInstanceBinding =
+              (binding.providerInstanceId !== undefined &&
+                binding.providerInstanceId !== defaultInstanceIdForDriver(binding.provider)) ||
+              persistedPayloadProviderInstanceId !== undefined ||
+              (persistedModelSelection !== undefined &&
+                resolveModelSelectionInstanceId(persistedModelSelection) !== binding.provider);
             const resolved = yield* resolveLaunchProviderInstance({
               operation: input.operation,
               ...providerKindConstraint(binding.provider),
               providerInstanceId: persistedProviderInstanceId,
               ...(persistedModelSelection ? { modelSelection: persistedModelSelection } : {}),
-              ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
+              ...(!hasProviderInstanceBinding && persistedProviderOptions
+                ? { providerOptions: persistedProviderOptions }
+                : {}),
             });
             const canReusePersistedResumeCursor =
               hasPersistedResumeCursor &&

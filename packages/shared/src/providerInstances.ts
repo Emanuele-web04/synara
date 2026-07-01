@@ -203,6 +203,30 @@ function deriveLegacyCodexAccountInstances(settings: ServerSettings): ProviderIn
   return instances as ProviderInstanceConfigMap;
 }
 
+function instanceConfigRecord(config: ProviderInstanceConfig["config"]): Record<string, unknown> {
+  return config && typeof config === "object" && !Array.isArray(config)
+    ? (config as Record<string, unknown>)
+    : {};
+}
+
+// Explicit entries for derived ids (built-in defaults, legacy Codex accounts)
+// override key-by-key instead of replacing the derived entry wholesale, so an
+// entry that only stores customModels keeps following the live legacy launch
+// settings (binary paths, homes, server URLs) instead of freezing a copy.
+function mergeDerivedProviderInstanceConfig(
+  derived: ProviderInstanceConfig,
+  explicit: ProviderInstanceConfig,
+): ProviderInstanceConfig {
+  return {
+    ...derived,
+    ...explicit,
+    config: {
+      ...instanceConfigRecord(derived.config),
+      ...instanceConfigRecord(explicit.config),
+    },
+  };
+}
+
 export function deriveProviderInstanceConfigMap(
   settings: ServerSettings,
 ): ProviderInstanceConfigMap {
@@ -212,7 +236,14 @@ export function deriveProviderInstanceConfigMap(
     merged[defaultInstanceIdForProvider(provider)] = legacyProviderConfig(settings, provider);
   }
 
-  Object.assign(merged, deriveLegacyCodexAccountInstances(settings), settings.providerInstances);
+  Object.assign(merged, deriveLegacyCodexAccountInstances(settings));
+  for (const [instanceId, explicit] of Object.entries(settings.providerInstances)) {
+    const derived = merged[instanceId];
+    merged[instanceId] =
+      derived && derived.driver === explicit.driver
+        ? mergeDerivedProviderInstanceConfig(derived, explicit)
+        : explicit;
+  }
   return merged as ProviderInstanceConfigMap;
 }
 

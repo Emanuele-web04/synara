@@ -10,6 +10,7 @@ import {
   setPinnedMessageLabel,
 } from "@synara/shared/pinnedMessages";
 import { createStalePendingInteractionMatcher } from "@synara/shared/pendingInteractions";
+import { resolveModelSelectionInstanceId } from "@synara/shared/providerInstances";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -778,6 +779,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
+          // The provider reactor may still reject an instance switch for a
+          // bound thread after this event is projected. Only adopt a selection
+          // routed at another instance on a fresh thread, so a rejected switch
+          // cannot overwrite the thread's working selection.
           const [messages, session] = yield* Effect.all([
             projectionThreadMessageRepository.listByThreadId({
               threadId: event.payload.threadId,
@@ -786,14 +791,23 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               threadId: event.payload.threadId,
             }),
           ]);
+          const canAdoptFirstTurnSelection = canAdoptFirstTurnProvider({
+            hasLatestTurn: existingRow.value.latestTurnId !== null,
+            hasSession: Option.isSome(session),
+            messages,
+          });
+          const requestedModelSelection = event.payload.modelSelection;
+          const canAdoptRequestedInstance =
+            requestedModelSelection === undefined ||
+            resolveModelSelectionInstanceId(requestedModelSelection) ===
+              resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+            canAdoptFirstTurnSelection;
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
-            requestedModelSelection: event.payload.modelSelection,
-            canAdoptRequestedProvider: canAdoptFirstTurnProvider({
-              hasLatestTurn: existingRow.value.latestTurnId !== null,
-              hasSession: Option.isSome(session),
-              messages,
-            }),
+            requestedModelSelection: canAdoptRequestedInstance
+              ? requestedModelSelection
+              : undefined,
+            canAdoptRequestedProvider: canAdoptFirstTurnSelection,
           });
           // Automation-dispatched turns run with the automation's modes but must not
           // repaint the thread's persisted modes: on a heartbeat target thread the

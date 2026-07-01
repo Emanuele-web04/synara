@@ -139,6 +139,20 @@ function adapterFacadeForInstance(
       ),
     );
 
+  // Native forks can spawn an untagged runtime session for the new thread;
+  // claim it for this instance like startSession does so listSessions keeps
+  // seeing it.
+  const forkThread: ProviderAdapterShape<ProviderAdapterError>["forkThread"] = adapter.forkThread
+    ? (input) =>
+        adapter.forkThread!(input).pipe(
+          Effect.tap((result) =>
+            Effect.sync(() => {
+              untaggedClaims.set(result.threadId, instanceId);
+            }),
+          ),
+        )
+    : undefined;
+
   return {
     ...adapter,
     startSession,
@@ -146,6 +160,7 @@ function adapterFacadeForInstance(
     listSessions,
     hasSession,
     stopAll,
+    ...(forkThread ? { forkThread } : {}),
     streamEvents: adapter.streamEvents.pipe(
       Stream.filter((event) => eventBelongsToInstance(event, instanceId)),
     ),

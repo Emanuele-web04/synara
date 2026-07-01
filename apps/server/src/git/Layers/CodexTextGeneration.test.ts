@@ -855,7 +855,47 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
-  it.effect("does not copy default auth into account-only text-generation homes", () =>
+  it.effect("copies auth from an account's own dedicated text-generation home", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        requireCodexHome: true,
+        requireAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const customCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "synara-account-home-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(customCodexHome, "auth.json"),
+          '{"access_token":"work-account"}',
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: {
+              homePath: customCodexHome,
+              accountId: "work",
+            },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not copy shared default auth into account-only text-generation homes", () =>
     withFakeCodexEnv(
       {
         output: JSON.stringify({
@@ -868,12 +908,23 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const customCodexHome = yield* fs.makeTempDirectoryScoped({
-          prefix: "synara-account-only-codex-",
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "synara-shared-codex-",
         });
         yield* fs.writeFileString(
-          path.join(customCodexHome, "auth.json"),
+          path.join(sharedCodexHome, "auth.json"),
           '{"access_token":"default-account"}',
+        );
+        const previousCodexHome = process.env.CODEX_HOME;
+        process.env.CODEX_HOME = sharedCodexHome;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (previousCodexHome === undefined) {
+              delete process.env.CODEX_HOME;
+            } else {
+              process.env.CODEX_HOME = previousCodexHome;
+            }
+          }),
         );
 
         const textGeneration = yield* TextGeneration;
@@ -884,7 +935,6 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           stagedPatch: "diff --git a/README.md b/README.md",
           providerOptions: {
             codex: {
-              homePath: customCodexHome,
               accountId: "work",
             },
           },
