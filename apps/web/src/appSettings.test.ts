@@ -1189,8 +1189,6 @@ describe("provider-indexed custom model settings", () => {
       patchCustomModelsForProviderInstance(
         {
           codexAccounts: [],
-          claudeBinaryPath: "/opt/bin/claude",
-          claudeHomePath: "/tmp/claude-default",
           codexHomePath: "",
           providerInstances: {},
           selectedCodexAccountId: "default",
@@ -1207,9 +1205,10 @@ describe("provider-indexed custom model settings", () => {
         claudeAgent: {
           driver: "claudeAgent",
           enabled: true,
+          // Launch settings are not copied: derived default instances merge the
+          // live legacy settings in at derivation time, so later edits to the
+          // provider settings keep applying.
           config: {
-            binaryPath: "/opt/bin/claude",
-            homePath: "/tmp/claude-default",
             customModels: ["claude/default-instance"],
           },
         },
@@ -1223,10 +1222,6 @@ describe("provider-indexed custom model settings", () => {
         {
           codexAccounts: [],
           codexHomePath: "",
-          openCodeBinaryPath: "/opt/bin/opencode",
-          openCodeExperimentalWebSockets: true,
-          openCodeServerPassword: "server-secret",
-          openCodeServerUrl: "http://127.0.0.1:4096",
           providerInstances: {},
           selectedCodexAccountId: "default",
         },
@@ -1243,10 +1238,6 @@ describe("provider-indexed custom model settings", () => {
           driver: "opencode",
           enabled: true,
           config: {
-            binaryPath: "/opt/bin/opencode",
-            experimentalWebSockets: true,
-            serverPassword: "server-secret",
-            serverUrl: "http://127.0.0.1:4096",
             customModels: ["openrouter/custom-opencode"],
           },
         },
@@ -1266,7 +1257,6 @@ describe("provider-indexed custom model settings", () => {
               shadowHomePath: "/tmp/codex-shadow",
             },
           ],
-          codexBinaryPath: "/opt/bin/codex",
           codexHomePath: "/tmp/codex-default",
           providerInstances: {},
           selectedCodexAccountId: "work",
@@ -1284,11 +1274,9 @@ describe("provider-indexed custom model settings", () => {
           driver: "codex",
           enabled: true,
           displayName: "Work",
+          // Account launch fields stay in the legacy codexAccounts entry and are
+          // merged into the derived instance, so the patch stores only models.
           config: {
-            binaryPath: "/opt/bin/codex",
-            homePath: "/tmp/codex-work",
-            shadowHomePath: "/tmp/codex-shadow",
-            accountId: "work",
             customModels: ["custom/work-codex"],
           },
         },

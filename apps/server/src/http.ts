@@ -34,6 +34,7 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
+import { codexConfiguredHomePathsFromSettings } from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { writeFileStringAtomically } from "./atomicWrite";
 import { GitCore } from "./git/Services/GitCore";
@@ -878,10 +879,22 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
+    // Dedicated per-account Codex homes anchor their own generated-image roots;
+    // resolve them from settings when the service is available so those images
+    // stay servable. The route keeps working without settings (e.g. tests).
+    const settingsService = yield* Effect.serviceOption(ServerSettingsService);
+    const codexHomePaths = Option.isSome(settingsService)
+      ? yield* settingsService.value.getSettings.pipe(
+          Effect.map(codexConfiguredHomePathsFromSettings),
+          Effect.catch(() => Effect.succeed<readonly string[]>([])),
+        )
+      : [];
+
     const previewFile = yield* Effect.promise(() =>
       resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        codexHomePaths,
         scratchWorkspacesRoot: resolveScratchWorkspacesRoot(),
         allowAbsoluteLocalPreviewFile: true,
         previewGrant: url.searchParams.get("grant"),

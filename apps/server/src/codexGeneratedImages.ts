@@ -11,9 +11,11 @@ import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
+  type ServerSettings,
   type ThreadId,
 } from "@synara/contracts";
 import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@synara/shared/localPreviewFiles";
+import { deriveProviderInstances } from "@synara/shared/providerInstances";
 
 import {
   SYNARA_CODEX_HOME_ACCOUNT_OVERLAYS_DIR,
@@ -82,6 +84,29 @@ export function resolveCodexHomePath(homePath?: string): string {
 /** The single generated-images directory we predict against (overlay-aware). */
 export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
   return path.join(resolveCodexHomePath(homePath), "generated_images");
+}
+
+/**
+ * Every Codex home configured in settings (default override plus per-instance
+ * dedicated homes). Dedicated homes anchor their own overlay roots, so the
+ * local-image route must enumerate them to allowlist those accounts' images.
+ */
+export function codexConfiguredHomePathsFromSettings(settings: ServerSettings): readonly string[] {
+  const homePaths = new Set<string>();
+  const defaultHomePath = settings.providers.codex.homePath?.trim();
+  if (defaultHomePath) {
+    homePaths.add(defaultHomePath);
+  }
+  for (const instance of deriveProviderInstances(settings)) {
+    if (instance.driver !== "codex") {
+      continue;
+    }
+    const instanceHomePath = instance.config.homePath;
+    if (typeof instanceHomePath === "string" && instanceHomePath.trim()) {
+      homePaths.add(instanceHomePath.trim());
+    }
+  }
+  return [...homePaths];
 }
 
 /**

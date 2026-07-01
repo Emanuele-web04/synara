@@ -41,4 +41,35 @@ describe("provider instance resolution", () => {
     expect(instanceId).toMatch(/^codex_work_example_com_[a-z0-9]+$/);
     expect(Schema.is(ProviderInstanceId)(instanceId)).toBe(true);
   });
+
+  it("keeps derived default instances following live legacy launch settings", () => {
+    // An explicit entry that only stores custom models must not freeze a copy
+    // of the launch settings: later edits to the legacy provider settings keep
+    // flowing into the derived default instance.
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providers: {
+          ...DEFAULT_SERVER_SETTINGS.providers,
+          opencode: {
+            ...DEFAULT_SERVER_SETTINGS.providers.opencode,
+            binaryPath: "/opt/bin/opencode-updated",
+            serverUrl: "http://127.0.0.1:5000",
+          },
+        },
+        providerInstances: {
+          opencode: {
+            driver: "opencode",
+            enabled: true,
+            config: { customModels: ["openrouter/custom"] },
+          },
+        },
+      },
+      { provider: "opencode" },
+    );
+
+    expect(resolved?.config.customModels).toEqual(["openrouter/custom"]);
+    expect(resolved?.config.binaryPath).toBe("/opt/bin/opencode-updated");
+    expect(resolved?.config.serverUrl).toBe("http://127.0.0.1:5000");
+  });
 });
