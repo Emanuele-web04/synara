@@ -708,28 +708,35 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   }
 
   if (shadowHomePath) {
-    try {
-      for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
-        const sourcePath = path.join(shadowHomePath, entry);
-        const stat = await fs.lstat(sourcePath).catch((cause: unknown) => {
-          if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
-            return undefined;
-          }
-          throw cause;
-        });
-        if (!stat) continue;
-        const targetPath = path.join(overlayHomePath, entry);
+    for (const entry of CODEX_ACCOUNT_PRIVATE_STATE_FILES) {
+      const sourcePath = path.join(shadowHomePath, entry);
+      let sourceStat: Awaited<ReturnType<typeof fs.lstat>>;
+      try {
+        sourceStat = await fs.lstat(sourcePath);
+      } catch {
+        // Missing shadow homes should not prevent Codex from creating account
+        // state lazily, but existing private files must never be read or logged.
+        continue;
+      }
+      // Symlinked account-private state can silently alias another account's
+      // credentials, so it must always be a real file in the shadow home.
+      if (sourceStat.isSymbolicLink()) {
+        throw new Error(
+          `Codex account private state at ${sourcePath} is a symlink; it must be a real file so accounts cannot alias each other's private state.`,
+        );
+      }
+      const targetPath = path.join(overlayHomePath, entry);
+      try {
         await ensureCodexOverlaySymlink({
           entryName: entry,
           sourcePath,
           targetPath,
-          type: stat.isDirectory() ? "dir" : "file",
+          type: sourceStat.isDirectory() ? "dir" : "file",
           force: true,
         });
+      } catch {
+        // Transient overlay filesystem races must not block session start.
       }
-    } catch {
-      // Missing shadow homes should not prevent Codex from creating account
-      // state lazily, but existing private files must never be read or logged.
     }
   }
 
