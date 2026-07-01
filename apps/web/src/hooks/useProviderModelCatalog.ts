@@ -76,6 +76,13 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "cursor" || discoveryEnabled,
     }),
   );
+  const devinDynamicModelsQuery = useQuery(
+    providerModelsQueryOptions({
+      provider: "devin",
+      binaryPath: settings.devinBinaryPath || null,
+      enabled: selectedProvider === "devin" || discoveryEnabled,
+    }),
+  );
   const geminiModelsQuery = useQuery(
     providerModelsQueryOptions({
       provider: "gemini",
@@ -160,6 +167,14 @@ export function useProviderModelCatalog(input: {
     cursorModelDiscoveryEnabled &&
     !hasResolvedCursorModelDiscovery &&
     (cursorDynamicModelsQuery.isLoading || cursorDynamicModelsQuery.isFetching);
+  const devinModelDiscoveryEnabled = selectedProvider === "devin" || discoveryEnabled;
+  const hasResolvedDevinModelDiscovery =
+    devinDynamicModelsQuery.data?.source === "devin.acp" &&
+    (devinDynamicModelsQuery.data.models.length ?? 0) > 0;
+  const devinModelDiscoveryPending =
+    devinModelDiscoveryEnabled &&
+    !hasResolvedDevinModelDiscovery &&
+    (devinDynamicModelsQuery.isLoading || devinDynamicModelsQuery.isFetching);
   const kiloModelDiscoveryEnabled = selectedProvider === "kilo" || discoveryEnabled;
   const hasResolvedKiloModelDiscovery =
     (kiloDynamicModelsQuery.data?.source === "kilo-cli" ||
@@ -200,6 +215,7 @@ export function useProviderModelCatalog(input: {
         customModelsByProvider.cursor,
         modelHintByProvider?.cursor,
       ),
+      devin: getAppModelOptions("devin", customModelsByProvider.devin, modelHintByProvider?.devin),
       gemini: getAppModelOptions(
         "gemini",
         customModelsByProvider.gemini,
@@ -226,6 +242,7 @@ export function useProviderModelCatalog(input: {
         cursorDynamicModelsQuery.data === undefined
           ? undefined
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
+      devin: devinDynamicModelsQuery.data,
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
       kilo: kiloDynamicModelsQuery.data,
@@ -237,6 +254,7 @@ export function useProviderModelCatalog(input: {
       "claudeAgent",
       "codex",
       "cursor",
+      "devin",
       "gemini",
       "grok",
       "kilo",
@@ -260,6 +278,7 @@ export function useProviderModelCatalog(input: {
     cursorDynamicModelsQuery.data,
     cursorRuntimeModels,
     customModelsByProvider,
+    devinDynamicModelsQuery.data,
     geminiModelsQuery.data,
     grokDynamicModelsQuery.data,
     kiloDynamicModelsQuery.data,
@@ -271,12 +290,14 @@ export function useProviderModelCatalog(input: {
   const loadingModelProviders = useMemo<Partial<Record<ProviderKind, boolean>>>(
     () => ({
       cursor: cursorModelDiscoveryPending,
+      devin: devinModelDiscoveryPending,
       kilo: kiloModelDiscoveryPending,
       opencode: openCodeModelDiscoveryPending,
       pi: piModelDiscoveryPending,
     }),
     [
       cursorModelDiscoveryPending,
+      devinModelDiscoveryPending,
       kiloModelDiscoveryPending,
       openCodeModelDiscoveryPending,
       piModelDiscoveryPending,
@@ -290,6 +311,7 @@ export function useProviderModelCatalog(input: {
       claudeAgent: claudeDynamicModelsQuery.data?.models ?? [],
       codex: codexDynamicModelsQuery.data?.models ?? [],
       cursor: cursorRuntimeModels,
+      devin: devinDynamicModelsQuery.data?.models ?? [],
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
@@ -300,6 +322,7 @@ export function useProviderModelCatalog(input: {
       claudeDynamicModelsQuery.data?.models,
       codexDynamicModelsQuery.data?.models,
       cursorRuntimeModels,
+      devinDynamicModelsQuery.data?.models,
       geminiModelsQuery.data?.models,
       grokDynamicModelsQuery.data?.models,
       kiloDynamicModelsQuery.data?.models,

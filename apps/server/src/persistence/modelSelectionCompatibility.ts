@@ -11,6 +11,7 @@ type ModelProviderKind =
   | "grok"
   | "kilo"
   | "opencode"
+  | "devin"
   | "pi";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -34,6 +35,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   }
   if (lowerLabel.includes("opencode")) {
     return "opencode";
+  }
+  if (lowerLabel.includes("devin")) {
+    return "devin";
   }
   if (lowerLabel.includes("kilo")) {
     return "kilo";
@@ -61,6 +65,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "codex" ||
     provider === "claudeAgent" ||
     provider === "cursor" ||
+    provider === "devin" ||
     provider === "gemini" ||
     provider === "grok" ||
     provider === "kilo" ||

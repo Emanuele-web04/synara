@@ -138,7 +138,7 @@ function comparePrereleaseIdentifier(left: string, right: string): number {
   return left.localeCompare(right);
 }
 
-function compareSemverVersions(left: string, right: string): number {
+export function compareSemverVersions(left: string, right: string): number {
   const parsedLeft = parseSemver(left);
   const parsedRight = parseSemver(right);
   if (!parsedLeft || !parsedRight) {

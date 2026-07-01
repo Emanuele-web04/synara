@@ -1247,7 +1247,7 @@ export class DesktopBrowserManager {
     const inactiveRuntimeTabIds = state.tabs
       .filter((tab) => tab.id !== activeTabId)
       .filter((tab) => this.runtimes.has(buildRuntimeKey(threadId, tab.id)))
-      .sort((left, right) => {
+      .toSorted((left, right) => {
         const leftKey = buildRuntimeKey(threadId, left.id);
         const rightKey = buildRuntimeKey(threadId, right.id);
         return (

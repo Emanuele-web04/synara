@@ -1,7 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import path from "node:path";
 import readline from "node:readline";
 
 import {
@@ -2931,7 +2930,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private findLatestReviewTurnId(snapshot: CodexThreadSnapshot): TurnId | undefined {
     const latestReviewTurn = [...snapshot.turns]
-      .reverse()
+      .toReversed()
       .find((turn) => this.turnHasReviewItem(turn, "entered"));
     return latestReviewTurn?.id;
   }

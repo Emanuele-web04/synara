@@ -16,6 +16,7 @@ import {
   trimOrNull,
 } from "@t3tools/shared/model";
 import { normalizeCursorModelVariantBaseId } from "../../cursorModelVariants";
+import { normalizeDevinModelVariantBaseId } from "../../devinModelVariants";
 
 function runtimeEffortLabel(value: string): string {
   switch (value) {
@@ -61,10 +62,17 @@ export function resolveRuntimeModelDescriptor(input: {
     if (normalizedCandidate === normalizedModel) {
       return true;
     }
-    return (
+    if (
       provider === "cursor" &&
       normalizeCursorModelVariantBaseId(normalizedCandidate) ===
         normalizeCursorModelVariantBaseId(normalizedModel)
+    ) {
+      return true;
+    }
+    return (
+      provider === "devin" &&
+      normalizeDevinModelVariantBaseId(normalizedCandidate) ===
+        normalizeDevinModelVariantBaseId(normalizedModel)
     );
   });
 }
@@ -78,7 +86,8 @@ export function getRuntimeAwareModelCapabilities(input: {
   const staticCapabilities = getModelCapabilities(input.provider, input.model);
   // Runtime discovery is authoritative when available; the static table is only a startup fallback.
   const supportsFastMode =
-    (input.provider === "codex" || input.provider === "cursor") && input.runtimeModel
+    (input.provider === "codex" || input.provider === "cursor" || input.provider === "devin") &&
+    input.runtimeModel
       ? input.runtimeModel.supportsFastMode === true
       : staticCapabilities.supportsFastMode;
   const supportsThinkingToggle =
@@ -95,6 +104,7 @@ export function getRuntimeAwareModelCapabilities(input: {
   if (
     (input.provider !== "codex" &&
       input.provider !== "cursor" &&
+      input.provider !== "devin" &&
       input.provider !== "grok" &&
       input.provider !== "kilo" &&
       input.provider !== "opencode" &&

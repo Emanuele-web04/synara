@@ -116,7 +116,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
           <div className="space-y-3">
             {details.edits.map((edit, index) => (
               <div
-                key={`${edit.path ?? "edit"}:${index}`}
+                key={`${edit.path ?? "edit"}:${edit.oldText?.slice(0, 32) ?? edit.newText?.slice(0, 32) ?? "edit"}`}
                 className="overflow-hidden rounded-lg border border-border/45 bg-background/58"
               >
                 {edit.path ? (
@@ -274,7 +274,7 @@ function DiffCodeBlock({ children }: { children: string }) {
     <pre className="max-h-[min(52vh,34rem)] overflow-auto rounded-lg border border-border/45 bg-background/70 px-0 py-2 font-chat-code text-[11px] leading-relaxed">
       {lines.map((line, index) => (
         <span
-          key={`${index}:${line.slice(0, 24)}`}
+          key={`${line.slice(0, 24)}:${line.length}`}
           className={cn(
             "block min-w-max whitespace-pre-wrap break-words px-3",
             line.startsWith("+") && !line.startsWith("+++")

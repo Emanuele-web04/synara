@@ -53,6 +53,11 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import {
+  settlePendingApprovalsAsCancelled,
+  settlePendingUserInputsAsEmptyAnswers,
+  makeAcpThreadLock,
+} from "../acp/AcpAdapterSessionSupport.ts";
+import {
   classifyAcpPromptTurnCompletion,
   mapAcpToAdapterError,
   readAcpFailedToolDetail,
@@ -99,7 +104,6 @@ import {
   extractAskQuestions,
   extractPlanMarkdown,
   extractTodosAsPlan,
-  formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -255,19 +259,6 @@ function finalizeCursorActiveTurnCost(ctx: CursorSessionContext): {
     : {};
 }
 
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingApprovals.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
-}
-
 function withCursorPlanModePrompt(input: {
   readonly text: string;
   readonly interactionMode?: ProviderInteractionMode;
@@ -280,19 +271,6 @@ function withCursorPlanModePrompt(input: {
   return text.length > 0
     ? `${CURSOR_PLAN_MODE_PROMPT_PREFIX}\n\nUser request:\n${text}`
     : CURSOR_PLAN_MODE_PROMPT_PREFIX;
-}
-
-function settlePendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
-): Effect.Effect<void> {
-  const pendingEntries = Array.from(pendingUserInputs.values());
-  return Effect.forEach(
-    pendingEntries,
-    (pending) => Deferred.succeed(pending.answers, {}).pipe(Effect.ignore),
-    {
-      discard: true,
-    },
-  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -456,6 +434,7 @@ export function makeCursorAdapter(
 
     const sessions = new Map<ThreadId, CursorSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const { withThreadLock } = makeAcpThreadLock(threadLocksRef);
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -464,27 +443,6 @@ export function makeCursorAdapter(
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
-
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
-      });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (
       threadId: ThreadId,

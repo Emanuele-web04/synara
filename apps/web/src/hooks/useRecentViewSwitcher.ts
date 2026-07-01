@@ -3,7 +3,7 @@
 // Layer: UI hook
 // Exports: useRecentViewSwitcher
 
-import { ThreadId, type ProjectId } from "@t3tools/contracts";
+import { ThreadId } from "@t3tools/contracts";
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 import { useLocation, useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";

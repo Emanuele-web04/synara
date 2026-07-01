@@ -9,12 +9,7 @@ import {
 import { DateTime, Effect, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
-import {
-  AuthError,
-  type AuthRequest,
-  type AuthenticatedSession,
-  type ServerAuthShape,
-} from "./Services/ServerAuth";
+import { AuthError, type AuthRequest, type ServerAuthShape } from "./Services/ServerAuth";
 import type { SessionCredentialServiceShape } from "./Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./utils";
 

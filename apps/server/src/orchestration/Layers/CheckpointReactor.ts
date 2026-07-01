@@ -9,6 +9,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type OrchestrationThread,
+  type ProviderKind,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
@@ -224,7 +225,13 @@ const make = Effect.gen(function* () {
 
   const resolveSessionRuntimeForThread = Effect.fnUntraced(function* (
     threadId: ThreadId,
-  ): Effect.fn.Return<Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }>> {
+  ): Effect.fn.Return<
+    Option.Option<{
+      readonly threadId: ThreadId;
+      readonly cwd: string;
+      readonly provider: ProviderKind;
+    }>
+  > {
     const thread = yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.catch(() => Effect.succeed(Option.none())));
@@ -236,11 +243,19 @@ const make = Effect.gen(function* () {
 
     const findSessionWithCwd = (
       session: (typeof sessions)[number] | undefined,
-    ): Option.Option<{ readonly threadId: ThreadId; readonly cwd: string }> => {
+    ): Option.Option<{
+      readonly threadId: ThreadId;
+      readonly cwd: string;
+      readonly provider: ProviderKind;
+    }> => {
       if (!session?.cwd) {
         return Option.none();
       }
-      return Option.some({ threadId: session.threadId, cwd: session.cwd });
+      return Option.some({
+        threadId: session.threadId,
+        cwd: session.cwd,
+        provider: session.provider,
+      });
     };
 
     const projectedSession = sessions.find((session) => session.threadId === thread.value.id);
@@ -853,6 +868,20 @@ const make = Effect.gen(function* () {
         threadId: event.payload.threadId,
         turnCount: event.payload.turnCount,
         detail: "Checkpoints are unavailable because this project is not a git repository.",
+        createdAt: now,
+      }).pipe(Effect.catch(() => Effect.void));
+      return;
+    }
+
+    const capabilities = yield* providerService
+      .getCapabilities(sessionRuntime.value.provider)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    if (capabilities?.supportsRollback === false) {
+      yield* appendRevertFailureActivity({
+        threadId: event.payload.threadId,
+        turnCount: event.payload.turnCount,
+        detail:
+          "Checkpoint revert cannot be performed for this provider. The Agent Client Protocol does not support session rollback, so the session cannot be rewound to match the filesystem restore. Restoring files without also rolling back the session would cause the files and session context to be out of sync. To revert changes, start a new session from the desired git checkpoint.",
         createdAt: now,
       }).pipe(Effect.catch(() => Effect.void));
       return;

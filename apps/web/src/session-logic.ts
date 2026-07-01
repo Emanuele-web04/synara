@@ -50,6 +50,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "codex", label: "Codex", available: true },
   { value: "claudeAgent", label: "Claude", available: true },
   { value: "cursor", label: "Cursor", available: true },
+  { value: "devin", label: "Devin", available: true },
   { value: "gemini", label: "Gemini", available: true },
   { value: "grok", label: "Grok", available: true },
   { value: "kilo", label: "Kilo", available: true },
@@ -226,7 +227,7 @@ function orderedActivities(
 
   const ordered = isActivityOrderStable(activities)
     ? activities
-    : [...activities].sort(compareActivitiesByOrder);
+    : activities.toSorted(compareActivitiesByOrder);
   orderedActivitiesCache.set(activities, ordered);
   return ordered;
 }
@@ -2209,7 +2210,7 @@ export function deriveTimelineEntries(
 export function inferCheckpointTurnCountByTurnId(
   summaries: TurnDiffSummary[],
 ): Record<TurnId, number> {
-  const sorted = [...summaries].toSorted((a, b) => a.completedAt.localeCompare(b.completedAt));
+  const sorted = summaries.toSorted((a, b) => a.completedAt.localeCompare(b.completedAt));
   const result: Record<TurnId, number> = {};
   for (let index = 0; index < sorted.length; index += 1) {
     const summary = sorted[index];

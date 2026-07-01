@@ -149,7 +149,7 @@ describe("buildPendingUserInputAnswers", () => {
     });
   });
 
-  it("returns null when any question is unanswered", () => {
+  it("returns null when any required question is unanswered", () => {
     expect(
       buildPendingUserInputAnswers(
         [
@@ -168,6 +168,58 @@ describe("buildPendingUserInputAnswers", () => {
         {},
       ),
     ).toBeNull();
+  });
+
+  it("allows optional questions to remain unanswered", () => {
+    expect(
+      buildPendingUserInputAnswers(
+        [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "What should the plan target first?",
+            options: [
+              {
+                label: "Orchestration-first",
+                description: "Focus on orchestration first",
+              },
+            ],
+          },
+          {
+            id: "notes",
+            header: "Notes",
+            question: "Any extra context?",
+            optional: true,
+            options: [],
+          },
+        ],
+        {
+          scope: {
+            selectedOptionLabels: ["Orchestration-first"],
+          },
+        },
+      ),
+    ).toEqual({
+      scope: "Orchestration-first",
+    });
+  });
+
+  it("lets users advance past optional questions without an answer", () => {
+    const questions = [
+      {
+        id: "notes",
+        header: "Notes",
+        question: "Any extra context?",
+        optional: true,
+        options: [],
+      },
+    ] as const;
+
+    expect(derivePendingUserInputProgress(questions, {}, 0)).toMatchObject({
+      isComplete: true,
+      canAdvance: true,
+      resolvedAnswer: null,
+    });
   });
 });
 

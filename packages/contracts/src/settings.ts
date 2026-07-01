@@ -49,6 +49,12 @@ export const CursorServerProviderSettings = Schema.Struct({
 });
 export type CursorServerProviderSettings = typeof CursorServerProviderSettings.Type;
 
+export const DevinServerProviderSettings = Schema.Struct({
+  ...ProviderSettingsBase,
+  binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "devin")),
+});
+export type DevinServerProviderSettings = typeof DevinServerProviderSettings.Type;
+
 export const OpenCodeServerProviderSettings = Schema.Struct({
   ...ProviderSettingsBase,
   binaryPath: StringSetting.pipe(Schema.withDecodingDefault(() => "opencode")),
@@ -99,6 +105,7 @@ export const ServerSettings = Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     cursor: CursorServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+    devin: DevinServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     gemini: GeminiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     grok: GrokServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     kilo: KiloServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -149,6 +156,7 @@ export const ServerSettingsPatch = Schema.Struct({
           apiEndpoint: Schema.optionalKey(StringSetting),
         }),
       ),
+      devin: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       gemini: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       grok: Schema.optionalKey(Schema.Struct(ProviderSettingsBasePatch)),
       kilo: Schema.optionalKey(

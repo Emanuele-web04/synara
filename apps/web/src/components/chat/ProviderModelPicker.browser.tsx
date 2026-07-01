@@ -50,6 +50,12 @@ const MODEL_OPTIONS_BY_PROVIDER = {
       upstreamProviderName: "OpenAI",
     },
   ],
+  devin: [
+    {
+      slug: "sonnet",
+      name: "Sonnet",
+    },
+  ],
   pi: [
     {
       slug: "anthropic/claude-sonnet-4-5",

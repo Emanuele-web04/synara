@@ -195,7 +195,7 @@ export function prunePersistedThreadRecapCache(
 ): PersistedThreadRecapCache {
   return Object.fromEntries(
     Object.entries(cache)
-      .sort(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))
+      .toSorted(([, left], [, right]) => right.updatedAt.localeCompare(left.updatedAt))
       .slice(0, MAX_PERSISTED_RECAPS),
   );
 }

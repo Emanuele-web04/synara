@@ -193,7 +193,7 @@ export async function collectSkillMarkdownPaths(
           )
             .filter((entry) => entry.isMarkdownFile)
             .map((entry) => nodePath.join(dir, entry.name))
-            .sort()
+            .toSorted()
         : [];
     const subdirNames = (
       await Promise.all(
@@ -205,7 +205,7 @@ export async function collectSkillMarkdownPaths(
     )
       .filter((entry) => entry.isDirectory)
       .map((entry) => entry.name)
-      .sort();
+      .toSorted();
     const nested = await Promise.all(
       subdirNames.map((name) => visit(nodePath.join(dir, name), depth + 1)),
     );
@@ -427,16 +427,19 @@ const SKILL_ORIGIN_ROOTS = {
   },
 } as const satisfies Record<SkillsHomeOrigin, SkillOriginRootSpec>;
 
-const PROVIDER_SKILL_ORIGIN_PREFERENCES = {
+const PROVIDER_SKILL_ORIGIN_PREFERENCES: Partial<
+  Record<ProviderKind, readonly SkillsHomeOrigin[]>
+> = {
   codex: ["codex", "agents"],
   claudeAgent: ["claude"],
   cursor: ["cursor", "agents", "claude", "codex"],
+  devin: ["agents"],
   gemini: ["agents", "gemini"],
   grok: ["grok", "claude", "agents"],
   kilo: ["kilo", "agents", "claude"],
   opencode: ["opencode", "claude", "agents"],
   pi: ["pi", "agents"],
-} as const satisfies Partial<Record<ProviderKind, readonly SkillsHomeOrigin[]>>;
+};
 
 function homeRootsForOrigin(
   origin: SkillsHomeOrigin,

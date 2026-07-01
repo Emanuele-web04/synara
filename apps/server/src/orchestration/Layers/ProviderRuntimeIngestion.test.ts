@@ -4007,6 +4007,7 @@ describe("ProviderRuntimeIngestion", () => {
       requestId: ApprovalRequestId.makeUnsafe("req-user-input-1"),
       payload: {
         answers: {
+          access_token: "secret-value",
           sandbox_mode: "workspace-write",
         },
       },
@@ -4037,9 +4038,11 @@ describe("ProviderRuntimeIngestion", () => {
         ? (resolved.payload as Record<string, unknown>)
         : undefined;
     expect(resolved?.kind).toBe("user-input.resolved");
-    expect(resolvedPayload?.answers).toEqual({
-      sandbox_mode: "workspace-write",
-    });
+    expect(resolvedPayload?.requestId).toBe("req-user-input-1");
+    expect(resolvedPayload?.answeredQuestionIds).toEqual(["access_token", "sandbox_mode"]);
+    expect(resolvedPayload?.redacted).toBe(true);
+    expect(JSON.stringify(resolvedPayload)).not.toContain("secret-value");
+    expect(JSON.stringify(resolvedPayload)).not.toContain("workspace-write");
     expect(thread.runtimeMode).toBe("approval-required");
   });
 

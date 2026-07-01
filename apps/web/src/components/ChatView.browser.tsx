@@ -437,16 +437,6 @@ function buildFixture(snapshot: OrchestrationReadModel): TestFixture {
   };
 }
 
-function getThreadDetailFromFixtureSnapshot(
-  threadId: ThreadId,
-): OrchestrationReadModel["threads"][number] {
-  const thread = fixture.snapshot.threads.find((entry) => entry.id === threadId);
-  if (!thread) {
-    throw new Error(`Missing thread fixture for ${threadId}`);
-  }
-  return thread;
-}
-
 function findThreadDetailFromFixtureSnapshot(
   threadId: ThreadId,
 ): OrchestrationReadModel["threads"][number] | null {

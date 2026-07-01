@@ -89,6 +89,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "gemini",
   "grok",
   "kilo",
@@ -396,6 +397,7 @@ export function PluginLibrary() {
   const codexCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("codex"));
   const claudeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("claudeAgent"));
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
+  const devinCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("devin"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
@@ -415,6 +417,10 @@ export function PluginLibrary() {
       cursor: {
         plugins: supportsPluginDiscovery(cursorCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(cursorCapabilitiesQuery.data),
+      },
+      devin: {
+        plugins: supportsPluginDiscovery(devinCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(devinCapabilitiesQuery.data),
       },
       gemini: {
         plugins: supportsPluginDiscovery(geminiCapabilitiesQuery.data),
@@ -441,6 +447,7 @@ export function PluginLibrary() {
       claudeCapabilitiesQuery.data,
       codexCapabilitiesQuery.data,
       cursorCapabilitiesQuery.data,
+      devinCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,

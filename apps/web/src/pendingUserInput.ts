@@ -47,6 +47,10 @@ function normalizeSelectedOptionLabels(value: string[] | undefined): string[] {
   return Array.from(new Set(normalized));
 }
 
+export function isPendingUserInputQuestionRequired(question: UserInputQuestion): boolean {
+  return question.optional !== true;
+}
+
 export function resolvePendingUserInputAnswer(
   question: UserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
@@ -62,6 +66,16 @@ export function resolvePendingUserInputAnswer(
   }
 
   return selectedOptionLabels[0] ?? null;
+}
+
+export function isPendingUserInputQuestionSatisfied(
+  question: UserInputQuestion,
+  draftAnswers: Record<string, PendingUserInputDraftAnswer>,
+): boolean {
+  if (!isPendingUserInputQuestionRequired(question)) {
+    return true;
+  }
+  return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) !== null;
 }
 
 export function setPendingUserInputCustomAnswer(
@@ -114,6 +128,9 @@ export function buildPendingUserInputAnswers(
   for (const question of questions) {
     const answer = resolvePendingUserInputAnswer(question, draftAnswers[question.id]);
     if (!answer) {
+      if (!isPendingUserInputQuestionRequired(question)) {
+        continue;
+      }
       return null;
     }
     answers[question.id] = answer;
@@ -154,7 +171,7 @@ export function countAnsweredPendingUserInputQuestions(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   return questions.reduce((count, question) => {
-    return resolvePendingUserInputAnswer(question, draftAnswers[question.id]) ? count + 1 : count;
+    return isPendingUserInputQuestionSatisfied(question, draftAnswers) ? count + 1 : count;
   }, 0);
 }
 
@@ -163,7 +180,7 @@ export function findFirstUnansweredPendingUserInputQuestionIndex(
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
 ): number {
   const unansweredIndex = questions.findIndex(
-    (question) => !resolvePendingUserInputAnswer(question, draftAnswers[question.id]),
+    (question) => !isPendingUserInputQuestionSatisfied(question, draftAnswers),
   );
 
   return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
@@ -197,6 +214,7 @@ export function derivePendingUserInputProgress(
     answeredQuestionCount,
     isLastQuestion,
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
-    canAdvance: Boolean(resolvedAnswer),
+    canAdvance:
+      activeQuestion !== null && (activeQuestion.optional === true || Boolean(resolvedAnswer)),
   };
 }

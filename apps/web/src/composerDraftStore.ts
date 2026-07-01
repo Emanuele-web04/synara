@@ -79,6 +79,7 @@ const COMPOSER_PROVIDER_KINDS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "gemini",
   "grok",
   "kilo",
@@ -1156,6 +1157,14 @@ function makeModelSelection(
           ? { options: options as Extract<ModelSelection, { provider: "opencode" }>["options"] }
           : {}),
       };
+    case "devin":
+      return {
+        provider,
+        model,
+        ...(options
+          ? { options: options as Extract<ModelSelection, { provider: "devin" }>["options"] }
+          : {}),
+      };
     case "pi":
       return {
         provider,
@@ -1204,6 +1213,10 @@ function normalizeProviderModelOptions(
   const piCandidate =
     candidate?.pi && typeof candidate.pi === "object"
       ? (candidate.pi as Record<string, unknown>)
+      : null;
+  const devinCandidate =
+    candidate?.devin && typeof candidate.devin === "object"
+      ? (candidate.devin as Record<string, unknown>)
       : null;
 
   const codexReasoningEffort: CodexReasoningEffort | undefined =
@@ -1362,7 +1375,9 @@ function normalizeProviderModelOptions(
       ? piCandidate.thinkingLevel
       : undefined;
   const pi = piThinkingLevel !== undefined ? { thinkingLevel: piThinkingLevel } : undefined;
-  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi) {
+  // Devin has no client-side model options; pass through an empty object if present.
+  const devin = devinCandidate && Object.keys(devinCandidate).length === 0 ? {} : undefined;
+  if (!codex && !claude && !cursor && !gemini && !grok && !kilo && !opencode && !pi && !devin) {
     return null;
   }
   return {
@@ -1374,6 +1389,7 @@ function normalizeProviderModelOptions(
     ...(kilo ? { kilo } : {}),
     ...(opencode ? { opencode } : {}),
     ...(pi ? { pi } : {}),
+    ...(devin ? { devin } : {}),
   };
 }
 
@@ -1427,9 +1443,11 @@ function normalizeModelSelection(
                 ? modelOptions?.cursor
                 : provider === "opencode"
                   ? modelOptions?.opencode
-                  : provider === "pi"
-                    ? modelOptions?.pi
-                    : undefined;
+                  : provider === "devin"
+                    ? modelOptions?.devin
+                    : provider === "pi"
+                      ? modelOptions?.pi
+                      : undefined;
   return makeModelSelection(provider, model, options);
 }
 
@@ -1612,10 +1630,15 @@ export function resolvePreferredComposerModelSelection(input: {
       : null) ??
     (input.projectModelSelection?.provider === preferredProvider
       ? input.projectModelSelection
-      : null) ?? {
-      provider: preferredProvider === "pi" ? "codex" : preferredProvider,
-      model: getDefaultModel(preferredProvider === "pi" ? "codex" : preferredProvider),
-    }
+      : null) ??
+    (() => {
+      const fallbackProvider = preferredProvider === "pi" ? "codex" : preferredProvider;
+      const fallbackModel = getDefaultModel(fallbackProvider);
+      return {
+        provider: fallbackModel === null ? "codex" : fallbackProvider,
+        model: fallbackModel ?? getDefaultModel("codex"),
+      };
+    })()
   );
 }
 

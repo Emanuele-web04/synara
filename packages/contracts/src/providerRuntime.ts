@@ -24,6 +24,7 @@ const RuntimeEventRawSource = Schema.Literals([
   "claude.sdk.message",
   "claude.sdk.permission",
   "codex.sdk.thread-event",
+  "devin.cli.event",
   "gemini.acp.message",
   "gemini.acp.stdout",
   "gemini.acp.stderr",
@@ -461,6 +462,9 @@ export const UserInputQuestion = Schema.Struct({
   question: TrimmedNonEmptyStringSchema,
   options: Schema.Array(UserInputQuestionOption),
   multiSelect: Schema.optional(Schema.Boolean).pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  optional: Schema.optional(Schema.Boolean).pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
 });

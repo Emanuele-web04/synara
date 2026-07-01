@@ -173,7 +173,7 @@ function findCanonicalHomeProject(input: ServerWorkspacePaths): {
     isLegacyHomeChatContainerProject(project, input),
   );
   const canonicalProject =
-    [...homeProjects].sort(
+    homeProjects.toSorted(
       (left, right) => scoreHomeChatProject(right, input) - scoreHomeChatProject(left, input),
     )[0] ?? null;
   if (!canonicalProject) {

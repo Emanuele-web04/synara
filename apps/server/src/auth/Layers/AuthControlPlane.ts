@@ -70,7 +70,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
                   expiresAt: pairingLink.expiresAt,
                 } satisfies AuthPairingLink),
           )
-          .sort(
+          .toSorted(
             (left, right) =>
               DateTime.toEpochMillis(right.createdAt) - DateTime.toEpochMillis(left.createdAt),
           ),
@@ -118,7 +118,7 @@ export const makeAuthControlPlane = Effect.gen(function* () {
 
   const listSessions: AuthControlPlaneShape["listSessions"] = () =>
     sessions.listActive().pipe(
-      Effect.map((activeSessions) => [...activeSessions].sort(bySessionPriority)),
+      Effect.map((activeSessions) => activeSessions.toSorted(bySessionPriority)),
       Effect.mapError(toAuthControlPlaneError("Failed to list sessions.")),
     );
 

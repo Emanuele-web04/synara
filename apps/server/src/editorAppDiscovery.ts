@@ -222,7 +222,7 @@ function resolvePowerShellCacheKey(
 ): string {
   const families = uniqueWindowsStorePackageDefinitions(packages)
     .map((packageDef) => windowsStorePackageFamilyName(packageDef).toLowerCase())
-    .sort();
+    .toSorted();
   return JSON.stringify({
     platform,
     families,

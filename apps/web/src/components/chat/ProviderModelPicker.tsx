@@ -231,7 +231,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const visibleAvailableProviderOptions = useMemo(
     () =>
       filterProviderOptionsByVisibility(
-        [...AVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+        AVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
           compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
         ),
         hiddenProviderSet,
@@ -242,7 +242,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const visibleUnavailableProviderOptions = useMemo(
     () =>
       filterProviderOptionsByVisibility(
-        [...UNAVAILABLE_PROVIDER_OPTIONS].sort((left, right) =>
+        UNAVAILABLE_PROVIDER_OPTIONS.toSorted((left, right) =>
           compareProvidersByOrder(providerOrder ?? [], left.value, right.value),
         ),
         hiddenProviderSet,

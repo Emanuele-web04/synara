@@ -2819,7 +2819,6 @@ export default function Sidebar() {
       removeThreadFromSplitViews,
       clearTemporaryThread,
       sidebarThreads,
-      syncServerShellSnapshot,
       unpinThread,
     ],
   );

@@ -92,6 +92,7 @@ type CustomModelSettingsKey =
   | "customCodexModels"
   | "customClaudeModels"
   | "customCursorModels"
+  | "customDevinModels"
   | "customGeminiModels"
   | "customGrokModels"
   | "customKiloModels"
@@ -111,6 +112,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
   claudeAgent: new Set(getModelOptions("claudeAgent").map((option) => option.slug)),
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
+  devin: new Set(getModelOptions("devin").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
@@ -144,6 +146,7 @@ export const AppSettingsSchema = Schema.Struct({
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  devinBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -196,6 +199,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customDevinModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -261,6 +265,15 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Cursor model slugs for the picker and provider runtime.",
     placeholder: "cursor-model-slug",
     example: "composer-2",
+  },
+  devin: {
+    provider: "devin",
+    settingsKey: "customDevinModels",
+    defaultSettingsKey: "customDevinModels",
+    title: "Devin",
+    description: "Save additional Devin model aliases for the picker and provider runtime.",
+    placeholder: "devin-model-alias",
+    example: "sonnet",
   },
   gemini: {
     provider: "gemini",
@@ -417,6 +430,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       "opencode",
       settings.openCodeBinaryPath,
     ),
+    devinBinaryPath: normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
     uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
@@ -425,6 +439,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
     customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
     customCursorModels: normalizeCustomModelSlugs(settings.customCursorModels, "cursor"),
+    customDevinModels: normalizeCustomModelSlugs(settings.customDevinModels, "devin"),
     customGeminiModels: normalizeCustomModelSlugs(settings.customGeminiModels, "gemini"),
     customGrokModels: normalizeCustomModelSlugs(settings.customGrokModels, "grok"),
     customKiloModels: normalizeCustomModelSlugs(settings.customKiloModels, "kilo"),
@@ -443,6 +458,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     codexHomePath: settings.providers.codex.homePath,
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
+    devinBinaryPath: settings.providers.devin.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
@@ -460,6 +476,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customCodexModels: settings.providers.codex.customModels,
     customClaudeModels: settings.providers.claudeAgent.customModels,
     customCursorModels: settings.providers.cursor.customModels,
+    customDevinModels: settings.providers.devin.customModels,
     customGeminiModels: settings.providers.gemini.customModels,
     customGrokModels: settings.providers.grok.customModels,
     customKiloModels: settings.providers.kilo.customModels,
@@ -558,6 +575,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
         : {}),
     };
   }
+  if (hasOwn(patch, "devinBinaryPath") || hasOwn(patch, "customDevinModels")) {
+    providers.devin = {
+      ...(hasOwn(patch, "devinBinaryPath") ? { binaryPath: patch.devinBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customDevinModels")
+        ? { customModels: patch.customDevinModels ?? [] }
+        : {}),
+    };
+  }
   if (hasOwn(patch, "geminiBinaryPath") || hasOwn(patch, "customGeminiModels")) {
     providers.gemini = {
       ...(hasOwn(patch, "geminiBinaryPath") ? { binaryPath: patch.geminiBinaryPath ?? "" } : {}),
@@ -643,6 +668,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "codexHomePath",
     "cursorApiEndpoint",
     "cursorBinaryPath",
+    "devinBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
@@ -669,6 +695,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "customCodexModels",
     "customClaudeModels",
     "customCursorModels",
+    "customDevinModels",
     "customGeminiModels",
     "customGrokModels",
     "customKiloModels",
@@ -717,6 +744,7 @@ export function getCustomModelsByProvider(
     codex: getCustomModelsForProvider(settings, "codex"),
     claudeAgent: getCustomModelsForProvider(settings, "claudeAgent"),
     cursor: getCustomModelsForProvider(settings, "cursor"),
+    devin: getCustomModelsForProvider(settings, "devin"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     grok: getCustomModelsForProvider(settings, "grok"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
@@ -836,6 +864,7 @@ export function getCustomModelOptionsByProvider(
     codex: getAppModelOptions("codex", customModelsByProvider.codex),
     claudeAgent: getAppModelOptions("claudeAgent", customModelsByProvider.claudeAgent),
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
+    devin: getAppModelOptions("devin", customModelsByProvider.devin),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
@@ -852,6 +881,7 @@ export function getProviderStartOptions(
     | "codexHomePath"
     | "cursorApiEndpoint"
     | "cursorBinaryPath"
+    | "devinBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
     | "kiloBinaryPath"
@@ -871,6 +901,7 @@ export function getProviderStartOptions(
   );
   const codexBinaryPath = normalizeProviderBinaryPathOverride("codex", settings.codexBinaryPath);
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
+  const devinBinaryPath = normalizeProviderBinaryPathOverride("devin", settings.devinBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
@@ -906,6 +937,13 @@ export function getProviderStartOptions(
           cursor: {
             ...(cursorBinaryPath ? { binaryPath: cursorBinaryPath } : {}),
             ...(settings.cursorApiEndpoint ? { apiEndpoint: settings.cursorApiEndpoint } : {}),
+          },
+        }
+      : {}),
+    ...(devinBinaryPath
+      ? {
+          devin: {
+            binaryPath: devinBinaryPath,
           },
         }
       : {}),
@@ -973,6 +1011,7 @@ export function getCustomBinaryPathForProvider(
     | "claudeBinaryPath"
     | "codexBinaryPath"
     | "cursorBinaryPath"
+    | "devinBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
     | "kiloBinaryPath"
@@ -988,6 +1027,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.claudeBinaryPath);
     case "cursor":
       return normalizeProviderBinaryPathOverride(provider, settings.cursorBinaryPath);
+    case "devin":
+      return normalizeProviderBinaryPathOverride(provider, settings.devinBinaryPath);
     case "gemini":
       return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
     case "grok":

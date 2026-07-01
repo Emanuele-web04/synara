@@ -29,6 +29,7 @@ __screenshots__/
 .tanstack
 /.pi/
 /.tmp/
+/.codegraph
 /~/
 /bootstrap.js
 /preload.js

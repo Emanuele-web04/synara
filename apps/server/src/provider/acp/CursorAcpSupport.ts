@@ -19,6 +19,7 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
+import { buildAcpSpawnEnv } from "./acpSpawnEnv.ts";
 import {
   CURSOR_AGENT_BROWSERLESS_ENV,
   buildCursorAgentCommand,
@@ -80,7 +81,12 @@ export function buildCursorAcpSpawnInput(
     args: command.args,
     cwd,
     // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
-    env: CURSOR_AGENT_BROWSERLESS_ENV,
+    // Allowlist the parent env to avoid leaking secrets into the Cursor subprocess;
+    // AcpSessionRuntime uses spawn.env as the complete child environment when set.
+    env: buildAcpSpawnEnv({
+      extraPrefixes: ["CURSOR_", "CURSOR_AGENT_"],
+      extraEnv: CURSOR_AGENT_BROWSERLESS_ENV,
+    }),
   };
 }
 

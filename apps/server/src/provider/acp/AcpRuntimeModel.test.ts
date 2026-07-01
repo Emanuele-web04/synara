@@ -5,6 +5,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import {
   extractModelConfigId,
   mergeToolCallState,
+  parseAvailableCommands,
   parsePermissionRequest,
   parseSessionModeState,
   parseSessionUpdateEvent,
@@ -476,6 +477,109 @@ describe("AcpRuntimeModel", () => {
               amount: 0.2,
               currency: "USD",
             },
+          },
+        },
+      },
+    ]);
+  });
+
+  it("projects ACP available_commands_update into AvailableCommandsUpdated events", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "/revert", description: "Revert changes" },
+          { name: "/steps", description: "" },
+          { name: "  /fork  ", description: "  Fork session  " },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [
+          { name: "revert", description: "Revert changes" },
+          { name: "steps" },
+          { name: "fork", description: "Fork session" },
+        ],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [
+              { name: "/revert", description: "Revert changes" },
+              { name: "/steps", description: "" },
+              { name: "  /fork  ", description: "  Fork session  " },
+            ],
+          },
+        },
+      },
+    ]);
+  });
+
+  it("preserves command input metadata when parsing available commands", () => {
+    const commands = parseAvailableCommands([
+      {
+        name: "/deploy",
+        description: "Deploy the app",
+        input: {
+          hint: "environment",
+          _meta: { required: true, placeholder: "staging" },
+        },
+      },
+    ] satisfies ReadonlyArray<EffectAcpSchema.AvailableCommand>);
+
+    expect(commands).toEqual([
+      {
+        name: "deploy",
+        description: "Deploy the app",
+        inputHint: "environment",
+        inputMeta: { required: true, placeholder: "staging" },
+      },
+    ]);
+  });
+
+  it("drops empty-name entries from available_commands_update", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [
+          { name: "   ", description: "no name" },
+          { name: "/revert", description: "" },
+        ],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [{ name: "revert" }],
+        rawPayload: expect.any(Object),
+      },
+    ]);
+  });
+
+  it("emits AvailableCommandsUpdated with empty commands for empty availableCommands array", () => {
+    const result = parseSessionUpdateEvent({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "available_commands_update",
+        availableCommands: [],
+      },
+    } satisfies EffectAcpSchema.SessionNotification);
+
+    expect(result.events).toEqual([
+      {
+        _tag: "AvailableCommandsUpdated",
+        commands: [],
+        rawPayload: {
+          sessionId: "session-1",
+          update: {
+            sessionUpdate: "available_commands_update",
+            availableCommands: [],
           },
         },
       },

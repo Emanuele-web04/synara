@@ -58,6 +58,8 @@ export interface ProviderAdapterCapabilities {
   readonly supportsTurnSteering?: boolean;
   /** True when `turn.diff.updated.payload.unifiedDiff` contains a parseable live patch. */
   readonly supportsLiveTurnDiffPatch?: boolean;
+  /** False when the provider cannot roll back its session state (e.g. ACP agents with no session/revert method). Defaults to true. */
+  readonly supportsRollback?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

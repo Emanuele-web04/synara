@@ -54,6 +54,13 @@ export interface AcpPermissionRequest {
   readonly toolCall?: AcpToolCallState;
 }
 
+export interface AcpAvailableCommand {
+  readonly name: string;
+  readonly description?: string;
+  readonly inputHint?: string;
+  readonly inputMeta?: Record<string, unknown>;
+}
+
 export type AcpParsedSessionEvent =
   | {
       readonly _tag: "ModeChanged";
@@ -88,6 +95,11 @@ export type AcpParsedSessionEvent =
       readonly _tag: "UsageUpdated";
       readonly usage: ThreadTokenUsageSnapshot;
       readonly cost?: EffectAcpSchema.Cost | null | undefined;
+      readonly rawPayload: unknown;
+    }
+  | {
+      readonly _tag: "AvailableCommandsUpdated";
+      readonly commands: ReadonlyArray<AcpAvailableCommand>;
       readonly rawPayload: unknown;
     };
 
@@ -166,6 +178,36 @@ export function parseSessionModeState(
     currentModeId,
     availableModes,
   };
+}
+
+export function parseAvailableCommands(
+  commands: ReadonlyArray<EffectAcpSchema.AvailableCommand> | null | undefined,
+): ReadonlyArray<AcpAvailableCommand> {
+  return (commands ?? [])
+    .map((command) => {
+      // Strip leading slash so callers consistently receive bare command names.
+      const name = command.name.trim().replace(/^\/+/, "");
+      if (!name) return undefined;
+      const description = command.description?.trim() || undefined;
+      const inputHint = command.input?.hint?.trim() || undefined;
+      const inputMeta =
+        command.input?._meta &&
+        typeof command.input._meta === "object" &&
+        !Array.isArray(command.input._meta)
+          ? (command.input._meta as Record<string, unknown>)
+          : undefined;
+      const result: {
+        name: string;
+        description?: string;
+        inputHint?: string;
+        inputMeta?: Record<string, unknown>;
+      } = { name };
+      if (description !== undefined) result.description = description;
+      if (inputHint !== undefined) result.inputHint = inputHint;
+      if (inputMeta !== undefined) result.inputMeta = inputMeta;
+      return result as AcpAvailableCommand;
+    })
+    .filter((command): command is AcpAvailableCommand => command !== undefined);
 }
 
 function normalizePlanStepStatus(raw: unknown): "pending" | "inProgress" | "completed" {
@@ -608,6 +650,14 @@ export function parseSessionUpdateEvent(params: EffectAcpSchema.SessionNotificat
           rawPayload: params,
         });
       }
+      break;
+    }
+    case "available_commands_update": {
+      events.push({
+        _tag: "AvailableCommandsUpdated",
+        commands: parseAvailableCommands(upd.availableCommands),
+        rawPayload: params,
+      });
       break;
     }
     case "tool_call": {

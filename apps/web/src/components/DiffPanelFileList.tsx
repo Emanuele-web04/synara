@@ -109,7 +109,7 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
 }) {
   const filePath = resolveFileDiffPath(props.fileDiff);
   const fileKey = buildFileDiffRenderKey(props.fileDiff);
-  const { chatActions, isCollapsed } = props;
+  const { chatActions, isCollapsed, onToggleFileCollapsed } = props;
   const shouldPreviewImage =
     !isCollapsed && props.workspaceRoot !== null && isSupportedLocalImagePath(filePath);
   const renderHeaderMetadata = useCallback(
@@ -141,9 +141,9 @@ const DiffPanelFileRow = memo(function DiffPanelFileRow(props: {
       });
       if (!clickedHeader) return;
       event.stopPropagation();
-      props.onToggleFileCollapsed(fileKey);
+      onToggleFileCollapsed(fileKey);
     },
-    [fileKey, props.onToggleFileCollapsed],
+    [fileKey, onToggleFileCollapsed],
   );
 
   return (

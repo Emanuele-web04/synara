@@ -360,18 +360,6 @@ function assistantMessageUpdated(input?: {
   };
 }
 
-function idleStatusEvent() {
-  return {
-    type: "session.status",
-    properties: {
-      sessionID: "opencode-session-1",
-      status: {
-        type: "idle",
-      },
-    },
-  };
-}
-
 describe("normalizeOpenCodeTokenUsage", () => {
   it("converts OpenCode assistant tokens into a context usage snapshot", () => {
     expect(

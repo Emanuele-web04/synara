@@ -804,12 +804,12 @@ describe("CheckpointReactor", () => {
           checkpoint.status === "ready" &&
           checkpoint.files
             ?.map((file) => file.path)
-            .sort()
+            .toSorted()
             .join(",") === "early.txt,late.txt",
       ),
     );
 
-    expect(thread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+    expect(thread.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       "early.txt",
       "late.txt",
     ]);
@@ -1037,7 +1037,7 @@ describe("CheckpointReactor", () => {
       ),
     );
     expect(finalThread.checkpoints).toHaveLength(1);
-    expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+    expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).toSorted()).toEqual([
       "live.txt",
       "second.txt",
     ]);

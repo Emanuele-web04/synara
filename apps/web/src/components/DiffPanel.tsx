@@ -93,6 +93,8 @@ import { type SplitViewPanePanelState } from "../splitViewStore";
 import { formatShortTimestamp } from "../timestampFormat";
 import type { TurnDiffSummary } from "../types";
 
+const EMPTY_DIFF_SUMMARIES: TurnDiffSummary[] = [];
+
 const EDITOR_DIFF_OPTIONS_MENU_ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 
 function EditorDiffOptionsCountBadge(props: { count: number | undefined }) {
@@ -508,7 +510,7 @@ export default function DiffPanel({
         ? "Failed to check git repository."
         : null;
   const isGitRepo = gitRepoStatus === true;
-  const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? [];
+  const turnDiffSummaries = activeThreadContext?.turnDiffSummaries ?? EMPTY_DIFF_SUMMARIES;
   const inferredCheckpointTurnCountByTurnId = useMemo(
     () => inferCheckpointTurnCountByTurnId(turnDiffSummaries),
     [turnDiffSummaries],

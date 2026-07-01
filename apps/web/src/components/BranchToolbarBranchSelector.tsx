@@ -239,7 +239,7 @@ function handleCheckoutError(
   const dirtyWorktree = parseDirtyWorktreeError(error);
   if (dirtyWorktree) {
     const copyText = toBranchActionErrorMessage(error);
-    const dirtyToastId = addBranchRecoveryToast({
+    addBranchRecoveryToast({
       type: "warning",
       title: "Uncommitted changes block checkout.",
       description: formatDirtyWorktreeDescription(dirtyWorktree.files),
@@ -263,7 +263,7 @@ function handleCheckoutError(
               if (isStashConflictError(stashError)) {
                 await invalidateGitQueries(input.queryClient);
                 input.onSuccess();
-                const stashConflictToastId = addBranchRecoveryToast({
+                addBranchRecoveryToast({
                   type: "warning",
                   title: "Changes saved, but not reapplied.",
                   description:
@@ -467,12 +467,15 @@ export function BranchToolbarBranchSelector({
     onSetThreadWorkspace,
   ]);
 
-  const runBranchAction = (action: () => Promise<void>) => {
-    startBranchActionTransition(async () => {
-      await action().catch(() => undefined);
-      await invalidateGitQueries(queryClient).catch(() => undefined);
-    });
-  };
+  const runBranchAction = useCallback(
+    (action: () => Promise<void>) => {
+      startBranchActionTransition(async () => {
+        await action().catch(() => undefined);
+        await invalidateGitQueries(queryClient).catch(() => undefined);
+      });
+    },
+    [queryClient, startBranchActionTransition],
+  );
 
   const openCreateBranchDialog = useCallback(() => {
     setCreateBranchName(canPrefillCreateBranch && !hasExactBranchMatch ? trimmedBranchQuery : "");

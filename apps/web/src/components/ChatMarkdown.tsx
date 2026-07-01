@@ -227,7 +227,7 @@ function normalizeRenderableMarkers(input: {
   const markers = input.markers ?? [];
   const result: RenderableThreadMarker[] = [];
   let previousEnd = -1;
-  for (const marker of [...markers].sort((left, right) => left.startOffset - right.startOffset)) {
+  for (const marker of markers.toSorted((left, right) => left.startOffset - right.startOffset)) {
     if (marker.startOffset < previousEnd) {
       continue;
     }

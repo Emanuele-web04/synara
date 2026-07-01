@@ -13,6 +13,7 @@ const PROVIDER_STATUS_CACHE_IDS = [
   "codex",
   "claudeAgent",
   "cursor",
+  "devin",
   "gemini",
   "grok",
   "kilo",
