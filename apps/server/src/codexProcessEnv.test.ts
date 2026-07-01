@@ -107,4 +107,91 @@ describe("buildCodexProcessEnv account overlays", () => {
       /is a symlink/,
     );
   });
+
+  it("rejects a shadow home directory that is itself a symlink", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const aliasedShadowHome = path.join(path.dirname(fixture.shadowHomePath), "codex-shadow-alias");
+    symlinkSync(fixture.homePath, aliasedShadowHome);
+
+    assert.throws(
+      () =>
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: aliasedShadowHome,
+          accountId: "work",
+          platform: "win32",
+        }),
+      /shadow home/i,
+    );
+  });
+
+  it("keeps shared auth out of account overlays without a shadow home", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    const env = buildCodexProcessEnv({
+      env: sharedEnv,
+      accountId: "work",
+      platform: "win32",
+    });
+
+    const overlayHomePath = env.CODEX_HOME;
+    assert.ok(overlayHomePath);
+    assert.notStrictEqual(path.resolve(overlayHomePath), path.resolve(fixture.homePath));
+    assert.throws(() => lstatSync(path.join(overlayHomePath, "auth.json")));
+  });
+
+  it("mirrors private auth from an account's own dedicated home", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+
+    const env = buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      accountId: "work",
+      platform: "win32",
+    });
+
+    const overlayHomePath = env.CODEX_HOME;
+    assert.ok(overlayHomePath);
+    const overlayAuthPath = path.join(overlayHomePath, "auth.json");
+    assert.ok(lstatSync(overlayAuthPath).isSymbolicLink());
+    assert.strictEqual(
+      path.resolve(readlinkSync(overlayAuthPath)),
+      path.resolve(path.join(fixture.homePath, "auth.json")),
+    );
+  });
+
+  it("drops legacy shared-auth aliases from account overlays and keeps own logins", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    const firstEnv = buildCodexProcessEnv({
+      env: sharedEnv,
+      accountId: "work",
+      platform: "win32",
+    });
+    const overlayHomePath = firstEnv.CODEX_HOME;
+    assert.ok(overlayHomePath);
+    // Simulate the legacy overlay state that symlinked shared auth in.
+    symlinkSync(path.join(fixture.homePath, "auth.json"), path.join(overlayHomePath, "auth.json"));
+
+    const secondEnv = buildCodexProcessEnv({
+      env: sharedEnv,
+      accountId: "work",
+      platform: "win32",
+    });
+    assert.strictEqual(secondEnv.CODEX_HOME, overlayHomePath);
+    assert.throws(() => lstatSync(path.join(overlayHomePath, "auth.json")));
+
+    // The account's own login is a real file and must survive re-preparation.
+    writeFileSync(path.join(overlayHomePath, "auth.json"), '{"account":"work"}', "utf8");
+    const thirdEnv = buildCodexProcessEnv({
+      env: sharedEnv,
+      accountId: "work",
+      platform: "win32",
+    });
+    assert.strictEqual(thirdEnv.CODEX_HOME, overlayHomePath);
+    assert.ok(lstatSync(path.join(overlayHomePath, "auth.json")).isFile());
+  });
 });

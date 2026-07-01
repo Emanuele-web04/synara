@@ -41,8 +41,14 @@ runs against the same home are picked up automatically.
 
 ## Caveats
 
-- An instance with only a label/account id but **no shadow auth home** shares
-  the default account's `auth.json` — it is a launch profile, not an isolated
-  account.
+- An instance with only a label/account id but **no shadow auth home and no
+  dedicated CODEX_HOME** starts signed out and keeps its own login inside its
+  managed overlay home. Use a shadow auth home when you want the login to live
+  in a directory you control.
+- An instance with its own dedicated **CODEX_HOME** mirrors that home's
+  credentials, so external `codex login` runs against it stay visible.
+- A shadow auth home must be a real directory with real credential files;
+  symlinked shadow homes or `auth.json` files are rejected so accounts can
+  never alias each other's credentials.
 - Threads keep the instance they started with; switching the account of a
   thread with a live session restarts the provider session.

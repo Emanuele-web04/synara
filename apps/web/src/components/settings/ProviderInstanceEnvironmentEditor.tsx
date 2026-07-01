@@ -31,10 +31,12 @@ function isRedactedVariable(variable: ProviderInstanceEnvironmentVariable): bool
 function EnvVariableNameInput({
   id,
   name,
+  readOnly,
   onCommit,
 }: {
   readonly id: string;
   readonly name: string;
+  readonly readOnly?: boolean;
   readonly onCommit: (nextName: string) => void;
 }) {
   const [draft, setDraft] = useState(name);
@@ -45,6 +47,12 @@ function EnvVariableNameInput({
       variant="soft"
       className="w-2/5 font-mono"
       value={draft}
+      readOnly={readOnly}
+      title={
+        readOnly
+          ? "Saved secrets keep their name. Remove the variable and add it again to rename it."
+          : undefined
+      }
       onChange={(event) => setDraft(event.target.value)}
       onBlur={() => onCommit(draft)}
       onKeyDown={(event) => {
@@ -115,9 +123,13 @@ export function ProviderInstanceEnvironmentEditor({
             <EnvVariableNameInput
               id={`provider-instance-${instanceId}-env-${index}-name`}
               name={entry.name}
+              // The server stores redacted secrets by name and cannot move them
+              // to a new key, so renaming a saved secret would silently drop it.
+              readOnly={redacted}
               onCommit={(nextName) => {
                 const trimmed = nextName.trim();
                 if (
+                  redacted ||
                   trimmed === entry.name ||
                   !isEnvironmentVariableName(trimmed) ||
                   entries.some(

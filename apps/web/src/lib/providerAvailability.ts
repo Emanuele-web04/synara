@@ -72,22 +72,15 @@ export function providerStatusInstanceKey(
   return (status.instanceId ?? status.provider) as ProviderInstanceId;
 }
 
+// Advisory warnings the health layer marks available (Pi bundled SDK, Cursor
+// model-discovery warnings, unconfirmed custom binaries) stay sendable; only
+// unavailable or unauthenticated statuses block sends.
 export function isProviderUsable(status: ServerProviderStatus | null | undefined): boolean {
   if (!status) {
     // Missing status means the health check has not confirmed an installed provider yet.
     return false;
   }
-  if (!status.available || status.authStatus === "unauthenticated") {
-    return false;
-  }
-  if (status.status === "ready") {
-    return true;
-  }
-  return (
-    status.status === "warning" &&
-    typeof status.message === "string" &&
-    status.message.endsWith(CUSTOM_BINARY_CONFIRMATION_SUFFIX)
-  );
+  return status.available && status.authStatus !== "unauthenticated";
 }
 
 export function providerUnavailableReason(status: ServerProviderStatus | null | undefined): string {

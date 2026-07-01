@@ -695,16 +695,44 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             END AS model,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN COALESCE(
-                json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
-                json_extract(e.payload_json, '$.modelSelection.options.effort')
-              )
+              THEN CASE
+                -- Model selections persist options either as a legacy object or
+                -- as the canonical array of {id, value} option selections.
+                WHEN json_type(e.payload_json, '$.modelSelection.options') = 'array'
+                THEN (
+                  SELECT json_extract(option_entry.value, '$.value')
+                  FROM json_each(e.payload_json, '$.modelSelection.options') AS option_entry
+                  WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                  ORDER BY CASE json_extract(option_entry.value, '$.id')
+                    WHEN 'reasoningEffort' THEN 0
+                    ELSE 1
+                  END
+                  LIMIT 1
+                )
+                ELSE COALESCE(
+                  json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+                  json_extract(e.payload_json, '$.modelSelection.options.effort')
+                )
+              END
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN COALESCE(
-                  json_extract(t.model_selection_json, '$.options.reasoningEffort'),
-                  json_extract(t.model_selection_json, '$.options.effort')
-                )
+                THEN CASE
+                  WHEN json_type(t.model_selection_json, '$.options') = 'array'
+                  THEN (
+                    SELECT json_extract(option_entry.value, '$.value')
+                    FROM json_each(t.model_selection_json, '$.options') AS option_entry
+                    WHERE json_extract(option_entry.value, '$.id') IN ('reasoningEffort', 'effort')
+                    ORDER BY CASE json_extract(option_entry.value, '$.id')
+                      WHEN 'reasoningEffort' THEN 0
+                      ELSE 1
+                    END
+                    LIMIT 1
+                  )
+                  ELSE COALESCE(
+                    json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                    json_extract(t.model_selection_json, '$.options.effort')
+                  )
+                END
               END
             END AS reasoning
           FROM orchestration_events e

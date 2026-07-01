@@ -9,6 +9,7 @@
  *
  * @module ProviderServiceLive
  */
+import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -132,6 +133,11 @@ function toRuntimePayloadFromSession(
     extra?.providerOptions !== undefined
       ? redactProviderOptionsForPersistence(extra.providerOptions)
       : undefined;
+  const credentialsFingerprint =
+    Schema.is(ProviderKind)(session.provider) &&
+    Schema.is(ProviderStartOptions)(extra?.providerOptions)
+      ? credentialsFingerprintForProvider(session.provider, extra.providerOptions)
+      : undefined;
   const providerInstanceId = session.providerInstanceId ?? extra?.providerInstanceId;
   return {
     cwd: session.cwd ?? null,
@@ -142,6 +148,9 @@ function toRuntimePayloadFromSession(
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(persistedProviderOptions !== undefined
       ? { providerOptions: persistedProviderOptions }
+      : {}),
+    ...(credentialsFingerprint !== undefined
+      ? { providerOptionsCredentialsFingerprint: credentialsFingerprint }
       : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
@@ -213,14 +222,61 @@ function redactedProviderOptionsForComparison(
   return Schema.is(ProviderStartOptions)(redacted) ? redacted : undefined;
 }
 
+// Fingerprints the credential inputs that persistence strips (environment,
+// server passwords) so resume decisions can notice account/credential changes
+// without ever persisting the secrets themselves.
+function credentialsFingerprintForProvider(
+  provider: ProviderKind,
+  options: ProviderStartOptions | undefined,
+): string | undefined {
+  const providerOptions = options?.[provider];
+  if (!providerOptions || typeof providerOptions !== "object") {
+    return undefined;
+  }
+  const environment = "environment" in providerOptions ? providerOptions.environment : undefined;
+  const serverPassword =
+    "serverPassword" in providerOptions ? providerOptions.serverPassword : undefined;
+  const environmentEntries =
+    environment && typeof environment === "object" && !Array.isArray(environment)
+      ? Object.entries(environment as Record<string, unknown>).toSorted(([left], [right]) =>
+          left.localeCompare(right),
+        )
+      : [];
+  const password = typeof serverPassword === "string" && serverPassword ? serverPassword : null;
+  if (environmentEntries.length === 0 && password === null) {
+    return undefined;
+  }
+  return createHash("sha256")
+    .update(JSON.stringify({ environment: environmentEntries, serverPassword: password }))
+    .digest("hex");
+}
+
+function readPersistedCredentialsFingerprint(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): string | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+  const raw =
+    "providerOptionsCredentialsFingerprint" in runtimePayload
+      ? runtimePayload.providerOptionsCredentialsFingerprint
+      : undefined;
+  return typeof raw === "string" && raw.length > 0 ? raw : undefined;
+}
+
 function providerStartOptionsEqualForProvider(
   provider: ProviderKind,
-  left: ProviderStartOptions | undefined,
-  right: ProviderStartOptions | undefined,
+  persisted: {
+    readonly options: ProviderStartOptions | undefined;
+    readonly credentialsFingerprint: string | undefined;
+  },
+  current: ProviderStartOptions | undefined,
 ): boolean {
-  return isDeepStrictEqual(
-    redactedProviderOptionsForComparison(left)?.[provider],
-    redactedProviderOptionsForComparison(right)?.[provider],
+  return (
+    isDeepStrictEqual(
+      redactedProviderOptionsForComparison(persisted.options)?.[provider],
+      redactedProviderOptionsForComparison(current)?.[provider],
+    ) && persisted.credentialsFingerprint === credentialsFingerprintForProvider(provider, current)
   );
 }
 
@@ -915,7 +971,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           hasPersistedResumeCursor &&
           providerStartOptionsEqualForProvider(
             resolved.instance.driver,
-            persistedProviderOptions,
+            {
+              options: persistedProviderOptions,
+              credentialsFingerprint: readPersistedCredentialsFingerprint(
+                input.binding.runtimePayload,
+              ),
+            },
             resolved.providerOptions,
           );
         const adapter = yield* getAdapterForInstance(resolved.instance);
@@ -1199,7 +1260,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           persistedBinding.providerInstanceId === resolved.instance.instanceId &&
           providerStartOptionsEqualForProvider(
             resolved.instance.driver,
-            persistedProviderOptions,
+            {
+              options: persistedProviderOptions,
+              credentialsFingerprint: readPersistedCredentialsFingerprint(
+                persistedBinding.runtimePayload,
+              ),
+            },
             effectiveProviderOptions,
           );
         const effectiveResumeCursor =
@@ -1323,7 +1389,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const effectiveProviderOptions = resolvedSource.providerOptions;
         const canReuseSourceResumeCursor = providerStartOptionsEqualForProvider(
           resolvedSource.instance.driver,
-          sourcePersistedProviderOptions,
+          {
+            options: sourcePersistedProviderOptions,
+            credentialsFingerprint: readPersistedCredentialsFingerprint(
+              sourceBinding.runtimePayload,
+            ),
+          },
           effectiveProviderOptions,
         );
         const sourceCwd = readPersistedCwd(sourceBinding.runtimePayload);
@@ -1403,6 +1474,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               ...(effectiveProviderOptions !== undefined
                 ? { providerOptions: redactProviderOptionsForPersistence(effectiveProviderOptions) }
                 : {}),
+              ...(() => {
+                const fingerprint =
+                  effectiveProviderOptions !== undefined &&
+                  Schema.is(ProviderKind)(adapter.provider)
+                    ? credentialsFingerprintForProvider(adapter.provider, effectiveProviderOptions)
+                    : undefined;
+                return fingerprint !== undefined
+                  ? { providerOptionsCredentialsFingerprint: fingerprint }
+                  : {};
+              })(),
               lastRuntimeEvent: "provider.thread.forked",
               lastRuntimeEventAt: new Date().toISOString(),
             },
