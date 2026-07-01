@@ -10,8 +10,6 @@ import {
   type AgentInfo,
   type CanUseTool,
   type AgentDefinition,
-  ModelUsage,
-  NonNullableUsage,
   query,
   type Options as ClaudeQueryOptions,
   type ModelInfo,
@@ -37,7 +35,6 @@ import {
   type ProviderSession,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
-  type RuntimeContentStreamKind,
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
@@ -56,9 +53,7 @@ import {
   getAgentMentionAliases,
 } from "@t3tools/contracts";
 import {
-  getDefaultContextWindow,
   hasEffortLevel,
-  hasContextWindowOption,
   applyClaudePromptEffortPrefix,
   getModelCapabilities,
   resolveApiModelId,
@@ -84,7 +79,52 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { buildClaudeProcessEnv } from "../claudeProcessEnv.ts";
-import { positiveFiniteNumber } from "../tokenUsage.ts";
+import {
+  CLAUDE_BENIGN_TERMINATION_MESSAGE,
+  exitPlanCaptureKey,
+  extractAssistantTextBlocks,
+  extractContentBlockText,
+  extractExitPlanModePlan,
+  extractTextContent,
+  hasDurableClaudeSessionId,
+  interruptionMessageFromClaudeCause,
+  isClaudeBenignTerminationCause,
+  isClaudeInterruptedCause,
+  isReplayedUserMessage,
+  messageFromClaudeStreamCause,
+  messageParentToolUseId,
+  normalizeClaudeUserVisibleErrorMessage,
+  readClaudeResumeState,
+  sanitizeClaudeDisplayText,
+  sdkMessageSubtype,
+  sdkMessageType,
+  sdkNativeItemId,
+  sdkNativeMethod,
+  streamKindFromDeltaType,
+  toError,
+  toMessage,
+  toolResultBlocksFromUserMessage,
+  tryParseJsonRecord,
+  turnStatusFromResult,
+} from "../claudeSdkMessages.ts";
+import {
+  classifyRequestType,
+  classifyToolItemType,
+  isClientSurfacedClaudeTool,
+  normalizeClaudeTodoTasks,
+  summarizeToolRequest,
+  titleForTool,
+  toolInputFingerprint,
+  toolLifecycleEventData,
+  toolResultStreamKind,
+} from "../claudeToolClassification.ts";
+import {
+  maxClaudeContextWindowFromModelUsage,
+  mergeClaudeTokenUsageSnapshot,
+  normalizeClaudeTokenUsage,
+  resolveEffectiveClaudeContextWindow,
+  resolveSelectedClaudeContextWindowMaxTokens,
+} from "../claudeTokenUsage.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -98,11 +138,6 @@ import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapte
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "claudeAgent" as const;
-type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
-type ClaudeToolResultStreamKind = Extract<
-  RuntimeContentStreamKind,
-  "command_output" | "file_change_output"
->;
 
 type PromptQueueItem =
   | {
@@ -113,17 +148,15 @@ type PromptQueueItem =
       readonly type: "terminate";
     };
 
-interface ClaudeResumeState {
-  readonly threadId?: ThreadId;
-  readonly resume?: string;
-  readonly resumeSessionAt?: string;
-  readonly turnCount?: number;
-}
-
 interface ClaudeTurnState {
   readonly turnId: TurnId;
   readonly startedAt: string;
   readonly interactionMode: "default" | "plan";
+  // "user" turns are opened by sendTurn and closed by their SDK result message.
+  // "synthetic" turns are opened by unsolicited runtime activity (background
+  // task continuations) and closed by result or the session_state_changed
+  // idle signal, whichever arrives first.
+  readonly origin: "user" | "synthetic";
   readonly items: Array<unknown>;
   readonly assistantTextBlocks: Map<number, AssistantTextBlockState>;
   readonly assistantTextBlockOrder: Array<AssistantTextBlockState>;
@@ -212,9 +245,20 @@ interface ClaudeSessionContext {
     id: TurnId;
     items: Array<unknown>;
   }>;
-  readonly inFlightTools: Map<number, ToolInFlight>;
+  // Tool_use blocks of the message currently being streamed, keyed by their
+  // content-block index. Indices restart at 0 for every streamed message, so
+  // this map is cleared on each message_start (see rotateStreamingMessage).
+  readonly streamingToolsByIndex: Map<number, ToolInFlight>;
+  // Tools whose tool_result has not arrived yet, keyed by tool_use id. Entries
+  // survive message boundaries — parallel and backgrounded calls resolve after
+  // later messages have started streaming.
+  readonly toolsAwaitingResult: Map<string, ToolInFlight>;
   turnState: ClaudeTurnState | undefined;
   interruptRequestedTurnId: TurnId | undefined;
+  // Results owed for turns that were force-closed before their SDK result
+  // arrived (sendTurn preempting a still-running turn). Each pending entry
+  // swallows one incoming result so it cannot complete the wrong turn.
+  staleResultsExpected: number;
   lastKnownContextWindow: number | undefined;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   lastAssistantUuid: string | undefined;
@@ -224,6 +268,24 @@ interface ClaudeSessionContext {
   // Claude SDKs stream high-frequency telemetry (e.g. `thinking_tokens`); de-duping
   // here keeps a single unknown kind from flooding the conversation timeline.
   readonly warnedUnhandledSdkKinds: Set<string>;
+  // Task ids flagged skip_transcript by the SDK (ambient/housekeeping tasks).
+  // All task lifecycle events for these ids stay off the conversation timeline.
+  readonly hiddenTaskIds: Set<string>;
+  // Tasks announced via task_started, keyed by the spawning tool_use id. Lets
+  // subagent output that arrives after the Task tool_result already resolved
+  // (backgrounded subagents) surface as task progress instead of being dropped.
+  // turnId is the turn that spawned the task: late background events must carry
+  // a turn id or the web work-log filter hides them. Entries are removed when
+  // the task reaches a terminal state.
+  readonly knownTasksByToolUseId: Map<
+    string,
+    {
+      readonly taskId: string;
+      readonly description: string;
+      readonly subagentType?: string;
+      readonly turnId?: TurnId;
+    }
+  >;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -267,51 +329,6 @@ function neverResolvingUserMessageStream(): AsyncIterable<SDKUserMessage> {
   };
 }
 
-function isUuid(value: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
-}
-
-function isSyntheticClaudeThreadId(value: string): boolean {
-  return value.startsWith("claude-thread-");
-}
-
-// Claude hook system messages can carry transient session ids; only durable
-// conversation messages should advance the resumable provider cursor.
-function hasDurableClaudeSessionId(message: SDKMessage): boolean {
-  if (message.type !== "system") {
-    return true;
-  }
-
-  return (
-    message.subtype !== "hook_started" &&
-    message.subtype !== "hook_progress" &&
-    message.subtype !== "hook_response"
-  );
-}
-
-function toMessage(cause: unknown, fallback: string): string {
-  if (cause instanceof Error && cause.message.length > 0) {
-    return cause.message;
-  }
-  return fallback;
-}
-
-function toError(cause: unknown, fallback: string): Error {
-  return cause instanceof Error ? cause : new Error(toMessage(cause, fallback));
-}
-
-function normalizeClaudeStreamMessages(cause: Cause.Cause<Error>): ReadonlyArray<string> {
-  const errors = Cause.prettyErrors(cause)
-    .map((error) => error.message.trim())
-    .filter((message) => message.length > 0);
-  if (errors.length > 0) {
-    return errors;
-  }
-
-  const squashed = toMessage(Cause.squash(cause), "").trim();
-  return squashed.length > 0 ? [squashed] : [];
-}
-
 function getEffectiveClaudeCodeEffort(
   effort: ClaudeCodeEffort | null | undefined,
 ): ClaudeApiEffort | null {
@@ -324,76 +341,6 @@ function getEffectiveClaudeCodeEffort(
   return effort === "ultracode" ? "xhigh" : effort;
 }
 
-function isClaudeInterruptedMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  return (
-    normalized.includes("all fibers interrupted without error") ||
-    normalized.includes("request was aborted") ||
-    normalized.includes("interrupted by user")
-  );
-}
-
-function isClaudeInterruptedCause(cause: Cause.Cause<Error>): boolean {
-  return (
-    Cause.hasInterruptsOnly(cause) ||
-    normalizeClaudeStreamMessages(cause).some(isClaudeInterruptedMessage)
-  );
-}
-
-function messageFromClaudeStreamCause(cause: Cause.Cause<Error>, fallback: string): string {
-  return normalizeClaudeStreamMessages(cause)[0] ?? fallback;
-}
-
-function interruptionMessageFromClaudeCause(cause: Cause.Cause<Error>): string {
-  const message = messageFromClaudeStreamCause(cause, "Claude runtime interrupted.");
-  return isClaudeInterruptedMessage(message) ? "Claude runtime interrupted." : message;
-}
-
-// SIGINT (130) and SIGTERM (143) are graceful stop requests, not crashes. When the
-// Claude subprocess receives one from outside our own stop path (an idle reaper, the
-// OS, or a parent process tearing the process group down), the SDK stream throws
-// "Claude Code process exited with code 143". Treat that as a suspend-and-resume,
-// not a hard failure with an error toast. SIGKILL (137) is intentionally excluded:
-// it usually signals an OOM/forced kill that is worth surfacing.
-const CLAUDE_BENIGN_TERMINATION_EXIT_CODES = new Set([130, 143]);
-
-const CLAUDE_BENIGN_TERMINATION_MESSAGE =
-  "Claude runtime stopped and will resume on your next message.";
-
-function isClaudeBenignTerminationMessage(message: string): boolean {
-  const normalized = message.toLowerCase();
-  const exitCode = normalized.match(/exited with code (\d+)/)?.[1];
-  if (exitCode !== undefined) {
-    return CLAUDE_BENIGN_TERMINATION_EXIT_CODES.has(Number.parseInt(exitCode, 10));
-  }
-  return normalized.includes("signal sigterm") || normalized.includes("signal sigint");
-}
-
-function isClaudeBenignTerminationCause(cause: Cause.Cause<Error>): boolean {
-  return normalizeClaudeStreamMessages(cause).some(isClaudeBenignTerminationMessage);
-}
-
-function resultErrorsText(result: SDKResultMessage): string {
-  return "errors" in result && Array.isArray(result.errors)
-    ? result.errors.join(" ").toLowerCase()
-    : "";
-}
-
-function isInterruptedResult(result: SDKResultMessage): boolean {
-  const errors = resultErrorsText(result);
-  if (errors.includes("interrupt")) {
-    return true;
-  }
-
-  return (
-    result.subtype === "error_during_execution" &&
-    result.is_error === false &&
-    (errors.includes("request was aborted") ||
-      errors.includes("interrupted by user") ||
-      errors.includes("aborted"))
-  );
-}
-
 function hasPendingUserInterrupt(context: ClaudeSessionContext): boolean {
   const activeTurnId = context.turnState?.turnId;
   return activeTurnId !== undefined && context.interruptRequestedTurnId === activeTurnId;
@@ -401,152 +348,6 @@ function hasPendingUserInterrupt(context: ClaudeSessionContext): boolean {
 
 function asRuntimeItemId(value: string): RuntimeItemId {
   return RuntimeItemId.makeUnsafe(value);
-}
-
-function maxClaudeContextWindowFromModelUsage(
-  modelUsage: Record<string, ModelUsage> | undefined,
-): number | undefined {
-  if (!modelUsage) return undefined;
-
-  let maxContextWindow: number | undefined;
-  for (const value of Object.values(modelUsage)) {
-    const contextWindow = positiveFiniteNumber(value.contextWindow);
-    if (contextWindow === undefined) {
-      continue;
-    }
-    maxContextWindow = Math.max(maxContextWindow ?? 0, contextWindow);
-  }
-
-  return maxContextWindow;
-}
-
-function normalizeClaudeTokenUsage(
-  value: NonNullableUsage | Record<string, unknown> | undefined,
-  contextWindow?: number,
-): ThreadTokenUsageSnapshot | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-
-  const usage = value as Record<string, unknown>;
-  const inputTokens =
-    (typeof usage.input_tokens === "number" && Number.isFinite(usage.input_tokens)
-      ? usage.input_tokens
-      : 0) +
-    (typeof usage.cache_creation_input_tokens === "number" &&
-    Number.isFinite(usage.cache_creation_input_tokens)
-      ? usage.cache_creation_input_tokens
-      : 0) +
-    (typeof usage.cache_read_input_tokens === "number" &&
-    Number.isFinite(usage.cache_read_input_tokens)
-      ? usage.cache_read_input_tokens
-      : 0);
-  const outputTokens =
-    typeof usage.output_tokens === "number" && Number.isFinite(usage.output_tokens)
-      ? usage.output_tokens
-      : 0;
-  const derivedTotalProcessedTokens = inputTokens + outputTokens;
-  const totalProcessedTokens =
-    (typeof usage.total_tokens === "number" && Number.isFinite(usage.total_tokens)
-      ? usage.total_tokens
-      : undefined) ?? (derivedTotalProcessedTokens > 0 ? derivedTotalProcessedTokens : undefined);
-  if (totalProcessedTokens === undefined || totalProcessedTokens <= 0) {
-    return undefined;
-  }
-
-  const maxTokens =
-    typeof contextWindow === "number" && Number.isFinite(contextWindow) && contextWindow > 0
-      ? contextWindow
-      : undefined;
-  const usedTokens =
-    maxTokens !== undefined ? Math.min(totalProcessedTokens, maxTokens) : totalProcessedTokens;
-
-  return {
-    usedTokens,
-    lastUsedTokens: usedTokens,
-    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
-    ...(inputTokens > 0 ? { inputTokens } : {}),
-    ...(outputTokens > 0 ? { outputTokens } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(typeof usage.tool_uses === "number" && Number.isFinite(usage.tool_uses)
-      ? { toolUses: usage.tool_uses }
-      : {}),
-    ...(typeof usage.duration_ms === "number" && Number.isFinite(usage.duration_ms)
-      ? { durationMs: usage.duration_ms }
-      : {}),
-  };
-}
-
-function mergeClaudeTokenUsageSnapshot(
-  previous: ThreadTokenUsageSnapshot,
-  accumulated: ThreadTokenUsageSnapshot | undefined,
-  contextWindow?: number,
-): ThreadTokenUsageSnapshot {
-  const maxTokens = positiveFiniteNumber(contextWindow);
-  const usedTokens =
-    maxTokens !== undefined ? Math.min(previous.usedTokens, maxTokens) : previous.usedTokens;
-  const lastUsedTokens =
-    previous.lastUsedTokens !== undefined
-      ? maxTokens !== undefined
-        ? Math.min(previous.lastUsedTokens, maxTokens)
-        : previous.lastUsedTokens
-      : usedTokens;
-  const totalProcessedTokens = Math.max(
-    previous.totalProcessedTokens ?? previous.usedTokens,
-    accumulated?.totalProcessedTokens ?? accumulated?.usedTokens ?? 0,
-    usedTokens,
-  );
-
-  return {
-    ...previous,
-    usedTokens,
-    lastUsedTokens,
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(totalProcessedTokens > usedTokens ? { totalProcessedTokens } : {}),
-  };
-}
-
-const CLAUDE_CONTEXT_WINDOW_MAX_TOKENS = {
-  "200k": 200_000,
-  "1m": 1_000_000,
-} as const;
-
-function resolveSelectedClaudeContextWindowMaxTokens(
-  model: string | null | undefined,
-  selectedContextWindow: string | null | undefined,
-): number | undefined {
-  const caps = getModelCapabilities("claudeAgent", model);
-  const resolvedContextWindow =
-    trimOrNull(selectedContextWindow) ?? getDefaultContextWindow(caps) ?? null;
-  if (
-    !resolvedContextWindow ||
-    !hasContextWindowOption(caps, resolvedContextWindow) ||
-    !Object.prototype.hasOwnProperty.call(CLAUDE_CONTEXT_WINDOW_MAX_TOKENS, resolvedContextWindow)
-  ) {
-    return undefined;
-  }
-
-  return CLAUDE_CONTEXT_WINDOW_MAX_TOKENS[
-    resolvedContextWindow as keyof typeof CLAUDE_CONTEXT_WINDOW_MAX_TOKENS
-  ];
-}
-
-function resolveEffectiveClaudeContextWindow(input: {
-  reportedContextWindow: number | undefined;
-  lastKnownContextWindow: number | undefined;
-  currentApiModelId: string | undefined;
-}): number | undefined {
-  const { reportedContextWindow, lastKnownContextWindow, currentApiModelId } = input;
-  const currentSessionUsesOneMillionWindow = currentApiModelId?.endsWith("[1m]") === true;
-  if (
-    currentSessionUsesOneMillionWindow &&
-    lastKnownContextWindow === CLAUDE_CONTEXT_WINDOW_MAX_TOKENS["1m"] &&
-    reportedContextWindow !== undefined &&
-    reportedContextWindow < lastKnownContextWindow
-  ) {
-    return lastKnownContextWindow;
-  }
-  return reportedContextWindow ?? lastKnownContextWindow;
 }
 
 function asCanonicalTurnId(value: TurnId): TurnId {
@@ -567,227 +368,6 @@ function toPermissionMode(value: unknown): PermissionMode | undefined {
       return value;
     default:
       return undefined;
-  }
-}
-
-function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undefined {
-  if (!resumeCursor || typeof resumeCursor !== "object") {
-    return undefined;
-  }
-  const cursor = resumeCursor as {
-    threadId?: unknown;
-    resume?: unknown;
-    sessionId?: unknown;
-    resumeSessionAt?: unknown;
-    turnCount?: unknown;
-  };
-
-  const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
-  const threadId =
-    threadIdCandidate && !isSyntheticClaudeThreadId(threadIdCandidate)
-      ? ThreadId.makeUnsafe(threadIdCandidate)
-      : undefined;
-  const resumeCandidate =
-    typeof cursor.resume === "string"
-      ? cursor.resume
-      : typeof cursor.sessionId === "string"
-        ? cursor.sessionId
-        : undefined;
-  const resume = resumeCandidate && isUuid(resumeCandidate) ? resumeCandidate : undefined;
-  const resumeSessionAt =
-    typeof cursor.resumeSessionAt === "string" ? cursor.resumeSessionAt : undefined;
-  const turnCountValue = typeof cursor.turnCount === "number" ? cursor.turnCount : undefined;
-
-  return {
-    ...(threadId ? { threadId } : {}),
-    ...(resume ? { resume } : {}),
-    ...(resumeSessionAt ? { resumeSessionAt } : {}),
-    ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
-      ? { turnCount: turnCountValue }
-      : {}),
-  };
-}
-
-function classifyToolItemType(toolName: string): CanonicalItemType {
-  const normalized = toolName.toLowerCase();
-  if (normalized === "todowrite" || normalized.includes("todo")) {
-    return "plan";
-  }
-  if (normalized.includes("agent")) {
-    return "collab_agent_tool_call";
-  }
-  if (
-    normalized === "task" ||
-    normalized === "agent" ||
-    normalized.includes("subagent") ||
-    normalized.includes("sub-agent")
-  ) {
-    return "collab_agent_tool_call";
-  }
-  if (
-    normalized.includes("bash") ||
-    normalized.includes("command") ||
-    normalized.includes("shell") ||
-    normalized.includes("terminal")
-  ) {
-    return "command_execution";
-  }
-  if (
-    normalized.includes("edit") ||
-    normalized.includes("write") ||
-    normalized.includes("file") ||
-    normalized.includes("patch") ||
-    normalized.includes("replace") ||
-    normalized.includes("create") ||
-    normalized.includes("delete")
-  ) {
-    return "file_change";
-  }
-  if (normalized.includes("mcp")) {
-    return "mcp_tool_call";
-  }
-  if (normalized.includes("websearch") || normalized.includes("web search")) {
-    return "web_search";
-  }
-  if (normalized.includes("image")) {
-    return "image_view";
-  }
-  return "dynamic_tool_call";
-}
-
-function isReadOnlyToolName(toolName: string): boolean {
-  const normalized = toolName.toLowerCase();
-  return (
-    normalized === "read" ||
-    normalized.includes("read file") ||
-    normalized.includes("view") ||
-    normalized.includes("grep") ||
-    normalized.includes("glob") ||
-    normalized.includes("search")
-  );
-}
-
-function classifyRequestType(toolName: string): CanonicalRequestType {
-  if (isReadOnlyToolName(toolName)) {
-    return "file_read_approval";
-  }
-  const itemType = classifyToolItemType(toolName);
-  return itemType === "command_execution"
-    ? "command_execution_approval"
-    : itemType === "file_change"
-      ? "file_change_approval"
-      : "dynamic_tool_call";
-}
-
-function summarizeToolRequest(toolName: string, input: Record<string, unknown>): string {
-  const commandValue = input.command ?? input.cmd;
-  const command = typeof commandValue === "string" ? commandValue : undefined;
-  if (command && command.trim().length > 0) {
-    return `${toolName}: ${command.trim().slice(0, 400)}`;
-  }
-
-  const serialized = JSON.stringify(input);
-  if (serialized.length <= 400) {
-    return `${toolName}: ${serialized}`;
-  }
-  return `${toolName}: ${serialized.slice(0, 397)}...`;
-}
-
-// Tools whose result is surfaced through a dedicated runtime channel — AskUserQuestion
-// via the user-input request flow, ExitPlanMode via the proposed-plan flow — must NOT
-// also emit a generic tool-call lifecycle item, or the timeline shows a redundant
-// "ToolName: {json}" row alongside the real interaction surface.
-function isClientSurfacedClaudeTool(toolName: string): boolean {
-  return toolName === "AskUserQuestion" || toolName === "ExitPlanMode";
-}
-
-// Stable per-call identity stamped on every tool lifecycle event's data so the client
-// can collapse started/updated/completed (and dedupe parallel calls) by tool-call id
-// instead of relying on row adjacency. Mirrors the shape other adapters emit (Pi/Grok).
-function toolLifecycleEventData(
-  tool: Pick<ToolInFlight, "itemId" | "toolName" | "input">,
-  extra?: Record<string, unknown>,
-): Record<string, unknown> {
-  return {
-    toolCallId: tool.itemId,
-    callId: tool.itemId,
-    toolName: tool.toolName,
-    input: tool.input,
-    ...extra,
-  };
-}
-
-function normalizeClaudeTodoStatus(value: unknown): "pending" | "inProgress" | "completed" {
-  if (value === "completed") {
-    return "completed";
-  }
-  if (value === "in_progress") {
-    return "inProgress";
-  }
-  return "pending";
-}
-
-function normalizeClaudeTodoTasks(input: Record<string, unknown>): {
-  readonly tasks: ReadonlyArray<{
-    readonly task: string;
-    readonly status: "pending" | "inProgress" | "completed";
-  }>;
-} | null {
-  const todos = Array.isArray(input.todos) ? input.todos : null;
-  if (!todos) {
-    return null;
-  }
-
-  const tasks = todos
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return null;
-      }
-      const todo = entry as Record<string, unknown>;
-      const status = normalizeClaudeTodoStatus(todo.status);
-      const content = trimOrNull(typeof todo.content === "string" ? todo.content : null);
-      const activeForm = trimOrNull(typeof todo.activeForm === "string" ? todo.activeForm : null);
-      const task = status === "inProgress" ? (activeForm ?? content) : (content ?? activeForm);
-      if (!task) {
-        return null;
-      }
-      return {
-        task,
-        status,
-      };
-    })
-    .filter(
-      (
-        task,
-      ): task is {
-        readonly task: string;
-        readonly status: "pending" | "inProgress" | "completed";
-      } => task !== null,
-    );
-
-  return tasks.length > 0 ? { tasks } : null;
-}
-
-function titleForTool(itemType: CanonicalItemType): string {
-  switch (itemType) {
-    case "plan":
-      return "Plan";
-    case "command_execution":
-      return "Command run";
-    case "file_change":
-      return "File change";
-    case "mcp_tool_call":
-      return "MCP tool call";
-    case "collab_agent_tool_call":
-      return "Subagent task";
-    case "web_search":
-      return "Web search";
-    case "image_view":
-      return "Image view";
-    case "dynamic_tool_call":
-      return "Tool call";
-    default:
-      return "Item";
   }
 }
 
@@ -950,25 +530,6 @@ function buildUserMessageEffect(
   });
 }
 
-function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
-  if (result.subtype === "success") {
-    return "completed";
-  }
-
-  const errors = resultErrorsText(result);
-  if (isInterruptedResult(result)) {
-    return "interrupted";
-  }
-  if (errors.includes("cancel")) {
-    return "cancelled";
-  }
-  return "failed";
-}
-
-function streamKindFromDeltaType(deltaType: string): ClaudeTextStreamKind {
-  return deltaType.includes("thinking") ? "reasoning_text" : "assistant_text";
-}
-
 function nativeProviderRefs(
   _context: ClaudeSessionContext,
   options?: {
@@ -981,219 +542,6 @@ function nativeProviderRefs(
     };
   }
   return {};
-}
-
-function extractAssistantTextBlocks(message: SDKMessage): Array<string> {
-  if (message.type !== "assistant") {
-    return [];
-  }
-
-  const content = (message.message as { content?: unknown } | undefined)?.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  const fragments: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const candidate = block as { type?: unknown; text?: unknown };
-    const sanitizedText =
-      candidate.type === "text" && typeof candidate.text === "string"
-        ? sanitizeClaudeDisplayText(candidate.text)
-        : "";
-    if (candidate.type === "text" && sanitizedText.length > 0) {
-      fragments.push(sanitizedText);
-    }
-  }
-
-  return fragments;
-}
-
-function sanitizeClaudeDisplayText(text: string): string {
-  if (text.length === 0) {
-    return text;
-  }
-
-  const lines = text.split(/\r?\n/);
-  const filteredLines = lines.filter((line) => {
-    const normalized = line.trim().toLowerCase();
-    return !(
-      normalized.startsWith("[ede_diagnostic]") &&
-      normalized.includes("result_type=") &&
-      normalized.includes("stop_reason=")
-    );
-  });
-
-  if (
-    filteredLines.length === 0 &&
-    lines.some((line) => line.trim().toLowerCase().startsWith("[ede_diagnostic]"))
-  ) {
-    return "";
-  }
-
-  return filteredLines.join("\n");
-}
-
-function normalizeClaudeUserVisibleErrorMessage(
-  text: string | undefined,
-  status: ProviderRuntimeTurnStatus,
-): string | undefined {
-  if (typeof text !== "string") {
-    return undefined;
-  }
-
-  const sanitized = sanitizeClaudeDisplayText(text).trim();
-  if (sanitized.length === 0) {
-    return undefined;
-  }
-
-  if (sanitized === "User interrupted response.") {
-    return status === "interrupted" ? "Claude runtime interrupted." : undefined;
-  }
-
-  if (/^[\]})"'`.,;:!?_-]+$/.test(sanitized)) {
-    return status === "interrupted" ? "Claude runtime interrupted." : "Claude turn failed.";
-  }
-
-  return sanitized;
-}
-
-function extractContentBlockText(block: unknown): string {
-  if (!block || typeof block !== "object") {
-    return "";
-  }
-
-  const candidate = block as { type?: unknown; text?: unknown };
-  return candidate.type === "text" && typeof candidate.text === "string"
-    ? sanitizeClaudeDisplayText(candidate.text)
-    : "";
-}
-
-function extractTextContent(value: unknown): string {
-  if (typeof value === "string") {
-    return sanitizeClaudeDisplayText(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((entry) => extractTextContent(entry)).join("");
-  }
-
-  if (!value || typeof value !== "object") {
-    return "";
-  }
-
-  const record = value as {
-    text?: unknown;
-    content?: unknown;
-  };
-
-  if (typeof record.text === "string") {
-    return sanitizeClaudeDisplayText(record.text);
-  }
-
-  return extractTextContent(record.content);
-}
-
-function extractExitPlanModePlan(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-
-  const record = value as {
-    plan?: unknown;
-  };
-  return typeof record.plan === "string" && record.plan.trim().length > 0
-    ? record.plan.trim()
-    : undefined;
-}
-
-function exitPlanCaptureKey(input: {
-  readonly toolUseId?: string | undefined;
-  readonly planMarkdown: string;
-}): string {
-  return input.toolUseId && input.toolUseId.length > 0
-    ? `tool:${input.toolUseId}`
-    : `plan:${input.planMarkdown}`;
-}
-
-function tryParseJsonRecord(value: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function toolInputFingerprint(input: Record<string, unknown>): string | undefined {
-  try {
-    return JSON.stringify(input);
-  } catch {
-    return undefined;
-  }
-}
-
-function toolResultStreamKind(itemType: CanonicalItemType): ClaudeToolResultStreamKind | undefined {
-  switch (itemType) {
-    case "command_execution":
-      return "command_output";
-    case "file_change":
-      return "file_change_output";
-    default:
-      return undefined;
-  }
-}
-
-function toolResultBlocksFromUserMessage(message: SDKMessage): Array<{
-  readonly toolUseId: string;
-  readonly block: Record<string, unknown>;
-  readonly text: string;
-  readonly isError: boolean;
-}> {
-  if (message.type !== "user") {
-    return [];
-  }
-
-  const content = (message.message as { content?: unknown } | undefined)?.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  const blocks: Array<{
-    readonly toolUseId: string;
-    readonly block: Record<string, unknown>;
-    readonly text: string;
-    readonly isError: boolean;
-  }> = [];
-
-  for (const entry of content) {
-    if (!entry || typeof entry !== "object") {
-      continue;
-    }
-
-    const block = entry as Record<string, unknown>;
-    if (block.type !== "tool_result") {
-      continue;
-    }
-
-    const toolUseId = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
-    if (!toolUseId) {
-      continue;
-    }
-
-    blocks.push({
-      toolUseId,
-      block,
-      text: extractTextContent(block.content),
-      isError: block.is_error === true,
-    });
-  }
-
-  return blocks;
 }
 
 function toSessionError(
@@ -1229,71 +577,6 @@ function toRequestError(threadId: ThreadId, method: string, cause: unknown): Pro
     detail: toMessage(cause, `${method} failed`),
     cause,
   });
-}
-
-function sdkMessageType(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as { type?: unknown };
-  return typeof record.type === "string" ? record.type : undefined;
-}
-
-function sdkMessageSubtype(value: unknown): string | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const record = value as { subtype?: unknown };
-  return typeof record.subtype === "string" ? record.subtype : undefined;
-}
-
-function sdkNativeMethod(message: SDKMessage): string {
-  const subtype = sdkMessageSubtype(message);
-  if (subtype) {
-    return `claude/${message.type}/${subtype}`;
-  }
-
-  if (message.type === "stream_event") {
-    const streamType = sdkMessageType(message.event);
-    if (streamType) {
-      const deltaType =
-        streamType === "content_block_delta"
-          ? sdkMessageType((message.event as { delta?: unknown }).delta)
-          : undefined;
-      if (deltaType) {
-        return `claude/${message.type}/${streamType}/${deltaType}`;
-      }
-      return `claude/${message.type}/${streamType}`;
-    }
-  }
-
-  return `claude/${message.type}`;
-}
-
-function sdkNativeItemId(message: SDKMessage): string | undefined {
-  if (message.type === "assistant") {
-    const maybeId = (message.message as { id?: unknown }).id;
-    if (typeof maybeId === "string") {
-      return maybeId;
-    }
-    return undefined;
-  }
-
-  if (message.type === "user") {
-    return toolResultBlocksFromUserMessage(message)[0]?.toolUseId;
-  }
-
-  if (message.type === "stream_event") {
-    const event = message.event as {
-      type?: unknown;
-      content_block?: { id?: unknown };
-    };
-    if (event.type === "content_block_start" && typeof event.content_block?.id === "string") {
-      return event.content_block.id;
-    }
-  }
-
-  return undefined;
 }
 
 function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
@@ -1808,13 +1091,74 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
       });
 
-    const completeTurn = (
+    // Background continuations (task notifications, held-back results) start
+    // producing stream events without a user-initiated turn. Open a synthetic
+    // turn on the first activity so the continuation streams into the timeline
+    // instead of being dropped until the buffered assistant message lands.
+    const ensureActiveTurn = (
       context: ClaudeSessionContext,
-      status: ProviderRuntimeTurnStatus,
-      errorMessage?: string,
-      result?: SDKResultMessage,
-    ): Effect.Effect<void> =>
+      rawMethod: string,
+    ): Effect.Effect<ClaudeTurnState> =>
       Effect.gen(function* () {
+        const existing = context.turnState;
+        if (existing) {
+          return existing;
+        }
+
+        const turnId = TurnId.makeUnsafe(yield* Random.nextUUIDv4);
+        const startedAt = yield* nowIso;
+        const turnState: ClaudeTurnState = {
+          turnId,
+          startedAt,
+          interactionMode: "default",
+          origin: "synthetic",
+          items: [],
+          assistantTextBlocks: new Map(),
+          assistantTextBlockOrder: [],
+          capturedProposedPlanKeys: new Set(),
+          sawFileChange: false,
+          nextSyntheticAssistantBlockIndex: -1,
+        };
+        context.turnState = turnState;
+        context.session = {
+          ...context.session,
+          status: "running",
+          activeTurnId: turnId,
+          updatedAt: startedAt,
+        };
+
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "turn.started",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          turnId,
+          payload: {},
+          providerRefs: {
+            ...nativeProviderRefs(context),
+            providerTurnId: turnId,
+          },
+          raw: {
+            source: "claude.sdk.message",
+            method: rawMethod,
+            payload: {},
+          },
+        });
+        return turnState;
+      });
+
+    // The SDK result.usage contains *accumulated* totals across all API calls
+    // (input_tokens, cache_read_input_tokens, etc. summed over every request).
+    // This does NOT represent the current context window size. Instead, use the
+    // last known context-window-accurate usage from task_progress events and
+    // treat the accumulated total as totalProcessedTokens.
+    const captureResultTokenUsage = (
+      context: ClaudeSessionContext,
+      result: SDKResultMessage | undefined,
+    ): Effect.Effect<ThreadTokenUsageSnapshot | undefined> =>
+      Effect.sync(() => {
         const resultContextWindow = maxClaudeContextWindowFromModelUsage(result?.modelUsage);
         const effectiveContextWindow = resolveEffectiveClaudeContextWindow({
           reportedContextWindow: resultContextWindow,
@@ -1825,61 +1169,62 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           context.lastKnownContextWindow = effectiveContextWindow;
         }
 
-        // The SDK result.usage contains *accumulated* totals across all API calls
-        // (input_tokens, cache_read_input_tokens, etc. summed over every request).
-        // This does NOT represent the current context window size.
-        // Instead, use the last known context-window-accurate usage from task_progress
-        // events and treat the accumulated total as totalProcessedTokens.
         const accumulatedSnapshot = normalizeClaudeTokenUsage(
           result?.usage,
           effectiveContextWindow,
         );
         const lastGoodUsage = context.lastKnownTokenUsage;
-        const maxTokens = effectiveContextWindow;
-        const usageSnapshot: ThreadTokenUsageSnapshot | undefined = lastGoodUsage
-          ? mergeClaudeTokenUsageSnapshot(lastGoodUsage, accumulatedSnapshot, maxTokens)
+        return lastGoodUsage
+          ? mergeClaudeTokenUsageSnapshot(
+              lastGoodUsage,
+              accumulatedSnapshot,
+              effectiveContextWindow,
+            )
           : accumulatedSnapshot;
+      });
+
+    const emitThreadTokenUsage = (
+      context: ClaudeSessionContext,
+      usageSnapshot: ThreadTokenUsageSnapshot,
+      turnId?: TurnId,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const usageStamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "thread.token-usage.updated",
+          eventId: usageStamp.eventId,
+          provider: PROVIDER,
+          createdAt: usageStamp.createdAt,
+          threadId: context.session.threadId,
+          ...(turnId !== undefined ? { turnId: asCanonicalTurnId(turnId) } : {}),
+          payload: {
+            usage: usageSnapshot,
+          },
+          providerRefs: turnId !== undefined ? nativeProviderRefs(context) : {},
+        });
+      });
+
+    const completeTurn = (
+      context: ClaudeSessionContext,
+      status: ProviderRuntimeTurnStatus,
+      errorMessage?: string,
+      result?: SDKResultMessage,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        const usageSnapshot = yield* captureResultTokenUsage(context, result);
 
         const turnState = context.turnState;
         if (!turnState) {
+          // No turn is open — the work this result belongs to was already
+          // completed (idle signal or an earlier result). Keep the usage but
+          // do not emit a turn.completed for a turn that no longer exists.
           if (usageSnapshot) {
-            const usageStamp = yield* makeEventStamp();
-            yield* offerRuntimeEvent({
-              type: "thread.token-usage.updated",
-              eventId: usageStamp.eventId,
-              provider: PROVIDER,
-              createdAt: usageStamp.createdAt,
-              threadId: context.session.threadId,
-              payload: {
-                usage: usageSnapshot,
-              },
-              providerRefs: {},
-            });
+            yield* emitThreadTokenUsage(context, usageSnapshot);
           }
-
-          const stamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent({
-            type: "turn.completed",
-            eventId: stamp.eventId,
-            provider: PROVIDER,
-            createdAt: stamp.createdAt,
-            threadId: context.session.threadId,
-            payload: {
-              state: status,
-              ...(result?.stop_reason !== undefined ? { stopReason: result.stop_reason } : {}),
-              ...(result?.usage ? { usage: result.usage } : {}),
-              ...(result?.modelUsage ? { modelUsage: result.modelUsage } : {}),
-              ...(typeof result?.total_cost_usd === "number"
-                ? { totalCostUsd: result.total_cost_usd }
-                : {}),
-              ...(errorMessage ? { errorMessage } : {}),
-            },
-            providerRefs: {},
-          });
           return;
         }
 
-        for (const [index, tool] of context.inFlightTools.entries()) {
+        for (const tool of context.toolsAwaitingResult.values()) {
           const toolStamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
             type: "item.completed",
@@ -1909,10 +1254,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               sawFileChange: true,
             };
           }
-          context.inFlightTools.delete(index);
         }
-        // Clear any remaining stale entries (e.g. from interrupted content blocks)
-        context.inFlightTools.clear();
+        context.toolsAwaitingResult.clear();
+        context.streamingToolsByIndex.clear();
 
         for (const block of turnState.assistantTextBlockOrder) {
           yield* completeAssistantTextBlock(context, block, {
@@ -1928,19 +1272,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         });
 
         if (usageSnapshot) {
-          const usageStamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent({
-            type: "thread.token-usage.updated",
-            eventId: usageStamp.eventId,
-            provider: PROVIDER,
-            createdAt: usageStamp.createdAt,
-            threadId: context.session.threadId,
-            turnId: turnState.turnId,
-            payload: {
-              usage: usageSnapshot,
-            },
-            providerRefs: nativeProviderRefs(context),
-          });
+          yield* emitThreadTokenUsage(context, usageSnapshot, turnState.turnId);
         }
 
         // Feed Claude edits into the same placeholder checkpoint flow used by Codex.
@@ -2013,6 +1345,32 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const { event } = message;
 
+        // Background continuations stream without a user turn; open a synthetic
+        // one as soon as real content arrives so deltas and tool items are not
+        // dropped or orphaned. content_block_stop alone never opens a turn.
+        if (event.type === "content_block_start" || event.type === "content_block_delta") {
+          yield* ensureActiveTurn(context, "claude/stream_event/synthetic-turn-start");
+        }
+
+        // Content-block indices restart at 0 for every streamed message. Rotate
+        // the per-message state so blocks of the next message cannot collide
+        // with blocks of the previous one: force-close any text block the prior
+        // message left open and drop its index-keyed tool entries (tools still
+        // awaiting results remain tracked by id in toolsAwaitingResult).
+        if (event.type === "message_start") {
+          if (context.turnState) {
+            for (const block of context.turnState.assistantTextBlocks.values()) {
+              block.streamClosed = true;
+              yield* completeAssistantTextBlock(context, block, {
+                rawMethod: "claude/stream_event/message_start",
+                rawPayload: message,
+              });
+            }
+          }
+          context.streamingToolsByIndex.clear();
+          return;
+        }
+
         if (event.type === "content_block_delta") {
           if (
             (event.delta.type === "text_delta" || event.delta.type === "thinking_delta") &&
@@ -2068,7 +1426,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           }
 
           if (event.delta.type === "input_json_delta") {
-            const tool = context.inFlightTools.get(event.index);
+            const tool = context.streamingToolsByIndex.get(event.index);
             if (!tool || typeof event.delta.partial_json !== "string") {
               return;
             }
@@ -2089,7 +1447,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               parsedInput && Object.keys(parsedInput).length > 0
                 ? toolInputFingerprint(parsedInput)
                 : undefined;
-            context.inFlightTools.set(event.index, nextTool);
+            const trackStreamingTool = (updated: ToolInFlight) => {
+              context.streamingToolsByIndex.set(event.index, updated);
+              context.toolsAwaitingResult.set(updated.itemId, updated);
+            };
+            trackStreamingTool(nextTool);
 
             if (
               !parsedInput ||
@@ -2103,7 +1465,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               ...nextTool,
               lastEmittedInputFingerprint: nextFingerprint,
             };
-            context.inFlightTools.set(event.index, nextTool);
+            trackStreamingTool(nextTool);
 
             const stamp = yield* makeEventStamp();
             yield* offerRuntimeEvent({
@@ -2181,7 +1543,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             partialInputJson: "",
             ...(inputFingerprint ? { lastEmittedInputFingerprint: inputFingerprint } : {}),
           };
-          context.inFlightTools.set(index, tool);
+          context.streamingToolsByIndex.set(index, tool);
+          context.toolsAwaitingResult.set(tool.itemId, tool);
 
           const stamp = yield* makeEventStamp();
           yield* offerRuntimeEvent({
@@ -2218,20 +1581,17 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         if (event.type === "content_block_stop") {
-          const { index } = event;
-          const assistantBlock = context.turnState?.assistantTextBlocks.get(index);
+          const assistantBlock = context.turnState?.assistantTextBlocks.get(event.index);
           if (assistantBlock) {
             assistantBlock.streamClosed = true;
             yield* completeAssistantTextBlock(context, assistantBlock, {
               rawMethod: "claude/stream_event/content_block_stop",
               rawPayload: message,
             });
-            return;
           }
-          const tool = context.inFlightTools.get(index);
-          if (!tool) {
-            return;
-          }
+          // Tool blocks stay tracked past their stop event — completion is
+          // driven by the matching tool_result (or turn end), not by the block
+          // finishing its input stream.
         }
       });
 
@@ -2249,14 +1609,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         for (const toolResult of toolResultBlocksFromUserMessage(message)) {
-          const toolEntry = Array.from(context.inFlightTools.entries()).find(
-            ([, tool]) => tool.itemId === toolResult.toolUseId,
-          );
-          if (!toolEntry) {
+          const tool = context.toolsAwaitingResult.get(toolResult.toolUseId);
+          if (!tool) {
             continue;
           }
 
-          const [index, tool] = toolEntry;
           const itemStatus = toolResult.isError ? "failed" : "completed";
           const toolData = toolLifecycleEventData(tool, { result: toolResult.block });
 
@@ -2338,7 +1695,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               sawFileChange: true,
             };
           }
-          context.inFlightTools.delete(index);
+          context.toolsAwaitingResult.delete(toolResult.toolUseId);
+          for (const [index, streamingTool] of context.streamingToolsByIndex) {
+            if (streamingTool.itemId === toolResult.toolUseId) {
+              context.streamingToolsByIndex.delete(index);
+              break;
+            }
+          }
         }
       });
 
@@ -2352,47 +1715,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         }
 
         // Auto-start a synthetic turn for assistant messages that arrive without
-        // an active turn (e.g., background agent/subagent responses between user prompts).
-        if (!context.turnState) {
-          const turnId = TurnId.makeUnsafe(yield* Random.nextUUIDv4);
-          const startedAt = yield* nowIso;
-          context.turnState = {
-            turnId,
-            startedAt,
-            interactionMode: "default",
-            items: [],
-            assistantTextBlocks: new Map(),
-            assistantTextBlockOrder: [],
-            capturedProposedPlanKeys: new Set(),
-            sawFileChange: false,
-            nextSyntheticAssistantBlockIndex: -1,
-          };
-          context.session = {
-            ...context.session,
-            status: "running",
-            activeTurnId: turnId,
-            updatedAt: startedAt,
-          };
-          const turnStartedStamp = yield* makeEventStamp();
-          yield* offerRuntimeEvent({
-            type: "turn.started",
-            eventId: turnStartedStamp.eventId,
-            provider: PROVIDER,
-            createdAt: turnStartedStamp.createdAt,
-            threadId: context.session.threadId,
-            turnId,
-            payload: {},
-            providerRefs: {
-              ...nativeProviderRefs(context),
-              providerTurnId: turnId,
-            },
-            raw: {
-              source: "claude.sdk.message",
-              method: "claude/synthetic-turn-start",
-              payload: {},
-            },
-          });
-        }
+        // an active turn (e.g., background task continuations between user prompts).
+        yield* ensureActiveTurn(context, "claude/synthetic-turn-start");
         const content = message.message?.content;
         if (Array.isArray(content)) {
           for (const block of content) {
@@ -2474,12 +1798,123 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         yield* updateResumeCursor(context);
       });
 
+    // Subagent assistant text is not part of the main conversation. While the
+    // spawning Task tool call is still awaiting its result (foreground
+    // subagent), reflect the text as live progress on that tool item. Once the
+    // tool_result has resolved the item (backgrounded subagent), the item row
+    // is closed — the web refuses to merge into completed rows — so route the
+    // text through the task.progress channel instead.
+    const handleSubagentAssistantMessage = (
+      context: ClaudeSessionContext,
+      message: SDKMessage,
+      parentToolUseId: string,
+    ): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        if (message.type !== "assistant") {
+          return;
+        }
+
+        const textBlocks = extractAssistantTextBlocks(message);
+        const latestText = textBlocks[textBlocks.length - 1]?.trim().slice(0, 2000) ?? "";
+        if (latestText.length === 0) {
+          return;
+        }
+
+        const messageSubagentType = (message as { subagent_type?: unknown }).subagent_type;
+        const subagentType =
+          typeof messageSubagentType === "string" && messageSubagentType.length > 0
+            ? messageSubagentType
+            : undefined;
+
+        const toolEntry = context.toolsAwaitingResult.get(parentToolUseId);
+        if (toolEntry) {
+          const stamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "item.updated",
+            eventId: stamp.eventId,
+            provider: PROVIDER,
+            createdAt: stamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+            itemId: asRuntimeItemId(toolEntry.itemId),
+            payload: {
+              itemType: toolEntry.itemType,
+              status: "inProgress",
+              title: toolEntry.title,
+              ...(toolEntry.detail ? { detail: toolEntry.detail } : {}),
+              // `output` is the field the web's collab work-log extraction
+              // renders; `subagentText` rides along for richer clients.
+              data: toolLifecycleEventData(toolEntry, {
+                output: latestText,
+                subagentText: latestText,
+                ...(subagentType ? { subagentType } : {}),
+              }),
+            },
+            providerRefs: nativeProviderRefs(context, { providerItemId: toolEntry.itemId }),
+            raw: {
+              source: "claude.sdk.message",
+              method: "claude/assistant/subagent",
+              payload: message,
+            },
+          });
+          return;
+        }
+
+        const taskInfo = context.knownTasksByToolUseId.get(parentToolUseId);
+        if (!taskInfo) {
+          return;
+        }
+
+        // Late background progress belongs to the turn that spawned the task,
+        // not whatever turn happens to be open when it arrives — and it must
+        // carry a turn id at all, or the web work-log filter hides it. Fall
+        // back to the active turn only when the spawning turn is unknown.
+        const progressTurnId = taskInfo.turnId ?? context.turnState?.turnId;
+        const stamp = yield* makeEventStamp();
+        yield* offerRuntimeEvent({
+          type: "task.progress",
+          eventId: stamp.eventId,
+          provider: PROVIDER,
+          createdAt: stamp.createdAt,
+          threadId: context.session.threadId,
+          ...(progressTurnId ? { turnId: asCanonicalTurnId(progressTurnId) } : {}),
+          payload: {
+            taskId: RuntimeTaskId.makeUnsafe(taskInfo.taskId),
+            description: taskInfo.description,
+            summary: latestText,
+            toolUseId: parentToolUseId,
+            ...((subagentType ?? taskInfo.subagentType)
+              ? { subagentType: subagentType ?? taskInfo.subagentType }
+              : {}),
+          },
+          providerRefs: nativeProviderRefs(context, { providerItemId: parentToolUseId }),
+          raw: {
+            source: "claude.sdk.message",
+            method: "claude/assistant/subagent",
+            payload: message,
+          },
+        });
+      });
+
     const handleResultMessage = (
       context: ClaudeSessionContext,
       message: SDKMessage,
     ): Effect.Effect<void> =>
       Effect.gen(function* () {
         if (message.type !== "result") {
+          return;
+        }
+
+        // A turn that was force-closed by a newer sendTurn still owes its SDK
+        // result. Swallow it here — completing the freshly started turn with a
+        // result that belongs to preempted work would end the new turn before
+        // the model even saw its prompt. Usage still counts.
+        if (context.staleResultsExpected > 0) {
+          context.staleResultsExpected -= 1;
+          const usageSnapshot = yield* captureResultTokenUsage(context, message);
+          if (usageSnapshot) {
+            yield* emitThreadTokenUsage(context, usageSnapshot);
+          }
           return;
         }
 
@@ -2508,12 +1943,75 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        // Benign high-frequency telemetry we intentionally don't project. `thinking_tokens`
-        // streams on every reasoning tick while extended thinking is active; `task_updated`
-        // is an incremental task patch already covered by task_started/progress/completed.
-        // Short-circuit before allocating an event stamp so they can't flood the timeline
-        // (or churn allocations) with "Runtime warning" entries.
-        if (message.subtype === "thinking_tokens" || message.subtype === "task_updated") {
+        // Benign telemetry we intentionally don't project. `thinking_tokens` streams on
+        // every reasoning tick while extended thinking is active; `api_retry` is
+        // transient transport chatter; `permission_denied` is already surfaced through
+        // the is_error tool_result; `memory_recall` and `elicitation_complete` have no
+        // timeline representation. Short-circuit before allocating an event stamp so
+        // they can't flood the timeline (or churn allocations) with "Runtime warning"
+        // entries.
+        if (
+          message.subtype === "thinking_tokens" ||
+          message.subtype === "api_retry" ||
+          message.subtype === "permission_denied" ||
+          message.subtype === "memory_recall" ||
+          message.subtype === "elicitation_complete"
+        ) {
+          return;
+        }
+
+        // Incremental task patches stay off the timeline — they're covered by
+        // task_started/progress/notification. Per-task bookkeeping is
+        // deliberately NOT cleaned here either: a terminal patch can precede
+        // the task_notification, and the notification needs both the
+        // skip_transcript tombstone (it does not always repeat the flag) and
+        // the spawning-turn metadata (to attribute the completion). The
+        // notification is the sole consumer of both; the occasional entry
+        // leaked by a never-notifying task is a few strings per session.
+        if (message.subtype === "task_updated") {
+          return;
+        }
+
+        if (message.subtype === "session_state_changed") {
+          // Authoritative turn-over signal: `idle` fires only after held-back
+          // results flush and background agents settle. Any turn still open at
+          // this point — a synthetic continuation whose result never arrived as
+          // a standalone message, or a user turn whose result was swallowed by
+          // an over-counted stale-result debt — is by definition finished, so
+          // close it rather than leaving the thread stuck in a phantom turn.
+          if (message.state === "idle") {
+            // All owed results have flushed by the time idle fires; drop any
+            // remaining stale-result debt so future results are never swallowed.
+            context.staleResultsExpected = 0;
+            if (context.turnState) {
+              yield* completeTurn(context, "completed");
+            }
+          }
+          const stateStamp = yield* makeEventStamp();
+          yield* offerRuntimeEvent({
+            type: "session.state.changed",
+            eventId: stateStamp.eventId,
+            provider: PROVIDER,
+            createdAt: stateStamp.createdAt,
+            threadId: context.session.threadId,
+            ...(context.turnState ? { turnId: asCanonicalTurnId(context.turnState.turnId) } : {}),
+            payload: {
+              state:
+                message.state === "idle"
+                  ? "ready"
+                  : message.state === "requires_action"
+                    ? "waiting"
+                    : "running",
+              reason: `session_state:${message.state}`,
+            },
+            providerRefs: nativeProviderRefs(context),
+            raw: {
+              source: "claude.sdk.message",
+              method: sdkNativeMethod(message),
+              messageType: `${message.type}:${message.subtype}`,
+              payload: message,
+            },
+          });
           return;
         }
 
@@ -2602,6 +2100,21 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             });
             return;
           case "task_started":
+            // Ambient/housekeeping tasks are flagged skip_transcript; keep their
+            // whole lifecycle off the conversation timeline.
+            if (message.skip_transcript === true) {
+              context.hiddenTaskIds.add(message.task_id);
+              return;
+            }
+            if (message.tool_use_id) {
+              context.knownTasksByToolUseId.set(message.tool_use_id, {
+                taskId: message.task_id,
+                description:
+                  message.description.trim().length > 0 ? message.description : "Subagent task",
+                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+              });
+            }
             yield* offerRuntimeEvent({
               ...base,
               type: "task.started",
@@ -2609,10 +2122,23 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
                 description: message.description,
                 ...(message.task_type ? { taskType: message.task_type } : {}),
+                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                ...(message.workflow_name ? { workflowName: message.workflow_name } : {}),
               },
             });
             return;
-          case "task_progress":
+          case "task_progress": {
+            if (context.hiddenTaskIds.has(message.task_id)) {
+              return;
+            }
+            // Task progress belongs to the turn that spawned the task — not
+            // whatever turn happens to be open when it arrives, and not no turn
+            // at all (the web work-log filter hides turn-less activities once
+            // turn-stamped messages exist).
+            const progressTurnId = message.tool_use_id
+              ? context.knownTasksByToolUseId.get(message.tool_use_id)?.turnId
+              : undefined;
             if (message.usage) {
               const normalizedUsage = normalizeClaudeTokenUsage(
                 message.usage,
@@ -2625,6 +2151,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   ...base,
                   eventId: usageStamp.eventId,
                   createdAt: usageStamp.createdAt,
+                  ...(progressTurnId ? { turnId: asCanonicalTurnId(progressTurnId) } : {}),
                   type: "thread.token-usage.updated",
                   payload: {
                     usage: normalizedUsage,
@@ -2634,6 +2161,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }
             yield* offerRuntimeEvent({
               ...base,
+              ...(progressTurnId ? { turnId: asCanonicalTurnId(progressTurnId) } : {}),
               type: "task.progress",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
@@ -2641,10 +2169,71 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
                 ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
               },
             });
+            // While the spawning Task tool call is still awaiting its result,
+            // mirror the progress onto its tool item so the "Subagent task"
+            // row shows live activity instead of a frozen request summary.
+            const spawningTool = message.tool_use_id
+              ? context.toolsAwaitingResult.get(message.tool_use_id)
+              : undefined;
+            if (spawningTool) {
+              const progressStamp = yield* makeEventStamp();
+              yield* offerRuntimeEvent({
+                ...base,
+                eventId: progressStamp.eventId,
+                createdAt: progressStamp.createdAt,
+                type: "item.updated",
+                itemId: asRuntimeItemId(spawningTool.itemId),
+                payload: {
+                  itemType: spawningTool.itemType,
+                  status: "inProgress",
+                  title: spawningTool.title,
+                  ...(spawningTool.detail ? { detail: spawningTool.detail } : {}),
+                  data: toolLifecycleEventData(spawningTool, {
+                    taskId: message.task_id,
+                    // `output` is the field the web's collab work-log extraction
+                    // renders; the named fields ride along for richer clients.
+                    ...(message.summary
+                      ? { output: message.summary, taskSummary: message.summary }
+                      : {}),
+                    ...(message.last_tool_name ? { lastToolName: message.last_tool_name } : {}),
+                    ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+                  }),
+                },
+                providerRefs: nativeProviderRefs(context, {
+                  providerItemId: spawningTool.itemId,
+                }),
+              });
+            }
             return;
-          case "task_notification":
+          }
+          case "task_notification": {
+            let notifiedTask = message.tool_use_id
+              ? context.knownTasksByToolUseId.get(message.tool_use_id)
+              : undefined;
+            if (message.tool_use_id) {
+              context.knownTasksByToolUseId.delete(message.tool_use_id);
+            } else {
+              // Notifications may omit the tool id; match by task id instead so
+              // the entry cannot leak — keeping its spawning-turn metadata for
+              // the completion event below.
+              for (const [toolUseId, taskInfo] of context.knownTasksByToolUseId) {
+                if (taskInfo.taskId === message.task_id) {
+                  notifiedTask = taskInfo;
+                  context.knownTasksByToolUseId.delete(toolUseId);
+                  break;
+                }
+              }
+            }
+            if (context.hiddenTaskIds.delete(message.task_id) || message.skip_transcript === true) {
+              return;
+            }
+            // The completion belongs to the turn that spawned the task, even if
+            // an unrelated turn is open when the notification arrives.
+            const notificationTurnId = notifiedTask?.turnId;
             if (message.usage) {
               const normalizedUsage = normalizeClaudeTokenUsage(
                 message.usage,
@@ -2657,6 +2246,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
                   ...base,
                   eventId: usageStamp.eventId,
                   createdAt: usageStamp.createdAt,
+                  ...(notificationTurnId ? { turnId: asCanonicalTurnId(notificationTurnId) } : {}),
                   type: "thread.token-usage.updated",
                   payload: {
                     usage: normalizedUsage,
@@ -2666,15 +2256,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             }
             yield* offerRuntimeEvent({
               ...base,
+              ...(notificationTurnId ? { turnId: asCanonicalTurnId(notificationTurnId) } : {}),
               type: "task.completed",
               payload: {
                 taskId: RuntimeTaskId.makeUnsafe(message.task_id),
                 status: message.status,
                 ...(message.summary ? { summary: message.summary } : {}),
                 ...(message.usage ? { usage: message.usage } : {}),
+                ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
               },
             });
             return;
+          }
           case "files_persisted":
             yield* offerRuntimeEvent({
               ...base,
@@ -2697,14 +2290,63 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               },
             });
             return;
-          default:
-            yield* warnUnhandledSdkKind(
+          case "notification":
+            // Loop-side notifications mirror the REPL notification queue; only
+            // urgent ones warrant a timeline entry.
+            if (message.priority === "high" || message.priority === "immediate") {
+              yield* emitRuntimeWarning(context, message.text, {
+                key: message.key,
+                priority: message.priority,
+              });
+            }
+            return;
+          case "mirror_error":
+            // Transcript-mirror batches were dropped after retries — surface it
+            // so history loss isn't silent.
+            yield* emitRuntimeWarning(
               context,
-              `system:${message.subtype}`,
-              `Unhandled Claude system message subtype '${message.subtype}'.`,
+              "Claude transcript mirror write failed; some session history may be missing.",
               message,
             );
             return;
+          case "plugin_install":
+            if (message.status === "failed") {
+              yield* emitRuntimeWarning(
+                context,
+                `Claude plugin install failed${message.name ? ` (${message.name})` : ""}.`,
+                message,
+              );
+            }
+            return;
+          case "local_command_output": {
+            // Output of local slash commands (e.g. /usage) renders as
+            // assistant-style text in the transcript.
+            const localCommandText = sanitizeClaudeDisplayText(message.content ?? "");
+            if (localCommandText.trim().length === 0) {
+              return;
+            }
+            const entry = yield* createSyntheticAssistantTextBlock(context, localCommandText);
+            if (entry) {
+              yield* completeAssistantTextBlock(context, entry.block, {
+                force: true,
+                rawMethod: sdkNativeMethod(message),
+                rawPayload: message,
+              });
+            }
+            return;
+          }
+          // All subtypes known to this SDK version are handled above; this is a
+          // runtime safety net for kinds introduced by newer SDKs.
+          default: {
+            const unknownSubtype = sdkMessageSubtype(message) ?? "unknown";
+            yield* warnUnhandledSdkKind(
+              context,
+              `system:${unknownSubtype}`,
+              `Unhandled Claude system message subtype '${unknownSubtype}'.`,
+              message,
+            );
+            return;
+          }
         }
       });
 
@@ -2790,14 +2432,29 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         yield* logNativeSdkMessage(context, message);
         yield* ensureThreadId(context, message);
 
+        const parentToolUseId = messageParentToolUseId(message);
+
         switch (message.type) {
           case "stream_event":
+            // Subagent stream events reuse content-block indices concurrently
+            // with the main stream; feeding them into the block-index-keyed
+            // turn state clobbers in-flight tools and interleaves text.
+            if (parentToolUseId !== undefined) {
+              return;
+            }
             yield* handleStreamEvent(context, message);
             return;
           case "user":
+            if (parentToolUseId !== undefined || isReplayedUserMessage(message)) {
+              return;
+            }
             yield* handleUserMessage(context, message);
             return;
           case "assistant":
+            if (parentToolUseId !== undefined) {
+              yield* handleSubagentAssistantMessage(context, message, parentToolUseId);
+              return;
+            }
             yield* handleAssistantMessage(context, message);
             return;
           case "result":
@@ -2807,19 +2464,34 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             yield* handleSystemMessage(context, message);
             return;
           case "tool_progress":
+            // Progress for tools running inside a subagent stays with the
+            // parent Task (task_progress covers it); leaking it here would put
+            // subagent-internal tool rows in the main turn's work log.
+            if (parentToolUseId !== undefined) {
+              return;
+            }
+            yield* handleSdkTelemetryMessage(context, message);
+            return;
           case "tool_use_summary":
           case "auth_status":
           case "rate_limit_event":
             yield* handleSdkTelemetryMessage(context, message);
             return;
-          default:
+          // Predicted next-prompt suggestions are a REPL affordance we don't render.
+          case "prompt_suggestion":
+            return;
+          // All types known to this SDK version are handled above; this is a
+          // runtime safety net for kinds introduced by newer SDKs.
+          default: {
+            const unknownType = sdkMessageType(message) ?? "unknown";
             yield* warnUnhandledSdkKind(
               context,
-              `type:${message.type}`,
-              `Unhandled Claude SDK message type '${message.type}'.`,
+              `type:${unknownType}`,
+              `Unhandled Claude SDK message type '${unknownType}'.`,
               message,
             );
             return;
+          }
         }
       });
 
@@ -3004,7 +2676,6 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
 
         const pendingApprovals = new Map<ApprovalRequestId, PendingApproval>();
         const pendingUserInputs = new Map<ApprovalRequestId, PendingUserInput>();
-        const inFlightTools = new Map<number, ToolInFlight>();
 
         const contextRef = yield* Ref.make<ClaudeSessionContext | undefined>(undefined);
 
@@ -3439,15 +3110,19 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           pendingApprovals,
           pendingUserInputs,
           turns: [],
-          inFlightTools,
+          streamingToolsByIndex: new Map(),
+          toolsAwaitingResult: new Map(),
           turnState: undefined,
           interruptRequestedTurnId: undefined,
+          staleResultsExpected: 0,
           lastKnownContextWindow: undefined,
           lastKnownTokenUsage: undefined,
           lastAssistantUuid: resumeState?.resumeSessionAt,
           lastThreadStartedId: undefined,
           stopped: false,
           warnedUnhandledSdkKinds: new Set(),
+          hiddenTaskIds: new Set(),
+          knownTasksByToolUseId: new Map(),
         };
         yield* Ref.set(contextRef, context);
         sessions.set(threadId, context);
@@ -3529,8 +3204,15 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
         );
 
         if (context.turnState) {
-          // Auto-close a stale synthetic turn (from background agent responses
-          // between user prompts) to prevent blocking the user's next turn.
+          // Auto-close a still-open turn so it cannot block the user's next
+          // turn. Only user-origin turns provably owe an SDK result (their
+          // prompt is queued and will run to completion), so only they arm the
+          // stale-result debt. A synthetic background continuation may fold its
+          // result into the idle signal instead — arming debt for it risks
+          // swallowing (and mislabeling) the new user turn's own result.
+          if (context.turnState.origin === "user") {
+            context.staleResultsExpected += 1;
+          }
           yield* completeTurn(context, "completed");
         }
 
@@ -3569,6 +3251,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           turnId,
           startedAt: yield* nowIso,
           interactionMode: effectiveInteractionMode,
+          origin: "user",
           items: [],
           assistantTextBlocks: new Map(),
           assistantTextBlockOrder: [],

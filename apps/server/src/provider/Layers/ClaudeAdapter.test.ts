@@ -4565,4 +4565,1088 @@ describe("ClaudeAdapterLive", () => {
       Effect.provide(harness.layer),
     );
   });
+
+  it.effect("isolates subagent messages tagged with parent_tool_use_id from the main turn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      // Main-thread Task tool call that spawns the subagent.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent",
+        uuid: "stream-subagent-0",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "task-tool-1",
+            name: "Task",
+            input: { description: "Explore the repo" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // Subagent stream reuses content-block index 0 concurrently with the main
+      // stream — it must not clobber main-thread state or leak into the timeline.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent",
+        uuid: "stream-subagent-1",
+        parent_tool_use_id: "task-tool-1",
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: "SUBAGENT-INNER",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-subagent",
+        uuid: "assistant-subagent-1",
+        parent_tool_use_id: "task-tool-1",
+        subagent_type: "explore",
+        message: {
+          id: "assistant-subagent-message-1",
+          content: [{ type: "text", text: "Inner update" }],
+        },
+      } as unknown as SDKMessage);
+
+      // Subagent tool results must not be matched against main in-flight tools.
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-subagent",
+        uuid: "user-subagent-1",
+        parent_tool_use_id: "task-tool-1",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-tool-1",
+              content: [{ type: "text", text: "SUBAGENT-TOOL-RESULT" }],
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // Progress telemetry for the subagent's internal tools stays with the
+      // parent Task instead of leaking into the main work log.
+      harness.query.emit({
+        type: "tool_progress",
+        session_id: "sdk-session-subagent",
+        uuid: "tool-progress-subagent-1",
+        parent_tool_use_id: "task-tool-1",
+        tool_use_id: "SUBAGENT-INNER-TOOL",
+        tool_name: "Bash",
+        elapsed_time_seconds: 3,
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-subagent",
+        uuid: "stream-subagent-2",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 1,
+          delta: {
+            type: "text_delta",
+            text: "Hi",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-subagent",
+        uuid: "result-subagent",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const deltas = runtimeEvents.flatMap((event) =>
+        event.type === "content.delta" ? [event.payload.delta] : [],
+      );
+      assert.deepEqual(deltas, ["Hi"]);
+
+      const subagentUpdate = runtimeEvents.find(
+        (event) =>
+          event.type === "item.updated" &&
+          (event.payload.data as { subagentText?: string } | undefined)?.subagentText !== undefined,
+      );
+      assert.equal(subagentUpdate?.type, "item.updated");
+      if (subagentUpdate?.type === "item.updated") {
+        assert.equal(subagentUpdate.payload.itemType, "collab_agent_tool_call");
+        assert.equal(String(subagentUpdate.itemId), "task-tool-1");
+        const data = subagentUpdate.payload.data as {
+          subagentText?: string;
+          subagentType?: string;
+        };
+        assert.equal(data.subagentText, "Inner update");
+        // The web's collab work-log extraction renders `output`.
+        assert.equal((data as { output?: string }).output, "Inner update");
+        assert.equal(data.subagentType, "explore");
+        assert.equal(String(subagentUpdate.turnId), String(turn.turnId));
+      }
+
+      // The subagent tool_result must not complete the main Task tool item; the
+      // Task item is force-completed by the result message instead.
+      assert.equal(JSON.stringify(runtimeEvents).includes("SUBAGENT-TOOL-RESULT"), false);
+      assert.equal(JSON.stringify(runtimeEvents).includes("SUBAGENT-INNER"), false);
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "tool.progress"),
+        false,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("streams background continuations as synthetic turns closed by the idle signal", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "session.state.changed" && event.payload.reason === "session_state:idle",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-background",
+        uuid: "result-background-1",
+      } as unknown as SDKMessage);
+
+      // Background task continuation: stream activity arrives without a user turn.
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-background",
+        uuid: "stream-background-0",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            text: "Background follow-up",
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // Authoritative turn-over signal after background agents settle.
+      harness.query.emit({
+        type: "system",
+        subtype: "session_state_changed",
+        state: "idle",
+        session_id: "sdk-session-background",
+        uuid: "session-state-idle-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const turnStarts = runtimeEvents.filter((event) => event.type === "turn.started");
+      assert.equal(turnStarts.length, 2);
+      const syntheticTurnStarted = turnStarts[1];
+      assert.notEqual(String(syntheticTurnStarted?.turnId), String(turn.turnId));
+
+      const backgroundDelta = runtimeEvents.find(
+        (event) => event.type === "content.delta" && event.payload.delta === "Background follow-up",
+      );
+      assert.equal(backgroundDelta?.type, "content.delta");
+      if (backgroundDelta?.type === "content.delta") {
+        assert.equal(String(backgroundDelta.turnId), String(syntheticTurnStarted?.turnId));
+      }
+
+      const turnCompletions = runtimeEvents.filter((event) => event.type === "turn.completed");
+      assert.equal(turnCompletions.length, 2);
+      const syntheticTurnCompleted = turnCompletions[1];
+      assert.equal(syntheticTurnCompleted?.type, "turn.completed");
+      if (syntheticTurnCompleted?.type === "turn.completed") {
+        assert.equal(String(syntheticTurnCompleted.turnId), String(syntheticTurnStarted?.turnId));
+        assert.equal(syntheticTurnCompleted.payload.state, "completed");
+      }
+
+      const idleState = runtimeEvents[runtimeEvents.length - 1];
+      assert.equal(idleState?.type, "session.state.changed");
+      if (idleState?.type === "session.state.changed") {
+        assert.equal(idleState.payload.state, "ready");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("passes workflow metadata through task events and hides skip_transcript tasks", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "task.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      // Ambient housekeeping task — its whole lifecycle stays off the timeline.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-hidden-1",
+        description: "Ambient housekeeping",
+        skip_transcript: true,
+        session_id: "sdk-session-workflow",
+        uuid: "task-hidden-started",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-hidden-1",
+        description: "Ambient housekeeping",
+        usage: { total_tokens: 10, tool_uses: 1, duration_ms: 5 },
+        session_id: "sdk-session-workflow",
+        uuid: "task-hidden-progress",
+      } as unknown as SDKMessage);
+      // A terminal patch can precede the notification; it must not erase the
+      // hidden marker the notification (which may omit skip_transcript) needs.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-hidden-1",
+        patch: { status: "completed" },
+        session_id: "sdk-session-workflow",
+        uuid: "task-hidden-updated",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-hidden-1",
+        status: "completed",
+        output_file: "/tmp/hidden.log",
+        summary: "hidden done",
+        session_id: "sdk-session-workflow",
+        uuid: "task-hidden-notification",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-workflow-1",
+        tool_use_id: "workflow-tool-1",
+        description: "Run the spec workflow",
+        task_type: "local_workflow",
+        workflow_name: "spec",
+        session_id: "sdk-session-workflow",
+        uuid: "task-workflow-started",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-workflow-1",
+        tool_use_id: "workflow-tool-1",
+        status: "completed",
+        output_file: "/tmp/workflow.log",
+        summary: "Workflow finished",
+        session_id: "sdk-session-workflow",
+        uuid: "task-workflow-notification",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      assert.equal(JSON.stringify(runtimeEvents).includes("task-hidden-1"), false);
+
+      const taskStarted = runtimeEvents.find((event) => event.type === "task.started");
+      assert.equal(taskStarted?.type, "task.started");
+      if (taskStarted?.type === "task.started") {
+        assert.equal(String(taskStarted.payload.taskId), "task-workflow-1");
+        assert.equal(taskStarted.payload.taskType, "local_workflow");
+        assert.equal(taskStarted.payload.workflowName, "spec");
+        assert.equal(taskStarted.payload.toolUseId, "workflow-tool-1");
+      }
+
+      const taskCompleted = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(taskCompleted?.type, "task.completed");
+      if (taskCompleted?.type === "task.completed") {
+        assert.equal(String(taskCompleted.payload.taskId), "task-workflow-1");
+        assert.equal(taskCompleted.payload.status, "completed");
+        assert.equal(taskCompleted.payload.toolUseId, "workflow-tool-1");
+        assert.equal(taskCompleted.payload.summary, "Workflow finished");
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("ignores replayed user messages when resuming a session", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-replay",
+        uuid: "stream-replay-0",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "tool-replay-1",
+            name: "Bash",
+            input: { command: "ls" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      // Historical replay carrying a tool_result for the same tool id — must not
+      // complete the live in-flight tool.
+      harness.query.emit({
+        type: "user",
+        isReplay: true,
+        session_id: "sdk-session-replay",
+        uuid: "user-replay-1",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-replay-1",
+              content: [{ type: "text", text: "REPLAYED" }],
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-replay",
+        uuid: "user-replay-2",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "tool-replay-1",
+              content: [{ type: "text", text: "REAL" }],
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-replay",
+        uuid: "result-replay",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      assert.equal(JSON.stringify(runtimeEvents).includes("REPLAYED"), false);
+
+      const toolCompleted = runtimeEvents.find(
+        (event) => event.type === "item.completed" && String(event.itemId) === "tool-replay-1",
+      );
+      assert.equal(toolCompleted?.type, "item.completed");
+      if (toolCompleted?.type === "item.completed") {
+        assert.equal(toolCompleted.payload.status, "completed");
+        assert.equal(JSON.stringify(toolCompleted.payload.data ?? {}).includes("REAL"), true);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("keeps tools awaiting results across message boundaries (index reuse)", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      const emitStream = (uuid: string, event: Record<string, unknown>) => {
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-rotation",
+          uuid,
+          parent_tool_use_id: null,
+          event,
+        } as unknown as SDKMessage);
+      };
+
+      // Message 1 starts a tool at content-block index 0 whose result arrives late.
+      emitStream("rotation-m1", { type: "message_start", message: {} });
+      emitStream("rotation-m1-b0", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-a",
+          name: "Bash",
+          input: { command: "long-job" },
+        },
+      });
+      emitStream("rotation-m1-b0-stop", { type: "content_block_stop", index: 0 });
+
+      // Message 2 reuses index 0 for a different tool before tool-a resolved.
+      emitStream("rotation-m2", { type: "message_start", message: {} });
+      emitStream("rotation-m2-b0", {
+        type: "content_block_start",
+        index: 0,
+        content_block: {
+          type: "tool_use",
+          id: "tool-b",
+          name: "Bash",
+          input: { command: "ls" },
+        },
+      });
+      emitStream("rotation-m2-b0-stop", { type: "content_block_stop", index: 0 });
+
+      const emitToolResult = (uuid: string, toolUseId: string, text: string) => {
+        harness.query.emit({
+          type: "user",
+          session_id: "sdk-session-rotation",
+          uuid,
+          parent_tool_use_id: null,
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: toolUseId,
+                content: [{ type: "text", text }],
+              },
+            ],
+          },
+        } as unknown as SDKMessage);
+      };
+      emitToolResult("rotation-result-a", "tool-a", "A-RESULT");
+      emitToolResult("rotation-result-b", "tool-b", "B-RESULT");
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-rotation",
+        uuid: "result-rotation",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const completionsByTool = new Map<string, string>();
+      for (const event of runtimeEvents) {
+        if (event.type === "item.completed" && event.payload.itemType === "command_execution") {
+          completionsByTool.set(String(event.itemId), JSON.stringify(event.payload.data ?? {}));
+        }
+      }
+      assert.equal(completionsByTool.size, 2);
+      assert.equal(completionsByTool.get("tool-a")?.includes("A-RESULT"), true);
+      assert.equal(completionsByTool.get("tool-b")?.includes("B-RESULT"), true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("swallows results owed to turns force-closed by a newer sendTurn", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "session.state.changed" && event.payload.reason === "session_state:idle",
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const firstTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "first",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-stale",
+        uuid: "stale-delta-1",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "working on the first prompt" },
+        },
+      } as unknown as SDKMessage);
+
+      // The user preempts the running turn with a new prompt.
+      const secondTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "second",
+        attachments: [],
+      });
+
+      // The SDK result for the preempted first turn must not complete turn two.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-stale",
+        uuid: "result-stale-first",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-stale",
+        uuid: "stale-delta-2",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "answer to the second prompt" },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-stale",
+        uuid: "result-stale-second",
+      } as unknown as SDKMessage);
+
+      // A duplicate/late result with no open turn must not fabricate a turn.completed.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-stale",
+        uuid: "result-stale-extra",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "session_state_changed",
+        state: "idle",
+        session_id: "sdk-session-stale",
+        uuid: "stale-idle",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const turnCompletions = runtimeEvents.filter((event) => event.type === "turn.completed");
+      assert.deepEqual(
+        turnCompletions.map((event) => String(event.turnId)),
+        [String(firstTurn.turnId), String(secondTurn.turnId)],
+      );
+
+      // The second turn stayed open across the stale result: its content delta
+      // is emitted after the first completion and before the second.
+      const secondDeltaIndex = runtimeEvents.findIndex(
+        (event) =>
+          event.type === "content.delta" && event.payload.delta === "answer to the second prompt",
+      );
+      const secondCompletionIndex = runtimeEvents.findIndex(
+        (event) =>
+          event.type === "turn.completed" && String(event.turnId) === String(secondTurn.turnId),
+      );
+      assert.equal(secondDeltaIndex >= 0 && secondDeltaIndex < secondCompletionIndex, true);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("routes backgrounded subagent text through task progress", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "task.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const turn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-tool",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "task-tool-bg",
+            name: "Task",
+            input: { description: "Explore the repo" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-bg-1",
+        tool_use_id: "task-tool-bg",
+        description: "Explore the repo",
+        subagent_type: "explore",
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-task-started",
+      } as unknown as SDKMessage);
+
+      // Backgrounding resolves the Task tool call immediately.
+      harness.query.emit({
+        type: "user",
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-tool-result",
+        parent_tool_use_id: null,
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "task-tool-bg",
+              content: [{ type: "text", text: "Running in the background" }],
+            },
+          ],
+        },
+      } as unknown as SDKMessage);
+
+      // The spawning turn ends while the subagent keeps running.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-result",
+      } as unknown as SDKMessage);
+
+      // Let the stream fiber process the result so the spawning turn is closed
+      // before the user's follow-up starts (not preempted by it).
+      for (let i = 0; i < 100; i += 1) {
+        const sessions = yield* adapter.listSessions();
+        if (sessions[0]?.status === "ready") {
+          break;
+        }
+        yield* Effect.yieldNow;
+      }
+
+      // The user starts an unrelated new turn before the subagent reports back.
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "unrelated follow-up",
+        attachments: [],
+      });
+
+      // Later subagent output can no longer attach to the completed tool item —
+      // and must not be attributed to the unrelated new turn either.
+      harness.query.emit({
+        type: "assistant",
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-assistant",
+        parent_tool_use_id: "task-tool-bg",
+        subagent_type: "explore",
+        message: {
+          id: "bg-subagent-message",
+          content: [{ type: "text", text: "Background inner update" }],
+        },
+      } as unknown as SDKMessage);
+
+      // A terminal patch preceding the notification must not drop the task's
+      // spawning-turn metadata.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_updated",
+        task_id: "task-bg-1",
+        patch: { status: "completed" },
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-task-updated",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-bg-1",
+        tool_use_id: "task-tool-bg",
+        description: "Explore the repo",
+        summary: "Halfway done",
+        usage: { total_tokens: 20, tool_uses: 1, duration_ms: 10 },
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-task-progress",
+      } as unknown as SDKMessage);
+
+      // The terminal notification may omit the tool id; the completion must
+      // still resolve the spawning turn via the task-id fallback.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-bg-1",
+        status: "completed",
+        output_file: "/tmp/bg.log",
+        summary: "Explored everything",
+        session_id: "sdk-session-bg-subagent",
+        uuid: "bg-subagent-task-notification",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const progressEvent = runtimeEvents.find(
+        (event) =>
+          event.type === "task.progress" && event.payload.summary === "Background inner update",
+      );
+      assert.equal(progressEvent?.type, "task.progress");
+      if (progressEvent?.type === "task.progress") {
+        assert.equal(String(progressEvent.payload.taskId), "task-bg-1");
+        assert.equal(progressEvent.payload.toolUseId, "task-tool-bg");
+        assert.equal(progressEvent.payload.subagentType, "explore");
+        assert.equal(progressEvent.payload.description, "Explore the repo");
+        // Late background progress carries the SPAWNING turn's id — visible to
+        // the web work-log filter, and not attributed to the unrelated turn
+        // that happens to be open when it arrives.
+        assert.equal(String(progressEvent.turnId), String(turn.turnId));
+      }
+
+      const sdkProgressEvent = runtimeEvents.find(
+        (event) => event.type === "task.progress" && event.payload.summary === "Halfway done",
+      );
+      assert.equal(sdkProgressEvent?.type, "task.progress");
+      if (sdkProgressEvent?.type === "task.progress") {
+        assert.equal(String(sdkProgressEvent.turnId), String(turn.turnId));
+      }
+
+      const completedEvent = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(completedEvent?.type, "task.completed");
+      if (completedEvent?.type === "task.completed") {
+        assert.equal(String(completedEvent.payload.taskId), "task-bg-1");
+        assert.equal(completedEvent.payload.status, "completed");
+        // Even without a tool id on the notification, the completion resolves
+        // the spawning turn instead of the unrelated open turn.
+        assert.equal(String(completedEvent.turnId), String(turn.turnId));
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("mirrors task progress onto the spawning tool item while it is in flight", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil(
+          (event) =>
+            event.type === "item.updated" &&
+            JSON.stringify(event.payload.data ?? {}).includes("Checked 3 files"),
+        ),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-fg-task",
+        uuid: "fg-task-tool",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: {
+            type: "tool_use",
+            id: "task-tool-fg",
+            name: "Task",
+            input: { description: "Review the migration" },
+          },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-fg-1",
+        tool_use_id: "task-tool-fg",
+        description: "Review the migration",
+        summary: "Checked 3 files",
+        last_tool_name: "Grep",
+        usage: { total_tokens: 50, tool_uses: 2, duration_ms: 100 },
+        session_id: "sdk-session-fg-task",
+        uuid: "fg-task-progress",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const itemUpdate = runtimeEvents.find(
+        (event) => event.type === "item.updated" && String(event.itemId) === "task-tool-fg",
+      );
+      assert.equal(itemUpdate?.type, "item.updated");
+      if (itemUpdate?.type === "item.updated") {
+        assert.equal(itemUpdate.payload.itemType, "collab_agent_tool_call");
+        const data = itemUpdate.payload.data as {
+          taskId?: string;
+          taskSummary?: string;
+          lastToolName?: string;
+        };
+        assert.equal(data.taskId, "task-fg-1");
+        assert.equal(data.taskSummary, "Checked 3 files");
+        // The web's collab work-log extraction renders `output`.
+        assert.equal((data as { output?: string }).output, "Checked 3 files");
+        assert.equal(data.lastToolName, "Grep");
+      }
+
+      // The plain task.progress activity is still emitted alongside.
+      assert.equal(
+        runtimeEvents.some(
+          (event) => event.type === "task.progress" && event.payload.toolUseId === "task-tool-fg",
+        ),
+        true,
+      );
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "does not let a preempted background continuation swallow the user turn's result",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const adapter = yield* ClaudeAdapter;
+
+        const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "session.state.changed" &&
+              event.payload.reason === "session_state:idle",
+          ),
+          Stream.runCollect,
+          Effect.forkChild,
+        );
+
+        const session = yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          runtimeMode: "full-access",
+        });
+        yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "first",
+          attachments: [],
+        });
+        // Complete the user turn so the follow-up activity opens a synthetic turn.
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-idle-heal",
+          uuid: "idle-heal-result-1",
+        } as unknown as SDKMessage);
+
+        // Background continuation opens a synthetic turn...
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-idle-heal",
+          uuid: "idle-heal-bg-delta",
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "background follow-up" },
+          },
+        } as unknown as SDKMessage);
+
+        // ...which the user preempts. Synthetic turns may fold their result into
+        // the idle signal, so preempting one must NOT arm stale-result debt —
+        // otherwise the next result (belonging to this new user turn) would be
+        // swallowed and the thread left stuck running.
+        const userTurn = yield* adapter.sendTurn({
+          threadId: session.threadId,
+          input: "second",
+          attachments: [],
+        });
+        harness.query.emit({
+          type: "stream_event",
+          session_id: "sdk-session-idle-heal",
+          uuid: "idle-heal-user-delta",
+          parent_tool_use_id: null,
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "text_delta", text: "answer to second" },
+          },
+        } as unknown as SDKMessage);
+        harness.query.emit({
+          type: "result",
+          subtype: "success",
+          is_error: false,
+          errors: [],
+          session_id: "sdk-session-idle-heal",
+          uuid: "idle-heal-result-2",
+        } as unknown as SDKMessage);
+
+        harness.query.emit({
+          type: "system",
+          subtype: "session_state_changed",
+          state: "idle",
+          session_id: "sdk-session-idle-heal",
+          uuid: "idle-heal-idle",
+        } as unknown as SDKMessage);
+
+        const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+        // The user turn is completed by its own result, before the idle signal —
+        // not swallowed as stale debt, not left for the idle backstop.
+        const userTurnCompletedIndex = runtimeEvents.findIndex(
+          (event) =>
+            event.type === "turn.completed" && String(event.turnId) === String(userTurn.turnId),
+        );
+        const userTurnCompleted = runtimeEvents[userTurnCompletedIndex];
+        assert.equal(userTurnCompleted?.type, "turn.completed");
+        if (userTurnCompleted?.type === "turn.completed") {
+          assert.equal(userTurnCompleted.payload.state, "completed");
+        }
+        const idleStateIndex = runtimeEvents.length - 1;
+        assert.equal(userTurnCompletedIndex >= 0 && userTurnCompletedIndex < idleStateIndex, true);
+
+        const idleState = runtimeEvents[idleStateIndex];
+        assert.equal(idleState?.type, "session.state.changed");
+        if (idleState?.type === "session.state.changed") {
+          assert.equal(idleState.payload.state, "ready");
+        }
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
 });

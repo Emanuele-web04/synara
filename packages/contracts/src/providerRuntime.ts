@@ -480,6 +480,12 @@ const TaskStartedPayload = Schema.Struct({
   taskId: RuntimeTaskId,
   description: Schema.optional(TrimmedNonEmptyStringSchema),
   taskType: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Tool-call id of the spawning tool (e.g. Claude's Task tool) so clients can
+  // link task activity to the tool item that launched it.
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Workflow script name when the task is a workflow run (taskType "local_workflow").
+  workflowName: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskStartedPayload = typeof TaskStartedPayload.Type;
 
@@ -489,6 +495,8 @@ const TaskProgressPayload = Schema.Struct({
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
   lastToolName: Schema.optional(TrimmedNonEmptyStringSchema),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
+  subagentType: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskProgressPayload = typeof TaskProgressPayload.Type;
 
@@ -497,6 +505,7 @@ const TaskCompletedPayload = Schema.Struct({
   status: Schema.Literals(["completed", "failed", "stopped"]),
   summary: Schema.optional(TrimmedNonEmptyStringSchema),
   usage: Schema.optional(Schema.Unknown),
+  toolUseId: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type TaskCompletedPayload = typeof TaskCompletedPayload.Type;
 

@@ -953,15 +953,21 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "task.started",
-          summary:
-            event.payload.taskType === "plan"
-              ? "Plan task started"
-              : event.payload.taskType
-                ? `${event.payload.taskType} task started`
-                : "Task started",
+          summary: event.payload.workflowName
+            ? `Workflow started: ${event.payload.workflowName}`
+            : event.payload.subagentType
+              ? `Subagent started: ${event.payload.subagentType}`
+              : event.payload.taskType === "plan"
+                ? "Plan task started"
+                : event.payload.taskType
+                  ? `${event.payload.taskType} task started`
+                  : "Task started",
           payload: toActivityPayload({
             taskId: event.payload.taskId,
             ...(event.payload.taskType ? { taskType: event.payload.taskType } : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentType ? { subagentType: event.payload.subagentType } : {}),
+            ...(event.payload.workflowName ? { workflowName: event.payload.workflowName } : {}),
             ...(event.payload.description
               ? { detail: truncateDetail(event.payload.description) }
               : {}),
@@ -986,6 +992,8 @@ function runtimeEventToActivities(
             ...(event.payload.summary ? { summary: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.lastToolName ? { lastToolName: event.payload.lastToolName } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
+            ...(event.payload.subagentType ? { subagentType: event.payload.subagentType } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1011,6 +1019,7 @@ function runtimeEventToActivities(
             status: event.payload.status,
             ...(event.payload.summary ? { detail: truncateDetail(event.payload.summary) } : {}),
             ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.toolUseId ? { toolUseId: event.payload.toolUseId } : {}),
           }),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
