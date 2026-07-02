@@ -1104,9 +1104,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.message.skills !== undefined ? { skills: command.message.skills } : {}),
           ...(command.message.mentions !== undefined ? { mentions: command.message.mentions } : {}),
           dispatchMode,
-          ...(command.dispatchOrigin !== undefined
-            ? { dispatchOrigin: command.dispatchOrigin }
-            : {}),
+          // Explicit "user" (not absent): edit-resends replay through a fresh
+          // server-side turn.start without an origin, and the projection
+          // upsert coalesces absent origins — a human resend of a message
+          // originally dispatched by an automation/agent must overwrite the
+          // stale origin instead of inheriting it.
+          dispatchOrigin: command.dispatchOrigin ?? "user",
           turnId: null,
           streaming: false,
           source: "native",

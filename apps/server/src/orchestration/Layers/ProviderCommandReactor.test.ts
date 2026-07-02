@@ -2070,6 +2070,11 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -2117,6 +2122,63 @@ describe("ProviderCommandReactor", () => {
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "pivot now",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    });
+  });
+
+  it("dispatches a codex steer as a queued turn when the live provider turn already settled", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // Projection lags: it still says running, but the provider runtime has no
+    // live turn. The steer must not ride the native codex steer path (which
+    // would skip the turn-start checkpoint) — it dispatches as a normal turn.
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stale-steer-codex"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-settled"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+    harness.steerTurn.mockClear();
+    harness.interruptTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-steer-codex-stale"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-steer-codex-stale"),
+          role: "user",
+          text: "steer but nothing is running",
+          attachments: [],
+        },
+        dispatchMode: "steer",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.steerTurn).not.toHaveBeenCalled();
+    expect(harness.interruptTurn).not.toHaveBeenCalled();
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "steer but nothing is running",
     });
   });
 

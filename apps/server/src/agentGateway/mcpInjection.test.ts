@@ -1,6 +1,11 @@
 import { assert, describe, it } from "@effect/vitest";
 
-import { appendCodexConfigSection } from "../codexProcessEnv.ts";
+import {
+  appendCodexConfigSection,
+  extractManagedCodexConfigSection,
+  SYNARA_MANAGED_CODEX_CONFIG_BEGIN,
+  SYNARA_MANAGED_CODEX_CONFIG_END,
+} from "../codexProcessEnv.ts";
 import {
   buildAcpSynaraMcpServers,
   buildClaudeMcpServers,
@@ -36,6 +41,22 @@ describe("agent gateway MCP injection", () => {
 
     const reappended = appendCodexConfigSection(appended, section);
     assert.equal(reappended.split("[mcp_servers.synara]").length, 2);
+  });
+
+  it("round-trips the managed section through the overlay markers", () => {
+    const section = buildCodexMcpConfigToml(connection.url);
+    const overlayConfig = [
+      '[model]\nname = "gpt-5.5"',
+      "",
+      SYNARA_MANAGED_CODEX_CONFIG_BEGIN,
+      section,
+      SYNARA_MANAGED_CODEX_CONFIG_END,
+      "",
+    ].join("\n");
+    // A rewrite without appendConfigToml recovers the block so concurrent env
+    // preps (version checks, text generation) don't strip the session's MCP entry.
+    assert.equal(extractManagedCodexConfigSection(overlayConfig), section);
+    assert.isUndefined(extractManagedCodexConfigSection('[model]\nname = "gpt-5.5"\n'));
   });
 
   it("builds a claude http server entry with the bearer header", () => {

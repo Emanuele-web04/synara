@@ -491,6 +491,42 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("keeps worktree-isolated callers from spawning local workers", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", {
+        envMode: "worktree",
+        worktreePath: "/tmp/worktrees/caller",
+        branch: "agent/caller",
+      }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      const rejected = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: { prompt: "touch the main checkout", provider: "codex", environment: "local" },
+      });
+      assert.isTrue(isToolError(rejected.result));
+      assert.include(toolErrorText(rejected.result), "isolated worktree");
+      assert.equal(harness.dispatched.length, 0);
+
+      // Omitting environment defaults to an isolated worktree, not local.
+      const defaulted = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: { prompt: "do isolated work", provider: "codex" },
+      });
+      assert.isFalse(isToolError(defaulted.result), toolErrorText(defaulted.result));
+      assert.equal(toolResultJson(defaulted.result).environment, "worktree");
+      const create = harness.dispatched[0]!;
+      assert.equal(create.type, "thread.create");
+      if (create.type === "thread.create") {
+        assert.equal(create.envMode, "worktree");
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects runtime-mode escalation beyond the calling thread", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

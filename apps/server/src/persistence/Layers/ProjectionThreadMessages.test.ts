@@ -244,4 +244,47 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(rows[0]?.dispatchOrigin, "automation");
     }),
   );
+
+  it.effect(
+    "overwrites a stale automation origin when a resend carries an explicit user origin",
+    () =>
+      Effect.gen(function* () {
+        const repository = yield* ProjectionThreadMessageRepository;
+        const threadId = ThreadId.makeUnsafe("thread-dispatch-origin-edit");
+        const messageId = MessageId.makeUnsafe("message-dispatch-origin-edit");
+        const createdAt = "2026-02-28T19:32:00.000Z";
+
+        yield* repository.upsert({
+          messageId,
+          threadId,
+          turnId: null,
+          role: "user",
+          text: "automation kicked this off",
+          dispatchOrigin: "automation",
+          isStreaming: false,
+          source: "native",
+          createdAt,
+          updatedAt: "2026-02-28T19:32:01.000Z",
+        });
+
+        // A human edit-and-resend replays through the decider, which stamps an
+        // explicit "user" origin; the row must stop being labeled automation.
+        yield* repository.upsert({
+          messageId,
+          threadId,
+          turnId: null,
+          role: "user",
+          text: "human edited and resent this",
+          dispatchOrigin: "user",
+          isStreaming: false,
+          source: "native",
+          createdAt,
+          updatedAt: "2026-02-28T19:32:02.000Z",
+        });
+
+        const rows = yield* repository.listByThreadId({ threadId });
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0]?.dispatchOrigin, "user");
+      }),
+  );
 });

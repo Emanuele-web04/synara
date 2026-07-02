@@ -1396,8 +1396,15 @@ const make = Effect.gen(function* () {
       // live provider turn. Codex steers ride the live turn natively; everything
       // else re-queues and is promoted when the live turn settles.
       const providerName = thread.session?.providerName ?? thread.modelSelection.provider;
-      const isCodexSteer = event.payload.dispatchMode === "steer" && providerName === "codex";
-      if (!isCodexSteer && (yield* hasLiveProviderTurn(event.payload.threadId))) {
+      const hasLiveTurn = yield* hasLiveProviderTurn(event.payload.threadId);
+      // Steering is only meaningful against a live turn. The projection can
+      // lag the runtime in the other direction too (turn already settled but
+      // still projected as running), so recheck live state and dispatch a
+      // settled codex "steer" as a normal queued turn — the native steer path
+      // would skip the turn-start checkpoint.
+      const isCodexSteer =
+        event.payload.dispatchMode === "steer" && providerName === "codex" && hasLiveTurn;
+      if (!isCodexSteer && hasLiveTurn) {
         yield* enqueueQueuedTurnStart(event.payload);
         if (event.payload.dispatchMode === "steer") {
           // Preserve steer semantics: jump the queue (enqueue unshifts steers)
@@ -1461,9 +1468,11 @@ const make = Effect.gen(function* () {
           ? { providerOptions: event.payload.providerOptions }
           : {}),
       }).pipe(Effect.forkScoped);
+      // Only a codex steer against a genuinely live turn keeps steer
+      // semantics; anything else that reaches direct dispatch runs as a
+      // normal queued turn (with its turn-start checkpoint).
       const immediateDispatchMode =
-        event.payload.dispatchMode === "steer" &&
-        (thread.session?.providerName ?? thread.modelSelection.provider) !== "codex"
+        event.payload.dispatchMode === "steer" && !isCodexSteer
           ? "queue"
           : event.payload.dispatchMode;
       const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);

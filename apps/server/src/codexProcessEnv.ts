@@ -148,6 +148,45 @@ export function appendCodexConfigSection(config: string, section: string): strin
   return base.length > 0 ? `${base}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
 }
 
+// Markers delimiting Synara-managed config appended to the shared overlay
+// config.toml. The overlay is rebuilt from the source config on every
+// buildCodexProcessEnv call (version checks, discovery, text generation), and
+// most callers don't know about the agent-gateway MCP section — the markers
+// let those rewrites carry the previously appended block forward instead of
+// dropping it while a codex app-server session is about to read the file.
+export const SYNARA_MANAGED_CODEX_CONFIG_BEGIN = "# >>> synara managed config >>>";
+export const SYNARA_MANAGED_CODEX_CONFIG_END = "# <<< synara managed config <<<";
+
+export function extractManagedCodexConfigSection(config: string): string | undefined {
+  const begin = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_BEGIN);
+  if (begin === -1) {
+    return undefined;
+  }
+  const contentStart = begin + SYNARA_MANAGED_CODEX_CONFIG_BEGIN.length;
+  const end = config.indexOf(SYNARA_MANAGED_CODEX_CONFIG_END, contentStart);
+  if (end === -1) {
+    return undefined;
+  }
+  const content = config.slice(contentStart, end).trim();
+  return content.length > 0 ? content : undefined;
+}
+
+function appendManagedCodexConfigSection(config: string, section: string): string {
+  const trimmedSection = section.trim();
+  if (!trimmedSection) {
+    return config;
+  }
+  // Respect a user-managed copy of the same table in the source config.
+  const sectionHeader = trimmedSection.split("\n")[0] ?? trimmedSection;
+  if (config.includes(sectionHeader)) {
+    return config;
+  }
+  return appendCodexConfigSection(
+    config,
+    `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${trimmedSection}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
+  );
+}
+
 function prepareDpCodeCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
@@ -187,10 +226,19 @@ function prepareDpCodeCodexHomeOverlay(input: {
   let overlayConfig = input.disableBrowserPlugin
     ? disableDpCodeBrowserPluginInCodexConfig(sourceConfig)
     : sourceConfig;
-  if (input.appendConfigToml) {
-    overlayConfig = appendCodexConfigSection(overlayConfig, input.appendConfigToml);
+  // Callers that don't pass appendConfigToml (version checks, discovery, text
+  // generation) must not strip a managed section a concurrent provider
+  // session relies on; carry the previously written block forward.
+  const overlayConfigPath = path.join(overlayHomePath, "config.toml");
+  const managedSection =
+    input.appendConfigToml ??
+    (existsSync(overlayConfigPath)
+      ? extractManagedCodexConfigSection(readFileSync(overlayConfigPath, "utf8"))
+      : undefined);
+  if (managedSection) {
+    overlayConfig = appendManagedCodexConfigSection(overlayConfig, managedSection);
   }
-  writeFileSync(path.join(overlayHomePath, "config.toml"), overlayConfig, "utf8");
+  writeFileSync(overlayConfigPath, overlayConfig, "utf8");
 
   return overlayHomePath;
 }

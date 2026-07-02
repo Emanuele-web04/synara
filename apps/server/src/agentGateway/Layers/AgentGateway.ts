@@ -342,7 +342,7 @@ export const makeAgentGateway = Effect.gen(function* () {
             type: "string",
             enum: ["local", "worktree"],
             description:
-              "local = share the project workspace (default, for read-only work); worktree = isolated git worktree (for file edits).",
+              "local = share the project workspace (default for local callers, read-only work); worktree = isolated git worktree (for file edits). Threads running in a worktree default to worktree and cannot spawn local workers.",
           },
           baseBranch: {
             type: "string",
@@ -368,8 +368,12 @@ export const makeAgentGateway = Effect.gen(function* () {
         const prompt = readStringArg(args, "prompt", { required: true })!;
         const provider = parseProviderKind(readStringArg(args, "provider", { required: true })!);
         const model = readStringArg(args, "model");
-        const environment = readStringArg(args, "environment") ?? "local";
-        if (environment !== "local" && environment !== "worktree") {
+        const environmentArg = readStringArg(args, "environment");
+        if (
+          environmentArg !== undefined &&
+          environmentArg !== "local" &&
+          environmentArg !== "worktree"
+        ) {
           throw new ToolInputError(`Argument "environment" must be "local" or "worktree".`);
         }
         const runtimeModeArg = readStringArg(args, "runtimeMode");
@@ -386,6 +390,17 @@ export const makeAgentGateway = Effect.gen(function* () {
         // The caller only provides defaults (project, runtime mode); the new
         // thread is an ordinary top-level thread with no parent linkage.
         const caller = yield* requireThreadShell(context.callerThreadId);
+
+        // Isolation boundary: a caller the user confined to a worktree must
+        // not place workers on the shared project checkout. Default to a
+        // fresh worktree and reject explicit "local" requests.
+        const callerIsolatedInWorktree = caller.envMode === "worktree";
+        if (environmentArg === "local" && callerIsolatedInWorktree) {
+          throw new ToolInputError(
+            'Your thread runs in an isolated worktree, so spawned threads cannot use environment "local". Omit environment (defaults to "worktree") or ask the user to run this task from a local thread.',
+          );
+        }
+        const environment = environmentArg ?? (callerIsolatedInWorktree ? "worktree" : "local");
 
         const projectIdArg = readStringArg(args, "projectId");
         const projectId = ProjectId.makeUnsafe(projectIdArg ?? caller.projectId);
