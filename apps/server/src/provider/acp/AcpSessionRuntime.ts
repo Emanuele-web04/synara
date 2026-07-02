@@ -94,6 +94,10 @@ export interface AcpSessionRuntimeShape {
   readonly handleExtNotification: EffectAcpClient.AcpClientShape["handleExtNotification"];
   readonly start: () => Effect.Effect<AcpSessionRuntimeStartResult, EffectAcpErrors.AcpError>;
   readonly getEvents: () => Stream.Stream<AcpParsedSessionEvent, never>;
+  // Number of parsed session/update events still queued for the getEvents()
+  // consumer. Adapters use it to keep turn attribution open until events
+  // received during the turn have actually been drained.
+  readonly pendingSessionUpdateCount: Effect.Effect<number>;
   readonly getModeState: Effect.Effect<AcpSessionModeState | undefined>;
   readonly getConfigOptions: Effect.Effect<ReadonlyArray<EffectAcpSchema.SessionConfigOption>>;
   readonly prompt: (
@@ -568,6 +572,7 @@ const makeAcpSessionRuntime = (
         acceptingSessionUpdates = true;
         return Stream.fromQueue(eventQueue);
       },
+      pendingSessionUpdateCount: Queue.size(eventQueue),
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt: (payload) =>

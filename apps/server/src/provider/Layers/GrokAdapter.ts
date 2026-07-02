@@ -136,6 +136,13 @@ const GROK_COMPACT_CANCEL_WAIT_MS = 10_000;
 // go quiet (bounded) before deciding success.
 const GROK_COMPACT_OUTCOME_QUIET_MS = 200;
 const GROK_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
+// A prompt response can resolve while session/update events received during
+// the turn still sit in the ACP event queue. The turn stays active (bounded)
+// until that backlog drains so late tool updates keep their turn attribution
+// instead of falling into the between-turn heuristics. Zero-cost when the
+// consumer is keeping up (the queue is already empty).
+const GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const GROK_TURN_SETTLE_DRAIN_POLL_MS = 25;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -945,6 +952,32 @@ export function makeGrokAdapter(
         });
       });
 
+    // Holds the active-turn window open until session/update events that were
+    // queued when the prompt response resolved have been drained by the
+    // notification consumer, so they settle with their turn attribution (and
+    // recorded failed-tool detail) intact. Returns immediately when the
+    // consumer kept up; bounded so a chatty stream cannot stall turn
+    // completion past the cap.
+    const waitForGrokQueuedTurnEventsDrained = (ctx: GrokSessionContext) =>
+      Effect.gen(function* () {
+        const startedAt = Date.now();
+        let sawBacklog = false;
+        while (Date.now() - startedAt < GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS) {
+          const pending = yield* ctx.acp.pendingSessionUpdateCount;
+          if (pending === 0) {
+            if (!sawBacklog) {
+              return;
+            }
+            // The final dequeued event may still be mid-processing; one short
+            // yield lets it read the still-active turn state before it clears.
+            yield* Effect.sleep(GROK_TURN_SETTLE_DRAIN_POLL_MS);
+            return;
+          }
+          sawBacklog = true;
+          yield* Effect.sleep(GROK_TURN_SETTLE_DRAIN_POLL_MS);
+        }
+      });
+
     // Waits until the notification consumer has been quiet briefly so state it
     // records from queued events (e.g. compactionFailedToolDetail) is visible
     // before the compaction outcome is decided. Bounded — a chatty session
@@ -983,6 +1016,15 @@ export function makeGrokAdapter(
             Effect.timeoutOption(GROK_COMPACT_CANCEL_WAIT_MS),
           );
           ctx.compactionCancelFiber = undefined;
+          // The cancel wait can outlive the quiet window armed at the original
+          // compaction timeout; restart it from now so stragglers arriving
+          // just after the cancel drains are still held off (and dropped).
+          if (ctx.compactionQuietUntil !== undefined) {
+            ctx.compactionQuietUntil = Math.max(
+              ctx.compactionQuietUntil,
+              Date.now() + GROK_COMPACT_ABANDON_QUIET_MS,
+            );
+          }
         }
         const compactionQuietUntil = ctx.compactionQuietUntil;
         if (compactionQuietUntil !== undefined) {
@@ -1654,6 +1696,16 @@ export function makeGrokAdapter(
           yield* Deferred.await(ctx.resumeReplayReady);
         }
         yield* waitForAbandonedGrokCompaction(ctx);
+        // The gates above are resolved by stopSessionInternal too (a failed or
+        // stopped startup must not strand waiters); a turn that was blocked on
+        // them must fail here instead of emitting lifecycle events for a dead
+        // session.
+        if (ctx.stopped) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
@@ -1780,6 +1832,7 @@ export function makeGrokAdapter(
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
+                yield* waitForGrokQueuedTurnEventsDrained(ctx);
                 if (!clearGrokActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1809,6 +1862,9 @@ export function makeGrokAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                // Drain BEFORE snapshotting turn state: queued events may still
+                // set activeTurnFailedToolDetail or assistant-content flags.
+                yield* waitForGrokQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 if (!clearGrokActiveTurn(ctx, turnId)) {
