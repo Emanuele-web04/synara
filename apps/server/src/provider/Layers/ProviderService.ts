@@ -872,7 +872,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             // A turn can settle before this write lands (e.g. a pre-start
             // cancellation completes inside the adapter fork); re-marking the
             // thread as running then would strand it with a stale active turn.
-            if (recentlyCompletedTurnByThread.get(input.threadId) !== String(turn.turnId)) {
+            // Durable metadata (model selection, resume cursor) is still
+            // persisted — status stays untouched (upsert keeps the existing
+            // value when omitted) and runtimePayload merges per key.
+            if (recentlyCompletedTurnByThread.get(input.threadId) === String(turn.turnId)) {
+              yield* directory.upsert({
+                threadId: input.threadId,
+                provider: routed.adapter.provider,
+                ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                ...(input.modelSelection !== undefined
+                  ? { runtimePayload: { modelSelection: input.modelSelection } }
+                  : {}),
+              });
+            } else {
               yield* directory.upsert({
                 threadId: input.threadId,
                 provider: routed.adapter.provider,

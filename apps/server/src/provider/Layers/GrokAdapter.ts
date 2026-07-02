@@ -121,6 +121,11 @@ const GROK_TURN_WATCHDOG_INTERVAL_MS = 15_000;
 // otherwise wedge the thread indefinitely. Reuses the turn idle timeout value
 // as a generous ceiling (compactions stream activity well under it).
 const GROK_COMPACT_TIMEOUT_MS = GROK_TURN_IDLE_TIMEOUT_MS;
+// After a timed-out /compact the cancel is only best-effort: the child may
+// still stream stale compaction updates for a moment. Hold new turns (and
+// drop compaction-shaped tool updates) for this long so those events cannot
+// be attributed to the next active turn.
+const GROK_COMPACT_ABANDON_QUIET_MS = 5_000;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -295,6 +300,10 @@ interface GrokSessionContext {
   // still resolves successfully is not persisted as compacted (mirrors how
   // normal turns use activeTurnFailedToolDetail).
   compactionFailedToolDetail: string | undefined;
+  // Epoch-ms until which an abandoned (timed-out) /compact may still stream
+  // stale updates; new turns wait it out and compaction-shaped tool updates
+  // are dropped so they cannot pollute the next turn.
+  compactionQuietUntil: number | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
 }
@@ -1167,6 +1176,7 @@ export function makeGrokAdapter(
             pendingTurnInterrupted: false,
             compactingThread: false,
             compactionFailedToolDetail: undefined,
+            compactionQuietUntil: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
           };
@@ -1234,6 +1244,16 @@ export function makeGrokAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
+                      // Stale tool updates from an abandoned (timed-out) /compact
+                      // can arrive until the child processes the cancel; drop
+                      // them instead of attributing them anywhere.
+                      if (
+                        ctx.compactionQuietUntil !== undefined &&
+                        Date.now() < ctx.compactionQuietUntil &&
+                        isGrokContextCompactionToolCall(event.toolCall)
+                      ) {
+                        return;
+                      }
                       // The title heuristic only applies between turns (grok-initiated
                       // auto-compaction); a live turn's tool call may legitimately
                       // mention "compact"/"summarize" and must render normally, and
@@ -1479,6 +1499,16 @@ export function makeGrokAdapter(
             issue: "Cannot start a turn while Grok context compaction is in progress.",
           });
         }
+        // A second sendTurn entering while another turn is still starting would
+        // clear that turn's pendingTurnInterrupted flag (letting a cancelled
+        // turn dispatch anyway) and race two ACP prompts; reject it instead.
+        if (ctx.turnStarting) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Another Grok turn is still starting for this thread.",
+          });
+        }
         ctx.turnStarting = true;
         ctx.pendingTurnInterrupted = false;
         return yield* startGrokTurn(ctx, input).pipe(
@@ -1497,6 +1527,17 @@ export function makeGrokAdapter(
       Effect.gen(function* () {
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
+        }
+        // An abandoned (timed-out) /compact may still stream stale updates
+        // until the child processes the cancel; wait out the quiet window so
+        // none of them can be attributed to this turn.
+        const compactionQuietUntil = ctx.compactionQuietUntil;
+        if (compactionQuietUntil !== undefined) {
+          const waitMs = compactionQuietUntil - Date.now();
+          if (waitMs > 0) {
+            yield* Effect.sleep(waitMs);
+          }
+          ctx.compactionQuietUntil = undefined;
         }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModelSelection =
@@ -1964,6 +2005,9 @@ export function makeGrokAdapter(
         if (promptResponse === undefined) {
           // Timed out: tell the child to abandon the prompt (best effort) and
           // surface the failure instead of leaving compactingThread wedged.
+          // The cancel may take a moment to drain; suppress stragglers so the
+          // next turn cannot inherit stale compaction updates.
+          ctx.compactionQuietUntil = Date.now() + GROK_COMPACT_ABANDON_QUIET_MS;
           yield* Effect.ignore(ctx.acp.cancel);
           const detail = `Grok did not finish context compaction within ${Math.round(GROK_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
           yield* Effect.logWarning("grok.acp.compact_timeout", {
