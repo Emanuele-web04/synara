@@ -459,7 +459,41 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     // thread. sendTurn consults this immediately before its post-dispatch
     // "running" upsert: a turn that settles before that write lands (e.g. a
     // pre-start cancellation) must not be re-marked as running afterwards.
-    const recentlyCompletedTurnByThread = new Map<ThreadId, string>();
+    // A single slot per thread is not enough — sendTurn is not serialized per
+    // thread, so overlapping sends can both settle pre-write and the second
+    // completion would evict the first turn's marker before its send checked
+    // it. Each thread keeps a small FIFO of recent completions instead, and
+    // each sendTurn consumes its own marker; the cap bounds markers for turns
+    // that never flow through this path.
+    const RECENTLY_COMPLETED_TURNS_PER_THREAD = 8;
+    const recentlyCompletedTurnsByThread = new Map<ThreadId, Set<string>>();
+    const recordRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): void => {
+      let turns = recentlyCompletedTurnsByThread.get(threadId);
+      if (turns === undefined) {
+        turns = new Set();
+        recentlyCompletedTurnsByThread.set(threadId, turns);
+      }
+      turns.delete(turnId);
+      turns.add(turnId);
+      while (turns.size > RECENTLY_COMPLETED_TURNS_PER_THREAD) {
+        const oldest = turns.values().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        turns.delete(oldest);
+      }
+    };
+    const consumeRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): boolean => {
+      const turns = recentlyCompletedTurnsByThread.get(threadId);
+      if (turns === undefined || !turns.has(turnId)) {
+        return false;
+      }
+      turns.delete(turnId);
+      if (turns.size === 0) {
+        recentlyCompletedTurnsByThread.delete(threadId);
+      }
+      return true;
+    };
 
     // Serializes binding writes for a thread between the runtime-event handler
     // and sendTurn's post-dispatch write. Without it a terminal event could
@@ -505,7 +539,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             (event.type === "turn.completed" || event.type === "turn.aborted") &&
             event.turnId !== undefined
           ) {
-            recentlyCompletedTurnByThread.set(event.threadId, String(event.turnId));
+            recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
           }
           const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
           if (!binding) {
@@ -902,7 +936,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             yield* withBindingWriteLock(
               input.threadId,
               Effect.gen(function* () {
-                if (recentlyCompletedTurnByThread.get(input.threadId) === String(turn.turnId)) {
+                if (consumeRecentlyCompletedTurn(input.threadId, String(turn.turnId))) {
                   // On the live-fallback path the terminal event can arrive
                   // before any directory row exists (the runtime-event handler
                   // skips threads without a binding), and upsert defaults a

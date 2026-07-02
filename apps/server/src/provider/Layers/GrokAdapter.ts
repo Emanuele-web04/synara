@@ -307,6 +307,11 @@ interface GrokSessionContext {
   // its originating turn instead of the between-turn auto-compaction
   // heuristic. Cleared when the next turn dispatches.
   readonly turnToolCallIds: Map<string, TurnId>;
+  // Count of ACP session/update events fully handled by the notification
+  // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
+  // events received before a prompt response have all been processed —
+  // in-flight handlers and stream chunk buffering included.
+  sessionUpdatesProcessed: number;
   // Pending until startSession has applied the requested model/mode config.
   // The session is registered in `sessions` before the config RPCs run (so
   // replay keeps draining), which means sendTurn/compactThread can route to it
@@ -953,27 +958,21 @@ export function makeGrokAdapter(
       });
 
     // Holds the active-turn window open until session/update events that were
-    // queued when the prompt response resolved have been drained by the
-    // notification consumer, so they settle with their turn attribution (and
-    // recorded failed-tool detail) intact. Returns immediately when the
-    // consumer kept up; bounded so a chatty stream cannot stall turn
-    // completion past the cap.
+    // already enqueued when the prompt response resolved have been fully
+    // handled by the notification consumer, so they settle with their turn
+    // attribution (and recorded failed-tool detail) intact. Snapshotting the
+    // runtime's enqueued count and waiting for the adapter's processed count
+    // to catch up is immune to stream chunk buffering and in-flight handlers,
+    // unlike a queue-size probe. Returns immediately when the consumer kept
+    // up; bounded so a chatty stream cannot stall settlement past the cap.
     const waitForGrokQueuedTurnEventsDrained = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
+        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
         const startedAt = Date.now();
-        let sawBacklog = false;
-        while (Date.now() - startedAt < GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS) {
-          const pending = yield* ctx.acp.pendingSessionUpdateCount;
-          if (pending === 0) {
-            if (!sawBacklog) {
-              return;
-            }
-            // The final dequeued event may still be mid-processing; one short
-            // yield lets it read the still-active turn state before it clears.
-            yield* Effect.sleep(GROK_TURN_SETTLE_DRAIN_POLL_MS);
-            return;
-          }
-          sawBacklog = true;
+        while (
+          ctx.sessionUpdatesProcessed < target &&
+          Date.now() - startedAt < GROK_TURN_SETTLE_DRAIN_MAX_WAIT_MS
+        ) {
           yield* Effect.sleep(GROK_TURN_SETTLE_DRAIN_POLL_MS);
         }
       });
@@ -984,6 +983,11 @@ export function makeGrokAdapter(
     // cannot hold the /compact RPC open past the cap.
     const settleGrokCompactionOutcome = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
+        // First drain events that were already enqueued when the /compact
+        // response resolved — a backlogged consumer may not have applied a
+        // failed compaction tool update yet, and the quiet window below only
+        // covers in-transit stragglers, not the existing backlog.
+        yield* waitForGrokQueuedTurnEventsDrained(ctx);
         const startedAt = Date.now();
         while (true) {
           const now = Date.now();
@@ -1294,6 +1298,7 @@ export function makeGrokAdapter(
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
             turnToolCallIds: new Map(),
+            sessionUpdatesProcessed: 0,
             sessionConfigReady,
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
@@ -1525,7 +1530,16 @@ export function makeGrokAdapter(
                     }
                     return;
                 }
-              }),
+              }).pipe(
+                // Bump the processed count only after the handler fully ran, so
+                // waitForGrokQueuedTurnEventsDrained cannot observe an event as
+                // consumed while its state updates are still being applied.
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    ctx.sessionUpdatesProcessed += 1;
+                  }),
+                ),
+              ),
             ),
           ).pipe(Effect.forkChild);
 
@@ -1784,6 +1798,15 @@ export function makeGrokAdapter(
           });
         }
 
+        // A stop can land while the config RPCs or attachment reads above were
+        // in flight; opening the turn now would publish turn.started (and a
+        // phantom cancelled completion) for a session that already exited.
+        if (ctx.stopped) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
         // Interrupts that landed during the pre-prompt waits (resume replay,
         // config RPCs, attachment reads) are honored by the prompt fiber's
         // dispatch guard below, so the turn completes through the normal
