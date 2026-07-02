@@ -196,6 +196,7 @@ import {
   closeLiveEditPreviewTabs,
   hasLiveEditPreviewForThread,
   openLiveEditPreviewTab,
+  stopLiveEditPreview,
 } from "../lib/liveEditPreviewTabs";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
@@ -3634,6 +3635,18 @@ export default function ChatView({
       },
     });
   }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
+  // Shared route fallback for revealing the browser pane when no host callback is wired.
+  const revealBrowserPaneViaRoute = useCallback(() => {
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        panel: "browser",
+      }),
+    });
+  }, [navigate, threadId]);
   const onOpenBrowser = useCallback(() => {
     if (resolvedBrowserOpen) {
       return;
@@ -3646,16 +3659,8 @@ export default function ChatView({
       onToggleBrowserPanel();
       return;
     }
-    void navigate({
-      to: "/$threadId",
-      params: { threadId },
-      replace: true,
-      search: (previous) => ({
-        ...stripDiffSearchParams(previous),
-        panel: "browser",
-      }),
-    });
-  }, [navigate, onOpenBrowserPanel, onToggleBrowserPanel, resolvedBrowserOpen, threadId]);
+    revealBrowserPaneViaRoute();
+  }, [onOpenBrowserPanel, onToggleBrowserPanel, resolvedBrowserOpen, revealBrowserPaneViaRoute]);
   const onOpenLiveEditor = useCallback(() => {
     if (onOpenLiveEditorPanel) {
       onOpenLiveEditorPanel();
@@ -3727,44 +3732,11 @@ export default function ChatView({
           // The preview may have been started before this thread's worktree was
           // provisioned (keyed by the project cwd), so stop every candidate cwd —
           // otherwise the original dev server keeps running after a "successful" stop.
-          const stopCwds = [
-            ...new Set(
-              [liveEditCwd, resolvedThreadWorktreePath, activeProject?.cwd ?? null].filter(
-                (candidate): candidate is string => Boolean(candidate),
-              ),
-            ),
-          ];
-          const stopUrls = new Set<string>();
-          for (const stopCwd of stopCwds) {
-            const runningPreviewState = await api.preview
-              .getState({
-                threadId,
-                cwd: stopCwd,
-                ...(activeProjectId ? { projectId: activeProjectId } : {}),
-              })
-              .catch(() => null);
-            if (runningPreviewState?.url) {
-              stopUrls.add(runningPreviewState.url);
-            }
-            await api.preview.stop({
-              threadId,
-              cwd: stopCwd,
-              ...(activeProjectId ? { projectId: activeProjectId } : {}),
-            });
-          }
-          const closedStates = (
-            await Promise.all(
-              stopCwds.map((stopCwd) =>
-                closeLiveEditPreviewTabs(api, {
-                  threadId,
-                  cwd: stopCwd,
-                  projectId: activeProjectId,
-                  urls: [...stopUrls],
-                  fallbackThreadIds: [threadId],
-                }).catch(() => []),
-              ),
-            )
-          ).flat();
+          const { closedStates } = await stopLiveEditPreview(api, {
+            threadId,
+            cwds: [liveEditCwd, resolvedThreadWorktreePath, activeProject?.cwd ?? null],
+            projectId: activeProjectId,
+          });
           for (const closedState of closedStates) {
             upsertThreadBrowserState(closedState);
           }
@@ -3858,17 +3830,9 @@ export default function ChatView({
         onOpenBrowserUrl(url);
         return;
       }
-      void navigate({
-        to: "/$threadId",
-        params: { threadId },
-        replace: true,
-        search: (previous) => ({
-          ...stripDiffSearchParams(previous),
-          panel: "browser",
-        }),
-      });
+      revealBrowserPaneViaRoute();
     },
-    [navigate, onOpenBrowserUrl, threadId],
+    [onOpenBrowserUrl, revealBrowserPaneViaRoute, threadId],
   );
 
   const envLocked = Boolean(

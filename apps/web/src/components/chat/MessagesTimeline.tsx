@@ -107,6 +107,8 @@ import {
 } from "~/lib/terminalContext";
 import {
   extractBrowserEditorContextPromptBlocks,
+  readPromptBlockCount,
+  readPromptBlockField,
   removeBrowserEditorContextPrompts,
   type BrowserEditorPromptContextSummary,
 } from "~/lib/browserEditorContext";
@@ -170,29 +172,19 @@ type TimelineImageAttachment = Extract<
   { type: "image" }
 >;
 
-function readBrowserPromptBlockField(block: string, field: string): string {
-  const match = block.match(new RegExp(`^${field}:\\s*(.*)$`, "m"));
-  return match?.[1]?.trim() ?? "";
-}
-
-function readBrowserPromptBlockCount(block: string, field: string): number {
-  const value = Number(readBrowserPromptBlockField(block, field));
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
-}
-
 function browserAnnotationFromPromptSummary(
   summary: BrowserEditorPromptContextSummary,
 ): ComposerBrowserAnnotationContext {
   const selectedSelector =
-    readBrowserPromptBlockField(summary.block, "selectedSelector") ||
-    readBrowserPromptBlockField(summary.block, "selector");
+    readPromptBlockField(summary.block, "selectedSelector") ||
+    readPromptBlockField(summary.block, "selector");
   return {
     promptBlock: summary.block,
     title: summary.title,
     url: summary.url,
-    strokeCount: readBrowserPromptBlockCount(summary.block, "strokeCount"),
-    textCount: readBrowserPromptBlockCount(summary.block, "textCount"),
-    arrowCount: readBrowserPromptBlockCount(summary.block, "arrowCount"),
+    strokeCount: readPromptBlockCount(summary.block, "strokeCount"),
+    textCount: readPromptBlockCount(summary.block, "textCount"),
+    arrowCount: readPromptBlockCount(summary.block, "arrowCount"),
     ...(selectedSelector ? { selectedSelector } : {}),
   };
 }

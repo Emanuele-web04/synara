@@ -1534,9 +1534,14 @@ function formatSelectedElement(context: BrowserElementEditorContext): string[] {
   ];
 }
 
-function readPromptBlockField(block: string, field: string): string {
+export function readPromptBlockField(block: string, field: string): string {
   const match = block.match(new RegExp(`^${field}:\\s*(.*)$`, "m"));
   return match?.[1]?.trim() ?? "";
+}
+
+export function readPromptBlockCount(block: string, field: string): number {
+  const value = Number(readPromptBlockField(block, field));
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
 }
 
 function compactPromptBlockText(value: string): string {

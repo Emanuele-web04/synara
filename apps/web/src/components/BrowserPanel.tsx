@@ -89,9 +89,9 @@ import {
   screenshotAttachmentName,
 } from "../lib/browserPromptContext";
 import {
-  closeLiveEditPreviewTabs,
   liveEditPreviewRouteKey,
   openLiveEditPreviewTab,
+  stopLiveEditPreview,
 } from "../lib/liveEditPreviewTabs";
 import {
   buildBrowserDrawingPromptBlock,
@@ -821,24 +821,10 @@ function ignoreBrowserBoundsSyncError(): void {
   // browser errors because they do not reflect page navigation health.
 }
 
-function formatPreviewActionError(error: unknown): string {
-  return error instanceof Error && error.message.length > 0
-    ? error.message
-    : "Couldn't complete that preview action.";
-}
-
-function formatInlineTextSaveError(error: unknown): string {
-  if (error instanceof Error && error.message.length > 0) {
-    return error.message;
-  }
-  return "Could not save the text edit to source.";
-}
-
-function formatStyleSourceEditError(error: unknown): string {
-  if (error instanceof Error && error.message.length > 0) {
-    return error.message;
-  }
-  return "Could not apply the style edit to source.";
+// One error-to-message rule for editor actions: surface the real message when the
+// failure carries one, otherwise fall back to the action-specific copy.
+function formatEditorActionError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.length > 0 ? error.message : fallback;
 }
 
 function isBrowserEditorChromeEventTarget(target: EventTarget | null): boolean {
@@ -3297,7 +3283,7 @@ export function BrowserPanel({
         }
         return state;
       } catch (error) {
-        const message = formatPreviewActionError(error);
+        const message = formatEditorActionError(error, "Couldn't complete that preview action.");
         const shouldSuppressUnavailableError =
           options.silentIfUnavailable === true &&
           (message.includes("No package.json preview script found") ||
@@ -3319,37 +3305,25 @@ export function BrowserPanel({
     }
     setPreviewActionPending(true);
     try {
-      const state = await api.preview.stop({
+      const { previewStates, closedStates } = await stopLiveEditPreview(api, {
         threadId,
-        cwd: previewCwd,
-        ...(activeProjectId ? { projectId: activeProjectId } : {}),
-      });
-      upsertPreviewState(state);
-      const closedStates = await closeLiveEditPreviewTabs(api, {
-        threadId,
-        cwd: previewCwd,
+        cwds: [previewCwd],
         projectId: activeProjectId,
-        urls: previewState?.url ? [previewState.url] : [],
-        fallbackThreadIds: [threadId],
-      }).catch(() => []);
+      });
+      const state = previewStates.at(-1);
+      if (state) {
+        upsertPreviewState(state);
+      }
       for (const closedState of closedStates) {
         upsertThreadState(closedState);
       }
       setLocalError(null);
     } catch (error) {
-      setLocalError(formatPreviewActionError(error));
+      setLocalError(formatEditorActionError(error, "Couldn't complete that preview action."));
     } finally {
       setPreviewActionPending(false);
     }
-  }, [
-    activeProjectId,
-    api,
-    previewCwd,
-    previewState?.url,
-    threadId,
-    upsertPreviewState,
-    upsertThreadState,
-  ]);
+  }, [activeProjectId, api, previewCwd, threadId, upsertPreviewState, upsertThreadState]);
 
   const restartPreview = useCallback(async () => {
     if (!api || !previewCwd) {
@@ -3369,7 +3343,7 @@ export function BrowserPanel({
         await navigateBrowserToPreviewUrl(state.url, state.targetCwd ?? null);
       }
     } catch (error) {
-      setLocalError(formatPreviewActionError(error));
+      setLocalError(formatEditorActionError(error, "Couldn't complete that preview action."));
     } finally {
       setPreviewActionPending(false);
     }
@@ -4147,7 +4121,7 @@ export function BrowserPanel({
         }
         setLocalError(null);
       } catch (error) {
-        setLocalError(formatInlineTextSaveError(error));
+        setLocalError(formatEditorActionError(error, "Could not save the text edit to source."));
       }
     },
     [
@@ -7306,7 +7280,9 @@ export function BrowserPanel({
             void clearBrowserStylePreview();
           }, 250);
         } catch (error) {
-          setLocalError(formatStyleSourceEditError(error));
+          setLocalError(
+            formatEditorActionError(error, "Could not apply the style edit to source."),
+          );
         }
       })();
     },

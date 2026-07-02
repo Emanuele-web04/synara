@@ -1,6 +1,7 @@
 import type {
   BrowserTabState,
   NativeApi,
+  PreviewRuntimeState,
   ProjectId,
   ThreadBrowserState,
   ThreadId,
@@ -236,22 +237,23 @@ function uniqueThreadIds(values: readonly ThreadId[]): ThreadId[] {
   return Array.from(new Set(values));
 }
 
-async function closeMatchingUrlTabs(
+// One sweep implementation for both URL-targeted and localhost-wide tab closing:
+// scan the given browser states (or fetch them per thread) and close every tab the
+// predicate matches, deduplicating via `closedTabKeys`.
+async function closeTabsMatching(
   api: NativeApi,
-  threadIds: readonly ThreadId[],
-  urls: readonly string[],
-  closedTabKeys: Set<string>,
-  browserStates?: readonly ThreadBrowserState[],
+  input: {
+    threadIds: readonly ThreadId[];
+    browserStates?: readonly ThreadBrowserState[] | undefined;
+    closedTabKeys: Set<string>;
+    matches: (tab: BrowserTabState) => boolean;
+  },
 ): Promise<ThreadBrowserState[]> {
-  if (urls.length === 0 || (threadIds.length === 0 && !browserStates)) {
-    return [];
-  }
-  const urlKeys = new Set(urls.map(previewUrlKey));
   const states: ThreadBrowserState[] = [];
   const statesToScan =
-    browserStates ??
+    input.browserStates ??
     (await Promise.all(
-      uniqueThreadIds(threadIds).map((threadId) =>
+      uniqueThreadIds(input.threadIds).map((threadId) =>
         api.browser.getState({ threadId }).catch(() => null),
       ),
     ));
@@ -259,15 +261,12 @@ async function closeMatchingUrlTabs(
     if (!state) {
       continue;
     }
-    const tabs = state.tabs.filter(
-      (tab) => urlKeys.has(previewUrlKey(tab.url)) || urlKeys.has(previewUrlKey(tabUrl(tab))),
-    );
-    for (const tab of tabs) {
+    for (const tab of state.tabs.filter(input.matches)) {
       const tabKey = `${state.threadId}:${tab.id}`;
-      if (closedTabKeys.has(tabKey)) {
+      if (input.closedTabKeys.has(tabKey)) {
         continue;
       }
-      closedTabKeys.add(tabKey);
+      input.closedTabKeys.add(tabKey);
       const closedState = await api.browser
         .closeTab({ threadId: state.threadId, tabId: tab.id })
         .catch(() => null);
@@ -279,42 +278,88 @@ async function closeMatchingUrlTabs(
   return states;
 }
 
+async function closeMatchingUrlTabs(
+  api: NativeApi,
+  threadIds: readonly ThreadId[],
+  urls: readonly string[],
+  closedTabKeys: Set<string>,
+  browserStates?: readonly ThreadBrowserState[],
+): Promise<ThreadBrowserState[]> {
+  if (urls.length === 0 || (threadIds.length === 0 && !browserStates)) {
+    return [];
+  }
+  const urlKeys = new Set(urls.map(previewUrlKey));
+  return closeTabsMatching(api, {
+    threadIds,
+    browserStates,
+    closedTabKeys,
+    matches: (tab) =>
+      urlKeys.has(previewUrlKey(tab.url)) || urlKeys.has(previewUrlKey(tabUrl(tab))),
+  });
+}
+
 async function closeLocalPreviewTabs(
   api: NativeApi,
   threadIds: readonly ThreadId[] = [],
   closedTabKeys: Set<string>,
   browserStates?: readonly ThreadBrowserState[],
 ): Promise<ThreadBrowserState[]> {
-  const states: ThreadBrowserState[] = [];
-  const statesToScan =
-    browserStates ??
-    (await Promise.all(
-      uniqueThreadIds(threadIds).map((threadId) =>
-        api.browser.getState({ threadId }).catch(() => null),
-      ),
-    ));
-  for (const state of statesToScan) {
-    if (!state) {
-      continue;
+  return closeTabsMatching(api, {
+    threadIds,
+    browserStates,
+    closedTabKeys,
+    matches: (tab) => isLocalPreviewUrl(tab.url) || isLocalPreviewUrl(tabUrl(tab)),
+  });
+}
+
+// Single source of truth for "stop a live edit preview": snapshot the running URL(s),
+// stop the runtime for every candidate cwd, then close the matching preview tabs.
+// Callers keep their own UI side effects (toasts, dock panes, store upserts).
+export async function stopLiveEditPreview(
+  api: NativeApi,
+  input: {
+    threadId: ThreadId;
+    cwds: readonly (string | null | undefined)[];
+    projectId?: ProjectId | null;
+  },
+): Promise<{ previewStates: PreviewRuntimeState[]; closedStates: ThreadBrowserState[] }> {
+  const cwds = [
+    ...new Set(
+      input.cwds.map((cwd) => cwd?.trim() ?? "").filter((cwd): cwd is string => cwd.length > 0),
+    ),
+  ];
+  const projectId = input.projectId ?? null;
+  const urls = new Set<string>();
+  const previewStates: PreviewRuntimeState[] = [];
+  for (const cwd of cwds) {
+    const running = await api.preview
+      .getState({ threadId: input.threadId, cwd, ...(projectId ? { projectId } : {}) })
+      .catch(() => null);
+    if (running?.url) {
+      urls.add(running.url);
     }
-    const tabs = state.tabs.filter(
-      (tab) => isLocalPreviewUrl(tab.url) || isLocalPreviewUrl(tabUrl(tab)),
+    previewStates.push(
+      await api.preview.stop({
+        threadId: input.threadId,
+        cwd,
+        ...(projectId ? { projectId } : {}),
+      }),
     );
-    for (const tab of tabs) {
-      const tabKey = `${state.threadId}:${tab.id}`;
-      if (closedTabKeys.has(tabKey)) {
-        continue;
-      }
-      closedTabKeys.add(tabKey);
-      const closedState = await api.browser
-        .closeTab({ threadId: state.threadId, tabId: tab.id })
-        .catch(() => null);
-      if (closedState) {
-        states.push(closedState);
-      }
-    }
   }
-  return states;
+  const closedStates = (
+    await Promise.all(
+      cwds.map((cwd) =>
+        closeLiveEditPreviewTabs(api, {
+          threadId: input.threadId,
+          cwd,
+          projectId,
+          urls: [...urls],
+          fallbackThreadIds: [input.threadId],
+        }).catch(() => []),
+      ),
+    )
+  ).flat();
+  return { previewStates, closedStates };
 }
 
 export async function closeLiveEditPreviewTabs(

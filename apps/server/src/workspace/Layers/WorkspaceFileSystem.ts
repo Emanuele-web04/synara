@@ -450,6 +450,47 @@ function chooseBestElementCandidate(candidates: StyleEditCandidate[]): StyleEdit
   return best;
 }
 
+// Shared scan for element-scoped edits (inline text edits and style edits): walk the
+// workspace source files once and score every opening tag that could be the selected
+// element.
+async function collectElementEditCandidates(input: {
+  root: string;
+  element: { tagName: string; attributes?: Record<string, string> | undefined };
+  text: string;
+}): Promise<StyleEditCandidate[]> {
+  const files = await collectTextEditSourceFiles(input.root);
+  const candidates: StyleEditCandidate[] = [];
+  const attributes = input.element.attributes ?? {};
+  const tagName = input.element.tagName.toLowerCase();
+  for (const absolutePath of files) {
+    const content = await nodeFs.readFile(absolutePath, "utf8");
+    candidates.push(
+      ...findStyleEditCandidates({
+        absolutePath,
+        attributes,
+        content,
+        relativePath: toRelativeWorkspacePath(input.root, absolutePath),
+        tagName,
+        text: input.text,
+      }),
+    );
+  }
+  return candidates;
+}
+
+// Candidate offsets were computed against the scanned snapshot; refuse to write if the
+// file changed underneath us (editor save, another live edit) in the meantime.
+async function assertSourceFileUnchanged(
+  absolutePath: string,
+  expectedContent: string,
+  action: string,
+): Promise<void> {
+  const freshContent = await nodeFs.readFile(absolutePath, "utf8");
+  if (freshContent !== expectedContent) {
+    throw new Error(`The source file changed while applying the ${action}. Try again.`);
+  }
+}
+
 async function findTextEditMatches(
   root: string,
   originalText: string,
@@ -479,25 +520,12 @@ async function applyElementScopedTextEdit(input: {
   originalText: string;
   root: string;
 }): Promise<{ relativePath: string; replacements: 1 } | null> {
-  const files = await collectTextEditSourceFiles(input.root);
-  const candidates: StyleEditCandidate[] = [];
-  const attributes = input.element.attributes ?? {};
   const tagName = input.element.tagName.toLowerCase();
-  const text = input.originalText.trim() || input.element.text?.trim() || "";
-
-  for (const absolutePath of files) {
-    const content = await nodeFs.readFile(absolutePath, "utf8");
-    candidates.push(
-      ...findStyleEditCandidates({
-        absolutePath,
-        attributes,
-        content,
-        relativePath: toRelativeWorkspacePath(input.root, absolutePath),
-        tagName,
-        text,
-      }),
-    );
-  }
+  const candidates = await collectElementEditCandidates({
+    root: input.root,
+    element: input.element,
+    text: input.originalText.trim() || input.element.text?.trim() || "",
+  });
 
   if (candidates.length === 0) {
     return null;
@@ -510,11 +538,7 @@ async function applyElementScopedTextEdit(input: {
     originalText: input.originalText,
     tagName,
   });
-  // Guard against the file changing between the candidate scan and this write.
-  const freshContent = await nodeFs.readFile(best.absolutePath, "utf8");
-  if (freshContent !== best.content) {
-    throw new Error("The source file changed while applying the text edit. Try again.");
-  }
+  await assertSourceFileUnchanged(best.absolutePath, best.content, "text edit");
   await nodeFs.writeFile(best.absolutePath, nextContent, "utf8");
   return { relativePath: best.relativePath, replacements: 1 };
 }
@@ -872,35 +896,12 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           throw new Error("No style changes to apply.");
         }
 
-        const files = await collectTextEditSourceFiles(normalizedRoot);
-        const candidates: StyleEditCandidate[] = [];
-        const attributes = input.element.attributes ?? {};
-        const tagName = input.element.tagName.toLowerCase();
-        const text = input.element.text?.trim() ?? "";
-
-        for (const absolutePath of files) {
-          const content = await nodeFs.readFile(absolutePath, "utf8");
-          candidates.push(
-            ...findStyleEditCandidates({
-              absolutePath,
-              attributes,
-              content,
-              relativePath: toRelativeWorkspacePath(normalizedRoot, absolutePath),
-              tagName,
-              text,
-            }),
-          );
-        }
-
-        if (candidates.length === 0) {
-          throw new Error("Could not confidently find the selected element in project source.");
-        }
-
-        candidates.sort((first, second) => second.score - first.score);
-        const [best, second] = candidates;
-        if (!best || (second && second.score === best.score)) {
-          throw new Error("Selected element maps to multiple possible source locations.");
-        }
+        const candidates = await collectElementEditCandidates({
+          root: normalizedRoot,
+          element: input.element,
+          text: input.element.text?.trim() ?? "",
+        });
+        const best = chooseBestElementCandidate(candidates);
 
         const openingTag = best.content.slice(best.openStart, best.openEnd);
         const nextOpeningTag = patchOpeningTagStyle(
@@ -912,11 +913,7 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           throw new Error("Style edit did not change the matched source element.");
         }
 
-        // Guard against the file changing between the candidate scan and this write.
-        const freshContent = await nodeFs.readFile(best.absolutePath, "utf8");
-        if (freshContent !== best.content) {
-          throw new Error("The source file changed while applying the style edit. Try again.");
-        }
+        await assertSourceFileUnchanged(best.absolutePath, best.content, "style edit");
         await nodeFs.writeFile(
           best.absolutePath,
           `${best.content.slice(0, best.openStart)}${nextOpeningTag}${best.content.slice(best.openEnd)}`,

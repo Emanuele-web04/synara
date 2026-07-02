@@ -165,79 +165,37 @@ export const ProjectApplyTextEditResult = Schema.Struct({
 });
 export type ProjectApplyTextEditResult = typeof ProjectApplyTextEditResult.Type;
 
+// Every style-patch property shares the same shape: an optional CSS value capped at
+// the style-edit length limit. Declared once so the patch fields cannot drift.
+const ProjectStyleEditValue = Schema.optional(
+  Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+);
+
 export const ProjectElementStylePatch = Schema.Struct({
-  color: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  backgroundColor: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  backgroundImage: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  backgroundPosition: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  backgroundSize: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  fontFamily: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  fontSize: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  fontWeight: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  fontStyle: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  lineHeight: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  letterSpacing: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  textAlign: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  opacity: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  padding: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  margin: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  borderWidth: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  borderColor: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  borderRadius: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  boxShadow: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  filter: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  animationName: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  animationDuration: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  animationTimingFunction: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
-  animationIterationCount: Schema.optional(
-    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
-  ),
+  color: ProjectStyleEditValue,
+  backgroundColor: ProjectStyleEditValue,
+  backgroundImage: ProjectStyleEditValue,
+  backgroundPosition: ProjectStyleEditValue,
+  backgroundSize: ProjectStyleEditValue,
+  fontFamily: ProjectStyleEditValue,
+  fontSize: ProjectStyleEditValue,
+  fontWeight: ProjectStyleEditValue,
+  fontStyle: ProjectStyleEditValue,
+  lineHeight: ProjectStyleEditValue,
+  letterSpacing: ProjectStyleEditValue,
+  textAlign: ProjectStyleEditValue,
+  opacity: ProjectStyleEditValue,
+  padding: ProjectStyleEditValue,
+  margin: ProjectStyleEditValue,
+  borderWidth: ProjectStyleEditValue,
+  borderColor: ProjectStyleEditValue,
+  borderRadius: ProjectStyleEditValue,
+  boxShadow: ProjectStyleEditValue,
+  filter: ProjectStyleEditValue,
+  animationName: ProjectStyleEditValue,
+  animationDuration: ProjectStyleEditValue,
+  animationTimingFunction: ProjectStyleEditValue,
+  animationIterationCount: ProjectStyleEditValue,
   effectTarget: Schema.optional(Schema.Literals(["element", "::before", "::after"])),
 });
 export type ProjectElementStylePatch = typeof ProjectElementStylePatch.Type;
