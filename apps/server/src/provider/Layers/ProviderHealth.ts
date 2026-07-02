@@ -24,6 +24,7 @@ import { isPathName, mergePathEntries } from "@synara/shared/shell";
 import {
   deriveProviderInstances,
   deriveUnsupportedProviderInstances,
+  providerStartOptionsFromInstance,
   type ResolvedProviderInstance,
   type UnsupportedProviderInstance,
 } from "@synara/shared/providerInstances";
@@ -983,6 +984,7 @@ export const makeCheckCodexProviderStatus = (
   homePath?: string,
   shadowHomePath?: string,
   accountId?: string,
+  environment?: Readonly<Record<string, string>>,
 ): Effect.Effect<
   ServerProviderStatus,
   never,
@@ -995,7 +997,7 @@ export const makeCheckCodexProviderStatus = (
     // symlinked shadow auth.json); report that as this instance's status instead
     // of letting a defect take down the whole provider refresh.
     const probeEnvResult = yield* Effect.tryPromise({
-      try: () => makeCodexProbeEnv(homePath, shadowHomePath, accountId),
+      try: () => makeCodexProbeEnv(homePath, shadowHomePath, accountId, environment),
       catch: (cause) => cause,
     }).pipe(Effect.result);
     if (Result.isFailure(probeEnvResult)) {
@@ -2949,17 +2951,21 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       > => {
         const binaryPath = readInstanceConfigString(instance, "binaryPath");
         switch (instance.driver) {
-          case "codex":
+          case "codex": {
+            // Launches derive their Codex homes and seeded account discriminator
+            // from these start options, so probe the same isolated account.
+            const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
             return checkProviderInstanceWhenEnabled(
               instance,
               makeCheckCodexProviderStatus(
                 binaryPath,
-                readInstanceConfigString(instance, "homePath"),
-                readInstanceConfigString(instance, "shadowHomePath"),
-                readInstanceConfigString(instance, "accountId"),
+                codexOptions?.homePath,
+                codexOptions?.shadowHomePath,
+                codexOptions?.accountId,
                 instance.environment,
               ),
             );
+          }
           case "claudeAgent": {
             const configuredHomePath = readInstanceConfigString(instance, "homePath");
             const homePath =

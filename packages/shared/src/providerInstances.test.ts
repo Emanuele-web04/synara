@@ -111,19 +111,25 @@ describe("providerStartOptionsFromInstance codex account isolation", () => {
     expect(options?.codex?.accountId).toBe("work@example.com");
   });
 
-  it("does not seed an account id when a dedicated or shadow home isolates the instance", () => {
-    for (const config of [
-      { homePath: "/homes/codex-work" },
-      { shadowHomePath: "/homes/codex-shadow" },
-    ]) {
-      const resolved = resolveProviderInstance(settingsWithInstance(config), {
-        provider: "codex",
-        instanceId: providerInstanceId("codex_2"),
-      });
+  it("seeds home-only instances so their overlay cannot collide with the default one", () => {
+    const resolved = resolveProviderInstance(
+      settingsWithInstance({ homePath: "/homes/codex-work" }),
+      { provider: "codex", instanceId: providerInstanceId("codex_2") },
+    );
 
-      const options = providerStartOptionsFromInstance(resolved!);
-      expect(options?.codex?.accountId).toBeUndefined();
-    }
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.codex?.accountId).toBe("codex_2");
+    expect(options?.codex?.homePath).toBe("/homes/codex-work");
+  });
+
+  it("does not seed an account id when a shadow home already segments the overlay", () => {
+    const resolved = resolveProviderInstance(
+      settingsWithInstance({ shadowHomePath: "/homes/codex-shadow" }),
+      { provider: "codex", instanceId: providerInstanceId("codex_2") },
+    );
+
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.codex?.accountId).toBeUndefined();
   });
 
   it("does not seed an account id for the default codex instance", () => {
