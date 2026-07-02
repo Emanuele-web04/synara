@@ -102,6 +102,18 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     assert.ok(root.endsWith(path.join("generated_images")));
   });
 
+  it("honors a per-instance SYNARA_HOME when predicting the managed overlay", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const root = resolveCodexGeneratedImagesRoot({
+      homePath: "/codex-test/.codex-work",
+      environment: { SYNARA_HOME: "/synara-test/instance-runtime" },
+    });
+    assert.equal(
+      root,
+      path.join("/synara-test/instance-runtime", "codex-home-overlay", "generated_images"),
+    );
+  });
+
   it("returns both source and overlay generated_images roots for the allowlist", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
     assert.deepEqual(resolveCodexGeneratedImagesRoots("/codex-test/.codex"), [
