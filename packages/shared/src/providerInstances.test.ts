@@ -10,7 +10,11 @@ import {
 } from "@t3tools/contracts";
 import { Schema } from "effect";
 
-import { codexAccountInstanceId, resolveProviderInstance } from "./providerInstances";
+import {
+  codexAccountInstanceId,
+  providerStartOptionsFromInstance,
+  resolveProviderInstance,
+} from "./providerInstances";
 
 function providerInstanceId(value: string): ProviderInstanceIdType {
   return value as ProviderInstanceIdType;
@@ -79,5 +83,62 @@ describe("provider instance resolution", () => {
     expect(resolved?.config.customModels).toEqual(["openrouter/custom"]);
     expect(resolved?.config.binaryPath).toBe("/opt/bin/opencode-updated");
     expect(resolved?.config.serverUrl).toBe("http://127.0.0.1:5000");
+  });
+});
+
+describe("providerStartOptionsFromInstance codex account isolation", () => {
+  const settingsWithInstance = (config: Record<string, unknown>) => ({
+    ...DEFAULT_SERVER_SETTINGS,
+    providerInstances: {
+      codex_2: {
+        driver: "codex" as const,
+        enabled: true,
+        config,
+      },
+    },
+  });
+
+  it("seeds the instance id as account discriminator when no isolating config exists", () => {
+    const resolved = resolveProviderInstance(settingsWithInstance({ binaryPath: "codex" }), {
+      provider: "codex",
+      instanceId: providerInstanceId("codex_2"),
+    });
+
+    expect(resolved).not.toBeNull();
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.codex?.accountId).toBe("codex_2");
+  });
+
+  it("keeps an explicit account id over the seeded instance id", () => {
+    const resolved = resolveProviderInstance(
+      settingsWithInstance({ accountId: "work@example.com" }),
+      { provider: "codex", instanceId: providerInstanceId("codex_2") },
+    );
+
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.codex?.accountId).toBe("work@example.com");
+  });
+
+  it("does not seed an account id when a dedicated or shadow home isolates the instance", () => {
+    for (const config of [
+      { homePath: "/homes/codex-work" },
+      { shadowHomePath: "/homes/codex-shadow" },
+    ]) {
+      const resolved = resolveProviderInstance(settingsWithInstance(config), {
+        provider: "codex",
+        instanceId: providerInstanceId("codex_2"),
+      });
+
+      const options = providerStartOptionsFromInstance(resolved!);
+      expect(options?.codex?.accountId).toBeUndefined();
+    }
+  });
+
+  it("does not seed an account id for the default codex instance", () => {
+    const resolved = resolveProviderInstance(DEFAULT_SERVER_SETTINGS, { provider: "codex" });
+
+    expect(resolved?.isDefault).toBe(true);
+    const options = providerStartOptionsFromInstance(resolved!);
+    expect(options?.codex?.accountId).toBeUndefined();
   });
 });

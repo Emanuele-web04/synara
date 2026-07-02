@@ -446,7 +446,12 @@ export function providerStartOptionsFromInstance(
     case "codex": {
       const homePath = trimString(config.homePath);
       const shadowHomePath = trimString(config.shadowHomePath);
-      const accountId = trimString(config.accountId);
+      // A non-default Codex instance with no isolating config must not run
+      // against the default overlay/auth: seed the instance id as a stable
+      // account discriminator so it gets its own signed-out managed overlay.
+      const accountId =
+        trimString(config.accountId) ||
+        (instance.isDefault || homePath || shadowHomePath ? "" : String(instance.instanceId));
       return binaryPath || homePath || shadowHomePath || accountId || environment.environment
         ? {
             codex: {
