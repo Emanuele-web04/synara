@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
-import { Effect, Stream } from "effect";
+import { Effect, Fiber, Stream } from "effect";
 import { describe, expect } from "vitest";
 
 import { AcpSessionRuntime, type AcpSessionRequestLogEvent } from "./AcpSessionRuntime.ts";
@@ -65,12 +65,20 @@ describe("AcpSessionRuntime", () => {
       const started = yield* runtime.start();
       expect(started.sessionId).toBe("mock-session-1");
 
+      // Resumed sessions drop session/update until a consumer attaches, so the
+      // events stream must be taken before prompting (mirrors the adapters,
+      // which fork the drain right after start()).
+      const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+        Effect.forkChild,
+      );
       const promptResult = yield* runtime.prompt({
         prompt: [{ type: "text", text: "hi" }],
       });
       expect(promptResult).toMatchObject({ stopReason: "end_turn" });
 
-      const notes = Array.from(yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)));
+      // The session/load replay chunk emitted before the consumer attached is
+      // dropped; only the prompt's own events arrive.
+      const notes = Array.from(yield* Fiber.join(eventsFiber));
       expect(notes.map((note) => note._tag)).toEqual([
         "PlanUpdated",
         "AssistantItemStarted",
