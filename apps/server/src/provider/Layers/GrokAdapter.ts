@@ -937,7 +937,11 @@ export function makeGrokAdapter(
         const startedAt = Date.now();
         while (true) {
           const now = Date.now();
-          const lastActivityAt = ctx.lastTurnActivityAt ?? 0;
+          // Seed the quiet measurement from startedAt: a backlogged consumer
+          // may not have bumped lastTurnActivityAt yet, so always wait at
+          // least one full quiet interval after the prompt response before
+          // deciding the outcome.
+          const lastActivityAt = Math.max(ctx.lastTurnActivityAt ?? 0, startedAt);
           if (
             now - lastActivityAt >= GROK_COMPACT_OUTCOME_QUIET_MS ||
             now - startedAt >= GROK_COMPACT_OUTCOME_MAX_WAIT_MS
