@@ -1131,20 +1131,37 @@ function ProviderInstancesControl(props: {
                 return (
                   <label className="block" key={field.settingsKey}>
                     <span className="block text-xs font-medium text-foreground">{field.label}</span>
-                    <DebouncedSettingTextInput
-                      id={`provider-instance-${instanceId}-${configKey}`}
-                      size="sm"
-                      variant="soft"
-                      className="mt-1"
-                      type={field.kind === "password" ? "password" : "text"}
-                      value={redacted ? "" : readConfigString(instance.config, configKey)}
-                      onCommit={(value) => {
-                        if (redacted && value.length === 0) return;
-                        updateInstance(instanceId, { config: { [configKey]: value } });
-                      }}
-                      placeholder={redacted ? "Secret saved — type to replace" : field.placeholder}
-                      spellCheck={false}
-                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <DebouncedSettingTextInput
+                        id={`provider-instance-${instanceId}-${configKey}`}
+                        size="sm"
+                        variant="soft"
+                        className="flex-1"
+                        type={field.kind === "password" ? "password" : "text"}
+                        value={redacted ? "" : readConfigString(instance.config, configKey)}
+                        onCommit={(value) => {
+                          if (redacted && value.length === 0) return;
+                          updateInstance(instanceId, { config: { [configKey]: value } });
+                        }}
+                        placeholder={redacted ? "Secret saved — type to replace" : field.placeholder}
+                        spellCheck={false}
+                      />
+                      {redacted ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="ghost"
+                          onClick={() =>
+                            updateInstance(instanceId, { config: { [configKey]: "" } })
+                          }
+                          aria-label={`Clear saved ${field.label.toLowerCase()} for ${
+                            instance.displayName || instanceId
+                          }`}
+                        >
+                          Clear
+                        </Button>
+                      ) : null}
+                    </div>
                   </label>
                 );
               })}

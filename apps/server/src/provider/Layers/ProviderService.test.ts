@@ -1101,6 +1101,45 @@ adapterConfirmedFreshRouting.layer("ProviderServiceLive resume confirmation", (i
   );
 });
 
+const deletedRouting = makeProviderServiceLayer();
+
+deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
+  it.effect("stops sessions whose provider instance was deleted from settings", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-deleted-instance");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            displayName: "Codex Work",
+          },
+        },
+      });
+
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      yield* serverSettings.updateSettings({ providerInstances: {} });
+      deletedRouting.codex.stopSession.mockClear();
+
+      yield* provider.stopSession({ threadId });
+
+      assert.equal(deletedRouting.codex.stopSession.mock.calls.length, 1);
+      assert.deepEqual(deletedRouting.codex.stopSession.mock.calls[0]?.[0], threadId);
+      const binding = yield* directory.getBinding(threadId);
+      assert.equal(Option.isNone(binding), true);
+    }),
+  );
+});
+
 routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("retries runtime cleanup after the adapter becomes non-routable", () =>
     Effect.gen(function* () {

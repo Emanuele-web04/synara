@@ -74,6 +74,11 @@ import {
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "synara:server-settings-migrated:v1";
+
+function hasCompletedServerSettingsMigration(): boolean {
+  return globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1";
+}
+
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const MIN_CHAT_FONT_SIZE_PX = 11;
@@ -1412,9 +1417,9 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
   return appSettingsPatchToServerSettingsPatch(patch);
 }
 
-// Browser storage must never hold plaintext secrets: the server materializes
-// sensitive values from the update patch and returns them redacted, so the
-// locally persisted copy keeps only the redaction markers.
+// After the initial server migration, browser storage must never hold plaintext
+// secrets: the server materializes sensitive values from the update patch and
+// returns them redacted, so the locally persisted copy keeps only the markers.
 export function redactProviderInstanceSecretsForClient(
   providerInstances: ProviderInstanceConfigMap,
 ): ProviderInstanceConfigMap {
@@ -2085,20 +2090,28 @@ export function useAppSettings() {
     }
     normalizedStoredSettingsRef.current = true;
 
-    setSettings((previous) => normalizeStoredAppSettings(previous));
+    // Un-migrated profiles may still hold plaintext instance secrets that
+    // buildInitialServerSettingsMigrationPatch must read; keep them until the
+    // migration has shipped them to the server (which then redacts below).
+    setSettings((previous) =>
+      hasCompletedServerSettingsMigration()
+        ? normalizeStoredAppSettings(previous)
+        : normalizeAppSettings(previous),
+    );
   }, [setSettings]);
 
   useEffect(() => {
     if (!serverSettingsQuery.data || serverSettingsMigrationInFlight) {
       return;
     }
-    if (globalThis.localStorage?.getItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY) === "1") {
+    if (hasCompletedServerSettingsMigration()) {
       return;
     }
 
     const migrationPatch = buildInitialServerSettingsMigrationPatch(localSettings);
     if (isServerSettingsPatchEmpty(migrationPatch)) {
       globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+      setSettings((previous) => normalizeStoredAppSettings(previous));
       return;
     }
 
@@ -2108,6 +2121,8 @@ export function useAppSettings() {
       .then((nextSettings) => {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+        // The server now owns the migrated secrets; drop the local plaintext.
+        setSettings((previous) => normalizeStoredAppSettings(previous));
       })
       .catch(() => {
         void queryClient.invalidateQueries({ queryKey: serverQueryKeys.settings() });
@@ -2115,7 +2130,7 @@ export function useAppSettings() {
       .finally(() => {
         serverSettingsMigrationInFlight = false;
       });
-  }, [localSettings, queryClient, serverSettingsQuery.data]);
+  }, [localSettings, queryClient, serverSettingsQuery.data, setSettings]);
 
   const refreshProvidersAfterEnablementChange = async () => {
     const api = ensureNativeApi();
@@ -2146,7 +2161,20 @@ export function useAppSettings() {
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
-    setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
+    const migrationCompletedBeforePatch = hasCompletedServerSettingsMigration();
+    setSettings((prev) => {
+      if (migrationCompletedBeforePatch) {
+        return applyLocalAppSettingsPatch(prev, patch);
+      }
+      const { disabledProviders: _disabledProviders, ...localPatch } = patch;
+      return normalizeAppSettings({
+        ...prev,
+        ...localPatch,
+        ...(hasOwn(patch, "openCodeServerPassword")
+          ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
+          : {}),
+      });
+    });
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
@@ -2169,12 +2197,15 @@ export function useAppSettings() {
         }
       } catch {
         if (providerInstancesBeforePatch !== undefined) {
-          setSettings((prev) =>
-            normalizeStoredAppSettings({
+          setSettings((prev) => {
+            const restored = normalizeAppSettings({
               ...prev,
               providerInstances: providerInstancesBeforePatch,
-            }),
-          );
+            });
+            return hasCompletedServerSettingsMigration()
+              ? redactAppSettingsSecretsForClient(restored)
+              : restored;
+          });
         }
         await queryClient
           .invalidateQueries({ queryKey: serverQueryKeys.settings() })
