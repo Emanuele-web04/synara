@@ -73,17 +73,35 @@ export function isCodexGeneratedImageItemType(raw: unknown): boolean {
 export const isSupportedLocalImagePath = isSupportedLocalImagePathShared;
 
 /**
+ * Instance launch context that decides which Codex home a session writes
+ * under: account-scoped and shadow-home instances write beneath their own
+ * account overlay, not the default one.
+ */
+export interface CodexGeneratedImageHomeContext {
+  readonly homePath?: string | undefined;
+  readonly shadowHomePath?: string | undefined;
+  readonly accountId?: string | undefined;
+}
+
+/**
  * Resolves the home directory the codex app-server child process actually
  * writes images under for the current process env. Synara uses its isolated
  * Codex overlay, not the user's source `~/.codex` directory.
  */
-export function resolveCodexHomePath(homePath?: string): string {
-  return resolveActiveCodexHomeWritePath(homePath?.trim() ? { homePath } : {});
+export function resolveCodexHomePath(codexHome?: string | CodexGeneratedImageHomeContext): string {
+  const context = typeof codexHome === "string" ? { homePath: codexHome } : (codexHome ?? {});
+  return resolveActiveCodexHomeWritePath({
+    ...(context.homePath?.trim() ? { homePath: context.homePath } : {}),
+    ...(context.shadowHomePath?.trim() ? { shadowHomePath: context.shadowHomePath } : {}),
+    ...(context.accountId?.trim() ? { accountId: context.accountId } : {}),
+  });
 }
 
 /** The single generated-images directory we predict against (overlay-aware). */
-export function resolveCodexGeneratedImagesRoot(homePath?: string): string {
-  return path.join(resolveCodexHomePath(homePath), "generated_images");
+export function resolveCodexGeneratedImagesRoot(
+  codexHome?: string | CodexGeneratedImageHomeContext,
+): string {
+  return path.join(resolveCodexHomePath(codexHome), "generated_images");
 }
 
 /**
@@ -170,21 +188,21 @@ export function extractCodexGeneratedImageCallId(
 export function predictedCodexGeneratedImagePath(input: {
   readonly item: Record<string, unknown>;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): string | undefined {
   const threadId = normalizeNonEmptyString(input.threadId);
   const callId = extractCodexGeneratedImageCallId(input.item);
   if (!threadId || !callId) {
     return undefined;
   }
-  return path.join(resolveCodexGeneratedImagesRoot(input.codexHomePath), threadId, `${callId}.png`);
+  return path.join(resolveCodexGeneratedImagesRoot(input.codexHome), threadId, `${callId}.png`);
 }
 
 // Mirrors Remodex relay behavior: keep metadata, drop bulky inline image data.
 export function annotateCodexGeneratedImagePayload(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): unknown {
   const item = asObject(input.value);
   if (!item || !isCodexGeneratedImageItemType(item.type ?? item.kind)) {
@@ -199,7 +217,7 @@ export function annotateCodexGeneratedImagePayload(input: {
     predictedCodexGeneratedImagePath({
       item,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
 
   if (generatedPath && !existingPath) {
@@ -219,7 +237,7 @@ export function annotateCodexGeneratedImagePayload(input: {
 export function sanitizeNestedCodexGeneratedImagePayloads(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): unknown {
   const annotated = annotateCodexGeneratedImagePayload(input);
   const record = asObject(annotated);
@@ -239,7 +257,7 @@ export function sanitizeNestedCodexGeneratedImagePayloads(input: {
     const sanitized = sanitizeNestedCodexGeneratedImagePayloads({
       value: nested,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
     if (sanitized !== nested) {
       overrides[key] = sanitized;
@@ -258,7 +276,7 @@ const NESTED_PAYLOAD_KEYS = ["item", "payload", "data", "event"] as const;
 export function extractCodexGeneratedImageReference(input: {
   readonly value: unknown;
   readonly threadId: ThreadId | string | undefined;
-  readonly codexHomePath?: string;
+  readonly codexHome?: string | CodexGeneratedImageHomeContext;
 }): CodexGeneratedImageReference | undefined {
   const item = asObject(input.value);
   if (!item || !isCodexGeneratedImageItemType(item.type ?? item.kind)) {
@@ -269,7 +287,7 @@ export function extractCodexGeneratedImageReference(input: {
     predictedCodexGeneratedImagePath({
       item,
       threadId: input.threadId,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.codexHome ? { codexHome: input.codexHome } : {}),
     });
   if (!imagePath || !isSupportedLocalImagePath(imagePath)) {
     return undefined;

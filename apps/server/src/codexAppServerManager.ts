@@ -2495,6 +2495,14 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     return context !== undefined && this.isContextRoutable(context);
   }
 
+  /**
+   * Launch options of a live session. Event projection needs these to predict
+   * generated-image paths against the account home the session writes under.
+   */
+  getSessionCodexOptions(threadId: ThreadId): CodexDiscoveryOptions | undefined {
+    return this.sessions.get(threadId)?.codexOptions;
+  }
+
   async stopAll(): Promise<void> {
     const discoveryKeys = new Set([
       ...this.discoverySessions.keys(),

@@ -87,6 +87,21 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     );
   });
 
+  it("predicts against the account overlay for account-scoped instance context", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const root = resolveCodexGeneratedImagesRoot({
+      homePath: "/codex-test/.codex",
+      accountId: "codex_2",
+    });
+    assert.ok(
+      root.startsWith(
+        path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_2-"),
+      ),
+      `expected account overlay root, got ${root}`,
+    );
+    assert.ok(root.endsWith(path.join("generated_images")));
+  });
+
   it("returns both source and overlay generated_images roots for the allowlist", () => {
     process.env.SYNARA_HOME = "/synara-test/runtime";
     assert.deepEqual(resolveCodexGeneratedImagesRoots("/codex-test/.codex"), [
