@@ -271,21 +271,25 @@ interface ClaudeSessionContext {
   // Task ids flagged skip_transcript by the SDK (ambient/housekeeping tasks).
   // All task lifecycle events for these ids stay off the conversation timeline.
   readonly hiddenTaskIds: Set<string>;
-  // Tasks announced via task_started, keyed by the spawning tool_use id. Lets
-  // subagent output that arrives after the Task tool_result already resolved
-  // (backgrounded subagents) surface as task progress instead of being dropped.
-  // turnId is the turn that spawned the task: late background events must carry
-  // a turn id or the web work-log filter hides them. Entries are removed when
-  // the task reaches a terminal state.
-  readonly knownTasksByToolUseId: Map<
+  // Tasks announced via task_started, keyed by task id (always present on task
+  // lifecycle messages, unlike the optional tool_use_id). Lets subagent output
+  // that arrives after the Task tool_result already resolved (backgrounded
+  // subagents) surface as task progress instead of being dropped. turnId is the
+  // turn that spawned the task: late background events must carry a turn id or
+  // the web work-log filter hides them. Entries are removed when the task
+  // reaches a terminal state.
+  readonly knownTasks: Map<
     string,
     {
-      readonly taskId: string;
       readonly description: string;
       readonly subagentType?: string;
       readonly turnId?: TurnId;
+      readonly toolUseId?: string;
     }
   >;
+  // Secondary index for parent-tagged subagent messages, which carry only the
+  // spawning tool_use id.
+  readonly taskIdByToolUseId: Map<string, string>;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
@@ -1860,8 +1864,9 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           return;
         }
 
-        const taskInfo = context.knownTasksByToolUseId.get(parentToolUseId);
-        if (!taskInfo) {
+        const taskId = context.taskIdByToolUseId.get(parentToolUseId);
+        const taskInfo = taskId !== undefined ? context.knownTasks.get(taskId) : undefined;
+        if (taskId === undefined || !taskInfo) {
           return;
         }
 
@@ -1879,7 +1884,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           threadId: context.session.threadId,
           ...(progressTurnId ? { turnId: asCanonicalTurnId(progressTurnId) } : {}),
           payload: {
-            taskId: RuntimeTaskId.makeUnsafe(taskInfo.taskId),
+            taskId: RuntimeTaskId.makeUnsafe(taskId),
             description: taskInfo.description,
             summary: latestText,
             toolUseId: parentToolUseId,
@@ -2106,14 +2111,18 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
               context.hiddenTaskIds.add(message.task_id);
               return;
             }
+            // Register by task id — always present, unlike the optional
+            // tool_use_id — so later id-less progress/notifications can still
+            // recover the spawning turn and description.
+            context.knownTasks.set(message.task_id, {
+              description:
+                message.description.trim().length > 0 ? message.description : "Subagent task",
+              ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
+              ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
+              ...(message.tool_use_id ? { toolUseId: message.tool_use_id } : {}),
+            });
             if (message.tool_use_id) {
-              context.knownTasksByToolUseId.set(message.tool_use_id, {
-                taskId: message.task_id,
-                description:
-                  message.description.trim().length > 0 ? message.description : "Subagent task",
-                ...(message.subagent_type ? { subagentType: message.subagent_type } : {}),
-                ...(context.turnState ? { turnId: context.turnState.turnId } : {}),
-              });
+              context.taskIdByToolUseId.set(message.tool_use_id, message.task_id);
             }
             yield* offerRuntimeEvent({
               ...base,
@@ -2136,9 +2145,7 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             // whatever turn happens to be open when it arrives, and not no turn
             // at all (the web work-log filter hides turn-less activities once
             // turn-stamped messages exist).
-            const progressTurnId = message.tool_use_id
-              ? context.knownTasksByToolUseId.get(message.tool_use_id)?.turnId
-              : undefined;
+            const progressTurnId = context.knownTasks.get(message.task_id)?.turnId;
             if (message.usage) {
               const normalizedUsage = normalizeClaudeTokenUsage(
                 message.usage,
@@ -2211,22 +2218,14 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
             return;
           }
           case "task_notification": {
-            let notifiedTask = message.tool_use_id
-              ? context.knownTasksByToolUseId.get(message.tool_use_id)
-              : undefined;
-            if (message.tool_use_id) {
-              context.knownTasksByToolUseId.delete(message.tool_use_id);
-            } else {
-              // Notifications may omit the tool id; match by task id instead so
-              // the entry cannot leak — keeping its spawning-turn metadata for
-              // the completion event below.
-              for (const [toolUseId, taskInfo] of context.knownTasksByToolUseId) {
-                if (taskInfo.taskId === message.task_id) {
-                  notifiedTask = taskInfo;
-                  context.knownTasksByToolUseId.delete(toolUseId);
-                  break;
-                }
-              }
+            // The notification is the terminal consumer of the task's
+            // bookkeeping: capture the spawning-turn metadata for the
+            // completion event, then release both registry entries.
+            const notifiedTask = context.knownTasks.get(message.task_id);
+            context.knownTasks.delete(message.task_id);
+            const notifiedToolUseId = notifiedTask?.toolUseId ?? message.tool_use_id;
+            if (notifiedToolUseId) {
+              context.taskIdByToolUseId.delete(notifiedToolUseId);
             }
             if (context.hiddenTaskIds.delete(message.task_id) || message.skip_transcript === true) {
               return;
@@ -3020,6 +3019,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           ...(existingResumeSessionId ? { resume: existingResumeSessionId } : {}),
           ...(newSessionId ? { sessionId: newSessionId } : {}),
           includePartialMessages: true,
+          // Both default to false in the SDK; without them the subagent
+          // plumbing has nothing to route — no parent-tagged assistant text is
+          // forwarded and task_progress.summary is never populated.
+          forwardSubagentText: true,
+          agentProgressSummaries: true,
           canUseTool,
           env: claudeSdkEnv,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
@@ -3122,7 +3126,8 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           stopped: false,
           warnedUnhandledSdkKinds: new Set(),
           hiddenTaskIds: new Set(),
-          knownTasksByToolUseId: new Map(),
+          knownTasks: new Map(),
+          taskIdByToolUseId: new Map(),
         };
         yield* Ref.set(contextRef, context);
         sessions.set(threadId, context);

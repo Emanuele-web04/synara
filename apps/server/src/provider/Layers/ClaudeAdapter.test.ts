@@ -289,6 +289,10 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
+      // Off by default in the SDK; without them no subagent text or task
+      // progress summaries ever reach the adapter's routing.
+      assert.equal(createInput?.options.forwardSubagentText, true);
+      assert.equal(createInput?.options.agentProgressSummaries, true);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -5649,4 +5653,90 @@ describe("ClaudeAdapterLive", () => {
       );
     },
   );
+
+  it.effect("keeps turn attribution for task messages that omit tool_use_id", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.takeUntil((event) => event.type === "task.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+      const spawningTurn = yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "kick off a background job",
+        attachments: [],
+      });
+
+      // The SDK marks tool_use_id optional on every task lifecycle message.
+      harness.query.emit({
+        type: "system",
+        subtype: "task_started",
+        task_id: "task-idless-1",
+        description: "Background job without tool id",
+        session_id: "sdk-session-idless",
+        uuid: "idless-task-started",
+      } as unknown as SDKMessage);
+
+      // The spawning turn ends before the task reports progress.
+      harness.query.emit({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        errors: [],
+        session_id: "sdk-session-idless",
+        uuid: "idless-result",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_progress",
+        task_id: "task-idless-1",
+        description: "Background job without tool id",
+        summary: "halfway there",
+        usage: { total_tokens: 10, tool_uses: 1, duration_ms: 5 },
+        session_id: "sdk-session-idless",
+        uuid: "idless-progress",
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "system",
+        subtype: "task_notification",
+        task_id: "task-idless-1",
+        status: "completed",
+        output_file: "/tmp/idless.log",
+        summary: "done",
+        session_id: "sdk-session-idless",
+        uuid: "idless-notification",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+
+      const progressEvent = runtimeEvents.find(
+        (event) => event.type === "task.progress" && event.payload.summary === "halfway there",
+      );
+      assert.equal(progressEvent?.type, "task.progress");
+      if (progressEvent?.type === "task.progress") {
+        assert.equal(String(progressEvent.turnId), String(spawningTurn.turnId));
+      }
+
+      const completedEvent = runtimeEvents.find((event) => event.type === "task.completed");
+      assert.equal(completedEvent?.type, "task.completed");
+      if (completedEvent?.type === "task.completed") {
+        assert.equal(String(completedEvent.payload.taskId), "task-idless-1");
+        assert.equal(String(completedEvent.turnId), String(spawningTurn.turnId));
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
 });
