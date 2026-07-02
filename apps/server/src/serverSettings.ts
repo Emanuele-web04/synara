@@ -92,10 +92,14 @@ export class ServerSettingsService extends ServiceMap.Service<
     );
 }
 
+// Fallback order for the git-writing/title/recap model. Must only contain
+// drivers ProviderTextGeneration actually implements (see
+// implementationForDriver): Gemini/Grok/Pi are rejected by that router, so
+// falling back to them would fail every generation instead of moving on.
 const PROVIDER_ORDER: readonly ProviderWithDefaultModel[] = [
   "codex",
   "claudeAgent",
-  "gemini",
+  "cursor",
   "kilo",
   "opencode",
 ];

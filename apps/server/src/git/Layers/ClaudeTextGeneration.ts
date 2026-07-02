@@ -154,6 +154,10 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
         "--model",
         resolveApiModelId(modelSelection),
         ...(effort ? ["--effort", effort] : []),
+        // Pure JSON generation over prompt text: no tools, so untrusted diff
+        // or thread content cannot prompt-inject workspace reads or edits.
+        "--tools",
+        "",
         "--dangerously-skip-permissions",
       ];
       const prepared = prepareWindowsSafeProcess(binaryPath, args, { cwd, env });

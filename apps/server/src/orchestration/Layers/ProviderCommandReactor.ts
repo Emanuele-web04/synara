@@ -1136,7 +1136,17 @@ const make = Effect.gen(function* () {
       shouldBootstrapSidechatContext && availableBootstrapChars > 0
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
+    // The live session after ensureSessionForThread is authoritative: a
+    // stopped thread whose model was switched to another provider restarts on
+    // the new provider, while the projected thread.session still names the
+    // old one until the projection catches up.
+    const liveSessionAfterEnsure = yield* providerService
+      .listSessions()
+      .pipe(
+        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
+      );
     const selectedProvider =
+      liveSessionAfterEnsure?.provider ??
       thread.session?.providerName ??
       (yield* resolveProviderForModelSelection(
         input.modelSelection ?? threadModelSelections.get(input.threadId) ?? thread.modelSelection,
@@ -1193,11 +1203,7 @@ const make = Effect.gen(function* () {
       }),
     );
     const normalizedAttachments = input.attachments ?? [];
-    const activeSession = yield* providerService
-      .listSessions()
-      .pipe(
-        Effect.map((sessions) => sessions.find((session) => session.threadId === input.threadId)),
-      );
+    const activeSession = liveSessionAfterEnsure;
     const sessionModelSwitch =
       activeSession === undefined
         ? "in-session"

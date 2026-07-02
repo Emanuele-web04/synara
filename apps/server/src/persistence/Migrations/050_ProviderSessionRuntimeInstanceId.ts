@@ -14,6 +14,24 @@ export default Effect.gen(function* () {
     `;
   }
 
+  // Legacy payloads stored modelSelection as { provider, model, options }.
+  // Recovery decodes it with the current ModelSelection schema (which
+  // requires instanceId), so canonicalize the JSON in place — otherwise
+  // resumed/forked sessions silently lose their saved model/options.
+  yield* sql`
+    UPDATE provider_session_runtime
+    SET runtime_payload_json = json_remove(
+      json_set(
+        runtime_payload_json,
+        '$.modelSelection.instanceId',
+        json_extract(runtime_payload_json, '$.modelSelection.provider')
+      ),
+      '$.modelSelection.provider'
+    )
+    WHERE json_extract(runtime_payload_json, '$.modelSelection.provider') IS NOT NULL
+      AND json_extract(runtime_payload_json, '$.modelSelection.instanceId') IS NULL
+  `;
+
   yield* sql`
     UPDATE provider_session_runtime
     SET provider_instance_id = COALESCE(

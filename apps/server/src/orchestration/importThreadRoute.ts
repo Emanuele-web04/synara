@@ -1,6 +1,15 @@
+import { execFile } from "node:child_process";
+import { promises as fsPromises } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
+import { pathToFileURL } from "node:url";
+
 import {
   getSessionInfo as getClaudeSessionInfo,
   getSessionMessages as getClaudeSessionMessages,
+  type SDKSessionInfo,
+  type SessionMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   CommandId,
@@ -45,41 +54,83 @@ function importMessagesError(message: string): ImportThreadError {
   return new ImportThreadError({ message });
 }
 
-let claudeHistoricalSessionEnvLock: Promise<void> = Promise.resolve();
+// The Claude agent SDK resolves its config dir from the process environment
+// (HOME/CLAUDE_CONFIG_DIR). Imports for instances with a custom home must not
+// mutate the server's process.env — concurrent health checks, text generation,
+// or session startups would observe the wrong Claude account — so the session
+// query runs in a short-lived child process that gets the custom environment.
+const CLAUDE_SESSION_QUERY_SCRIPT = `const [moduleUrl, method, sessionId, optionsJson] = process.argv.slice(2);
+const sdk = await import(moduleUrl);
+const options = JSON.parse(optionsJson);
+const result = await sdk[method](sessionId, options ?? undefined);
+process.stdout.write(JSON.stringify(result ?? null));
+`;
 
-async function withSerializedProcessEnv<T>(
-  environment: Readonly<Record<string, string>> | undefined,
-  run: () => Promise<T>,
-): Promise<T> {
-  const previousLock = claudeHistoricalSessionEnvLock;
-  let releaseLock: (() => void) | undefined;
-  claudeHistoricalSessionEnvLock = previousLock.then(
-    () =>
-      new Promise<void>((resolve) => {
-        releaseLock = resolve;
-      }),
-  );
-  await previousLock;
+type ClaudeSessionQueryMethod = "getSessionInfo" | "getSessionMessages";
 
-  const environmentEntries = Object.entries(environment ?? {});
-  const previousValues = new Map<string, string | undefined>();
-  for (const [key, value] of environmentEntries) {
-    previousValues.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-
+async function runClaudeSessionQueryInChildProcess<T>(input: {
+  readonly method: ClaudeSessionQueryMethod;
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: Readonly<Record<string, string>>;
+}): Promise<T> {
+  const moduleUrl = pathToFileURL(
+    createRequire(import.meta.url).resolve("@anthropic-ai/claude-agent-sdk"),
+  ).href;
+  const scriptDir = await fsPromises.mkdtemp(nodePath.join(tmpdir(), "t3code-claude-import-"));
+  const scriptPath = nodePath.join(scriptDir, "claudeSessionQuery.mjs");
   try {
-    return await run();
+    await fsPromises.writeFile(scriptPath, CLAUDE_SESSION_QUERY_SCRIPT, "utf8");
+    const stdout = await new Promise<string>((resolve, reject) => {
+      execFile(
+        process.execPath,
+        [
+          scriptPath,
+          moduleUrl,
+          input.method,
+          input.sessionId,
+          JSON.stringify(input.dir ? { dir: input.dir } : null),
+        ],
+        {
+          env: { ...process.env, ...input.environment },
+          maxBuffer: 64 * 1024 * 1024,
+        },
+        (error, childStdout, childStderr) => {
+          if (error) {
+            const detail = childStderr.toString().trim();
+            reject(detail.length > 0 ? new Error(detail) : error);
+            return;
+          }
+          resolve(childStdout.toString());
+        },
+      );
+    });
+    return JSON.parse(stdout) as T;
   } finally {
-    for (const [key, previousValue] of previousValues) {
-      if (previousValue === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = previousValue;
-      }
-    }
-    releaseLock?.();
+    await fsPromises.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
   }
+}
+
+async function queryClaudeHistoricalSession<T>(input: {
+  readonly method: ClaudeSessionQueryMethod;
+  readonly sessionId: string;
+  readonly dir: string | undefined;
+  readonly environment: Readonly<Record<string, string>> | undefined;
+}): Promise<T> {
+  if (input.environment && Object.keys(input.environment).length > 0) {
+    return runClaudeSessionQueryInChildProcess<T>({
+      method: input.method,
+      sessionId: input.sessionId,
+      dir: input.dir,
+      environment: input.environment,
+    });
+  }
+  const options = input.dir ? { dir: input.dir } : undefined;
+  return (
+    input.method === "getSessionInfo"
+      ? getClaudeSessionInfo(input.sessionId, options)
+      : getClaudeSessionMessages(input.sessionId, options)
+  ) as Promise<T>;
 }
 
 function claudeHistoricalSessionEnvironment(
@@ -149,9 +200,12 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const claudeSessionInfo = yield* Effect.tryPromise({
       try: () =>
-        withSerializedProcessEnv(historicalEnv, () =>
-          getClaudeSessionInfo(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
-        ),
+        queryClaudeHistoricalSession<SDKSessionInfo | null | undefined>({
+          method: "getSessionInfo",
+          sessionId: input.externalId,
+          dir: input.cwd,
+          environment: historicalEnv,
+        }),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0
@@ -302,9 +356,12 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
     const sessionMessages = yield* Effect.tryPromise({
       try: () =>
-        withSerializedProcessEnv(historicalEnv, () =>
-          getClaudeSessionMessages(input.externalId, input.cwd ? { dir: input.cwd } : undefined),
-        ),
+        queryClaudeHistoricalSession<SessionMessage[]>({
+          method: "getSessionMessages",
+          sessionId: input.externalId,
+          dir: input.cwd,
+          environment: historicalEnv,
+        }),
       catch: (cause) =>
         importMessagesError(
           cause instanceof Error && cause.message.length > 0

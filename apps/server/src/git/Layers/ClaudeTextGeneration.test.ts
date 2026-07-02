@@ -101,6 +101,11 @@ describe("ClaudeTextGenerationServiceLive", () => {
         mockSpawnerLayer((args, command, env) => {
           assert.strictEqual(command, "claude");
           assert.deepStrictEqual(args.slice(0, 2), ["-p", "--output-format"]);
+          // Pure text generation must run with an empty tool set so untrusted
+          // prompt content cannot reach the workspace.
+          const toolsFlagIndex = args.indexOf("--tools");
+          assert.notStrictEqual(toolsFlagIndex, -1);
+          assert.strictEqual(args[toolsFlagIndex + 1], "");
           assert.strictEqual(env?.HOME, "C:\\Users\\work\\.claude-work");
           assert.strictEqual(env?.USERPROFILE, "C:\\Users\\work\\.claude-work");
           assert.strictEqual(env?.APPDATA, "C:\\Users\\work\\.claude-work\\AppData\\Roaming");
