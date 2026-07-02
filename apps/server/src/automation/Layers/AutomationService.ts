@@ -39,6 +39,7 @@ import { providerStartOptionsFromServerSettings } from "@synara/shared/serverSet
 import { autoRuntimeModeSelectionIssue } from "@synara/shared/runtimeMode";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
+  mergeProviderStartOptions,
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
@@ -1579,17 +1580,30 @@ export const AutomationServiceLive = Layer.effect(
 
     const resolveAutomationCompletionTextGenerationInput = (definition: AutomationDefinition) =>
       Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings.pipe(
+          Effect.mapError(toServiceError("Failed to load text-generation settings.")),
+        );
+        // Stored definitions never carry redacted per-instance environment or
+        // secrets, so the completion evaluator must merge in the server-side
+        // instance options the same way turn dispatch does.
+        const selectionInstance = definition.modelSelection
+          ? resolveProviderInstance(settings, {
+              instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+            })
+          : null;
+        const directProviderOptions = selectionInstance
+          ? mergeProviderStartOptions(
+              definition.providerOptions,
+              providerStartOptionsFromInstance(selectionInstance),
+            )
+          : definition.providerOptions;
         const directInput = resolveTextGenerationInputForSelection(
           definition.modelSelection,
-          definition.providerOptions,
+          directProviderOptions,
         );
         if (directInput) {
           return directInput;
         }
-
-        const settings = yield* serverSettings.getSettings.pipe(
-          Effect.mapError(toServiceError("Failed to load text-generation settings.")),
-        );
         const fallbackInstance = resolveProviderInstance(settings, {
           provider: settings.textGenerationModelSelection.provider,
           instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),

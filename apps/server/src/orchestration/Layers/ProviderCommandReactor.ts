@@ -1285,7 +1285,13 @@ const make = Effect.gen(function* () {
       });
       if (instance) {
         selectionProvider = instance.driver;
-        selectionProviderOptions = providerOptions ?? providerStartOptionsFromInstance(instance);
+        // Client-supplied options never carry redacted per-instance
+        // environment/secrets, so the server-side instance options must win
+        // (same "instance" precedence startSession applies later).
+        selectionProviderOptions = mergeProviderStartOptions(
+          providerOptions,
+          providerStartOptionsFromInstance(instance),
+        );
       }
     }
     const threadTextGenerationInput = resolveTextGenerationInputForSelection(

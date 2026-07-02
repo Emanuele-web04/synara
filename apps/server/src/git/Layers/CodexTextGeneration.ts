@@ -186,9 +186,13 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     sourceHomePath?: string,
     authHomePath?: string,
     accountId?: string,
+    // Sessions launch with the instance environment layered over the server's,
+    // which can relocate the env-derived home and the account overlay root
+    // (SYNARA_HOME/CODEX_HOME); auth lookup must see the same view.
+    launchEnv: NodeJS.ProcessEnv = process.env,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
-      const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
+      const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(launchEnv);
       const sourceAuthHome = authHomePath?.trim();
       // Accounts read auth from their shadow home or their own dedicated home;
       // accounts routed at the shared env-derived home keep their login inside
@@ -205,7 +209,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           accountId: trimmedAccountId,
         });
         return accountSegment
-          ? resolveSynaraCodexHomeOverlayPath(process.env, sourceCodexHome, accountSegment)
+          ? resolveSynaraCodexHomeOverlayPath(launchEnv, sourceCodexHome, accountSegment)
           : undefined;
       })();
       const shouldCopyAuth =
@@ -358,11 +362,15 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         JSON.stringify(toJsonSchemaObject(outputSchemaJson)),
       );
       const outputPath = yield* writeTempFile(operation, "codex-output", "");
+      const instanceLaunchEnv = providerOptions?.codex?.environment
+        ? { ...process.env, ...providerOptions.codex.environment }
+        : process.env;
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(
         operation,
         resolvedCodexHomePath,
         resolvedCodexAuthHomePath,
         resolvedCodexAccountId,
+        instanceLaunchEnv,
       );
 
       const workingDirectoryExists = fileSystem.stat(cwd).pipe(
