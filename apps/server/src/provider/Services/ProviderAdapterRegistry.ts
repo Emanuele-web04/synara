@@ -18,9 +18,14 @@ import type { ProviderAdapterShape } from "./ProviderAdapter.ts";
  * ProviderAdapterRegistryShape - Service API for adapter lookup by provider kind.
  */
 export interface ProviderAdapterRegistryShape {
-  /** Resolve an adapter facade scoped to one configured provider instance. */
+  /**
+   * Resolve an adapter facade scoped to one configured provider instance.
+   * Disabled instances fail by default; stop/cleanup paths may opt in via
+   * `allowDisabled` to tear down sessions that outlived the instance toggle.
+   */
   readonly getByInstance?: (
     instanceId: ProviderInstanceId,
+    options?: { readonly allowDisabled?: boolean },
   ) => Effect.Effect<ProviderAdapterShape<ProviderAdapterError>, ProviderUnsupportedError>;
 
   /**
