@@ -637,9 +637,10 @@ const makeServerSettings = Effect.gen(function* () {
 
   // Secret writes must land before the settings file references them (a crash
   // after the file write must still materialize), while removals are returned
-  // as a deferred effect the caller runs only after the settings write
-  // succeeds — otherwise a failed write leaves a settings file whose redacted
-  // markers point at secrets that no longer exist.
+  // as a deferred effect the caller runs best-effort only after the settings
+  // write succeeded and was applied — otherwise a failed write leaves a
+  // settings file whose redacted markers point at secrets that no longer
+  // exist, and a failed removal would fail an update that already landed.
   const persistProviderEnvironmentSecrets = (
     current: ServerSettings,
     next: ServerSettings,
@@ -827,6 +828,22 @@ const makeServerSettings = Effect.gen(function* () {
       ),
     );
 
+  // Obsolete-secret removal is post-write cleanup: by the time it runs, the
+  // new settings are already durable and applied. A failed removal only
+  // leaves an orphaned store entry (retried on the next save), so it must
+  // never fail the settings operation that already landed.
+  const runObsoleteSecretCleanup = (
+    removeObsoleteSecrets: Effect.Effect<void, ServerSettingsError>,
+  ): Effect.Effect<void> =>
+    removeObsoleteSecrets.pipe(
+      Effect.catch((error) =>
+        Effect.logWarning("failed to remove obsolete provider instance secrets", {
+          path: settingsPath,
+          error,
+        }),
+      ),
+    );
+
   const hasPlaintextProviderInstanceSecrets = (settings: ServerSettings): boolean => {
     for (const instance of Object.values(settings.providerInstances)) {
       if (
@@ -966,19 +983,23 @@ const makeServerSettings = Effect.gen(function* () {
         ),
       );
       const loaded = yield* loadSettingsFromDisk;
+      let obsoleteSecretCleanup: Effect.Effect<void, ServerSettingsError> | undefined;
       if (loaded.migrated) {
         loaded.revision += 1;
         const { settings: persistedSettings, removeObsoleteSecrets } =
           yield* persistProviderEnvironmentSecrets(loaded.settings, loaded.settings);
+        obsoleteSecretCleanup = removeObsoleteSecrets;
         yield* writeSettingsAtomically({
           revision: loaded.revision,
           migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
           settings: persistedSettings,
         });
-        yield* removeObsoleteSecrets;
       }
       yield* Ref.set(settingsRef, loaded.settings);
       yield* Ref.set(revisionRef, loaded.revision);
+      if (obsoleteSecretCleanup) {
+        yield* runObsoleteSecretCleanup(obsoleteSecretCleanup);
+      }
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -1025,10 +1046,10 @@ const makeServerSettings = Effect.gen(function* () {
           migrationVersion: SERVER_SETTINGS_MIGRATION_VERSION,
           settings: persistedSettings,
         });
-        yield* removeObsoleteSecrets;
         yield* Ref.set(settingsRef, next);
         yield* Ref.set(revisionRef, nextRevision);
         yield* emitChange(next);
+        yield* runObsoleteSecretCleanup(removeObsoleteSecrets);
         return resolveTextGenerationProvider(next);
       }),
     );
