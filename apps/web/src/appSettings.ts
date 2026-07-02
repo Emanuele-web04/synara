@@ -2144,6 +2144,8 @@ export function useAppSettings() {
   };
 
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
+    const providerInstancesBeforePatch =
+      patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
     setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
@@ -2166,6 +2168,14 @@ export function useAppSettings() {
             .catch(() => undefined);
         }
       } catch {
+        if (providerInstancesBeforePatch !== undefined) {
+          setSettings((prev) =>
+            normalizeStoredAppSettings({
+              ...prev,
+              providerInstances: providerInstancesBeforePatch,
+            }),
+          );
+        }
         await queryClient
           .invalidateQueries({ queryKey: serverQueryKeys.settings() })
           .catch(() => undefined);
