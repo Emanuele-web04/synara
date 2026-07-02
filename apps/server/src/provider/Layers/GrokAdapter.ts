@@ -1476,7 +1476,10 @@ export function makeGrokAdapter(
         });
         // Best-effort: tell the child to abandon the turn, then unwind the
         // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
-        yield* Effect.ignore(ctx.acp.cancel);
+        // The cancel is forked, not awaited — this path only runs because the
+        // child went silent, and a hung session/cancel must not block the
+        // prompt-fiber interrupt or leak the watchdog fiber.
+        yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
         if (promptFiber) {
           yield* Fiber.interrupt(promptFiber);
         }
@@ -2006,9 +2009,11 @@ export function makeGrokAdapter(
           // Timed out: tell the child to abandon the prompt (best effort) and
           // surface the failure instead of leaving compactingThread wedged.
           // The cancel may take a moment to drain; suppress stragglers so the
-          // next turn cannot inherit stale compaction updates.
+          // next turn cannot inherit stale compaction updates. The cancel is
+          // forked, not awaited: the child just proved it can go silent, and a
+          // hung session/cancel would keep compactingThread set forever.
           ctx.compactionQuietUntil = Date.now() + GROK_COMPACT_ABANDON_QUIET_MS;
-          yield* Effect.ignore(ctx.acp.cancel);
+          yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
           const detail = `Grok did not finish context compaction within ${Math.round(GROK_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
           yield* Effect.logWarning("grok.acp.compact_timeout", {
             threadId: ctx.threadId,
