@@ -2333,7 +2333,7 @@ const make = Effect.gen(function* () {
     }
     const transcriptBoundaryMessageId =
       input.turnKind === "goal-continuation" ? undefined : input.messageId;
-    const selectedProvider =
+    let selectedProvider =
       input.modelSelection?.provider ??
       threadSessionModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
@@ -2355,6 +2355,10 @@ const make = Effect.gen(function* () {
         ? { registerPriorTranscriptBootstrapOnFreshStart: true }
         : {}),
     });
+    // The session returned by ensureSessionForThread is authoritative. A
+    // stopped projected session can still name the old provider after a model
+    // switch until the projection catches up with the newly started session.
+    selectedProvider = activeSession.provider;
     if (input.modelSelection !== undefined) {
       threadSessionModelSelections.set(input.threadId, input.modelSelection);
     }
@@ -2587,9 +2591,15 @@ const make = Effect.gen(function* () {
       provider: selectedProvider as ProviderKind,
       operation: "thread.turn.start",
     });
-    const sessionModelSwitch = (yield* providerService.getCapabilities(activeSession.provider))
-      .sessionModelSwitch;
-    const requestedModelSelection = input.modelSelection ?? thread.modelSelection;
+    const sessionModelSwitch = (
+      yield* providerService.getCapabilities(
+        activeSession.providerInstanceId ?? activeSession.provider,
+      )
+    ).sessionModelSwitch;
+    const requestedModelSelection =
+      input.modelSelection ??
+      threadSessionModelSelections.get(input.threadId) ??
+      thread.modelSelection;
     const modelForTurn =
       sessionModelSwitch === "unsupported"
         ? activeSession.model !== undefined

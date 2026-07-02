@@ -373,7 +373,7 @@ describe("ServerSettingsService", () => {
     });
   });
 
-  it("falls back from disabled text generation instances to another enabled instance", async () => {
+  it("falls back from disabled text generation instances to a supported enabled instance", async () => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {
         const service = yield* ServerSettingsService;
@@ -396,6 +396,13 @@ describe("ServerSettingsService", () => {
                 driver: "claudeAgent",
                 enabled: false,
                 config: { homePath: "/tmp/claude-work" },
+              },
+              // Enabled, but Gemini has no text-generation implementation, so
+              // fallback must continue to the next supported driver.
+              gemini_work: {
+                driver: "gemini",
+                enabled: true,
+                config: { binaryPath: "gemini" },
               },
               cursor_work: {
                 driver: "cursor",
