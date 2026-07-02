@@ -29,6 +29,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
+import { listRecentStudioOutputs } from "./studioOutputs";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
@@ -749,6 +750,14 @@ export const makeWsRpcLayer = () =>
               label: "projects.dev-servers",
               onDroppedEvents: failLiveUiStreamForSnapshotResync,
             }),
+          ),
+        [WS_METHODS.studioListRecentOutputs]: (input) =>
+          rpcEffect(
+            listRecentStudioOutputs({
+              outboxRoot: path.join(config.studioWorkspaceRoot, "Outbox"),
+              limit: input.limit,
+            }),
+            "Failed to list studio outputs",
           ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),

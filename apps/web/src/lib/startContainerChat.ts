@@ -20,12 +20,11 @@ export async function startContainerChat(input: {
   readonly fresh?: boolean | undefined;
   readonly errorLabel: string;
 }): Promise<StartContainerChatResult> {
-  const projectId = await input.ensureProjectId();
-  if (!projectId) {
-    return { ok: false, error: input.errorLabel };
-  }
-
   try {
+    const projectId = await input.ensureProjectId();
+    if (!projectId) {
+      return { ok: false, error: input.errorLabel };
+    }
     const threadOptions: NewThreadOptions | undefined =
       input.fresh === true ? { fresh: true, envMode: "local", worktreePath: null } : undefined;
     await input.handleNewThread(projectId, threadOptions);

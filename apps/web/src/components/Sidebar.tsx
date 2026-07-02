@@ -302,7 +302,7 @@ import {
   SIDEBAR_SECTION_LABEL_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
-import { SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME } from "./chat/composerPickerStyles";
+import { StudioOutputsSection } from "./StudioOutputsSection";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import {
   resolveSplitViewFocusedThreadId,
@@ -352,7 +352,7 @@ const ADD_PROJECT_EXISTING_SYNC_ERROR =
   "This folder is already linked, but the existing project has not synced into the sidebar yet. Try again in a moment.";
 type SidebarView = "threads" | "studio" | "workspace";
 const SIDEBAR_VIEW_LABELS: Record<SidebarView, string> = {
-  threads: "Threads",
+  threads: "Projects",
   studio: "Studio",
   workspace: "Workspace",
 };
@@ -1125,21 +1125,30 @@ function SidebarSegmentedPicker({
   if (views.length < 2) {
     return null;
   }
+  const activeIndex = Math.max(0, views.indexOf(activeView));
   return (
     <div className="px-3 pb-2.5">
-      <div className="sidebar-segmented-picker inline-flex w-full rounded-lg p-0.5">
+      <div className="sidebar-segmented-picker relative isolate inline-flex w-full rounded-lg p-0.5">
+        {/* Single highlighted pill that glides between segments instead of snapping per-button. */}
+        <div
+          aria-hidden
+          className="sidebar-segmented-thumb pointer-events-none absolute inset-y-0.5 left-0.5 z-0 rounded-md transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          style={{
+            width: `calc((100% - 0.25rem) / ${views.length})`,
+            transform: `translateX(${activeIndex * 100}%)`,
+          }}
+        />
         {views.map((view) => {
           const active = activeView === view;
           return (
             <button
               key={view}
               type="button"
-              data-sidebar-segmented-active={active ? "true" : undefined}
               className={cn(
-                "flex-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors",
+                "relative z-10 flex-1 rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors duration-200",
                 active
-                  ? SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME
-                  : "text-[var(--color-text-foreground-secondary)] hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)]",
+                  ? "text-[var(--color-text-foreground)]"
+                  : "text-[var(--color-text-foreground-secondary)] hover:text-[var(--color-text-foreground)]",
               )}
               onClick={() => onSelectView(view)}
             >
@@ -1468,10 +1477,11 @@ export default function Sidebar() {
       ),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
-  const { nonStudioThreads: nonStudioSidebarThreads } = useMemo(
-    () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
-    [sidebarThreads, studioProjectIdSet],
-  );
+  const { nonStudioThreads: nonStudioSidebarThreads, studioThreads: studioSidebarThreads } =
+    useMemo(
+      () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
+      [sidebarThreads, studioProjectIdSet],
+    );
   const {
     nonStudioThreads: nonStudioSidebarDisplayThreads,
     studioThreads: studioSidebarDisplayThreads,
@@ -1581,8 +1591,13 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project] as const)),
     [projects],
   );
+  // Resolve the active thread's project for real threads AND not-yet-persisted draft threads.
+  // Without the draft fallback, opening a fresh Studio chat (a draft at /$threadId) would drop
+  // out of the Studio surface and snap the segmented picker back to Projects.
   const activeRouteProjectId = routeThreadId
-    ? (sidebarThreadSummaryById[routeThreadId]?.projectId ?? null)
+    ? (sidebarThreadSummaryById[routeThreadId]?.projectId ??
+      draftThreadsByThreadId[routeThreadId]?.projectId ??
+      null)
     : null;
   const activeRouteProject = activeRouteProjectId
     ? (projectById.get(activeRouteProjectId) ?? null)
@@ -2143,15 +2158,22 @@ export default function Sidebar() {
     },
     [navigate],
   );
-  const navigateToStudio = useCallback(
-    (options?: { replace?: boolean }) => {
-      void navigate({
-        to: "/studio",
-        ...(options?.replace ? { replace: true } : {}),
-      });
-    },
-    [navigate],
-  );
+  // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
+  // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
+  // async redirect is what made the segment switch feel sluggish. Mirrors
+  // resolveBackToThreadsTarget so both segments restore the thread you were last on.
+  const resolveBackToStudioTarget = useCallback(() => {
+    const latestThread =
+      sortThreadsForSidebar(studioSidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+    return resolveSettingsBackTarget({
+      lastThreadRoute,
+      availableThreadIds: new Set(studioSidebarThreads.map((thread) => thread.id)),
+      availableSplitViewIds: new Set(
+        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
+      ),
+      latestThreadId: latestThread?.id ?? null,
+    });
+  }, [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById, studioSidebarThreads]);
 
   const resolveBackToThreadTarget = useCallback(() => {
     const latestThread =
@@ -2221,7 +2243,18 @@ export default function Sidebar() {
         return;
       }
       if (view === "studio") {
-        navigateToStudio();
+        const target = resolveBackToStudioTarget();
+        if (target.kind === "thread") {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: ThreadId.makeUnsafe(target.threadId) },
+            search: () => ({
+              splitViewId: target.splitViewId,
+            }),
+          });
+          return;
+        }
+        void handleNewStudioChat({ fresh: true });
         return;
       }
 
@@ -2241,9 +2274,10 @@ export default function Sidebar() {
     },
     [
       handleNewChat,
+      handleNewStudioChat,
       navigate,
-      navigateToStudio,
       navigateToWorkspace,
+      resolveBackToStudioTarget,
       resolveBackToThreadsTarget,
       routeWorkspaceId,
       workspacePages,
@@ -2285,11 +2319,11 @@ export default function Sidebar() {
     prewarmHomeChatProject({ homeDir, chatWorkspaceRoot });
   }, [chatWorkspaceRoot, homeDir]);
   useEffect(() => {
-    if (!studioWorkspaceRoot) {
+    if (!studioSectionVisible || !studioWorkspaceRoot) {
       return;
     }
     prewarmStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot });
-  }, [chatWorkspaceRoot, homeDir, studioWorkspaceRoot]);
+  }, [chatWorkspaceRoot, homeDir, studioSectionVisible, studioWorkspaceRoot]);
 
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
@@ -3945,6 +3979,30 @@ export default function Sidebar() {
     () => visibleChatThreadRows.map((row) => row.thread.id),
     [visibleChatThreadRows],
   );
+  // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
+  // Studio surface is not showing so thread updates on Projects don't pay for an unused sort.
+  const studioChatThreadRows = useMemo(() => {
+    if (!isOnStudio) {
+      return [];
+    }
+    return buildProjectThreadTree({
+      threads: sortThreadsForSidebar(
+        studioProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+        appSettings.sidebarThreadSortOrder,
+      ),
+      expandedParentThreadIds: expandedSubagentParentIds,
+    });
+  }, [
+    appSettings.sidebarThreadSortOrder,
+    expandedSubagentParentIds,
+    isOnStudio,
+    sortedSidebarThreadsByProjectId,
+    studioProjects,
+  ]);
+  const studioChatThreadIds = useMemo(
+    () => studioChatThreadRows.map((row) => row.thread.id),
+    [studioChatThreadRows],
+  );
   const visibleChatPreviewEntries = useMemo(
     () =>
       visibleChatThreadRows.map((row) => ({
@@ -5251,6 +5309,16 @@ export default function Sidebar() {
     );
   }
 
+  function renderStudioChatItem(row: (typeof studioChatThreadRows)[number]) {
+    return renderThreadRow(
+      row.thread,
+      studioChatThreadIds,
+      row.depth,
+      row.childCount,
+      row.isExpanded,
+    );
+  }
+
   function renderProjectItem(
     project: (typeof sortedProjects)[number],
     dragHandleProps: SortableProjectHandleProps | null,
@@ -6224,8 +6292,8 @@ export default function Sidebar() {
           <>
             <SidebarSegmentedPicker
               views={[
-                "threads",
                 ...(studioSectionVisible ? (["studio"] as const) : []),
+                "threads",
                 ...(workspaceSectionVisible ? (["workspace"] as const) : []),
               ]}
               activeView={isOnStudio ? "studio" : isOnWorkspace ? "workspace" : "threads"}
@@ -6409,9 +6477,9 @@ export default function Sidebar() {
                 </DndContext>
               </SidebarGroup>
             ) : isOnStudio ? (
+              // Studio is "just chats": a labeled Studio block holding a flat list of threads
+              // rooted at the Studio workspace (no project-folder chrome).
               <SidebarGroup className="px-1.5 py-1.5">
-                {renderPinnedThreadsSection()}
-
                 {renderListSectionHeader(
                   "Studio",
                   <ChatSortMenu
@@ -6421,20 +6489,16 @@ export default function Sidebar() {
                     }}
                   />,
                 )}
-
-                <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-3">
-                  {studioProjects.map((project) => (
-                    <SidebarMenuItem key={project.id} className="rounded-md">
-                      {renderProjectItem(project, null)}
-                    </SidebarMenuItem>
-                  ))}
+                <SidebarMenu ref={attachProjectListAutoAnimateRef} className="gap-1">
+                  {studioChatThreadRows.length > 0 ? (
+                    studioChatThreadRows.map((row) => renderStudioChatItem(row))
+                  ) : (
+                    <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
+                      {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
+                    </div>
+                  )}
                 </SidebarMenu>
-
-                {studioProjects.length === 0 ? (
-                  <div className="px-2 pt-4 text-center text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/58">
-                    {threadsHydrated ? "No studio chats yet" : "Loading Studio..."}
-                  </div>
-                ) : null}
+                <StudioOutputsSection />
               </SidebarGroup>
             ) : (
               <SidebarGroup className="px-1.5 py-1.5">
@@ -6624,7 +6688,7 @@ export default function Sidebar() {
       </SidebarContent>
 
       <SidebarFooter className="gap-2 p-2 font-system-ui">
-        {!isOnSettings && chatsSectionVisible ? (
+        {!isOnSettings && !isOnStudio && chatsSectionVisible ? (
           <div className="group/collapsible">
             <div className="group/project-header relative">
               <SidebarMenuButton

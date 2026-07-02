@@ -9449,11 +9449,7 @@ export default function ChatView({
                     <SynaraLogo aria-label="Synara logo" className="size-10" />
                     <h2 className="text-[26px] font-normal leading-[1.15] tracking-[-0.015em] text-foreground/95 sm:text-[30px]">
                       {isEmptyChatLanding ? (
-                        isStudioContainer ? (
-                          "What should we create?"
-                        ) : (
-                          "What should we work on?"
-                        )
+                        "What should we work on?"
                       ) : (
                         <>
                           What should we do in{" "}

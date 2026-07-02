@@ -20,6 +20,7 @@ import {
 } from "./automation";
 import { OpenInEditorInput } from "./editor";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
+import { StudioListRecentOutputsInput, StudioListRecentOutputsResult } from "./studio";
 import {
   GitCheckoutInput,
   GitActionProgressEvent,
@@ -327,6 +328,12 @@ export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
     stream: true,
   },
 );
+
+export const WsStudioListRecentOutputsRpc = Rpc.make(WS_METHODS.studioListRecentOutputs, {
+  payload: StudioListRecentOutputsInput,
+  success: StudioListRecentOutputsResult,
+  error: WsRpcError,
+});
 
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
@@ -803,6 +810,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
   WsSubscribeProjectDevServerEventsRpc,
+  WsStudioListRecentOutputsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
   WsGitGithubRepositoryRpc,
