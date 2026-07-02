@@ -454,6 +454,14 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       );
     };
 
+    // Turn ids whose terminal runtime event has already been observed, keyed by
+    // thread. sendTurn consults this immediately before its post-dispatch
+    // "running" upsert: a turn that settles before that write lands (e.g. a
+    // pre-start cancellation) must not be re-marked as running afterwards. The
+    // record below happens before the terminal event's own binding upsert, so
+    // whenever that upsert can precede sendTurn's, this map is already populated.
+    const recentlyCompletedTurnByThread = new Map<ThreadId, string>();
+
     const updateSessionBindingFromRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> => {
@@ -473,6 +481,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       }
 
       return Effect.gen(function* () {
+        if (
+          (event.type === "turn.completed" || event.type === "turn.aborted") &&
+          event.turnId !== undefined
+        ) {
+          recentlyCompletedTurnByThread.set(event.threadId, String(event.turnId));
+        }
         const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
         if (!binding) {
           return;
@@ -855,20 +869,25 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               allowRecovery: true,
             });
             const turn = yield* routed.adapter.sendTurn(input);
-            yield* directory.upsert({
-              threadId: input.threadId,
-              provider: routed.adapter.provider,
-              status: "running",
-              ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-              runtimePayload: {
-                ...(input.modelSelection !== undefined
-                  ? { modelSelection: input.modelSelection }
-                  : {}),
-                activeTurnId: turn.turnId,
-                lastRuntimeEvent: "provider.sendTurn",
-                lastRuntimeEventAt: new Date().toISOString(),
-              },
-            });
+            // A turn can settle before this write lands (e.g. a pre-start
+            // cancellation completes inside the adapter fork); re-marking the
+            // thread as running then would strand it with a stale active turn.
+            if (recentlyCompletedTurnByThread.get(input.threadId) !== String(turn.turnId)) {
+              yield* directory.upsert({
+                threadId: input.threadId,
+                provider: routed.adapter.provider,
+                status: "running",
+                ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                runtimePayload: {
+                  ...(input.modelSelection !== undefined
+                    ? { modelSelection: input.modelSelection }
+                    : {}),
+                  activeTurnId: turn.turnId,
+                  lastRuntimeEvent: "provider.sendTurn",
+                  lastRuntimeEventAt: new Date().toISOString(),
+                },
+              });
+            }
             yield* analytics.record("provider.turn.sent", {
               provider: routed.adapter.provider,
               model: input.modelSelection?.model,

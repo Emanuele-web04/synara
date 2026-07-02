@@ -116,6 +116,11 @@ const GROK_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 600_000,
 });
 const GROK_TURN_WATCHDOG_INTERVAL_MS = 15_000;
+// Hard cap on a manual /compact prompt. compactingThread rejects every send
+// while set, so a Grok child that goes alive-but-silent mid-compaction would
+// otherwise wedge the thread indefinitely. Reuses the turn idle timeout value
+// as a generous ceiling (compactions stream activity well under it).
+const GROK_COMPACT_TIMEOUT_MS = GROK_TURN_IDLE_TIMEOUT_MS;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -1929,6 +1934,7 @@ export function makeGrokAdapter(
             Effect.mapError((error) =>
               mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
             ),
+            Effect.timeoutOption(GROK_COMPACT_TIMEOUT_MS),
             Effect.exit,
           );
 
@@ -1954,10 +1960,35 @@ export function makeGrokAdapter(
           );
         }
 
+        const promptResponse = Option.getOrUndefined(compactResult.value);
+        if (promptResponse === undefined) {
+          // Timed out: tell the child to abandon the prompt (best effort) and
+          // surface the failure instead of leaving compactingThread wedged.
+          yield* Effect.ignore(ctx.acp.cancel);
+          const detail = `Grok did not finish context compaction within ${Math.round(GROK_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
+          yield* Effect.logWarning("grok.acp.compact_timeout", {
+            threadId: ctx.threadId,
+            timeoutMs: GROK_COMPACT_TIMEOUT_MS,
+          });
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.completed",
+            status: "failed",
+            title: "Context compaction timed out",
+            detail,
+          });
+          return yield* Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail,
+            }),
+          );
+        }
+
         // ACP can answer a /compact prompt successfully with stopReason
         // "cancelled" (user interrupt via session/cancel); that is not a
         // completed compaction and must not be persisted as one.
-        if (compactResult.value.stopReason === "cancelled") {
+        if (promptResponse.stopReason === "cancelled") {
           const detail = "Grok context compaction was cancelled before it completed.";
           yield* emitGrokContextCompactionRuntimeEvent(ctx, {
             lifecycle: "item.completed",

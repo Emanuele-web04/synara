@@ -430,6 +430,7 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
+      let resumedExistingSession = false;
       if (options.resumeSessionId) {
         const loadPayload = {
           sessionId: options.resumeSessionId,
@@ -447,6 +448,7 @@ const makeAcpSessionRuntime = (
           // the replay cannot pile up in the unbounded queue.
           sessionId = options.resumeSessionId;
           sessionSetupResult = resumed.value;
+          resumedExistingSession = true;
         } else {
           // Fresh fallback session: no replay risk, and agents may emit early
           // session/update from inside session/new — accept from here so those
@@ -483,8 +485,14 @@ const makeAcpSessionRuntime = (
 
       yield* Ref.set(modeStateRef, parseSessionModeState(sessionSetupResult));
       yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
-      yield* Ref.set(toolCallsRef, new Map());
-      yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+      // Fresh sessions accept session/update while session/new is in flight, and
+      // those events are already in the queue; resetting the merge/segment state
+      // they created would orphan their continuations (new segment ids, unmerged
+      // tool updates). Only the resumed replay-dropping path starts clean.
+      if (resumedExistingSession) {
+        yield* Ref.set(toolCallsRef, new Map());
+        yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
+      }
 
       const nextState = {
         sessionId,
