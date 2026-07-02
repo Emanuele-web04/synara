@@ -5,6 +5,8 @@
 
 import {
   ApprovalRequestId,
+  AutomationId,
+  AutomationRunId,
   CommandId,
   type ContextMenuItem,
   EventId,
@@ -286,6 +288,7 @@ describe("wsNativeApi", () => {
       settings: {
         enableWandy: true,
         enableAssistantStreaming: true,
+        enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
@@ -394,6 +397,54 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards automation requests and events", async () => {
+    requestMock.mockResolvedValue({ definitions: [], runs: [] });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    const onAutomationEvent = vi.fn();
+    const unsubscribe = api.automation.onEvent(onAutomationEvent);
+
+    await api.automation.list({ projectId: ProjectId.makeUnsafe("project-1") });
+    await api.automation.runNow({ automationId: AutomationId.makeUnsafe("automation-1") });
+    await api.automation.markRunRead({
+      runId: AutomationRunId.makeUnsafe("automation-run-1"),
+      unread: false,
+    });
+    await api.automation.archiveRun({
+      runId: AutomationRunId.makeUnsafe("automation-run-1"),
+      archived: true,
+    });
+
+    const event = {
+      type: "definition-deleted",
+      automationId: AutomationId.makeUnsafe("automation-1"),
+    } as const;
+    emitPush(WS_CHANNELS.automationEvent, event);
+    unsubscribe();
+    emitPush(WS_CHANNELS.automationEvent, {
+      type: "definition-deleted",
+      automationId: AutomationId.makeUnsafe("automation-2"),
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationList, {
+      projectId: "project-1",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationRunNow, {
+      automationId: "automation-1",
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationMarkRunRead, {
+      runId: "automation-run-1",
+      unread: false,
+    });
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.automationArchiveRun, {
+      runId: "automation-run-1",
+      archived: true,
+    });
+    expect(onAutomationEvent).toHaveBeenCalledTimes(1);
+    expect(onAutomationEvent).toHaveBeenCalledWith(event);
+  });
+
   it("wraps orchestration dispatch commands in the command envelope", async () => {
     requestMock.mockResolvedValue(undefined);
     const { createWsNativeApi } = await import("./wsNativeApi");
@@ -494,6 +545,23 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsReadFile, {
       cwd: "/tmp/project",
       relativePath: "src/app.ts",
+    });
+  });
+
+  it("forwards local preview grant creation to the websocket project method", async () => {
+    requestMock.mockResolvedValue({
+      grant: "grant-token",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.createLocalFilePreviewGrant({
+      path: "/Users/tester/Downloads/shot.png",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsCreateLocalFilePreviewGrant, {
+      path: "/Users/tester/Downloads/shot.png",
     });
   });
 

@@ -64,6 +64,7 @@ import {
   EnvironmentRowBody,
   EnvironmentRowChevron,
 } from "./chat/environment/EnvironmentRow";
+import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "./chat/composerPickerStyles";
 import type { ThreadWorkspacePatch } from "../types";
 
 /**
@@ -80,6 +81,7 @@ interface BranchToolbarBranchSelectorProps {
   branchCwd: string | null;
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
+  hasServerThread: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
@@ -369,6 +371,7 @@ export function BranchToolbarBranchSelector({
   branchCwd,
   effectiveEnvMode,
   envLocked,
+  hasServerThread,
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
@@ -446,6 +449,7 @@ export function BranchToolbarBranchSelector({
         activeWorktreePath,
         activeThreadBranch,
         currentGitBranch,
+        hasServerThread,
         isBranchActionPending,
       })
     ) {
@@ -458,6 +462,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     currentGitBranch,
     effectiveEnvMode,
+    hasServerThread,
     isBranchActionPending,
     onSetThreadWorkspace,
   ]);
@@ -837,7 +842,7 @@ export function BranchToolbarBranchSelector({
         className={
           isPanel
             ? ENVIRONMENT_ROW_CLASS_NAME
-            : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+            : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} disabled:cursor-not-allowed disabled:opacity-50`
         }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >

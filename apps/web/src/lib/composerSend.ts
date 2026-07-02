@@ -1,5 +1,5 @@
 // FILE: composerSend.ts
-// Purpose: Shared composer send helpers for image intake, prompt formatting, and upload payloads.
+// Purpose: Shared composer send helpers for attachment intake, prompt formatting, and upload payloads.
 // Layer: Web composer utility
 // Depends on: provider/model contracts plus composer draft attachment shapes.
 
@@ -7,6 +7,7 @@ import {
   MessageId,
   type ModelSelection,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type ClaudeCodeEffort,
   type ProviderKind,
@@ -16,6 +17,7 @@ import { applyClaudePromptEffortPrefix, getModelCapabilities } from "@t3tools/sh
 
 import type {
   ComposerAssistantSelectionAttachment,
+  ComposerFileAttachment,
   ComposerImageAttachment,
 } from "../composerDraftStore";
 import { randomUUID } from "./utils";
@@ -23,28 +25,40 @@ import { randomUUID } from "./utils";
 export const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024),
 )}MB`;
+export const FILE_SIZE_LIMIT_LABEL = `${Math.round(
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES / (1024 * 1024),
+)}MB`;
 
 export interface ComposerImageBuildResult {
   images: ComposerImageAttachment[];
   error: string | null;
 }
 
-// Converts File objects into the exact attachment draft shape used by the chat composer.
-export function buildComposerImageAttachmentsFromFiles(input: {
+export interface ComposerFileBuildResult {
+  files: ComposerFileAttachment[];
+  error: string | null;
+}
+
+// Centralizes the shared file/count/size guard while each attachment type maps its own draft shape.
+function collectComposerAttachmentFiles(input: {
   files: readonly File[];
   existingAttachmentCount: number;
-}): ComposerImageBuildResult {
-  const images: ComposerImageAttachment[] = [];
+  maxBytes: number;
+  sizeLimitLabel: string;
+  acceptsFile: (file: File) => boolean;
+  unsupportedFileError?: (file: File) => string | null;
+}): { files: File[]; error: string | null } {
+  const files: File[] = [];
   let nextAttachmentCount = input.existingAttachmentCount;
   let error: string | null = null;
 
   for (const file of input.files) {
-    if (!file.type.startsWith("image/")) {
-      error = `Unsupported file type for '${file.name}'. Please attach image files only.`;
+    if (!input.acceptsFile(file)) {
+      error = input.unsupportedFileError?.(file) ?? error;
       continue;
     }
-    if (file.size > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
-      error = `'${file.name}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`;
+    if (file.size > input.maxBytes) {
+      error = `'${file.name}' exceeds the ${input.sizeLimitLabel} attachment limit.`;
       continue;
     }
     if (nextAttachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
@@ -52,19 +66,64 @@ export function buildComposerImageAttachmentsFromFiles(input: {
       break;
     }
 
-    images.push({
-      type: "image",
-      id: randomUUID(),
-      name: file.name || "image",
-      mimeType: file.type,
-      sizeBytes: file.size,
-      previewUrl: URL.createObjectURL(file),
-      file,
-    });
+    files.push(file);
     nextAttachmentCount += 1;
   }
 
-  return { images, error };
+  return { files, error };
+}
+
+// Converts File objects into the exact attachment draft shape used by the chat composer.
+export function buildComposerImageAttachmentsFromFiles(input: {
+  files: readonly File[];
+  existingAttachmentCount: number;
+}): ComposerImageBuildResult {
+  const result = collectComposerAttachmentFiles({
+    files: input.files,
+    existingAttachmentCount: input.existingAttachmentCount,
+    maxBytes: PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+    sizeLimitLabel: IMAGE_SIZE_LIMIT_LABEL,
+    acceptsFile: (file) => file.type.startsWith("image/"),
+    unsupportedFileError: (file) =>
+      `Unsupported file type for '${file.name}'. Please attach image files only.`,
+  });
+
+  const images = result.files.map<ComposerImageAttachment>((file) => ({
+    type: "image",
+    id: randomUUID(),
+    name: file.name || "image",
+    mimeType: file.type,
+    sizeBytes: file.size,
+    previewUrl: URL.createObjectURL(file),
+    file,
+  }));
+
+  return { images, error: result.error };
+}
+
+// Converts non-image File objects into in-memory file attachment drafts.
+export function buildComposerFileAttachmentsFromFiles(input: {
+  files: readonly File[];
+  existingAttachmentCount: number;
+}): ComposerFileBuildResult {
+  const result = collectComposerAttachmentFiles({
+    files: input.files,
+    existingAttachmentCount: input.existingAttachmentCount,
+    maxBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES,
+    sizeLimitLabel: FILE_SIZE_LIMIT_LABEL,
+    acceptsFile: (file) => !file.type.startsWith("image/"),
+  });
+
+  const files = result.files.map<ComposerFileAttachment>((file) => ({
+    type: "file",
+    id: randomUUID(),
+    name: file.name || "attachment",
+    mimeType: file.type || "application/octet-stream",
+    sizeBytes: file.size,
+    file,
+  }));
+
+  return { files, error: result.error };
 }
 
 export function readFileAsDataUrl(file: File): Promise<string> {
@@ -75,10 +134,10 @@ export function readFileAsDataUrl(file: File): Promise<string> {
         resolve(reader.result);
         return;
       }
-      reject(new Error("Could not read image data."));
+      reject(new Error("Could not read attachment data."));
     });
     reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
+      reject(reader.error ?? new Error("Failed to read attachment."));
     });
     reader.readAsDataURL(file);
   });
@@ -144,6 +203,7 @@ export function resolvePromptEffortFromModelSelection(
 
 export async function buildUploadComposerAttachments(input: {
   images: ReadonlyArray<ComposerImageAttachment>;
+  files?: ReadonlyArray<ComposerFileAttachment>;
   assistantSelections: ReadonlyArray<ComposerAssistantSelectionAttachment>;
 }): Promise<UploadChatAttachment[]> {
   return Promise.all([
@@ -160,6 +220,13 @@ export async function buildUploadComposerAttachments(input: {
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       dataUrl: await readFileAsDataUrl(image.file),
+    })),
+    ...(input.files ?? []).map(async (file) => ({
+      type: "file" as const,
+      name: file.name,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+      dataUrl: await readFileAsDataUrl(file.file),
     })),
   ]);
 }

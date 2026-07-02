@@ -17,6 +17,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -24,40 +25,49 @@ import {
   type ComponentProps,
   type KeyboardEvent,
   type RefObject,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import {
   deriveTimelineEntries,
   formatClockElapsed,
   isFileChangeWorkLogEntry,
+  type WorkLogEntry,
 } from "../../session-logic";
 import { type TurnDiffSummary } from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
+  ArrowUpCircleIcon,
   BotIcon,
   CheckIcon,
   ChangesIcon,
   CircleAlertIcon,
+  CircleQuestionIcon,
   EyeIcon,
   GitHubIcon,
-  GlobeIcon,
   HammerIcon,
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
+  PencilIcon,
   PinIcon,
+  SearchIcon,
   SkillCubeIcon,
-  SquarePenIcon,
   SteerIcon,
   TerminalIcon,
   Undo2Icon,
+  WebSearchIcon,
   ZapIcon,
 } from "~/lib/icons";
+import { pinActionLabel } from "~/lib/pin";
 import { Button } from "../ui/button";
+import { AutomationCreatedCard } from "./AutomationCreatedCard";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
+import { ToolCallDetailsContent, ToolCallDetailsDialog } from "./ToolCallDetailsDialog";
 import { DiffStatLabel } from "./DiffStatLabel";
+import { fileDiffStatsByPath, resolveFileDiffStatByChangedPath } from "~/lib/diffRendering";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 import { FileEntryIcon } from "./FileEntryIcon";
 import { InlineMentionChip } from "./InlineMentionChip";
@@ -66,17 +76,26 @@ import { InlineAgentChip } from "./InlineAgentChip";
 import { MessageActionButton, MESSAGE_ACTION_ICON_CLASS_NAME } from "./MessageActionButton";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip";
+import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
+import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
+  type CollapsedTurnItem,
   type MessagesTimelineRow,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
-import { deriveInlineCommandCall } from "../../lib/toolCallLabel";
+import {
+  deriveReadableCommandDisplay,
+  extractWebFetchUrl,
+  resolveCommandVisualKind,
+} from "../../lib/toolCallLabel";
+import { describeLinkChip } from "~/lib/linkChips";
+import { LinkChipIcon } from "../LinkChipIcon";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -121,8 +140,12 @@ import {
   normalizeSubagentStatusKind,
   resolveSubagentPresentation,
 } from "../../lib/subagentPresentation";
-import { RiRobot3Line } from "react-icons/ri";
 import { deriveUserMessagePreviewState } from "./userMessagePreview";
+import {
+  resolveActiveTrailSnapshot,
+  type ActiveTrailSnapshot,
+  type MessageTrailAnchor,
+} from "./messageTrail.logic";
 
 const MAX_VISIBLE_INLINE_TOOL_ENTRIES = 4;
 // Changed-files list in the per-turn card is capped so large turns stay compact;
@@ -133,15 +156,37 @@ const MAX_VISIBLE_CHANGED_FILES = 5;
 const MIN_BOTTOM_CONTENT_INSET_PX = 64;
 const MESSAGE_HOVER_REVEAL_CLASS_NAME =
   "opacity-0 transition-opacity pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto focus-visible:opacity-100 focus-visible:pointer-events-auto";
+// Shared interaction tone for a work row's leading glyph and labels: muted by
+// default, brightening to foreground when the enclosing row is hovered/focused.
+// This is the single source for that treatment so command, MCP, agent, and
+// "Edited <file>" rows stay visually coherent (they previously drifted in
+// opacity). The row's `group/<name>` token is baked into each literal — Tailwind
+// only generates classes it can see statically, so the group cannot be
+// interpolated. Add one entry per group token used by a work row.
+const WORK_ROW_MUTED_HOVER_TONE: Record<"tool-row" | "file-row", string> = {
+  "tool-row":
+    "text-muted-foreground/70 transition-colors group-hover/tool-row:text-foreground group-focus-visible/tool-row:text-foreground",
+  "file-row":
+    "text-muted-foreground/70 transition-colors group-hover/file-row:text-foreground group-focus-visible/file-row:text-foreground",
+};
 // How long a jumped-to message keeps its highlight tint before fading back out.
 const JUMP_HIGHLIGHT_DURATION_MS = 1200;
 const MARKER_FINE_SCROLL_RETRY_TIMEOUT_MS = 900;
 const MARKER_FINE_SCROLL_MAX_RETRY_FRAMES = 90;
+const TRANSCRIPT_DISCLOSURE_TRANSITION_MS = 220;
+const TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS = 40;
+const MESSAGE_SEND_ENTER_ANIMATION_MS = 180;
+const MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS = 60;
+// Treat any partially visible row (>= 1px) as in view, so the navigation trail's
+// "active" tick tracks the topmost rendered row rather than waiting for a turn to
+// be substantially on-screen.
+const TRAIL_VIEWABILITY_CONFIG = { itemVisiblePercentThreshold: 0 } as const;
 // The deep-link "active" ring is applied imperatively to the rendered marker spans so jumping
 // never re-parses a message's markdown tree (the className is purely a CSS box-shadow).
 const ACTIVE_MARKER_CLASS_NAME = "thread-marker-active";
 const EMPTY_MESSAGE_MARKERS: readonly ThreadMarker[] = [];
 const EMPTY_THREAD_MARKERS_BY_MESSAGE_ID = new Map<MessageId, readonly ThreadMarker[]>();
+const EMPTY_MESSAGE_ID_SET: ReadonlySet<MessageId> = new Set();
 
 /**
  * Imperative handle the transcript exposes so the Environment panel's pinned-message
@@ -152,9 +197,9 @@ export interface MessagesTimelineController {
   scrollToMarker: (marker: ThreadMarker) => void;
 }
 
-const AgentTaskIcon: LucideIcon = (props) => (
-  <RiRobot3Line className={props.className} style={props.style} />
-);
+// Distinct component identity from BotIcon so prefersCompactWorkEntryRow can
+// target agent-task rows specifically; both render the shared central robot glyph.
+const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
 // Keeps the steer marker visually attached to the whole sent-message stack.
 function UserDispatchModeChip({
@@ -185,6 +230,11 @@ function basename(value: string): string {
   const slash = Math.max(value.lastIndexOf("/"), value.lastIndexOf("\\"));
   return slash >= 0 ? value.slice(slash + 1) : value;
 }
+
+// Stable empty stat map so file-change rows without a parsable patch don't churn
+// referential identity on every render.
+const EMPTY_FILE_DIFF_STATS: ReadonlyMap<string, { additions: number; deletions: number }> =
+  new Map();
 
 function cssAttributeSelectorValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
@@ -230,10 +280,14 @@ interface MessagesTimelineProps {
   controllerRef?: RefObject<MessagesTimelineController | null>;
   /** Message ids currently pinned for the active thread (drives the footer pin toggle state). */
   pinnedMessageIds?: ReadonlySet<MessageId>;
+  /** Excludes transient rows from persistent pin affordances. */
+  canPinMessage?: (messageId: MessageId) => boolean;
   /** Toggle a message's pinned state from the assistant footer. */
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
+  /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
+  enteringUserMessageIds?: ReadonlySet<MessageId>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   nowIso?: string;
@@ -242,6 +296,8 @@ interface MessagesTimelineProps {
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  /** Open an automation's detail page from a "created automation" transcript card. */
+  onOpenAutomation?: (automationId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   onEditUserMessage?: (messageId: MessageId, text: string) => boolean | Promise<boolean>;
@@ -249,6 +305,8 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onIsAtEndChange?: (isAtEnd: boolean) => void;
+  /** Emits current + visible sent-message anchors as the viewport scrolls (drives the trail). */
+  onTrailHighlightsChange?: (snapshot: ActiveTrailSnapshot) => void;
   onMessagesClickCapture?: ComponentProps<typeof LegendList>["onClickCapture"];
   onMessagesMouseUp?: ComponentProps<typeof LegendList>["onMouseUp"];
   onMessagesPointerCancel?: ComponentProps<typeof LegendList>["onPointerCancel"];
@@ -282,8 +340,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   listRef,
   controllerRef,
   pinnedMessageIds,
+  canPinMessage,
   onTogglePinMessage,
   threadMarkers = [],
+  enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
   nowIso,
@@ -292,6 +352,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenAgentActivity,
   onOpenTurnDiff,
   onOpenThread,
+  onOpenAutomation,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   onEditUserMessage,
@@ -299,6 +360,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   onIsAtEndChange,
+  onTrailHighlightsChange,
   onMessagesClickCapture,
   onMessagesMouseUp,
   onMessagesPointerCancel,
@@ -379,6 +441,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const [editingUserMessageId, setEditingUserMessageId] = useState<MessageId | null>(null);
   const [submittingEditedUserMessageId, setSubmittingEditedUserMessageId] =
     useState<MessageId | null>(null);
+  const [selectedToolDetailsEntryId, setSelectedToolDetailsEntryId] = useState<string | null>(null);
+  const openToolDetails = useCallback((workEntry: TimelineWorkEntry) => {
+    setSelectedToolDetailsEntryId(workEntry.id);
+  }, []);
+  const handleToolDetailsOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      setSelectedToolDetailsEntryId(null);
+    }
+  }, []);
   // Transient highlight applied to a message jumped-to from the pinned-message checklist.
   const [highlightedMessageId, setHighlightedMessageId] = useState<MessageId | null>(null);
   // Index markers once per update so each assistant row avoids a full marker scan.
@@ -397,32 +468,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     }
     return byMessageId;
   }, [threadMarkers]);
-  const timelineExtraData = useMemo(
-    () => ({
-      editingUserMessageId,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      highlightedMessageId,
-      pinnedMessageIds,
-      submittingEditedUserMessageId,
-      threadMarkersByMessageId,
-    }),
-    [
-      editingUserMessageId,
-      expandedCollapsedWork,
-      expandedFileChangesByTurnId,
-      expandedFileListByTurnId,
-      expandedUserMessagesById,
-      expandedWorkGroupsState,
-      highlightedMessageId,
-      pinnedMessageIds,
-      submittingEditedUserMessageId,
-      threadMarkersByMessageId,
-    ],
-  );
   const fallbackListRef = useRef<LegendListRef | null>(null);
   const resolvedListRef = listRef ?? fallbackListRef;
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -454,6 +499,42 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ],
   );
   const rows = useStableRows(rawRows);
+  const settledTurnCollapseTransitions = useSettledTurnCollapseTransitions(rows);
+  const enteringMessageRowIds = useMessageSendEnterAnimations(rows, enteringUserMessageIds);
+  const timelineExtraData = useMemo(
+    () => ({
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      threadMarkersByMessageId,
+    }),
+    [
+      editingUserMessageId,
+      enteringMessageRowIds,
+      expandedCollapsedWork,
+      expandedFileChangesByTurnId,
+      expandedFileListByTurnId,
+      expandedUserMessagesById,
+      expandedWorkGroupsState,
+      highlightedMessageId,
+      pinnedMessageIds,
+      settledTurnCollapseTransitions,
+      submittingEditedUserMessageId,
+      threadMarkersByMessageId,
+    ],
+  );
+  const selectedToolDetailsEntry = useMemo(
+    () => findToolDetailsEntryById(rows, selectedToolDetailsEntryId),
+    [rows, selectedToolDetailsEntryId],
+  );
   // Latest rows kept in a ref so the imperative scroll controller can look up a message's
   // index lazily without re-installing the controller on every transcript change.
   const rowsRef = useRef(rows);
@@ -645,16 +726,72 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       window.cancelAnimationFrame(frameId);
     };
   }, [onIsAtEndChange, resolvedListRef, rows.length]);
+  // Sent-message anchors (id + position in the virtualized row list) for the
+  // navigation trail. Held in a ref so the viewability callback stays stable and
+  // doesn't re-subscribe LegendList on every transcript change.
+  const userMessageAnchors = useMemo<MessageTrailAnchor[]>(() => {
+    const anchors: MessageTrailAnchor[] = [];
+    rows.forEach((row, index) => {
+      if (row.kind === "message" && row.message.role === "user") {
+        anchors.push({ id: row.message.id, rowIndex: index });
+      }
+    });
+    return anchors;
+  }, [rows]);
+  const userMessageAnchorsRef = useRef(userMessageAnchors);
+  userMessageAnchorsRef.current = userMessageAnchors;
+  const emitTrailHighlightsForViewport = useCallback(
+    (topRowIndex: number, bottomRowIndex: number) => {
+      if (!onTrailHighlightsChange || !Number.isFinite(topRowIndex)) {
+        return;
+      }
+      onTrailHighlightsChange(
+        resolveActiveTrailSnapshot(userMessageAnchorsRef.current, topRowIndex, bottomRowIndex),
+      );
+    },
+    [onTrailHighlightsChange],
+  );
   const handleListScroll = useCallback<NonNullable<MessagesTimelineProps["onMessagesScroll"]>>(
     (event) => {
       onMessagesScroll?.(event);
       const state = resolvedListRef.current?.getState?.();
       if (state) {
         onIsAtEndChange?.(state.isAtEnd);
+        emitTrailHighlightsForViewport(state.start, state.end);
       }
     },
-    [onIsAtEndChange, onMessagesScroll, resolvedListRef],
+    [emitTrailHighlightsForViewport, onIsAtEndChange, onMessagesScroll, resolvedListRef],
   );
+  const handleViewableItemsChanged = useCallback<
+    NonNullable<ComponentProps<typeof LegendList>["onViewableItemsChanged"]>
+  >(
+    ({ viewableItems }) => {
+      let topIndex = Number.POSITIVE_INFINITY;
+      let bottomIndex = Number.NEGATIVE_INFINITY;
+      for (const token of viewableItems) {
+        if (token.isViewable) {
+          topIndex = Math.min(topIndex, token.index);
+          bottomIndex = Math.max(bottomIndex, token.index);
+        }
+      }
+      emitTrailHighlightsForViewport(topIndex, bottomIndex);
+    },
+    [emitTrailHighlightsForViewport],
+  );
+  useEffect(() => {
+    if (!onTrailHighlightsChange) {
+      return;
+    }
+    const frameId = window.requestAnimationFrame(() => {
+      const state = resolvedListRef.current?.getState?.();
+      if (state) {
+        emitTrailHighlightsForViewport(state.start, state.end);
+      }
+    });
+    return () => {
+      window.cancelAnimationFrame(frameId);
+    };
+  }, [emitTrailHighlightsForViewport, onTrailHighlightsChange, resolvedListRef, rows.length]);
   const toggleFileChangesExpanded = useCallback((turnId: TurnId) => {
     setExpandedFileChangesByTurnId((current) => ({
       ...current,
@@ -707,6 +844,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         row.kind === "message" && row.message.id === highlightedMessageId
           ? "rounded-xl bg-[var(--color-background-elevated-secondary)]"
           : null,
+        enteringMessageRowIds.has(row.id) ? "chat-message-send-enter" : null,
       )}
       data-timeline-row-kind={row.kind}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
@@ -737,8 +875,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
                     markdownCwd={markdownCwd}
                     onImageExpand={onImageExpand}
+                    onOpenToolDetails={openToolDetails}
                     {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
                     {...(onOpenThread ? { onOpenThread } : {})}
+                    {...(onOpenAutomation ? { onOpenAutomation } : {})}
                   />
                 ))}
               </div>
@@ -777,8 +917,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               { type: "assistant-selection" }
             > => attachment.type === "assistant-selection",
           );
+          const userFiles = (row.message.attachments ?? []).filter(
+            (
+              attachment,
+            ): attachment is Extract<
+              NonNullable<TimelineMessage["attachments"]>[number],
+              { type: "file" }
+            > => attachment.type === "file",
+          );
           const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text, {
-            hideImageOnlyBootstrapPrompt: userImages.length > 0 || assistantSelections.length > 0,
+            hideImageOnlyBootstrapPrompt:
+              userImages.length > 0 || userFiles.length > 0 || assistantSelections.length > 0,
           });
           const renderedAssistantSelections =
             assistantSelections.length > 0
@@ -791,6 +940,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 }));
           const terminalContexts = displayedUserMessage.contexts;
           const renderedFileComments = displayedUserMessage.fileComments;
+          const renderedPastedTexts = displayedUserMessage.pastedTexts;
           const userMessagePreview = deriveUserMessagePreviewState(
             displayedUserMessage.visibleText,
             {
@@ -814,6 +964,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const hasLeadingMedia =
             renderedAssistantSelections.length > 0 ||
             renderedFileComments.length > 0 ||
+            renderedPastedTexts.length > 0 ||
             userImages.length > 0;
           const isTailContentRow = row.id === tailContentRowId;
           return (
@@ -837,6 +988,24 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {renderedFileComments.length > 0 && (
                   <div className="mb-1 flex max-w-[240px] flex-wrap justify-end gap-1.5 self-end">
                     <FileCommentsSummaryChip comments={renderedFileComments} />
+                  </div>
+                )}
+                {renderedPastedTexts.length > 0 && (
+                  <div className="mb-1 flex max-w-full flex-col items-end gap-1.5 self-end">
+                    {renderedPastedTexts.map((pasted) => (
+                      <UserMessagePastedTextCard
+                        key={pasted.index}
+                        text={pasted.text}
+                        metrics={{ lineCount: pasted.lineCount, charCount: pasted.charCount }}
+                      />
+                    ))}
+                  </div>
+                )}
+                {userFiles.length > 0 && (
+                  <div className="mb-1 flex max-w-[280px] flex-wrap justify-end gap-1.5 self-end">
+                    {userFiles.map((file) => (
+                      <FileAttachmentChip key={file.id} file={file} />
+                    ))}
                   </div>
                 )}
                 {userImages.length > 0 && (
@@ -875,7 +1044,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
                       USER_MESSAGE_BUBBLE_RADIUS_CLASS_NAME,
                       bubbleIsChipOnly
-                        ? "py-1 px-3.5"
+                        ? "py-0.5 px-3"
                         : USER_MESSAGE_BUBBLE_SHELL_CHROME_CLASS_NAME,
                     )}
                   >
@@ -961,34 +1130,68 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
-          const inlineWorkEntries = row.inlineWorkEntries ?? [];
-          const inlineToolEntries = inlineWorkEntries.filter((entry) => entry.tone === "tool");
-          const inlineStatusEntries = inlineWorkEntries.filter((entry) => entry.tone !== "tool");
-          const inlineToolGroupId =
-            inlineToolEntries.length > 0 ? (row.inlineWorkGroupId ?? null) : null;
-          const inlineToolExpanded =
-            inlineToolGroupId !== null
-              ? (expandedWorkGroupsState[inlineToolGroupId] ?? false)
-              : false;
-          const visibleInlineToolEntries =
-            inlineToolExpanded || inlineToolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
-              ? inlineToolEntries
-              : activeTurnInProgress
-                ? inlineToolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
-                : inlineToolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
-          const hiddenInlineToolCount = inlineToolEntries.length - visibleInlineToolEntries.length;
+          const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
+            const toolEntries = workEntries.filter((entry) => entry.tone === "tool");
+            const statusEntries = workEntries.filter((entry) => entry.tone !== "tool");
+            const toolGroupId = toolEntries.length > 0 ? workGroupId : null;
+            const toolExpanded =
+              toolGroupId !== null ? (expandedWorkGroupsState[toolGroupId] ?? false) : false;
+            const visibleToolEntries =
+              toolExpanded || toolEntries.length <= MAX_VISIBLE_INLINE_TOOL_ENTRIES
+                ? toolEntries
+                : activeTurnInProgress
+                  ? toolEntries.slice(-MAX_VISIBLE_INLINE_TOOL_ENTRIES)
+                  : toolEntries.slice(0, MAX_VISIBLE_INLINE_TOOL_ENTRIES);
+            const hasGenericFileChangeEntry = toolEntries.some(
+              (workEntry) =>
+                isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
+            );
+            const visibleRenderableToolEntries = visibleToolEntries.filter(
+              (workEntry) =>
+                !(
+                  hasGenericFileChangeEntry &&
+                  isFileChangeWorkEntry(workEntry) &&
+                  (workEntry.changedFiles?.length ?? 0) === 0
+                ),
+            );
+            return {
+              toolEntries,
+              statusEntries,
+              toolGroupId,
+              toolExpanded,
+              visibleRenderableToolEntries,
+              hiddenToolCount: toolEntries.length - visibleToolEntries.length,
+              hasGenericFileChangeEntry,
+            };
+          };
+          const leadingWorkDisplay = buildWorkDisplay(
+            row.leadingWorkEntries ?? [],
+            row.leadingWorkGroupId ?? null,
+          );
+          const inlineWorkDisplay = buildWorkDisplay(
+            row.inlineWorkEntries ?? [],
+            row.inlineWorkGroupId ?? null,
+          );
           const inlineWorkSummary =
-            inlineToolEntries.length > 0 ? null : formatInlineWorkSummary(inlineStatusEntries);
+            leadingWorkDisplay.toolEntries.length + inlineWorkDisplay.toolEntries.length > 0
+              ? null
+              : formatInlineWorkSummary([
+                  ...leadingWorkDisplay.statusEntries,
+                  ...inlineWorkDisplay.statusEntries,
+                ]);
           const assistantCopyState = resolveAssistantMessageCopyState({
             text: row.message.text ?? null,
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.assistantCopyStreaming,
           });
           const messagePinned = pinnedMessageIds?.has(row.message.id) ?? false;
+          const messageCanPin = canPinMessage?.(row.message.id) ?? true;
           // Offer the pin toggle wherever copy is offered (a complete, terminal answer);
           // keep it visible for an already-pinned message so it can always be unpinned.
           const showPinToggle =
-            Boolean(onTogglePinMessage) && (assistantCopyState.visible || messagePinned);
+            messageCanPin &&
+            Boolean(onTogglePinMessage) &&
+            (assistantCopyState.visible || messagePinned);
           const turnSummary = row.assistantTurnDiffSummary;
           const fileDiffStatByPath = new Map(
             (turnSummary?.files ?? []).map((file) => [
@@ -999,24 +1202,22 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               },
             ]),
           );
-          const hasGenericInlineFileChangeEntry = inlineToolEntries.some(
-            (workEntry) =>
-              isFileChangeWorkEntry(workEntry) && (workEntry.changedFiles?.length ?? 0) === 0,
-          );
-          const visibleRenderableInlineToolEntries = visibleInlineToolEntries.filter(
-            (workEntry) =>
-              !(
-                hasGenericInlineFileChangeEntry &&
-                isFileChangeWorkEntry(workEntry) &&
-                (workEntry.changedFiles?.length ?? 0) === 0
-              ),
-          );
           const inlineEditedFilesFromTurnSummary =
-            hasGenericInlineFileChangeEntry && (turnSummary?.files.length ?? 0) > 0
+            (leadingWorkDisplay.hasGenericFileChangeEntry ||
+              inlineWorkDisplay.hasGenericFileChangeEntry) &&
+            (turnSummary?.files.length ?? 0) > 0
               ? turnSummary!.files
               : [];
+          // Only the turn's final answer carries a timestamp. Intermediate
+          // working preambles (and their inline tool calls) stay timestamp-free
+          // so a live turn reads as one block, not a stack of timestamped
+          // fragments. `showAssistantCopyButton` is exactly the terminal-message
+          // signal (see deriveTerminalAssistantMessageIds).
+          const isTerminalAssistantMessage = row.showAssistantCopyButton;
           const assistantMeta = [
-            formatShortTimestamp(row.message.createdAt, timestampFormat),
+            isTerminalAssistantMessage
+              ? formatShortTimestamp(row.message.createdAt, timestampFormat)
+              : null,
             inlineWorkSummary,
           ]
             .filter((value): value is string => Boolean(value))
@@ -1026,9 +1227,125 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           const isCollapsedWorkExpanded = hasCollapsedWork
             ? (expandedCollapsedWork[row.message.id] ?? false)
             : false;
+          const settledCollapseTransition = isCollapsedWorkExpanded
+            ? undefined
+            : settledTurnCollapseTransitions[row.message.id];
           const isTailContentRow = row.id === tailContentRowId;
+          const renderWorkDisplay = (
+            display: typeof leadingWorkDisplay,
+            placement: "leading" | "inline",
+          ) => (
+            <>
+              {!hasCollapsedWork && display.visibleRenderableToolEntries.length > 0 && (
+                <div className={placement === "leading" ? "mb-1.5" : "mt-1.5"}>
+                  <div className="space-y-px">
+                    {display.visibleRenderableToolEntries.map((workEntry) => (
+                      <SimpleWorkEntryRow
+                        key={`${placement}-tool-row:${row.message.id}:${workEntry.id}`}
+                        workEntry={workEntry}
+                        chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                        textFontSizePx={normalizedChatFontSizePx}
+                        density="compact"
+                        fileDiffStatByPath={fileDiffStatByPath}
+                        markdownCwd={markdownCwd}
+                        onImageExpand={onImageExpand}
+                        onOpenTurnDiff={onOpenTurnDiff}
+                        onOpenToolDetails={openToolDetails}
+                        {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+                        {...(onOpenThread ? { onOpenThread } : {})}
+                        {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                        {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
+                      />
+                    ))}
+                  </div>
+                  {display.toolGroupId &&
+                    display.toolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
+                      <div className="py-0.5">
+                        <button
+                          type="button"
+                          className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
+                          style={{ fontSize: `${normalizedChatFontSizePx}px` }}
+                          onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
+                        >
+                          {display.toolExpanded
+                            ? "Show less"
+                            : `+${display.hiddenToolCount} more tool calls`}
+                        </button>
+                      </div>
+                    )}
+                </div>
+              )}
+              {!hasCollapsedWork && display.statusEntries.length > 0 && (
+                <div className={cn("space-y-0.5", placement === "leading" ? "mb-2" : "mt-2")}>
+                  {display.statusEntries.map((workEntry) => (
+                    <SimpleWorkEntryRow
+                      key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
+                      workEntry={workEntry}
+                      chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                      textFontSizePx={normalizedChatFontSizePx}
+                      density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
+                      markdownCwd={markdownCwd}
+                      onImageExpand={onImageExpand}
+                      onOpenToolDetails={openToolDetails}
+                      {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+                      {...(onOpenThread ? { onOpenThread } : {})}
+                      {...(onOpenAutomation ? { onOpenAutomation } : {})}
+                    />
+                  ))}
+                </div>
+              )}
+            </>
+          );
+          const renderCollapsedTurnItem = (item: CollapsedTurnItem, keyPrefix: string) =>
+            item.kind === "work" ? (
+              <SimpleWorkEntryRow
+                key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
+                workEntry={item.entry}
+                chatMetaFontSizePx={appTypographyScale.chatMetaPx}
+                textFontSizePx={normalizedChatFontSizePx}
+                density={prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"}
+                markdownCwd={markdownCwd}
+                onImageExpand={onImageExpand}
+                onOpenToolDetails={openToolDetails}
+                {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
+                {...(onOpenThread ? { onOpenThread } : {})}
+                {...(onOpenAutomation ? { onOpenAutomation } : {})}
+              />
+            ) : (
+              <div
+                key={`${keyPrefix}:narration:${row.message.id}:${item.id}`}
+                className="text-muted-foreground/80"
+              >
+                <ChatMarkdown
+                  text={item.message.text}
+                  cwd={markdownCwd}
+                  isStreaming={false}
+                  style={chatTypographyStyle}
+                  onImageExpand={onImageExpand}
+                />
+              </div>
+            );
           return (
             <>
+              {settledCollapseTransition && (
+                <div
+                  aria-hidden="true"
+                  inert
+                  // The clone is visual-only for the entire close transition; keep it inert
+                  // even while the inner DisclosureRegion starts open for its first frame.
+                  className="pointer-events-none mb-3 select-none"
+                  data-settled-turn-collapse-transition="true"
+                >
+                  <DisclosureRegion
+                    open={settledCollapseTransition.open}
+                    contentClassName="space-y-1.5 pb-2.5"
+                  >
+                    {settledCollapseTransition.items.map((item) =>
+                      renderCollapsedTurnItem(item, "settling-turn-close"),
+                    )}
+                  </DisclosureRegion>
+                </div>
+              )}
               {hasCollapsedWork && (
                 <div className="mb-3">
                   <Collapsible
@@ -1065,34 +1382,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                         )}
                       >
                         {collapsedTurnItems!.map((item) =>
-                          item.kind === "work" ? (
-                            <SimpleWorkEntryRow
-                              key={`collapsed-work:${row.message.id}:${item.id}`}
-                              workEntry={item.entry}
-                              chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                              textFontSizePx={normalizedChatFontSizePx}
-                              density={
-                                prefersCompactWorkEntryRow(item.entry) ? "compact" : "default"
-                              }
-                              markdownCwd={markdownCwd}
-                              onImageExpand={onImageExpand}
-                              {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                              {...(onOpenThread ? { onOpenThread } : {})}
-                            />
-                          ) : (
-                            <div
-                              key={`collapsed-narration:${row.message.id}:${item.id}`}
-                              className="text-muted-foreground/80"
-                            >
-                              <ChatMarkdown
-                                text={item.message.text}
-                                cwd={markdownCwd}
-                                isStreaming={false}
-                                style={chatTypographyStyle}
-                                onImageExpand={onImageExpand}
-                              />
-                            </div>
-                          ),
+                          renderCollapsedTurnItem(item, "collapsed-panel"),
                         )}
                       </div>
                     </CollapsiblePanel>
@@ -1101,6 +1391,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 </div>
               )}
               <div className="group min-w-0 py-0.5">
+                {renderWorkDisplay(leadingWorkDisplay, "leading")}
                 <div data-assistant-message-id={row.message.id}>
                   <ChatMarkdown
                     text={messageText}
@@ -1111,132 +1402,71 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     markers={messageMarkers}
                   />
                 </div>
-                {!hasCollapsedWork && visibleRenderableInlineToolEntries.length > 0 && (
-                  <div className="mt-2.5">
-                    <div className="space-y-px">
-                      {visibleRenderableInlineToolEntries.map((workEntry) => (
-                        <SimpleWorkEntryRow
-                          key={`inline-tool-row:${row.message.id}:${workEntry.id}`}
-                          workEntry={workEntry}
-                          chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                          textFontSizePx={normalizedChatFontSizePx}
-                          density="compact"
-                          fileDiffStatByPath={fileDiffStatByPath}
-                          markdownCwd={markdownCwd}
-                          onImageExpand={onImageExpand}
-                          onOpenTurnDiff={onOpenTurnDiff}
-                          {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                          {...(onOpenThread ? { onOpenThread } : {})}
-                          {...(turnSummary?.turnId ? { turnId: turnSummary.turnId } : {})}
-                        />
-                      ))}
-                    </div>
-                    {inlineToolGroupId &&
-                      inlineToolEntries.length > MAX_VISIBLE_INLINE_TOOL_ENTRIES && (
-                        <div className="py-0.5">
-                          <button
-                            type="button"
-                            className="text-muted-foreground/50 transition-colors duration-150 hover:text-foreground/72"
-                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                            onClick={() => handleToggleWorkGroup(inlineToolGroupId)}
-                          >
-                            {inlineToolExpanded
-                              ? "Show less"
-                              : `+${hiddenInlineToolCount} more tool calls`}
-                          </button>
-                        </div>
-                      )}
-                  </div>
-                )}
-                {!hasCollapsedWork && inlineStatusEntries.length > 0 && (
-                  <div className="mt-2 space-y-0.5">
-                    {inlineStatusEntries.map((workEntry) => (
-                      <SimpleWorkEntryRow
-                        key={`inline-status-row:${row.message.id}:${workEntry.id}`}
-                        workEntry={workEntry}
-                        chatMetaFontSizePx={appTypographyScale.chatMetaPx}
-                        textFontSizePx={normalizedChatFontSizePx}
-                        density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
-                        markdownCwd={markdownCwd}
-                        onImageExpand={onImageExpand}
-                        {...(onOpenAgentActivity ? { onOpenAgentActivity } : {})}
-                        {...(onOpenThread ? { onOpenThread } : {})}
-                      />
-                    ))}
-                  </div>
-                )}
+                {renderWorkDisplay(inlineWorkDisplay, "inline")}
                 {inlineEditedFilesFromTurnSummary.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {inlineEditedFilesFromTurnSummary.map((file) => (
                       <button
                         key={`inline-summary-edit:${row.message.id}:${file.path}`}
                         type="button"
-                        className="group/file-row flex w-full max-w-full items-baseline gap-1 px-0 py-1.5 text-left transition-opacity duration-150 hover:opacity-95"
+                        className="group/file-row flex w-full max-w-full items-center gap-2 px-0 py-1.5 text-left transition-colors duration-150 focus-visible:outline-none"
                         title={file.path}
                         onClick={() => onOpenTurnDiff(turnSummary!.turnId, file.path)}
                       >
-                        <span
-                          className="font-system-ui shrink-0 text-[#7b7b84]"
-                          style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                        >
-                          Edited
-                        </span>
-                        <span
-                          className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                          style={{
-                            fontSize: `${normalizedChatFontSizePx}px`,
-                          }}
-                        >
-                          {basename(file.path)}
-                        </span>
-                        {(file.additions ?? 0) + (file.deletions ?? 0) > 0 ? (
-                          <span
-                            className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
-                            style={{ fontSize: `${normalizedChatFontSizePx}px` }}
-                          >
-                            <DiffStatLabel
-                              additions={file.additions ?? 0}
-                              deletions={file.deletions ?? 0}
-                            />
-                          </span>
-                        ) : null}
+                        <EditedFileRowContent
+                          filePath={file.path}
+                          additions={file.additions}
+                          deletions={file.deletions}
+                          fontSizePx={normalizedChatFontSizePx}
+                          compact={false}
+                        />
                       </button>
                     ))}
                   </div>
                 )}
-                <div
-                  className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
-                  style={chatMessageFooterStyle}
-                >
-                  {showPinToggle ? (
-                    // Pin sits at the left edge of the footer, before the copy action. It stays
-                    // visible when pinned so it reads as a persistent "this is pinned" marker; an
-                    // unpinned message only reveals it on hover, like the other footer actions.
-                    // Same Central pin glyph in both states — persistence signals the pinned state.
-                    <MessageActionButton
-                      label={messagePinned ? "Unpin message" : "Pin message"}
-                      tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
-                      aria-pressed={messagePinned}
-                      className={
-                        messagePinned ? "text-muted-foreground/80" : MESSAGE_HOVER_REVEAL_CLASS_NAME
-                      }
-                      onClick={() => onTogglePinMessage?.(row.message.id)}
-                    >
-                      <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
-                    </MessageActionButton>
-                  ) : null}
-                  {assistantCopyState.visible ? (
-                    <MessageCopyButton
-                      text={assistantCopyState.text ?? ""}
-                      className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
-                    />
-                  ) : null}
-                  <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
-                    {assistantMeta}
-                  </p>
-                </div>
+                {(showPinToggle || assistantCopyState.visible || assistantMeta.length > 0) && (
+                  <div
+                    className="mt-0.5 flex items-center gap-2 font-system-ui font-normal text-muted-foreground/45"
+                    style={chatMessageFooterStyle}
+                  >
+                    {showPinToggle ? (
+                      // Pin sits at the left edge of the footer, before the copy action. It stays
+                      // visible when pinned so it reads as a persistent "this is pinned" marker; an
+                      // unpinned message only reveals it on hover, like the other footer actions.
+                      // Same Central pin glyph in both states — persistence signals the pinned state.
+                      <MessageActionButton
+                        label={pinActionLabel("message", messagePinned)}
+                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
+                        aria-pressed={messagePinned}
+                        className={
+                          messagePinned
+                            ? "text-muted-foreground/80"
+                            : MESSAGE_HOVER_REVEAL_CLASS_NAME
+                        }
+                        onClick={() => onTogglePinMessage?.(row.message.id)}
+                      >
+                        <PinIcon className={MESSAGE_ACTION_ICON_CLASS_NAME} />
+                      </MessageActionButton>
+                    ) : null}
+                    {assistantCopyState.visible ? (
+                      <MessageCopyButton
+                        text={assistantCopyState.text ?? ""}
+                        className={MESSAGE_HOVER_REVEAL_CLASS_NAME}
+                      />
+                    ) : null}
+                    {assistantMeta.length > 0 ? (
+                      <p className={cn("tabular-nums", MESSAGE_HOVER_REVEAL_CLASS_NAME)}>
+                        {assistantMeta}
+                      </p>
+                    ) : null}
+                  </div>
+                )}
                 {(() => {
-                  if (!turnSummary) return null;
+                  // Hold the end-of-turn changes card (Undo / Review) until the
+                  // turn settles. While the turn is live the composer's own
+                  // live-changes strip owns this surface; showing the card too
+                  // would duplicate it and pre-empt the strip mid-turn.
+                  if (!turnSummary || row.assistantTurnInProgress) return null;
                   const checkpointFiles = turnSummary.files;
                   if (checkpointFiles.length === 0) return null;
                   const fileChangesExpanded =
@@ -1424,7 +1654,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       {row.kind === "working" && (
         <div
-          className="pt-0.5 text-muted-foreground/70 font-system-ui"
+          className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
           {row.createdAt ? (
@@ -1478,18 +1708,33 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         onPointerDown={onMessagesPointerDown}
         onPointerUp={onMessagesPointerUp}
         onScroll={handleListScroll}
+        {...(onTrailHighlightsChange
+          ? {
+              onViewableItemsChanged: handleViewableItemsChanged,
+              viewabilityConfig: TRAIL_VIEWABILITY_CONFIG,
+            }
+          : {})}
         onTouchEnd={onMessagesTouchEnd}
         onTouchMove={onMessagesTouchMove}
         onTouchStart={onMessagesTouchStart}
         onWheel={onMessagesWheel}
         data-chat-scroll-container="true"
         ListFooterComponent={listFooter}
+        // `scroll-fade-b` (vendored shadcn 4.12.0 util in index.css) masks the bottom
+        // edge so streamed content dissolves toward the composer. It is scroll-aware
+        // via `animation-timeline: scroll()`, so the fade clears at the live edge and a
+        // pinned or non-scrollable transcript stays crisp (no permanent shadow).
         className={cn(
-          "h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
+          "scroll-fade-b h-full overflow-x-hidden overscroll-y-contain py-3 [scrollbar-gutter:stable] sm:py-4",
           ENVIRONMENT_CONTENT_INSET_MOTION_CLASS,
           CHAT_COLUMN_GUTTER_CLASS_NAME,
         )}
         {...(listScrollStyle ? { style: listScrollStyle } : {})}
+      />
+      <ToolCallDetailsDialog
+        entry={selectedToolDetailsEntry}
+        open={selectedToolDetailsEntry !== null}
+        onOpenChange={handleToolDetailsOpenChange}
       />
     </div>
   );
@@ -1497,6 +1742,50 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
 type TimelineMessage = Extract<MessagesTimelineRow, { kind: "message" }>["message"];
 type TimelineWorkEntry = Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"][number];
+type SettledTurnCollapseTransition = {
+  open: boolean;
+  items: readonly CollapsedTurnItem[];
+};
+type SettledTurnCollapseTimer = {
+  closeFrame: number | null;
+  cleanupTimeout: number | null;
+};
+
+export function findToolDetailsEntryById(
+  rows: ReadonlyArray<MessagesTimelineRow>,
+  entryId: string | null,
+): TimelineWorkEntry | null {
+  if (!entryId) {
+    return null;
+  }
+  for (const row of rows) {
+    if (row.kind === "work") {
+      const matchingEntry = row.groupedEntries.find((entry) => entry.id === entryId);
+      if (matchingEntry) {
+        return matchingEntry;
+      }
+      continue;
+    }
+    if (row.kind !== "message") {
+      continue;
+    }
+    const matchingLeadingEntry = row.leadingWorkEntries?.find((entry) => entry.id === entryId);
+    if (matchingLeadingEntry) {
+      return matchingLeadingEntry;
+    }
+    const matchingInlineEntry = row.inlineWorkEntries?.find((entry) => entry.id === entryId);
+    if (matchingInlineEntry) {
+      return matchingInlineEntry;
+    }
+    const matchingCollapsedEntry = row.collapsedTurnItems?.find(
+      (item) => item.kind === "work" && item.entry.id === entryId,
+    );
+    if (matchingCollapsedEntry?.kind === "work") {
+      return matchingCollapsedEntry.entry;
+    }
+  }
+  return null;
+}
 
 // Reuse stable row references so streaming updates only force React work for
 // rows whose visible content actually changed.
@@ -1511,6 +1800,217 @@ function useStableRows(rows: MessagesTimelineRow[]): MessagesTimelineRow[] {
     previousStateRef.current = nextState;
     return nextState.result;
   }, [rows]);
+}
+
+// Animates only user rows that ChatView identifies as local optimistic sends;
+// transcript hydration can add rows too, but should not replay send motion.
+function useMessageSendEnterAnimations(
+  rows: readonly MessagesTimelineRow[],
+  enteringUserMessageIds: ReadonlySet<MessageId>,
+): ReadonlySet<string> {
+  const [enteringRowIds, setEnteringRowIds] = useState<ReadonlySet<string>>(() => new Set());
+  const previousRowIdsRef = useRef<ReadonlySet<string> | null>(null);
+  const cleanupTimeoutsRef = useRef<number[]>([]);
+
+  useLayoutEffect(() => {
+    const currentRowIds = new Set(rows.map((row) => row.id));
+    const previousRowIds = previousRowIdsRef.current;
+    previousRowIdsRef.current = currentRowIds;
+
+    const freshUserRowIds = rows
+      .filter(
+        (row) =>
+          row.kind === "message" &&
+          row.message.role === "user" &&
+          enteringUserMessageIds.has(row.message.id) &&
+          (previousRowIds === null || !previousRowIds.has(row.id)),
+      )
+      .map((row) => row.id);
+    if (freshUserRowIds.length === 0) {
+      return;
+    }
+
+    setEnteringRowIds((current) => {
+      const next = new Set(current);
+      for (const rowId of freshUserRowIds) {
+        next.add(rowId);
+      }
+      return next;
+    });
+
+    const cleanupTimeout = window.setTimeout(() => {
+      cleanupTimeoutsRef.current = cleanupTimeoutsRef.current.filter((id) => id !== cleanupTimeout);
+      setEnteringRowIds((current) => {
+        const next = new Set(current);
+        for (const rowId of freshUserRowIds) {
+          next.delete(rowId);
+        }
+        return next.size === current.size ? current : next;
+      });
+    }, MESSAGE_SEND_ENTER_ANIMATION_MS + MESSAGE_SEND_ENTER_CLEANUP_BUFFER_MS);
+    cleanupTimeoutsRef.current.push(cleanupTimeout);
+  }, [enteringUserMessageIds, rows]);
+
+  useEffect(
+    () => () => {
+      for (const timeoutId of cleanupTimeoutsRef.current) {
+        window.clearTimeout(timeoutId);
+      }
+      cleanupTimeoutsRef.current = [];
+    },
+    [],
+  );
+
+  return enteringRowIds;
+}
+
+// Keeps newly folded turn details mounted for one shared-disclosure close
+// animation, so settled turns do not disappear in one height recalculation.
+function useSettledTurnCollapseTransitions(
+  rows: readonly MessagesTimelineRow[],
+): Readonly<Record<string, SettledTurnCollapseTransition>> {
+  const [transitions, setTransitions] = useState<Record<string, SettledTurnCollapseTransition>>({});
+  const previousAssistantMessageIdsRef = useRef<ReadonlySet<string>>(new Set());
+  const previousCollapsedSignaturesRef = useRef<ReadonlyMap<string, string>>(new Map());
+  const timersRef = useRef(new Map<string, SettledTurnCollapseTimer>());
+
+  const clearTransitionTimer = useCallback((messageId: string) => {
+    const timer = timersRef.current.get(messageId);
+    if (!timer) {
+      return;
+    }
+    if (timer.closeFrame !== null) {
+      window.cancelAnimationFrame(timer.closeFrame);
+    }
+    if (timer.cleanupTimeout !== null) {
+      window.clearTimeout(timer.cleanupTimeout);
+    }
+    timersRef.current.delete(messageId);
+  }, []);
+
+  const scheduleTransitionClose = useCallback(
+    (messageId: string) => {
+      clearTransitionTimer(messageId);
+      const closeFrame = window.requestAnimationFrame(() => {
+        const timer = timersRef.current.get(messageId);
+        if (!timer) {
+          return;
+        }
+        timersRef.current.set(messageId, { ...timer, closeFrame: null });
+        setTransitions((current) => {
+          const transition = current[messageId];
+          if (!transition || !transition.open) {
+            return current;
+          }
+          return {
+            ...current,
+            [messageId]: { ...transition, open: false },
+          };
+        });
+
+        const cleanupTimeout = window.setTimeout(() => {
+          timersRef.current.delete(messageId);
+          setTransitions((current) => {
+            if (!current[messageId]) {
+              return current;
+            }
+            const next = { ...current };
+            delete next[messageId];
+            return next;
+          });
+        }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+        timersRef.current.set(messageId, { closeFrame: null, cleanupTimeout });
+      });
+      timersRef.current.set(messageId, { closeFrame, cleanupTimeout: null });
+    },
+    [clearTransitionTimer],
+  );
+
+  useLayoutEffect(() => {
+    const currentAssistantMessageIds = new Set<string>();
+    const currentCollapsed = new Map<
+      string,
+      { signature: string; items: readonly CollapsedTurnItem[] }
+    >();
+
+    for (const row of rows) {
+      if (row.kind !== "message" || row.message.role !== "assistant") {
+        continue;
+      }
+      const messageId = row.message.id;
+      currentAssistantMessageIds.add(messageId);
+      if (row.collapsedTurnItems && row.collapsedTurnItems.length > 0) {
+        currentCollapsed.set(messageId, {
+          signature: collapsedTurnItemsSignature(row.collapsedTurnItems),
+          items: row.collapsedTurnItems,
+        });
+      }
+    }
+
+    const previousAssistantMessageIds = previousAssistantMessageIdsRef.current;
+    const previousCollapsedSignatures = previousCollapsedSignaturesRef.current;
+    const startedTransitions: Array<{
+      messageId: string;
+      items: readonly CollapsedTurnItem[];
+    }> = [];
+
+    for (const [messageId, collapsed] of currentCollapsed) {
+      if (
+        previousAssistantMessageIds.has(messageId) &&
+        !previousCollapsedSignatures.has(messageId)
+      ) {
+        startedTransitions.push({ messageId, items: collapsed.items });
+      }
+    }
+
+    previousAssistantMessageIdsRef.current = currentAssistantMessageIds;
+    previousCollapsedSignaturesRef.current = new Map(
+      Array.from(currentCollapsed, ([messageId, collapsed]) => [messageId, collapsed.signature]),
+    );
+
+    setTransitions((current) => {
+      let next: Record<string, SettledTurnCollapseTransition> | null = null;
+      const ensureNext = () => {
+        next ??= { ...current };
+        return next;
+      };
+
+      for (const messageId of Object.keys(current)) {
+        if (!currentCollapsed.has(messageId)) {
+          clearTransitionTimer(messageId);
+          delete ensureNext()[messageId];
+        }
+      }
+
+      for (const transition of startedTransitions) {
+        ensureNext()[transition.messageId] = {
+          open: true,
+          items: transition.items,
+        };
+      }
+
+      return next ?? current;
+    });
+
+    for (const transition of startedTransitions) {
+      scheduleTransitionClose(transition.messageId);
+    }
+  }, [clearTransitionTimer, rows, scheduleTransitionClose]);
+
+  useEffect(
+    () => () => {
+      for (const messageId of Array.from(timersRef.current.keys())) {
+        clearTransitionTimer(messageId);
+      }
+    },
+    [clearTransitionTimer],
+  );
+
+  return transitions;
+}
+
+function collapsedTurnItemsSignature(items: readonly CollapsedTurnItem[]): string {
+  return items.map((item) => `${item.kind}:${item.id}`).join("|");
 }
 
 // Keep the live clock scoped to tiny leaf components so active Claude turns do
@@ -1977,7 +2477,7 @@ function workEntryPreview(
 
   if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
     const command = workEntry.command ?? workEntry.rawCommand;
-    if (command) return deriveInlineCommandCall(command);
+    if (command) return deriveReadableCommandDisplay(command).target;
   }
 
   if (workEntry.preview) return workEntry.preview;
@@ -2027,29 +2527,48 @@ function workEntryPreview(
 }
 
 // Provider read tools (e.g. Claude's `Read`) arrive as generic dynamic tool calls
-// without a `file-read` requestKind, so match their tool name to surface the eye icon
+// without a `file-read` requestKind, so match their tool name to surface the search icon
 // instead of the generic tool/wrench fallback.
 function isFileReadToolEntry(workEntry: TimelineWorkEntry): boolean {
   const name = (workEntry.toolName ?? "").toLowerCase().replace(/[^a-z]/g, "");
   return name === "read" || name === "readfile" || name === "viewfile";
 }
 
+// Command rows reuse toolCallLabel's wrapper-aware classifier so wrapped git/gh
+// commands get the GitHub mark while ordinary commands keep the terminal icon.
+function commandWorkEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  const command = workEntry.command ?? workEntry.rawCommand;
+  switch (command ? resolveCommandVisualKind(command) : "terminal") {
+    case "inspect":
+      return SearchIcon;
+    case "git":
+    case "github":
+      return GitHubIcon;
+    case "terminal":
+      return TerminalIcon;
+  }
+}
+
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
-  if (workEntry.requestKind === "command") return TerminalIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
-  if (workEntry.requestKind === "file-change") return SquarePenIcon;
+  // User-input rows read as a question (awaiting an answer) and an upload
+  // (answer submitted) rather than the generic "info" checkmark.
+  if (workEntry.activityKind === "user-input.requested") return CircleQuestionIcon;
+  if (workEntry.activityKind === "user-input.resolved") return ArrowUpCircleIcon;
+
+  if (workEntry.requestKind === "command") return commandWorkEntryIcon(workEntry);
+  if (workEntry.requestKind === "file-read") return SearchIcon;
+  if (workEntry.requestKind === "file-change") return PencilIcon;
 
   if (workEntry.itemType === "command_execution" || workEntry.command) {
-    return TerminalIcon;
+    return commandWorkEntryIcon(workEntry);
   }
   if (workEntry.itemType === "file_change") {
-    return SquarePenIcon;
+    return PencilIcon;
   }
-  if (workEntry.itemType === "web_search") return GlobeIcon;
-  if (workEntry.requestKind === "file-read") return EyeIcon;
+  if (workEntry.itemType === "web_search") return WebSearchIcon;
   if (workEntry.itemType === "image_generation") return ZapIcon;
   if (workEntry.itemType === "image_view") return EyeIcon;
-  if (isFileReadToolEntry(workEntry)) return EyeIcon;
+  if (isFileReadToolEntry(workEntry)) return SearchIcon;
 
   switch (workEntry.itemType) {
     case "mcp_tool_call":
@@ -2070,12 +2589,17 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
 
 // Render command, agent-task, and file-change rows at the tighter compact density.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
+  // Commands stay compact even when surfaced with a non-terminal icon (read-only
+  // inspections like `cat` now use the file-read search icon).
+  if (workEntry.itemType === "command_execution" || workEntry.command || workEntry.rawCommand) {
+    return true;
+  }
   const EntryIcon = workEntryIcon(workEntry);
   return (
     EntryIcon === TerminalIcon ||
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
-    EntryIcon === SquarePenIcon ||
+    EntryIcon === PencilIcon ||
     EntryIcon === SkillCubeIcon
   );
 }
@@ -2179,21 +2703,49 @@ function commandTooltipContent(command: string, displayText: string) {
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
       <div className="space-y-2">
         <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Summary
-          </div>
+          <div className="text-muted-foreground/70">Summary</div>
           <div>{displayText}</div>
         </div>
         <div className="space-y-0.5">
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/70">
-            Raw call
-          </div>
+          <div className="text-muted-foreground/70">Raw call</div>
           <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
             {command}
           </code>
         </div>
       </div>
     </div>
+  );
+}
+
+// Hover content for a tool-call row: the rich command card when a raw command is
+// present, otherwise the plain label (used to reveal truncated text / file paths).
+// Returns null when there's nothing worth showing so the row renders untouched.
+function toolRowTooltipContent(
+  rawCommand: string | null | undefined,
+  displayText: string,
+  fallback: string | undefined,
+): ReactNode {
+  if (rawCommand) {
+    return commandTooltipContent(rawCommand, displayText);
+  }
+  return fallback ? <span className="whitespace-pre-wrap">{fallback}</span> : null;
+}
+
+// Frosted hover tooltip for tool-call rows — the same surface (via the `default`
+// variant) as the sidebar thread/project hover cards, so the rows read as one
+// system. Replaces the native `title` tooltip; renders the trigger untouched when
+// there's no content to show.
+function ToolRowTooltip(props: { content: ReactNode; children: ReactElement }) {
+  if (!props.content) {
+    return props.children;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger render={props.children} />
+      <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
+        {props.content}
+      </TooltipPopup>
+    </Tooltip>
   );
 }
 
@@ -2207,8 +2759,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   turnId?: TurnId;
   onOpenTurnDiff?: (turnId: TurnId, filePath?: string) => void;
+  onOpenToolDetails?: (workEntry: TimelineWorkEntry) => void;
   onOpenAgentActivity?: (activityId: string) => void;
   onOpenThread?: (threadId: ThreadId) => void;
+  onOpenAutomation?: (automationId: string) => void;
 }) {
   const {
     workEntry,
@@ -2220,26 +2774,42 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onImageExpand,
     turnId,
     onOpenTurnDiff,
+    onOpenToolDetails,
     onOpenAgentActivity,
     onOpenThread,
+    onOpenAutomation,
   } = props;
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
-  // Every tool row leads with a single left icon; keep branded glyphs for GitHub/MCP rows.
+  // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
+  // `WebFetch: {json}` arguments, reusing the same link-chip icon/label path as
+  // composer and markdown links so every site reference looks identical.
+  const webFetchUrl = extractWebFetchUrl(workEntry);
+  // Every tool row leads with a single left icon; keep branded glyphs discoverable
+  // for command rows and app-backed tool rows.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
   const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
   const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
-  const leftIconKind = isGitHubToolRow ? "github" : isMcpToolRow ? "mcp" : undefined;
+  const leftIconKind = webFetchUrl
+    ? "web-fetch"
+    : isGitHubToolRow || EntryIcon === GitHubIcon
+      ? "github"
+      : isMcpToolRow
+        ? "mcp"
+        : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
-  const displayText = combineWorkEntryDisplayText(heading, preview);
+  const displayText = webFetchUrl
+    ? describeLinkChip(webFetchUrl).label
+    : combineWorkEntryDisplayText(heading, preview);
   const showInlineAgentTaskPreview =
     workEntry.itemType === "collab_agent_tool_call" &&
     (workEntry.subagents?.length ?? 0) === 0 &&
     Boolean(preview) &&
     normalizeWorkDisplayText(heading) !== normalizeWorkDisplayText(preview ?? "");
   const rawCommand = workEntry.rawCommand ?? workEntry.command;
-  const hoverText = rawCommand ?? (showInlineAgentTaskPreview ? heading : displayText);
+  const hoverText =
+    rawCommand ?? (showInlineAgentTaskPreview ? heading : (webFetchUrl ?? displayText));
   const changedFiles = workEntry.changedFiles ?? [];
   const showEditedRows = isFileChangeWorkEntry(workEntry) && changedFiles.length > 0;
   const showSubagentRows =
@@ -2255,9 +2825,38 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const openAgentActivity = canOpenAgentActivity
     ? () => onOpenAgentActivity?.(workEntry.id)
     : undefined;
+  const canOpenToolDetails = Boolean(onOpenToolDetails) && Boolean(workEntry.toolDetails);
   // File-read rows open the referenced file in the in-app viewer when the
   // hosting surface provides an opener (right-dock file pane / editor pane).
   const opener = useWorkspaceFileOpener();
+  // Per-file +N/-M parsed from this tool call's own patch, used as a fallback when
+  // the turn-diff summary isn't in scope (e.g. standalone work rows) so every
+  // "Edited <file>" row can still show diff stats.
+  const toolDiffStatsByPath = useMemo(
+    () =>
+      isFileChangeWorkEntry(workEntry)
+        ? fileDiffStatsByPath(workEntry.toolDetails?.diff)
+        : EMPTY_FILE_DIFF_STATS,
+    [workEntry],
+  );
+
+  // A created-automation row renders as its own card instead of a tool-call line.
+  // Kept after the hooks above so the early return never changes hook order.
+  const automation = workEntry.automation;
+  if (automation) {
+    return (
+      <div className={cn(compact ? "py-0.5" : "py-1")}>
+        <AutomationCreatedCard
+          name={automation.name}
+          cadenceLabel={automation.cadenceLabel}
+          textFontSizePx={textFontSizePx}
+          metaFontSizePx={chatMetaFontSizePx}
+          {...(onOpenAutomation ? { onOpen: () => onOpenAutomation(automation.id) } : {})}
+        />
+      </div>
+    );
+  }
+
   const readFilePath =
     opener !== null &&
     !canOpenAgentActivity &&
@@ -2280,52 +2879,64 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       {showEditedRows ? (
         <div className="space-y-0.5">
           {changedFiles.map((changedFilePath) => {
-            const changedFileStat = fileDiffStatByPath?.get(changedFilePath);
+            // Prefer the turn-diff summary's per-file stat; fall back to the stat
+            // parsed from this tool call's own patch so the +N/-M shows even when
+            // no summary is in scope (standalone work rows) or it lacks the file.
+            const summaryStat = fileDiffStatByPath?.get(changedFilePath);
+            const changedFileStat =
+              summaryStat && summaryStat.additions + summaryStat.deletions > 0
+                ? summaryStat
+                : (resolveFileDiffStatByChangedPath(
+                    toolDiffStatsByPath,
+                    changedFilePath,
+                    changedFiles.length,
+                  ) ?? summaryStat);
             const canOpenEditedDiff = Boolean(turnId && onOpenTurnDiff);
+            const canOpenEditedRow = canOpenToolDetails || canOpenEditedDiff;
+            const editedRowClassName = cn(
+              "group/file-row flex w-full max-w-full items-center text-left transition-colors duration-150",
+              compact ? "gap-1.5" : "gap-2",
+              canOpenEditedRow ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
+            );
+            const editedRowChildren = (
+              <EditedFileRowContent
+                filePath={changedFilePath}
+                additions={changedFileStat?.additions}
+                deletions={changedFileStat?.deletions}
+                fontSizePx={rowFontSizePx}
+                compact={compact}
+              />
+            );
+            if (canOpenToolDetails && workEntry.toolDetails) {
+              return (
+                <ToolDetailsDisclosure
+                  key={`${workEntry.id}:${changedFilePath}`}
+                  details={workEntry.toolDetails}
+                  compact={compact}
+                  tooltip={<span className="whitespace-pre-wrap">{changedFilePath}</span>}
+                  summaryClassName={editedRowClassName}
+                  dataFileChangeRow
+                >
+                  {editedRowChildren}
+                </ToolDetailsDisclosure>
+              );
+            }
             return (
               <button
                 key={`${workEntry.id}:${changedFilePath}`}
                 type="button"
                 data-file-change-row="true"
-                className={cn(
-                  "group/file-row flex w-full max-w-full items-baseline gap-1 text-left transition-opacity duration-150",
-                  compact
-                    ? "px-0 py-[1px] hover:opacity-95"
-                    : "rounded-md border border-border/45 bg-background/65 px-2 py-2 hover:bg-background/80",
-                  canOpenEditedDiff ? "cursor-pointer" : "cursor-default",
-                )}
+                className={editedRowClassName}
                 title={changedFilePath}
-                disabled={!canOpenEditedDiff}
+                disabled={!canOpenEditedRow}
                 onClick={() => {
-                  if (!turnId || !onOpenTurnDiff) return;
+                  if (!turnId || !onOpenTurnDiff) {
+                    return;
+                  }
                   onOpenTurnDiff(turnId, changedFilePath);
                 }}
               >
-                <span
-                  className="font-system-ui shrink-0 font-medium text-muted-foreground/72"
-                  style={{ fontSize: `${rowFontSizePx}px` }}
-                >
-                  Edited
-                </span>
-                <span
-                  className="font-system-ui max-w-[28rem] truncate text-[var(--color-text-foreground)] underline-offset-2 group-hover/file-row:underline group-focus-visible/file-row:underline"
-                  style={{
-                    fontSize: `${rowFontSizePx}px`,
-                  }}
-                >
-                  {basename(changedFilePath)}
-                </span>
-                {changedFileStat ? (
-                  <span
-                    className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
-                    style={{ fontSize: `${rowFontSizePx}px` }}
-                  >
-                    <DiffStatLabel
-                      additions={changedFileStat.additions}
-                      deletions={changedFileStat.deletions}
-                    />
-                  </span>
-                ) : null}
+                {editedRowChildren}
               </button>
             );
           })}
@@ -2424,9 +3035,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                           style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
                           title={subagent.latestUpdate}
                         >
-                          <span className="shrink-0 uppercase tracking-[0.14em] text-muted-foreground/30">
-                            Latest
-                          </span>
+                          <span className="shrink-0 text-muted-foreground/30">Latest</span>
                           <span className="truncate">{subagent.latestUpdate}</span>
                         </div>
                       ) : null}
@@ -2449,7 +3058,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                       <button
                         type="button"
                         className={cn(
-                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/62 transition-colors",
+                          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium text-muted-foreground/62 transition-colors",
                           canOpenThread
                             ? "hover:border-foreground/15 hover:text-foreground/84"
                             : "cursor-default opacity-50",
@@ -2468,7 +3077,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 );
               })}
               {hiddenSubagentCount > 0 ? (
-                <div className="pl-4 text-[10px] uppercase tracking-[0.12em] text-muted-foreground/46">
+                <div className="pl-4 text-[10px] text-muted-foreground/46">
                   +{hiddenSubagentCount} more
                 </div>
               ) : null}
@@ -2481,14 +3090,27 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             <>
               <span
                 className={cn(
-                  "flex shrink-0 items-center justify-center text-muted-foreground/40",
+                  "flex shrink-0 items-center justify-center",
+                  WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                   compact ? "size-4" : "size-5",
                 )}
                 data-tool-icon={leftIconKind}
               >
-                <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                {webFetchUrl ? (
+                  <LinkChipIcon url={webFetchUrl} className={compact ? "size-3.5" : "size-4"} />
+                ) : (
+                  <LeftIcon className={compact ? "size-3.5" : "size-4"} />
+                )}
               </span>
-              <div className="min-w-0 flex-1 overflow-hidden">
+              <div
+                className={cn(
+                  "min-w-0 overflow-hidden",
+                  // Single-line tool labels size to their content so the disclosure
+                  // chevron can sit right after the name; the multi-line markdown
+                  // preview still needs the full row width.
+                  showInlineAgentTaskPreview && "flex-1",
+                )}
+              >
                 {showInlineAgentTaskPreview ? (
                   <div className={cn(compact ? "space-y-[1px]" : "space-y-0.5")}>
                     <p
@@ -2514,8 +3136,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <p
                     className={cn(
                       compact ? "truncate leading-5" : "truncate leading-6",
-                      // Match the leading icon's tone so the row reads as one muted unit.
-                      "text-muted-foreground/40",
+                      // Match the leading icon's tone so the row reads as one muted unit, and
+                      // brighten the whole row to foreground on hover/focus instead of a fill.
+                      WORK_ROW_MUTED_HOVER_TONE["tool-row"],
                     )}
                     style={{ fontSize: `${rowFontSizePx}px` }}
                   >
@@ -2525,35 +3148,94 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               </div>
             </>
           );
+          if (canOpenToolDetails && workEntry.toolDetails) {
+            return (
+              <ToolDetailsDisclosure
+                details={workEntry.toolDetails}
+                compact={compact}
+                tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
+              >
+                {rowContentChildren}
+              </ToolDetailsDisclosure>
+            );
+          }
+
           const rowContent = (
             <AgentActivityOpenSurface
               canOpen={canOpenAgentActivity || canOpenReadFile}
               compact={compact}
-              title={canOpenReadFile ? (readFilePath ?? hoverText) : hoverText}
               onOpen={openAgentActivity ?? openReadFile}
               onHover={prefetchReadFile}
+              tooltip={toolRowTooltipContent(
+                rawCommand,
+                displayText,
+                canOpenReadFile ? (readFilePath ?? hoverText) : hoverText,
+              )}
             >
               {rowContentChildren}
             </AgentActivityOpenSurface>
           );
 
-          if (!rawCommand) {
-            return rowContent;
-          }
-
-          return (
-            <Tooltip>
-              <TooltipTrigger render={rowContent} />
-              <TooltipPopup side="top" align="start" className="max-w-96 whitespace-normal">
-                {commandTooltipContent(rawCommand, displayText)}
-              </TooltipPopup>
-            </Tooltip>
-          );
+          return rowContent;
         })()
       )}
     </div>
   );
 });
+
+// Inner content for an "Edited <file> +n/-m" row. Mirrors the tool-call row treatment
+// (muted leading icon + label that brightens to foreground on hover/focus, same font
+// size) so edited rows read as the same visual unit. Callers own the interactive wrapper
+// (`group/file-row` button or disclosure summary) and pass the diff stat when available.
+function EditedFileRowContent(props: {
+  filePath: string;
+  additions: number | undefined;
+  deletions: number | undefined;
+  fontSizePx: number;
+  compact: boolean;
+}) {
+  const { filePath, additions, deletions, fontSizePx, compact } = props;
+  const hasStat = (additions ?? 0) + (deletions ?? 0) > 0;
+  return (
+    <>
+      <span
+        className={cn(
+          "flex shrink-0 items-center justify-center",
+          WORK_ROW_MUTED_HOVER_TONE["file-row"],
+          compact ? "size-4" : "size-5",
+        )}
+        data-tool-icon="edit"
+      >
+        <PencilIcon className={compact ? "size-3.5" : "size-4"} />
+      </span>
+      <span
+        className={cn("font-system-ui shrink-0", WORK_ROW_MUTED_HOVER_TONE["file-row"])}
+        style={{ fontSize: `${fontSizePx}px` }}
+      >
+        Edited
+      </span>
+      <span
+        className={cn(
+          "font-system-ui max-w-[28rem] truncate underline-offset-2",
+          WORK_ROW_MUTED_HOVER_TONE["file-row"],
+          // Filename doubles as a link affordance: underline on the same row hover/focus.
+          "group-hover/file-row:underline group-focus-visible/file-row:underline",
+        )}
+        style={{ fontSize: `${fontSizePx}px` }}
+      >
+        {basename(filePath)}
+      </span>
+      {hasStat ? (
+        <span
+          className="font-system-ui shrink-0 tabular-nums whitespace-nowrap"
+          style={{ fontSize: `${fontSizePx}px` }}
+        >
+          <DiffStatLabel additions={additions ?? 0} deletions={deletions ?? 0} />
+        </span>
+      ) : null}
+    </>
+  );
+}
 
 function AgentActivityOpenSurface(props: {
   canOpen: boolean;
@@ -2563,32 +3245,128 @@ function AgentActivityOpenSurface(props: {
   onHover?: (() => void) | undefined;
   onOpen?: (() => void) | undefined;
   title?: string | undefined;
+  /** Styled frosted hover tooltip (preferred over the native `title`). */
+  tooltip?: ReactNode;
+  dataToolDetailTrigger?: boolean | undefined;
 }) {
   const className = cn(
-    "flex w-full items-center text-left transition-[opacity,translate] duration-200",
+    "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
     props.compact ? "gap-1.5" : "gap-2",
-    props.canOpen
-      ? "cursor-pointer rounded-md hover:bg-[var(--color-background-button-secondary-hover)]"
-      : "cursor-default",
+    props.canOpen ? "cursor-pointer focus-visible:outline-none" : "cursor-default",
   );
 
-  if (props.canOpen) {
-    return (
-      <button
-        type="button"
-        className={className}
-        title={props.title}
-        onClick={props.onOpen}
-        {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
-      >
-        {props.children}
-      </button>
-    );
-  }
-
-  return (
+  // Wrap the real DOM element (not this component) so Base UI's tooltip trigger
+  // can attach its hover handlers and compose with our own onClick/onPointerEnter.
+  const surface = props.canOpen ? (
+    <button
+      type="button"
+      className={className}
+      title={props.title}
+      onClick={props.onOpen}
+      data-tool-detail-trigger={props.dataToolDetailTrigger ? "true" : undefined}
+      {...(props.onHover ? { onPointerEnter: props.onHover, onFocus: props.onHover } : {})}
+    >
+      {props.children}
+    </button>
+  ) : (
     <div className={className} title={props.title}>
       {props.children}
+    </div>
+  );
+
+  return <ToolRowTooltip content={props.tooltip}>{surface}</ToolRowTooltip>;
+}
+
+function ToolDetailsDisclosure(props: {
+  children: ReactNode;
+  compact: boolean;
+  dataFileChangeRow?: boolean | undefined;
+  details: NonNullable<TimelineWorkEntry["toolDetails"]>;
+  summaryClassName?: string | undefined;
+  tooltip?: ReactNode;
+}) {
+  const summaryClassName =
+    props.summaryClassName ??
+    cn(
+      "group/tool-row flex w-full items-center text-left transition-[opacity,translate] duration-200",
+      props.compact ? "gap-1.5" : "gap-2",
+      "cursor-pointer focus-visible:outline-none",
+    );
+  const [open, setOpen] = useState(false);
+  const [renderDetails, setRenderDetails] = useState(false);
+  const [motionOpen, setMotionOpen] = useState(false);
+  const openFrameRef = useRef<number | null>(null);
+  const cleanupTimeoutRef = useRef<number | null>(null);
+
+  const clearMotionTimers = useCallback(() => {
+    if (openFrameRef.current !== null) {
+      window.cancelAnimationFrame(openFrameRef.current);
+      openFrameRef.current = null;
+    }
+    if (cleanupTimeoutRef.current !== null) {
+      window.clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+  }, []);
+
+  const setDetailsOpen = useCallback(
+    (nextOpen: boolean) => {
+      clearMotionTimers();
+      setOpen(nextOpen);
+
+      if (nextOpen) {
+        setRenderDetails(true);
+        setMotionOpen(false);
+        openFrameRef.current = window.requestAnimationFrame(() => {
+          openFrameRef.current = null;
+          setMotionOpen(true);
+        });
+        return;
+      }
+
+      setMotionOpen(false);
+      cleanupTimeoutRef.current = window.setTimeout(() => {
+        cleanupTimeoutRef.current = null;
+        setRenderDetails(false);
+      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    },
+    [clearMotionTimers],
+  );
+
+  useEffect(() => () => clearMotionTimers(), [clearMotionTimers]);
+
+  const summaryButton = (
+    <button
+      type="button"
+      className={summaryClassName}
+      aria-expanded={open}
+      data-file-change-row={props.dataFileChangeRow ? "true" : undefined}
+      data-tool-detail-trigger="true"
+      onClick={() => {
+        setDetailsOpen(!open);
+      }}
+    >
+      {props.children}
+      <DisclosureChevron
+        open={open}
+        className="text-muted-foreground/38 group-hover/tool-row:text-foreground group-hover/file-row:text-foreground group-focus-visible/tool-row:text-foreground group-focus-visible/file-row:text-foreground"
+      />
+    </button>
+  );
+
+  return (
+    <div className="group/tool-details min-w-0">
+      <ToolRowTooltip content={props.tooltip}>{summaryButton}</ToolRowTooltip>
+      {renderDetails ? (
+        <DisclosureRegion
+          open={motionOpen}
+          contentClassName={cn("min-w-0 pt-2", props.compact ? "ml-5" : "ml-7")}
+        >
+          <div data-tool-details-inline="true">
+            <ToolCallDetailsContent details={props.details} />
+          </div>
+        </DisclosureRegion>
+      ) : null}
     </div>
   );
 }

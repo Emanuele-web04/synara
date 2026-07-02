@@ -126,9 +126,12 @@ function formatMessageForRecap(message: ChatMessage): string {
   const attachmentSummary =
     message.attachments && message.attachments.length > 0
       ? ` Attachments: ${message.attachments
-          .map((attachment) =>
-            attachment.type === "image" ? attachment.name : "assistant selection",
-          )
+          .map((attachment) => {
+            if (attachment.type === "image" || attachment.type === "file") {
+              return attachment.name;
+            }
+            return "assistant selection";
+          })
           .join(", ")}.`
       : "";
   return `[${message.role}] ${text}${attachmentSummary}`;

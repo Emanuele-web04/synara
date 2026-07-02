@@ -26,8 +26,10 @@ describe("desktop update button presentation timeline", () => {
       ...baseState,
       status: "checking",
     });
-    expect(checking.label).toBe("Checking...");
-    expect(checking.progressPercent).toBeNull();
+    expect(checking).toEqual({
+      label: "Checking...",
+      secondaryLabel: null,
+    });
 
     const downloading = getDesktopUpdateButtonPresentation({
       ...baseState,
@@ -35,8 +37,10 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadPercent: 37.9,
     });
-    expect(downloading.label).toBe("Preparing...");
-    expect(downloading.progressPercent).toBe(37);
+    expect(downloading).toEqual({
+      label: "Preparing",
+      secondaryLabel: null,
+    });
 
     const downloaded = getDesktopUpdateButtonPresentation({
       ...baseState,
@@ -44,8 +48,10 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadedVersion: "1.2.0",
     });
-    expect(downloaded.label).toBe("Update");
-    expect(downloaded.progressPercent).toBeNull();
+    expect(downloaded).toEqual({
+      label: "Update",
+      secondaryLabel: null,
+    });
   });
 
   it("shows a stable fallback when download progress is unavailable", () => {
@@ -56,18 +62,23 @@ describe("desktop update button presentation timeline", () => {
       downloadPercent: null,
     });
 
-    expect(downloading.label).toBe("Preparing...");
-    expect(downloading.progressPercent).toBeNull();
+    expect(downloading).toEqual({
+      label: "Preparing",
+      secondaryLabel: null,
+    });
   });
 
-  it("clamps percentage output to avoid invalid UI values", () => {
+  it("keeps downloading presentation stable for out-of-range progress values", () => {
     const over = getDesktopUpdateButtonPresentation({
       ...baseState,
       status: "downloading",
       availableVersion: "1.2.0",
       downloadPercent: 126.9,
     });
-    expect(over.progressPercent).toBe(100);
+    expect(over).toEqual({
+      label: "Preparing",
+      secondaryLabel: null,
+    });
 
     const below = getDesktopUpdateButtonPresentation({
       ...baseState,
@@ -75,6 +86,9 @@ describe("desktop update button presentation timeline", () => {
       availableVersion: "1.2.0",
       downloadPercent: -8,
     });
-    expect(below.progressPercent).toBe(0);
+    expect(below).toEqual({
+      label: "Preparing",
+      secondaryLabel: null,
+    });
   });
 });

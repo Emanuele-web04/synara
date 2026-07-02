@@ -5,7 +5,6 @@
 // Exports: KanbanCardView
 
 import { GoRepoForked } from "react-icons/go";
-import { LuSplit } from "react-icons/lu";
 import { memo } from "react";
 
 import { resolvePrStatePresentation, resolveThreadStatusPill } from "../Sidebar.logic";
@@ -16,8 +15,9 @@ import {
   GitPullRequestIcon,
   LoaderIcon,
   PaperclipIcon,
-  PinIcon,
+  PinFilledIcon,
   TerminalIcon,
+  WorktreeIcon,
 } from "~/lib/icons";
 import { resolveThreadEnvironmentPresentation } from "~/lib/threadEnvironment";
 import { formatRelativeTime } from "~/lib/relativeTime";
@@ -48,7 +48,7 @@ function KanbanCardColumnLabel({ card }: { card: KanbanCard }) {
   if (card.isTerminal) {
     return (
       <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/80">
-        <TerminalIcon className="size-3 shrink-0 text-[var(--color-text-accent)]" aria-hidden />
+        <TerminalIcon className="size-3 shrink-0" aria-hidden />
         Terminal
       </span>
     );
@@ -160,7 +160,7 @@ function KanbanCardViewComponent({
         </span>
         {card.thread?.isPinned ? (
           <span title="Pinned" className="flex shrink-0 items-center pt-0.5">
-            <PinIcon className="size-3 text-muted-foreground/60" aria-hidden />
+            <PinFilledIcon className="size-3 text-muted-foreground/60" aria-hidden />
           </span>
         ) : null}
       </span>
@@ -187,7 +187,7 @@ function KanbanCardViewComponent({
         ) : null}
         {worktreeBadgeLabel ? (
           <span title={worktreeBadgeLabel} className="flex shrink-0 items-center">
-            <LuSplit className="size-3 rotate-90 text-muted-foreground/70" aria-hidden />
+            <WorktreeIcon className="size-3 text-muted-foreground/70" aria-hidden />
           </span>
         ) : null}
         {isForked ? (

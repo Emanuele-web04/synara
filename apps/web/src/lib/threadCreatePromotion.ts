@@ -12,6 +12,10 @@ import { getThreadFromState } from "../threadDerivation";
 type ThreadCreateCommand = Extract<ClientOrchestrationCommand, { type: "thread.create" }>;
 
 type PromoteThreadCreateResult = "created" | "exists" | "unavailable";
+interface PromoteThreadCreateOptions {
+  // Draft-aware callers use this when React knows the route is still local.
+  readonly force?: boolean;
+}
 
 const inFlightThreadCreateById = new Map<ThreadId, Promise<PromoteThreadCreateResult>>();
 
@@ -43,8 +47,9 @@ async function recoverPromotedThreadFromShellSnapshot(
 async function dispatchPromoteThreadCreate(
   api: NativeApi,
   command: ThreadCreateCommand,
+  options: PromoteThreadCreateOptions = {},
 ): Promise<PromoteThreadCreateResult> {
-  if (getThreadFromState(useStore.getState(), command.threadId)) {
+  if (!options.force && getThreadFromState(useStore.getState(), command.threadId)) {
     markPromotedDraftThreads(new Set([command.threadId]));
     return "exists";
   }
@@ -71,6 +76,7 @@ async function dispatchPromoteThreadCreate(
 export async function promoteThreadCreate(
   command: ThreadCreateCommand,
   api: NativeApi | undefined = readNativeApi(),
+  options: PromoteThreadCreateOptions = {},
 ): Promise<PromoteThreadCreateResult> {
   if (!api) {
     return "unavailable";
@@ -81,7 +87,7 @@ export async function promoteThreadCreate(
     return "exists";
   }
 
-  const promise = dispatchPromoteThreadCreate(api, command).finally(() => {
+  const promise = dispatchPromoteThreadCreate(api, command, options).finally(() => {
     inFlightThreadCreateById.delete(command.threadId);
   });
   inFlightThreadCreateById.set(command.threadId, promise);

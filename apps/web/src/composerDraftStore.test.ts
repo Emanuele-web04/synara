@@ -1,5 +1,6 @@
 import * as Schema from "effect/Schema";
 import {
+  OrchestrationProposedPlanId,
   ProjectId,
   ThreadId,
   type ModelSelection,
@@ -98,9 +99,11 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     previewText: `queued chat ${id}`,
     prompt: "queued chat prompt",
     images: image ? [image] : [],
+    files: [],
     assistantSelections: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],
     fileComments: [],
+    pastedTexts: [],
     skills: [{ name: "check-code", path: "/skills/check-code" }],
     mentions: [{ name: "repo", path: "/mentions/repo" }],
     selectedProvider: "codex",
@@ -109,6 +112,10 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     modelSelection: {
       provider: "codex",
       model: "gpt-5",
+    },
+    sourceProposedPlan: {
+      threadId: ThreadId.makeUnsafe("thread-source-plan"),
+      planId: "plan-1",
     },
     runtimeMode: "full-access",
     interactionMode: "default",
@@ -281,14 +288,28 @@ describe("composerDraftStore clearComposerContent", () => {
     URL.revokeObjectURL = originalRevokeObjectUrl;
   });
 
-  it("does not revoke blob preview URLs when clearing composer content", () => {
+  it("revokes blob preview URLs when clearing composer content", () => {
+    const first = makeImage({
+      id: "img-clear",
+      previewUrl: "blob:clear",
+    });
+    useComposerDraftStore.getState().addImage(threadId, first);
+
+    useComposerDraftStore.getState().clearComposerContent(threadId);
+
+    const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
+    expect(draft).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:clear");
+  });
+
+  it("can preserve blob preview URLs for optimistic message handoff", () => {
     const first = makeImage({
       id: "img-optimistic",
       previewUrl: "blob:optimistic",
     });
     useComposerDraftStore.getState().addImage(threadId, first);
 
-    useComposerDraftStore.getState().clearComposerContent(threadId);
+    useComposerDraftStore.getState().clearComposerContent(threadId, { preservePreviewUrls: true });
 
     const draft = useComposerDraftStore.getState().draftsByThreadId[threadId];
     expect(draft).toBeUndefined();
@@ -304,6 +325,59 @@ describe("composerDraftStore clearComposerContent", () => {
     store.clearComposerContent(threadId);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore restored source proposed plan", () => {
+  const threadId = ThreadId.makeUnsafe("thread-restored-source");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists restored plan source metadata with composer drafts", () => {
+    const restoredSource = {
+      threadId,
+      restoredPrompt: "Implement the accepted plan",
+      sourceProposedPlan: {
+        threadId,
+        planId: OrchestrationProposedPlanId.makeUnsafe("plan-restored-source"),
+      },
+    };
+    const store = useComposerDraftStore.getState();
+
+    store.setPrompt(threadId, restoredSource.restoredPrompt);
+    store.setRestoredSourceProposedPlan(threadId, restoredSource);
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadId?: Record<
+        string,
+        {
+          restoredSourceProposedPlan?: unknown;
+        }
+      >;
+    };
+
+    expect(persistedState.draftsByThreadId?.[threadId]?.restoredSourceProposedPlan).toEqual(
+      restoredSource,
+    );
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.restoredSourceProposedPlan).toEqual(
+      restoredSource,
+    );
   });
 });
 
@@ -416,6 +490,24 @@ describe("composerDraftStore copyTransferableComposerState", () => {
       },
       activeProvider: "claudeAgent",
     });
+  });
+
+  it("does not transfer thread-bound restored plan source metadata", () => {
+    useComposerDraftStore.getState().setPrompt(sourceThreadId, "Implement the accepted plan");
+    useComposerDraftStore.getState().setRestoredSourceProposedPlan(sourceThreadId, {
+      threadId: sourceThreadId,
+      restoredPrompt: "Implement the accepted plan",
+      sourceProposedPlan: {
+        threadId: sourceThreadId,
+        planId: OrchestrationProposedPlanId.makeUnsafe("plan-source-transfer"),
+      },
+    });
+
+    useComposerDraftStore.getState().copyTransferableComposerState(sourceThreadId, targetThreadId);
+
+    expect(
+      useComposerDraftStore.getState().draftsByThreadId[targetThreadId]?.restoredSourceProposedPlan,
+    ).toBeNull();
   });
 });
 
@@ -990,6 +1082,80 @@ describe("composerDraftStore project draft thread mapping", () => {
     });
   });
 
+  it("moves an empty draft to another project while preserving composer content", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/old",
+      worktreePath: "/tmp/old-worktree",
+      envMode: "worktree",
+    });
+    store.setPrompt(threadId, "keep this draft");
+
+    store.moveDraftThreadToProject(threadId, otherProjectId, {
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+      lastKnownPr: null,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "keep this draft",
+    );
+  });
+
+  it("clears the replaced target draft when moving a draft to another project", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectId, threadId, {
+      branch: "feature/old",
+      worktreePath: "/tmp/old-worktree",
+      envMode: "worktree",
+    });
+    store.setPrompt(threadId, "move this draft");
+    store.setProjectDraftThreadId(otherProjectId, otherThreadId);
+    store.setPrompt(otherThreadId, "replace this draft");
+    store.enqueueQueuedTurn(
+      otherThreadId,
+      makeQueuedChatTurn(
+        "queued-target-replaced",
+        makeImage({ id: "queued-target-replaced", previewUrl: "blob:queued-target-replaced" }),
+      ),
+    );
+
+    store.moveDraftThreadToProject(threadId, otherProjectId, {
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+      lastKnownPr: null,
+    });
+
+    expect(useComposerDraftStore.getState().getDraftThreadByProjectId(projectId)).toBeNull();
+    expect(
+      useComposerDraftStore.getState().getDraftThreadByProjectId(otherProjectId),
+    ).toMatchObject({
+      threadId,
+      projectId: otherProjectId,
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
+    expect(useComposerDraftStore.getState().draftsByThreadId[threadId]?.prompt).toBe(
+      "move this draft",
+    );
+    expect(useComposerDraftStore.getState().getDraftThread(otherThreadId)).toBeNull();
+    expect(useComposerDraftStore.getState().draftsByThreadId[otherThreadId]).toBeUndefined();
+    expect(revokeSpy).toHaveBeenCalledWith("blob:queued-target-replaced");
+  });
+
   it("preserves existing branch and worktree when setProjectDraftThreadId receives undefined", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectId, threadId, {
@@ -1510,9 +1676,61 @@ describe("composerDraftStore queued follow-ups", () => {
         kind: "chat",
         prompt: "queued chat prompt",
         images: [{ name: "queued.png" }],
+        sourceProposedPlan: {
+          threadId: "thread-source-plan",
+          planId: "plan-1",
+        },
         terminalContexts: [{ text: "git status\nOn branch main" }],
       },
     ]);
+  });
+
+  it("persists restored proposed-plan source for edited queued sends", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadId, "implement the queued plan");
+    store.setRestoredSourceProposedPlan(threadId, {
+      threadId,
+      restoredPrompt: "implement the queued plan",
+      sourceProposedPlan: {
+        threadId: ThreadId.makeUnsafe("thread-source-plan"),
+        planId: "plan-1",
+      },
+    });
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadId?: Record<string, { restoredSourceProposedPlan?: unknown }>;
+    };
+
+    expect(persistedState.draftsByThreadId?.[threadId]?.restoredSourceProposedPlan).toEqual({
+      threadId,
+      restoredPrompt: "implement the queued plan",
+      sourceProposedPlan: {
+        threadId: "thread-source-plan",
+        planId: "plan-1",
+      },
+    });
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.draftsByThreadId[threadId]?.restoredSourceProposedPlan).toEqual({
+      threadId,
+      restoredPrompt: "implement the queued plan",
+      sourceProposedPlan: {
+        threadId: "thread-source-plan",
+        planId: "plan-1",
+      },
+    });
   });
 
   it("revokes queued chat image blob URLs when a queued turn is removed", () => {
@@ -1594,6 +1812,40 @@ describe("composerDraftStore sticky composer settings", () => {
       modelSelection("codex", "gpt-5.4"),
     );
     expect(useComposerDraftStore.getState().stickyActiveProvider).toBe("codex");
+  });
+
+  it("preserves current sticky model fields during storage-version migration", () => {
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        migrate: (persistedState: unknown, version: number) => unknown;
+      };
+    };
+    const migratedState = persistApi.getOptions().migrate(
+      {
+        draftsByThreadId: {},
+        draftThreadsByThreadId: {},
+        projectDraftThreadIdByProjectId: {},
+        stickyModelSelectionByProvider: {
+          claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", {
+            effort: "max",
+          }),
+        },
+        stickyActiveProvider: "claudeAgent",
+        stickyProvider: "codex",
+        stickyModel: "gpt-5",
+      },
+      4,
+    ) as {
+      stickyModelSelectionByProvider: Partial<Record<ModelSelection["provider"], ModelSelection>>;
+      stickyActiveProvider: ModelSelection["provider"] | null;
+    };
+
+    expect(migratedState.stickyModelSelectionByProvider.claudeAgent).toEqual(
+      modelSelection("claudeAgent", "claude-opus-4-6", {
+        effort: "max",
+      }),
+    );
+    expect(migratedState.stickyActiveProvider).toBe("claudeAgent");
   });
 
   it("applies sticky activeProvider to new drafts", () => {

@@ -1,7 +1,7 @@
 // FILE: threadRetention.ts
-// Purpose: Runs the server-side cleanup loop for inactive orchestration threads.
+// Purpose: Runs the server-side retention loop that hides inactive orchestration threads.
 // Layer: Server maintenance
-// Exports: retention constants, stale-thread selection, and scoped job startup.
+// Exports: retention constants, inactive-thread selection, and scoped job startup.
 
 import {
   CommandId,
@@ -10,7 +10,6 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { Effect } from "effect";
-import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { randomUUID } from "node:crypto";
 
 import type { OrchestrationEngineShape } from "./orchestration/Services/OrchestrationEngine";
@@ -22,13 +21,12 @@ export const THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS = 5 * 60 * 1000;
 export const THREAD_RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const THREAD_RETENTION_BATCH_SIZE = 25;
 const THREAD_RETENTION_BATCH_PAUSE_MS = 50;
-const RETENTION_COMPACT_FREE_PAGE_THRESHOLD = 8192;
 
 type RetentionThread =
   | OrchestrationReadModel["threads"][number]
   | OrchestrationShellSnapshot["threads"][number];
 
-type RetentionMaintenanceState = "started" | "progress" | "compacting" | "completed" | "failed";
+type RetentionMaintenanceState = "started" | "progress" | "completed" | "failed";
 
 function parseIsoMs(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -84,9 +82,7 @@ const publishRetentionMaintenance = Effect.fn("publishRetentionMaintenance")(fun
   state: RetentionMaintenanceState,
   details: {
     readonly deletedCount?: number;
-    readonly purgedCount?: number;
     readonly totalCount?: number;
-    readonly freePageCount?: number;
     readonly error?: string;
   } = {},
 ) {
@@ -110,84 +106,7 @@ const publishRetentionMaintenance = Effect.fn("publishRetentionMaintenance")(fun
     );
 });
 
-export const purgeThreadDatabaseRows = Effect.fn("purgeThreadDatabaseRows")(function* (
-  threadId: ThreadId,
-) {
-  const sql = yield* SqlClient.SqlClient;
-
-  // Retention is destructive: remove replay events plus derived rows so old
-  // threads do not keep bloating production SQLite forever.
-  yield* sql.withTransaction(
-    Effect.gen(function* () {
-      yield* sql`
-        DELETE FROM projection_pending_approvals
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_thread_proposed_plans
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_turns
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_thread_sessions
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_thread_activities
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_thread_messages
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM provider_session_runtime
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM checkpoint_diff_blobs
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM projection_threads
-        WHERE thread_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM orchestration_command_receipts
-        WHERE aggregate_kind = 'thread'
-          AND aggregate_id = ${threadId}
-      `;
-      yield* sql`
-        DELETE FROM orchestration_events
-        WHERE aggregate_kind = 'thread'
-          AND stream_id = ${threadId}
-      `;
-    }),
-  );
-});
-
-const compactDatabaseAfterRetention = Effect.fn("compactDatabaseAfterRetention")(function* () {
-  const sql = yield* SqlClient.SqlClient;
-  const freePageRows = yield* sql<{ readonly freelist_count: number }>`
-    PRAGMA freelist_count
-  `;
-  const freePageCount = freePageRows[0]?.freelist_count ?? 0;
-  if (freePageCount < RETENTION_COMPACT_FREE_PAGE_THRESHOLD) {
-    return { compacted: false, freePageCount };
-  }
-
-  yield* publishRetentionMaintenance("compacting", { freePageCount });
-  yield* Effect.sleep(250);
-  yield* sql`PRAGMA optimize`;
-  yield* sql`VACUUM`;
-  yield* sql`PRAGMA wal_checkpoint(TRUNCATE)`;
-  return { compacted: true, freePageCount };
-});
-
-// Picks the same threads manual deletion can delete, while protecting active work.
+// Picks inactive threads to soft-delete from the app while keeping their DB rows for stats.
 export function getInactiveThreadIdsForRetention(
   readModel: Pick<OrchestrationReadModel, "threads"> | Pick<OrchestrationShellSnapshot, "threads">,
   nowMs = Date.now(),
@@ -207,57 +126,21 @@ export function getInactiveThreadIdsForRetention(
   return inactiveThreadIds;
 }
 
-export function getSoftDeletedThreadIdsForRetentionPurge(
-  readModel: OrchestrationReadModel,
-): ThreadId[] {
-  const deletedThreadIds: ThreadId[] = [];
-  for (const thread of readModel.threads) {
-    if (thread.deletedAt === null) continue;
-    deletedThreadIds.push(thread.id);
-  }
-  return deletedThreadIds;
-}
-
-const listSoftDeletedThreadIdsFromDatabase = Effect.fn("listSoftDeletedThreadIdsFromDatabase")(
-  function* () {
-    const sql = yield* SqlClient.SqlClient;
-    const rows = yield* sql<{ readonly threadId: ThreadId }>`
-    SELECT thread_id AS "threadId"
-    FROM projection_threads
-    WHERE deleted_at IS NOT NULL
-    ORDER BY deleted_at ASC, thread_id ASC
-  `;
-    return rows.map((row) => row.threadId);
-  },
-);
-
 export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(function* (
   orchestrationEngine: OrchestrationEngineShape,
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
   const shellSnapshot = yield* projectionSnapshotQuery.getShellSnapshot();
   const inactiveThreadIds = getInactiveThreadIdsForRetention(shellSnapshot);
-  const purgeThreadIds = new Set<ThreadId>([
-    ...(yield* listSoftDeletedThreadIdsFromDatabase().pipe(
-      Effect.catch((error) =>
-        Effect.logWarning("failed to list soft-deleted threads for retention purge").pipe(
-          Effect.annotateLogs({ error: String(error) }),
-          Effect.as([] as ThreadId[]),
-        ),
-      ),
-    )),
-  ]);
-  const totalCandidateCount = inactiveThreadIds.length + purgeThreadIds.size;
+  const totalCandidateCount = inactiveThreadIds.length;
   let deletedCount = 0;
-  let purgedCount = 0;
 
   if (inactiveThreadIds.length > 0) {
     yield* publishRetentionMaintenance("started", {
       deletedCount,
-      purgedCount,
       totalCount: totalCandidateCount,
     });
-    yield* Effect.logInfo("deleting inactive orchestration threads").pipe(
+    yield* Effect.logInfo("hiding inactive orchestration threads").pipe(
       Effect.annotateLogs({ count: inactiveThreadIds.length }),
     );
   }
@@ -278,11 +161,10 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
               Effect.tap(() =>
                 Effect.sync(() => {
                   deletedCount += 1;
-                  purgeThreadIds.add(threadId);
                 }),
               ),
               Effect.catch((error) =>
-                Effect.logWarning("failed to delete inactive thread during retention sweep").pipe(
+                Effect.logWarning("failed to hide inactive thread during retention sweep").pipe(
                   Effect.annotateLogs({
                     threadId,
                     error: String(error),
@@ -295,7 +177,6 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
         Effect.tap(() =>
           publishRetentionMaintenance("progress", {
             deletedCount,
-            purgedCount,
             totalCount: totalCandidateCount,
           }),
         ),
@@ -304,79 +185,12 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
     { concurrency: 1 },
   ).pipe(Effect.asVoid);
 
-  if (purgeThreadIds.size > 0) {
-    if (inactiveThreadIds.length === 0) {
-      yield* publishRetentionMaintenance("started", {
-        deletedCount,
-        purgedCount,
-        totalCount: totalCandidateCount,
-      });
-    }
-    yield* Effect.logInfo("purging retained deleted thread rows").pipe(
-      Effect.annotateLogs({ count: purgeThreadIds.size }),
-    );
+  if (totalCandidateCount > 0) {
+    yield* publishRetentionMaintenance("completed", {
+      deletedCount,
+      totalCount: totalCandidateCount,
+    });
   }
-
-  yield* Effect.forEach(
-    chunkThreadIds(purgeThreadIds),
-    (threadBatch) =>
-      Effect.forEach(
-        threadBatch,
-        (threadId) =>
-          purgeThreadDatabaseRows(threadId).pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                purgedCount += 1;
-              }),
-            ),
-            Effect.catch((error) =>
-              Effect.logWarning("failed to purge deleted thread database rows").pipe(
-                Effect.annotateLogs({
-                  threadId,
-                  error: String(error),
-                }),
-              ),
-            ),
-          ),
-        { concurrency: 1 },
-      ).pipe(
-        Effect.tap(() =>
-          publishRetentionMaintenance("progress", {
-            deletedCount,
-            purgedCount,
-            totalCount: totalCandidateCount,
-          }),
-        ),
-        Effect.tap(() => pauseBetweenRetentionBatches),
-      ),
-    { concurrency: 1 },
-  ).pipe(Effect.asVoid);
-
-  yield* compactDatabaseAfterRetention().pipe(
-    Effect.tap(({ compacted, freePageCount }) =>
-      totalCandidateCount > 0 || compacted
-        ? publishRetentionMaintenance("completed", {
-            deletedCount,
-            purgedCount,
-            totalCount: totalCandidateCount,
-            freePageCount,
-          })
-        : Effect.void,
-    ),
-    Effect.catch((error) =>
-      Effect.logWarning("failed to compact database after retention sweep").pipe(
-        Effect.annotateLogs({ error: String(error) }),
-        Effect.andThen(
-          publishRetentionMaintenance("failed", {
-            deletedCount,
-            purgedCount,
-            totalCount: totalCandidateCount,
-            error: String(error),
-          }),
-        ),
-      ),
-    ),
-  );
 });
 
 export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(function* (
@@ -384,7 +198,7 @@ export const startThreadRetentionJob = Effect.fn("startThreadRetentionJob")(func
   projectionSnapshotQuery: ProjectionSnapshotQueryShape,
 ) {
   // Give startup/projection bootstrap a short settling window, then run one
-  // cleanup promptly so desktop installs do not need to stay open for 24 hours.
+  // hide pass promptly so desktop installs do not need to stay open for 24 hours.
   yield* Effect.gen(function* () {
     yield* Effect.sleep(THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS);
     yield* runThreadRetentionSweep(orchestrationEngine, projectionSnapshotQuery);

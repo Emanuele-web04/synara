@@ -1,0 +1,1072 @@
+// FILE: profileStats.ts
+// Purpose: Compute Profile-page stats from Synara's local projection DB only.
+// The share card never reads provider archives or cloud services for metrics.
+// Layer: server stats query service (SqlClient + ServerConfig).
+
+import nodePath from "node:path";
+
+import type {
+  ProfileQuota,
+  ProfileStats,
+  ProfileTokenStats,
+  ProviderKind,
+  StatsGetProfileStatsInput,
+  StatsGetProfileTokenStatsInput,
+} from "@t3tools/contracts";
+import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
+import { Effect, Layer, ServiceMap } from "effect";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
+
+import { ServerConfig } from "./config";
+
+const HEATMAP_WINDOW_DAYS = 274; // ~9 months, GitHub-style contribution grid.
+const SKILL_RESULT_LIMIT = 12;
+const THREAD_RETENTION_COMMAND_ID_PATTERN = "thread-retention:%";
+const PROVIDER_KINDS = new Set<ProviderKind>([
+  "codex",
+  "claudeAgent",
+  "cursor",
+  "gemini",
+  "grok",
+  "kilo",
+  "opencode",
+  "pi",
+]);
+
+type HeatmapCell = ProfileStats["activity"]["heatmap"][number];
+type ProviderModelUsage = ProfileStats["providerModels"][number];
+type SkillUsage = ProfileStats["skills"][number];
+type MostWorkedProject = ProfileStats["mostWorkedProject"];
+
+interface CountRow {
+  readonly count: number;
+}
+
+interface PromptActivityRow extends CountRow {
+  readonly day: string | null;
+  readonly hour: number | null;
+}
+
+interface TurnInsightRow extends CountRow {
+  readonly provider: string | null;
+  readonly model: string | null;
+  readonly reasoning: string | null;
+}
+
+interface SkillUsageMessageRow {
+  readonly messageId: string | null;
+  readonly text: string | null;
+  readonly skillsJson: string | null;
+  readonly mentionsJson: string | null;
+}
+
+interface MostWorkedProjectRow {
+  readonly projectId: string | null;
+  readonly title: string | null;
+  readonly workspaceRoot: string | null;
+  readonly promptCount: number;
+  readonly threadCount: number;
+  readonly activeDays: number;
+  readonly lastWorkedAt: string | null;
+}
+
+interface TokenDayRow {
+  readonly day: string | null;
+  readonly provider: string | null;
+  readonly tokens: number;
+}
+
+type UsageKind = "skill" | "agent";
+
+interface UsageCount {
+  name: string;
+  kind: UsageKind;
+  runCount: number;
+}
+
+// ── Pure helpers ───────────────────────────────────────────────────────
+
+// SQLite DATETIME() modifier that shifts UTC timestamps into the caller's LOCAL
+// wall-clock time (for example "+02:00" / "-05:00").
+export function sqliteModifierFromUtcOffsetMinutes(offsetMinutes: number): string {
+  const safe = Number.isFinite(offsetMinutes) ? Math.trunc(offsetMinutes) : 0;
+  const sign = safe < 0 ? "-" : "+";
+  const abs = Math.abs(safe);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${sign}${hh}:${mm}`;
+}
+
+function localToday(utcOffsetMinutes: number): string {
+  return new Date(Date.now() + utcOffsetMinutes * 60_000).toISOString().slice(0, 10);
+}
+
+function num(value: unknown): number {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : 0;
+  }
+  if (typeof value === "bigint") {
+    return Number(value);
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+const PROFILE_SKILL_NAME_TOKEN =
+  "[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?(?::[A-Za-z0-9](?:[A-Za-z0-9_-]*[A-Za-z0-9])?)*";
+const PROFILE_SKILL_TOKEN_REGEX = new RegExp(
+  `(^|[\\s([{<])([$/])(${PROFILE_SKILL_NAME_TOKEN})(?=$|[\\s.,!?;)\\]}>])`,
+  "giu",
+);
+const PROFILE_TRAILING_PROMPT_BLOCK_PATTERNS = [
+  /\n*<pasted_text>\n[\s\S]*?\n<\/pasted_text>\s*$/u,
+  /\n*<file_comments>\n[\s\S]*?\n<\/file_comments>\s*$/u,
+  /\n*<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*$/u,
+  /\n*<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>\s*$/u,
+] as const;
+
+function normalizeUsageName(value: unknown): string | null {
+  const name = nonEmptyString(value);
+  if (!name) {
+    return null;
+  }
+  const withoutPrefix = name.replace(/^[$/@]+/u, "").trim();
+  return withoutPrefix.length > 0 ? withoutPrefix : null;
+}
+
+function usageKey(kind: UsageKind, name: string): string {
+  return `${kind}\u0000${name.toLowerCase()}`;
+}
+
+function usageKindSortOrder(kind: UsageKind): number {
+  return kind === "skill" ? 0 : 1;
+}
+
+function isObviousNonSkillDollarToken(name: string): boolean {
+  return /^\d/u.test(name) || /^[A-Z_][A-Z0-9_]*$/u.test(name);
+}
+
+function stripProfileTrailingPromptBlocks(prompt: string): string {
+  let visiblePrompt = prompt;
+  let stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (const pattern of PROFILE_TRAILING_PROMPT_BLOCK_PATTERNS) {
+      const nextPrompt = visiblePrompt.replace(pattern, "").replace(/\n+$/u, "");
+      if (nextPrompt !== visiblePrompt) {
+        visiblePrompt = nextPrompt;
+        stripped = true;
+        break;
+      }
+    }
+  }
+  return visiblePrompt;
+}
+
+function parseReferenceNames(json: string | null): string[] {
+  const value = nonEmptyString(json);
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    return parsed.flatMap((entry) => {
+      if (entry && typeof entry === "object" && "name" in entry) {
+        const name = normalizeUsageName((entry as { readonly name?: unknown }).name);
+        return name ? [name] : [];
+      }
+      return [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function extractTextSkillNames(text: string | null): string[] {
+  const prompt = nonEmptyString(text);
+  if (!prompt) {
+    return [];
+  }
+  const visiblePrompt = stripProfileTrailingPromptBlocks(prompt);
+  if (visiblePrompt.trim().length === 0) {
+    return [];
+  }
+
+  const names: string[] = [];
+  PROFILE_SKILL_TOKEN_REGEX.lastIndex = 0;
+  for (const match of visiblePrompt.matchAll(PROFILE_SKILL_TOKEN_REGEX)) {
+    const leadingBoundary = match[1] ?? "";
+    const prefix = match[2] ?? "";
+    const rawName = match[3] ?? "";
+    // Serialized prompt blocks end with XML-style tags like </pasted_text>.
+    // Those slashes are structural delimiters, not user-invoked slash skills.
+    if (leadingBoundary === "<" && prefix === "/") {
+      continue;
+    }
+    if (prefix === "/" && isBuiltInComposerSlashCommandName(rawName)) {
+      continue;
+    }
+
+    const hasExplicitSkillPrefix = rawName.toLowerCase().startsWith("skill:");
+    const normalizedRawName = rawName.toLowerCase().startsWith("skill:")
+      ? rawName.slice("skill:".length)
+      : rawName;
+    const name = normalizeUsageName(normalizedRawName);
+    if (name) {
+      // `$...` also appears in shell snippets and prices. Keep the legacy
+      // text backfill, but avoid the most common non-skill dollar tokens.
+      if (prefix === "$" && !hasExplicitSkillPrefix && isObviousNonSkillDollarToken(name)) {
+        continue;
+      }
+      names.push(name);
+    }
+  }
+  return names;
+}
+
+// Builds profile skill rows from every stored Synara user message. Structured
+// references stay authoritative, while text tokens backfill older or partial rows.
+export function aggregateProfileSkillUsageRows(
+  rows: ReadonlyArray<SkillUsageMessageRow>,
+): SkillUsage[] {
+  const counts = new Map<string, UsageCount>();
+
+  for (const row of rows) {
+    const messageSkillCounts = new Map<
+      string,
+      { name: string; structuredCount: number; textCount: number }
+    >();
+    const messageAgentUsages = new Map<string, { name: string; kind: UsageKind }>();
+    const addMessageSkillUsage = (rawName: string, source: "structured" | "text") => {
+      const name = normalizeUsageName(rawName);
+      if (!name) {
+        return;
+      }
+      const key = usageKey("skill", name);
+      const next = messageSkillCounts.get(key) ?? {
+        name,
+        structuredCount: 0,
+        textCount: 0,
+      };
+      if (source === "structured") {
+        next.structuredCount += 1;
+      } else {
+        next.textCount += 1;
+      }
+      messageSkillCounts.set(key, next);
+    };
+    const addMessageAgentUsage = (rawName: string) => {
+      const name = normalizeUsageName(rawName);
+      if (!name) {
+        return;
+      }
+      const key = usageKey("agent", name);
+      if (!messageAgentUsages.has(key)) {
+        messageAgentUsages.set(key, { name, kind: "agent" });
+      }
+    };
+
+    for (const name of parseReferenceNames(row.skillsJson)) {
+      addMessageSkillUsage(name, "structured");
+    }
+    for (const name of extractTextSkillNames(row.text)) {
+      addMessageSkillUsage(name, "text");
+    }
+    for (const name of parseReferenceNames(row.mentionsJson)) {
+      addMessageAgentUsage(name);
+    }
+
+    for (const usage of messageSkillCounts.values()) {
+      // Selected skills can appear both as structured refs and visible text.
+      // Count repeated user tokens, but do not double-count the structured echo.
+      const increment = Math.max(usage.structuredCount, usage.textCount);
+      if (increment <= 0) {
+        continue;
+      }
+      const key = usageKey("skill", usage.name);
+      const existing = counts.get(key);
+      if (existing) {
+        existing.runCount += increment;
+      } else {
+        counts.set(key, { name: usage.name, kind: "skill", runCount: increment });
+      }
+    }
+
+    for (const usage of messageAgentUsages.values()) {
+      const key = usageKey(usage.kind, usage.name);
+      const existing = counts.get(key);
+      if (existing) {
+        existing.runCount += 1;
+      } else {
+        counts.set(key, { ...usage, runCount: 1 });
+      }
+    }
+  }
+
+  return [...counts.values()]
+    .toSorted(
+      (left, right) =>
+        right.runCount - left.runCount ||
+        usageKindSortOrder(left.kind) - usageKindSortOrder(right.kind) ||
+        left.name.localeCompare(right.name),
+    )
+    .map((row) => ({
+      name: row.name,
+      displayName: `${row.kind === "skill" ? "$" : "@"}${row.name}`,
+      kind: row.kind,
+      runCount: row.runCount,
+    }));
+}
+
+function addDaysIso(day: string, delta: number): string {
+  const [year = 1970, month = 1, date = 1] = day.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, date) + delta * 86_400_000).toISOString().slice(0, 10);
+}
+
+function weekdayOf(day: string): number {
+  const [year = 1970, month = 1, date = 1] = day.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+}
+
+function heatmapIntensity(count: number, max: number): number {
+  if (count <= 0 || max <= 0) {
+    return 0;
+  }
+  const ratio = count / max;
+  if (ratio <= 0.25) return 1;
+  if (ratio <= 0.5) return 2;
+  if (ratio <= 0.75) return 3;
+  return 4;
+}
+
+function percent1(part: number, total: number): number {
+  return total > 0 ? Math.round((part / total) * 1000) / 10 : 0;
+}
+
+function compareNullableText(
+  left: string | null | undefined,
+  right: string | null | undefined,
+): number {
+  return (left ?? "").localeCompare(right ?? "");
+}
+
+function deriveInitials(name: string): string {
+  const parts = name.split(/[\s._-]+/u).filter((part) => part.length > 0);
+  if (parts.length >= 2) {
+    return `${parts[0]?.[0] ?? ""}${parts[1]?.[0] ?? ""}`.toUpperCase() || "SY";
+  }
+  const single = parts[0] ?? name;
+  return (single.slice(0, 2) || "SY").toUpperCase();
+}
+
+function sanitizeHandle(basename: string): string {
+  const slug = basename.toLowerCase().replace(/[^a-z0-9_]/gu, "");
+  return `@${slug || "synara"}`;
+}
+
+function formatHour(hour: number): string {
+  const normalized = ((hour % 24) + 24) % 24;
+  if (normalized === 0) return "12 AM";
+  if (normalized === 12) return "12 PM";
+  return normalized < 12 ? `${normalized} AM` : `${normalized - 12} PM`;
+}
+
+function arcName(startHour: number): string {
+  if (startHour < 5) return "Late-Night Dev Arc";
+  if (startHour < 9) return "Early Bird Arc";
+  if (startHour < 12) return "Morning Arc";
+  if (startHour < 17) return "Afternoon Arc";
+  if (startHour < 21) return "Evening Arc";
+  return "Night Owl Arc";
+}
+
+function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
+  const provider = nonEmptyString(value);
+  return provider && PROVIDER_KINDS.has(provider as ProviderKind)
+    ? (provider as ProviderKind)
+    : "unknown";
+}
+
+function computeStreaks(
+  activeDaysAsc: ReadonlyArray<string>,
+  todayKey: string,
+): { current: number; longest: number } {
+  if (activeDaysAsc.length === 0) {
+    return { current: 0, longest: 0 };
+  }
+  const set = new Set(activeDaysAsc);
+
+  let longest = 0;
+  let run = 0;
+  let previous: string | null = null;
+  for (const day of activeDaysAsc) {
+    run = previous && addDaysIso(previous, 1) === day ? run + 1 : 1;
+    if (run > longest) {
+      longest = run;
+    }
+    previous = day;
+  }
+
+  // Keep the streak alive through the current local day: if yesterday was active
+  // but today is still empty, the user still has today to extend it.
+  let anchor: string | null = set.has(todayKey)
+    ? todayKey
+    : set.has(addDaysIso(todayKey, -1))
+      ? addDaysIso(todayKey, -1)
+      : null;
+  let current = 0;
+  while (anchor && set.has(anchor)) {
+    current += 1;
+    anchor = addDaysIso(anchor, -1);
+  }
+
+  return { current, longest };
+}
+
+// Rolling 6-month window ending today.
+function buildHeatmap(countByDay: ReadonlyMap<string, number>, todayKey: string): HeatmapCell[] {
+  const windowStart = addDaysIso(todayKey, -(HEATMAP_WINDOW_DAYS - 1));
+
+  let windowMax = 0;
+  for (const [day, count] of countByDay) {
+    if (day >= windowStart && day <= todayKey && count > windowMax) {
+      windowMax = count;
+    }
+  }
+
+  const heatmap: HeatmapCell[] = [];
+  for (let offset = 0; offset < HEATMAP_WINDOW_DAYS; offset += 1) {
+    const day = addDaysIso(windowStart, offset);
+    const count = countByDay.get(day) ?? 0;
+    heatmap.push({
+      day,
+      count,
+      weekday: weekdayOf(day),
+      intensity: heatmapIntensity(count, windowMax),
+    });
+  }
+  return heatmap;
+}
+
+function emptyQuota(): ProfileQuota {
+  return {
+    status: "unavailable",
+    provider: null,
+    window: null,
+    usedPercent: null,
+    resetsAt: null,
+    planName: null,
+  };
+}
+
+function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWorkedProject {
+  if (!row) {
+    return null;
+  }
+
+  const projectId = nonEmptyString(row.projectId);
+  const title = nonEmptyString(row.title);
+  const workspaceRoot = nonEmptyString(row.workspaceRoot);
+  const lastWorkedAt = nonEmptyString(row.lastWorkedAt);
+  if (!projectId || !title || !workspaceRoot || !lastWorkedAt) {
+    return null;
+  }
+
+  return {
+    projectId,
+    title,
+    workspaceRoot,
+    promptCount: num(row.promptCount),
+    threadCount: num(row.threadCount),
+    activeDays: num(row.activeDays),
+    lastWorkedAt,
+  };
+}
+
+// ── Service ────────────────────────────────────────────────────────────
+
+export interface ProfileStatsQueryShape {
+  readonly getProfileStats: (
+    input: StatsGetProfileStatsInput,
+  ) => Effect.Effect<ProfileStats, unknown>;
+  readonly getProfileTokenStats: (
+    input: StatsGetProfileTokenStatsInput,
+  ) => Effect.Effect<ProfileTokenStats, unknown>;
+}
+
+export class ProfileStatsQuery extends ServiceMap.Service<
+  ProfileStatsQuery,
+  ProfileStatsQueryShape
+>()("synara/profileStats/ProfileStatsQuery") {}
+
+const makeProfileStatsQuery = Effect.gen(function* () {
+  const sql = yield* SqlClient.SqlClient;
+  const config = yield* ServerConfig;
+
+  function profileStatsErrorMessage(error: unknown): string {
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  function isMissingLegacyColumnError(error: unknown): boolean {
+    return /\bno such column\b/iu.test(profileStatsErrorMessage(error));
+  }
+
+  // Imported legacy databases can briefly miss columns added after their original
+  // lineage. Only that compatibility case degrades; real SQL failures should reach
+  // the UI retry path instead of producing believable zero-stats.
+  const legacyCompatibleQuery = <T>(
+    operation: string,
+    query: Effect.Effect<ReadonlyArray<T>, unknown>,
+  ) =>
+    query.pipe(
+      Effect.catchIf(isMissingLegacyColumnError, (error) =>
+        Effect.logWarning("profile stats query skipped due to missing legacy column", {
+          error: profileStatsErrorMessage(error),
+          operation,
+        }).pipe(Effect.as([] as ReadonlyArray<T>)),
+      ),
+    );
+
+  // Retention hides old threads with `thread.delete` but intentionally keeps
+  // their rows for profile history. Manual deletes and deleted projects stay out.
+  // ── SQL helpers ──────────────────────────────────────────────────────
+
+  // Activity = days/hours the user actually sent a Synara prompt. One day-hour
+  // grouping gives day totals, hour totals, and lifetime prompt count in TS.
+  const queryPromptActivity = (tz: string) =>
+    legacyCompatibleQuery(
+      "profileStats.promptActivity",
+      sql<PromptActivityRow>`
+        SELECT
+          STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz})) AS day,
+          CAST(STRFTIME('%H', DATETIME(m.created_at, ${tz})) AS INTEGER) AS hour,
+          COUNT(*) AS count
+        FROM projection_thread_messages m
+        JOIN projection_threads t ON t.thread_id = m.thread_id
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE m.role = 'user'
+          AND m.source = 'native'
+          AND (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
+          AND p.deleted_at IS NULL
+        GROUP BY day, hour
+        ORDER BY day ASC, hour ASC
+      `,
+    );
+
+  // Token usage for EVERY provider, straight from Synara's own DB (no external
+  // ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
+  // `context-window.updated` activity carries the running `totalProcessedTokens`; the
+  // positive per-thread delta is the tokens processed in that step, bucketed by the
+  // caller's local day and attributed to the thread's provider.
+  const queryTokenActivity = (tz: string) =>
+    legacyCompatibleQuery(
+      "profileStats.tokenActivity",
+      sql<TokenDayRow>`
+        WITH ev AS (
+          SELECT
+            a.thread_id AS thread_id,
+            STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
+            CASE
+              WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+              THEN COALESCE(json_extract(th.model_selection_json, '$.provider'), 'unknown')
+              ELSE 'unknown'
+            END AS provider,
+            CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
+            a.sequence AS sequence,
+            a.created_at AS created_at,
+            a.activity_id AS activity_id
+          FROM projection_thread_activities a
+          JOIN projection_threads th ON th.thread_id = a.thread_id
+          LEFT JOIN projection_projects p ON p.project_id = th.project_id
+          WHERE a.kind = 'context-window.updated'
+            AND json_extract(a.payload_json, '$.totalProcessedTokens') IS NOT NULL
+            AND (
+              th.deleted_at IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM orchestration_events td
+                WHERE td.event_type = 'thread.deleted'
+                  AND td.stream_id = th.thread_id
+                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+              )
+            )
+            AND p.deleted_at IS NULL
+        ),
+        delta AS (
+          SELECT
+            day,
+            provider,
+            MAX(0, tot - LAG(tot, 1, 0) OVER (
+              PARTITION BY thread_id
+              ORDER BY
+                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                sequence ASC,
+                created_at ASC,
+                activity_id ASC
+            )) AS d
+          FROM ev
+        )
+        SELECT day, provider, SUM(d) AS tokens
+        FROM delta
+        GROUP BY day, provider
+      `,
+    );
+
+  const queryTotalThreads = () =>
+    legacyCompatibleQuery(
+      "profileStats.totalThreads",
+      sql<CountRow>`
+        SELECT COUNT(*) AS count
+        FROM projection_threads t
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
+          AND p.deleted_at IS NULL
+      `,
+    );
+
+  const queryTurnInsights = () =>
+    legacyCompatibleQuery(
+      "profileStats.turnInsights",
+      sql<TurnInsightRow>`
+        WITH per_turn AS (
+          SELECT
+            CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN json_extract(e.payload_json, '$.modelSelection.provider')
+              ELSE CASE
+                WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                THEN json_extract(t.model_selection_json, '$.provider')
+              END
+            END AS provider,
+            CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN json_extract(e.payload_json, '$.modelSelection.model')
+              ELSE CASE
+                WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                THEN json_extract(t.model_selection_json, '$.model')
+              END
+            END AS model,
+            CASE
+              WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.options.reasoningEffort'),
+                json_extract(e.payload_json, '$.modelSelection.options.effort')
+              )
+              ELSE CASE
+                WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.options.reasoningEffort'),
+                  json_extract(t.model_selection_json, '$.options.effort')
+                )
+              END
+            END AS reasoning
+          FROM orchestration_events e
+          JOIN projection_threads t
+            ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+          LEFT JOIN projection_projects p ON p.project_id = t.project_id
+          WHERE e.event_type = 'thread.turn-start-requested'
+            AND (
+              t.deleted_at IS NULL
+              OR EXISTS (
+                SELECT 1
+                FROM orchestration_events td
+                WHERE td.event_type = 'thread.deleted'
+                  AND td.stream_id = t.thread_id
+                  AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+              )
+            )
+            AND p.deleted_at IS NULL
+        )
+        SELECT provider, model, reasoning, COUNT(*) AS count
+        FROM per_turn
+        GROUP BY provider, model, reasoning
+        ORDER BY count DESC, provider ASC, model ASC, reasoning ASC
+      `,
+    );
+
+  const querySkillUsageMessages = () =>
+    sql<SkillUsageMessageRow>`
+      SELECT
+        m.message_id AS messageId,
+        CASE
+          WHEN m.text GLOB '*$[A-Za-z0-9]*'
+            OR m.text GLOB '*/[A-Za-z0-9]*'
+          THEN m.text
+          ELSE NULL
+        END AS text,
+        m.skills_json AS skillsJson,
+        m.mentions_json AS mentionsJson
+      FROM projection_thread_messages m
+      JOIN projection_threads t ON t.thread_id = m.thread_id
+      LEFT JOIN projection_projects p ON p.project_id = t.project_id
+      WHERE m.role = 'user'
+        AND m.source = 'native'
+        AND (
+          t.deleted_at IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM orchestration_events td
+            WHERE td.event_type = 'thread.deleted'
+              AND td.stream_id = t.thread_id
+              AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+          )
+        )
+        AND p.deleted_at IS NULL
+        AND (
+          (m.skills_json IS NOT NULL AND TRIM(m.skills_json) NOT IN ('', '[]'))
+          OR (m.mentions_json IS NOT NULL AND TRIM(m.mentions_json) NOT IN ('', '[]'))
+          OR m.text GLOB '*$[A-Za-z0-9]*'
+          OR m.text GLOB '*/[A-Za-z0-9]*'
+        )
+      ORDER BY m.created_at ASC, m.message_id ASC
+    `.pipe(
+      Effect.catchIf(isMissingLegacyColumnError, (error) =>
+        Effect.logWarning("profile stats skill usage fell back to text-only legacy scan", {
+          error: profileStatsErrorMessage(error),
+          operation: "profileStats.skillUsage",
+        }).pipe(
+          Effect.flatMap(
+            () => sql<SkillUsageMessageRow>`
+              SELECT
+                m.message_id AS messageId,
+                m.text AS text,
+                NULL AS skillsJson,
+                NULL AS mentionsJson
+              FROM projection_thread_messages m
+              JOIN projection_threads t ON t.thread_id = m.thread_id
+              LEFT JOIN projection_projects p ON p.project_id = t.project_id
+              WHERE m.role = 'user'
+                AND (
+                  t.deleted_at IS NULL
+                  OR EXISTS (
+                    SELECT 1
+                    FROM orchestration_events td
+                    WHERE td.event_type = 'thread.deleted'
+                      AND td.stream_id = t.thread_id
+                      AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+                  )
+                )
+                AND p.deleted_at IS NULL
+                AND (
+                  m.text GLOB '*$[A-Za-z0-9]*'
+                  OR m.text GLOB '*/[A-Za-z0-9]*'
+                )
+              ORDER BY m.created_at ASC, m.message_id ASC
+            `,
+          ),
+        ),
+      ),
+    );
+
+  const queryMostWorkedProject = (tz: string) =>
+    legacyCompatibleQuery(
+      "profileStats.mostWorkedProject",
+      sql<MostWorkedProjectRow>`
+        SELECT
+          p.project_id AS projectId,
+          p.title AS title,
+          p.workspace_root AS workspaceRoot,
+          COUNT(*) AS promptCount,
+          COUNT(DISTINCT t.thread_id) AS threadCount,
+          COUNT(DISTINCT STRFTIME('%Y-%m-%d', DATETIME(m.created_at, ${tz}))) AS activeDays,
+          MAX(m.created_at) AS lastWorkedAt
+        FROM projection_thread_messages m
+        JOIN projection_threads t ON t.thread_id = m.thread_id
+        JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE m.role = 'user'
+          AND m.source = 'native'
+          AND (
+            t.deleted_at IS NULL
+            OR EXISTS (
+              SELECT 1
+              FROM orchestration_events td
+              WHERE td.event_type = 'thread.deleted'
+                AND td.stream_id = t.thread_id
+                AND td.command_id LIKE ${THREAD_RETENTION_COMMAND_ID_PATTERN}
+            )
+          )
+          AND p.deleted_at IS NULL
+        GROUP BY p.project_id, p.title, p.workspace_root
+        ORDER BY
+          promptCount DESC,
+          activeDays DESC,
+          lastWorkedAt DESC,
+          p.title ASC
+        LIMIT 1
+      `,
+    );
+
+  // ── Result builders ─────────────────────────────────────────────────
+
+  const getProfileStats = (
+    input: StatsGetProfileStatsInput,
+  ): Effect.Effect<ProfileStats, unknown> =>
+    Effect.gen(function* () {
+      const tz = sqliteModifierFromUtcOffsetMinutes(input.utcOffsetMinutes);
+      const todayKey = localToday(input.utcOffsetMinutes);
+
+      const promptActivityRows = yield* queryPromptActivity(tz);
+      const totalThreadRows = yield* queryTotalThreads();
+      const turnInsightRows = yield* queryTurnInsights();
+      const skillMessageRows = yield* querySkillUsageMessages();
+      const mostWorkedProjectRows = yield* queryMostWorkedProject(tz);
+
+      // ── Activity / heatmap / streaks ──
+      const countByDay = new Map<string, number>();
+      const hourCounts = Array.from({ length: 24 }, () => 0);
+      let totalPromptsSent = 0;
+      for (const row of promptActivityRows) {
+        const day = nonEmptyString(row.day);
+        const count = num(row.count);
+        if (day) {
+          countByDay.set(day, (countByDay.get(day) ?? 0) + count);
+        }
+        const hour = ((Math.trunc(num(row.hour)) % 24) + 24) % 24;
+        hourCounts[hour] = (hourCounts[hour] ?? 0) + count;
+        totalPromptsSent += count;
+      }
+      const heatmap = buildHeatmap(countByDay, todayKey);
+      const activeDaysAsc = [...countByDay.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([day]) => day)
+        .toSorted();
+      const { current: currentStreakDays, longest: longestStreakDays } = computeStreaks(
+        activeDaysAsc,
+        todayKey,
+      );
+
+      // ── Peak hour (single highest local-hour bucket) ──
+      const totalHourTurns = hourCounts.reduce((sum, value) => sum + value, 0);
+      let bestHour: number | null = null;
+      let bestHourCount = 0;
+      if (totalHourTurns > 0) {
+        for (let hour = 0; hour < 24; hour += 1) {
+          const hourCount = hourCounts[hour] ?? 0;
+          if (hourCount > bestHourCount) {
+            bestHourCount = hourCount;
+            bestHour = hour;
+          }
+        }
+      }
+      const activeHours =
+        bestHour === null
+          ? { startHour: null, endHour: null, turnCount: 0, label: null }
+          : {
+              startHour: bestHour,
+              endHour: null,
+              turnCount: bestHourCount,
+              label: `${formatHour(bestHour)} · ${arcName(bestHour)}`,
+            };
+
+      // ── Provider / model mix ──
+      const providerModelCounts = new Map<
+        string,
+        { readonly provider: string | null; readonly model: string | null; count: number }
+      >();
+      const reasoningCounts = new Map<string, { readonly reasoning: string; count: number }>();
+
+      for (const row of turnInsightRows) {
+        const count = num(row.count);
+        const provider = nonEmptyString(row.provider);
+        const model = nonEmptyString(row.model);
+        const providerModelKey = `${provider ?? ""}\u0000${model ?? ""}`;
+        const existingProviderModel = providerModelCounts.get(providerModelKey);
+        if (existingProviderModel) {
+          existingProviderModel.count += count;
+        } else {
+          providerModelCounts.set(providerModelKey, { provider, model, count });
+        }
+
+        const reasoning = nonEmptyString(row.reasoning);
+        if (reasoning) {
+          const existingReasoning = reasoningCounts.get(reasoning);
+          if (existingReasoning) {
+            existingReasoning.count += count;
+          } else {
+            reasoningCounts.set(reasoning, { reasoning, count });
+          }
+        }
+      }
+
+      const providerModelRows = [...providerModelCounts.values()].toSorted(
+        (left, right) =>
+          right.count - left.count ||
+          compareNullableText(left.provider, right.provider) ||
+          compareNullableText(left.model, right.model),
+      );
+      const totalModelTurns = providerModelRows.reduce((sum, row) => sum + num(row.count), 0);
+      const providerModels: ProviderModelUsage[] = providerModelRows.slice(0, 8).map((row) => {
+        const count = num(row.count);
+        return {
+          provider: normalizeProviderKind(row.provider),
+          model: nonEmptyString(row.model) ?? "unknown",
+          turnCount: count,
+          percent: percent1(count, totalModelTurns),
+        };
+      });
+
+      const providerTurnCounts = new Map<ProviderKind, number>();
+      // "Most used provider" should reflect actual turns, not how many threads were created.
+      for (const row of providerModelRows) {
+        const provider = normalizeProviderKind(row.provider);
+        if (provider === "unknown") {
+          continue;
+        }
+        providerTurnCounts.set(provider, (providerTurnCounts.get(provider) ?? 0) + num(row.count));
+      }
+      const totalKnownProviderTurns = [...providerTurnCounts.values()].reduce(
+        (sum, count) => sum + count,
+        0,
+      );
+      let topProvider: ProviderKind | null = null;
+      let topProviderTurns = 0;
+      for (const [provider, count] of providerTurnCounts) {
+        if (count > topProviderTurns) {
+          topProvider = provider;
+          topProviderTurns = count;
+        }
+      }
+
+      // ── Insights (top provider, top reasoning) ──
+      const topProviderPercent =
+        topProvider && totalKnownProviderTurns > 0
+          ? percent1(topProviderTurns, totalKnownProviderTurns)
+          : null;
+
+      const reasoningRows = [...reasoningCounts.values()].toSorted(
+        (left, right) =>
+          right.count - left.count || compareNullableText(left.reasoning, right.reasoning),
+      );
+      const totalReasonedSelections = reasoningRows.reduce((sum, row) => sum + num(row.count), 0);
+      const topReasoningRow = reasoningRows[0];
+      const topReasoning = topReasoningRow?.reasoning ?? null;
+      // Denominator excludes null reasoning values; those turns had no reasoning option set.
+      const topReasoningPercent =
+        topReasoningRow && totalReasonedSelections > 0
+          ? percent1(num(topReasoningRow.count), totalReasonedSelections)
+          : null;
+
+      // ── Skills and agent mentions ──
+      const allSkillUsages = aggregateProfileSkillUsageRows(skillMessageRows);
+      const skills = allSkillUsages.slice(0, SKILL_RESULT_LIMIT);
+      const totalSkillsUsed = allSkillUsages.reduce((sum, row) => sum + row.runCount, 0);
+
+      // ── Identity ──
+      const homeDirBasename = nodePath.basename(config.homeDir) || "synara";
+
+      return {
+        generatedAt: new Date().toISOString(),
+        timezone: { utcOffsetMinutes: input.utcOffsetMinutes, today: todayKey },
+        identity: {
+          homeDirBasename,
+          initials: deriveInitials(homeDirBasename),
+          defaultHandle: sanitizeHandle(homeDirBasename),
+        },
+        activity: {
+          currentStreakDays,
+          longestStreakDays,
+          totalPromptsSent,
+          totalThreads: num(totalThreadRows[0]?.count),
+          promptsToday: countByDay.get(todayKey) ?? 0,
+          heatmapMetric: "prompts",
+          heatmap,
+        },
+        activeHours,
+        insights: {
+          topProvider,
+          topProviderPercent,
+          topReasoning,
+          topReasoningPercent,
+          skillsExplored: allSkillUsages.length,
+          totalSkillsUsed,
+        },
+        providerModels,
+        skills,
+        mostUsedSkill: skills[0] ?? null,
+        mostWorkedProject: buildMostWorkedProject(mostWorkedProjectRows[0]),
+        quota: emptyQuota(),
+      } satisfies ProfileStats;
+    });
+
+  const getProfileTokenStats = (
+    input: StatsGetProfileTokenStatsInput,
+  ): Effect.Effect<ProfileTokenStats, unknown> =>
+    Effect.gen(function* () {
+      const tz = sqliteModifierFromUtcOffsetMinutes(input.utcOffsetMinutes);
+      const todayKey = localToday(input.utcOffsetMinutes);
+      const rows = yield* queryTokenActivity(tz);
+
+      const tokensByDay = new Map<string, number>();
+      const tokensByProvider = new Map<ProviderKind, number>();
+      let lifetime = 0;
+      for (const row of rows) {
+        const day = nonEmptyString(row.day);
+        const tokens = num(row.tokens);
+        if (!day || tokens <= 0) {
+          continue;
+        }
+        tokensByDay.set(day, (tokensByDay.get(day) ?? 0) + tokens);
+        lifetime += tokens;
+        const provider = normalizeProviderKind(row.provider);
+        if (provider !== "unknown") {
+          tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
+        }
+      }
+
+      let peakDay: string | null = null;
+      let peakDayTokens: number | null = null;
+      for (const [day, tokens] of tokensByDay) {
+        if (peakDayTokens === null || tokens > peakDayTokens) {
+          peakDayTokens = tokens;
+          peakDay = day;
+        }
+      }
+
+      const providers = [...tokensByProvider.entries()]
+        .filter(([, tokens]) => tokens > 0)
+        .toSorted((a, b) => b[1] - a[1])
+        .map(([provider]) => provider);
+      const available = lifetime > 0;
+
+      return {
+        available,
+        lifetimeTotalTokens: available ? lifetime : null,
+        peakDayTokens,
+        peakDay,
+        providers,
+        unavailableProviders: [],
+        heatmapMetric: "tokens",
+        heatmap: buildHeatmap(tokensByDay, todayKey),
+      } satisfies ProfileTokenStats;
+    });
+
+  return { getProfileStats, getProfileTokenStats } satisfies ProfileStatsQueryShape;
+});
+
+export const ProfileStatsQueryLive = Layer.effect(ProfileStatsQuery, makeProfileStatsQuery);

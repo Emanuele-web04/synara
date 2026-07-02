@@ -71,7 +71,10 @@ export const providerDiscoveryQueryKeys = {
     agentDir: string | null,
     cwd: string | null,
   ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
-  agents: (provider: ProviderKind) => ["provider-discovery", "agents", provider] as const,
+  agentsForProvider: (provider: ProviderKind) =>
+    ["provider-discovery", "agents", provider] as const,
+  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
+    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
 };
 
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
@@ -211,12 +214,25 @@ export function providerModelsQueryOptions(input: {
   });
 }
 
-export function providerAgentsQueryOptions(input: { provider: ProviderKind; enabled?: boolean }) {
+export function providerAgentsQueryOptions(input: {
+  provider: ProviderKind;
+  binaryPath?: string | null;
+  cwd?: string | null;
+  enabled?: boolean;
+}) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.agents(input.provider),
+    queryKey: providerDiscoveryQueryKeys.agents(
+      input.provider,
+      input.binaryPath ?? null,
+      input.cwd ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.listAgents({ provider: input.provider });
+      return api.provider.listAgents({
+        provider: input.provider,
+        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+      });
     },
     enabled: input.enabled ?? true,
     staleTime: 60_000,

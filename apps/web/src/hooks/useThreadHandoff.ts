@@ -8,6 +8,7 @@ import { useCallback } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useProviderStatusesForLocalConfig } from "./useProviderStatusesForLocalConfig";
+import { useRefreshProviderStatusesNow } from "./useProviderStatusRefresh";
 import {
   buildThreadHandoffImportedActivities,
   buildThreadHandoffImportedMessages,
@@ -16,7 +17,7 @@ import {
   resolveThreadHandoffModelSelection,
   resolveThreadHandoffTitle,
 } from "../lib/threadHandoff";
-import { resolveProviderSendAvailability } from "../lib/providerAvailability";
+import { resolveProviderSendAvailabilityWithRefresh } from "../lib/providerAvailability";
 import { newCommandId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { useStore } from "../store";
@@ -27,6 +28,7 @@ export function useThreadHandoff() {
   const projects = useStore((store) => store.projects);
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
 
   const createThreadHandoff = useCallback(
     async (thread: Thread, targetProvider: ProviderKind): Promise<Thread["id"]> => {
@@ -50,9 +52,10 @@ export function useThreadHandoff() {
       ) {
         throw new Error("This handoff target is not available for the current thread.");
       }
-      const targetAvailability = resolveProviderSendAvailability({
+      const targetAvailability = await resolveProviderSendAvailabilityWithRefresh({
         provider: targetProvider,
         statuses: providerStatuses,
+        refreshStatuses: () => refreshProviderStatuses({ silent: true }),
       });
       if (!targetAvailability.usable) {
         throw new Error(targetAvailability.unavailableReason);
@@ -113,7 +116,7 @@ export function useThreadHandoff() {
 
       return nextThreadId;
     },
-    [navigate, projects, providerStatuses, syncServerShellSnapshot],
+    [navigate, projects, providerStatuses, refreshProviderStatuses, syncServerShellSnapshot],
   );
 
   return {

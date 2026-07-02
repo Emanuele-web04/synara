@@ -22,6 +22,590 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.7",
+    date: "Jul 2",
+    features: [
+      {
+        id: "update-download-progress",
+        title: "Update downloads show their progress",
+        description:
+          "When Synara is downloading a desktop update, the sidebar update button now shows a live percent badge so you can tell whether it is moving or nearly ready.",
+        details:
+          "The desktop update helper now clamps reported download percentages, hides them outside active downloads, and covers edge cases for null, negative, oversized, and fractional progress values.",
+      },
+      {
+        id: "claude-auth-status-stability",
+        title: "Claude auth checks are less jumpy",
+        description:
+          "Claude sessions are less likely to be marked logged out during refresh-token races, especially when health checks and the macOS credential keepalive run near the same time.",
+        details:
+          "`claude auth status` is now serialized through a shared lock, retried once for structured false negatives, and can fall back to verified local credential metadata before showing an unauthenticated state.",
+      },
+      {
+        id: "checkpoint-baseline-resilience",
+        title: "Turn checkpoints are harder to confuse",
+        description:
+          "Synara preserves the first pre-turn snapshot more carefully, so transcript diffs and restore points better match what was on disk when you pressed send.",
+        details:
+          "Checkpoint capture now has single-flight behavior per repo/ref, a bounded capture timeout, first-writer-wins `skipIfExists` baselines, and extra recovery when a startup or backup path missed the original message baseline.",
+      },
+      {
+        id: "chat-sidebar-polish",
+        title: "The sidebar chat list behaves more naturally",
+        description:
+          "The Chats section now lives with the rest of the scrollable sidebar content, has a familiar disclosure chevron, and keeps the footer focused on account/update controls.",
+        details:
+          "Sidebar chat collapse state now exposes `aria-expanded`, reuses the shared disclosure chevron, and separates chat rows from the footer while preserving sort and new-chat actions.",
+      },
+      {
+        id: "first-send-environment-panel",
+        title: "First sends keep the workspace calm",
+        description:
+          "Starting from an empty chat no longer opens the Environment panel by surprise after the first message turns the landing view into a transcript.",
+        details:
+          "ChatView now records a closed environment-panel preference when sending from the centered empty landing, preventing the default-open policy from popping the panel into a just-started conversation.",
+      },
+      {
+        id: "provider-health-parser-coverage",
+        title: "Provider health parsing is easier to trust",
+        description:
+          "Provider CLI output handling and Claude auth interpretation now have clearer, isolated parsing paths with more focused tests around failure and metadata cases.",
+        details:
+          "Generic CLI-output helpers moved out of ProviderHealth, Claude auth parsing moved into a pure module, and new tests cover auth JSON markers, credential summaries, the auth-status lock, checkpoint single-flight behavior, and provider health edge cases.",
+      },
+    ],
+  },
+  {
+    version: "0.3.6",
+    date: "Jun 30",
+    features: [
+      {
+        id: "cursor-launch-fallbacks",
+        title: "Cursor launch fallback is much sturdier",
+        description:
+          "Synara now finds Cursor agent commands across more install layouts, including bundled sibling shims and legacy shim locations, while rejecting unsafe fallbacks.",
+        details:
+          "Cursor ACP command discovery now resolves safer CLI paths, honors bundled sibling launchers, preserves legacy shim coverage, and avoids falling back to paths that do not match the expected Cursor agent shape.",
+      },
+      {
+        id: "muxy-open-in",
+        title: "Muxy can open from Synara",
+        description:
+          "Open-in support now recognizes Muxy, so editor/open buttons can hand files to the right desktop target when Muxy is part of your workflow.",
+        details:
+          "Editor metadata, open-route handling, and focused coverage were extended so Muxy is treated as a supported external app alongside the existing editor launch targets.",
+      },
+      {
+        id: "live-message-trail",
+        title: "Live chats leave a clearer message trail",
+        description:
+          "Active replies now expose a calmer live trail through the transcript, making long-running turns easier to follow while new work arrives.",
+        details:
+          "The transcript gained MessageTrail rendering, shared message-trail logic, browser coverage, and timeline integration so live assistant activity can stay visible without fighting the normal message rows.",
+      },
+      {
+        id: "clipboard-image-sharing",
+        title: "Image sharing works better on desktop",
+        description:
+          "Share cards and exported profile visuals can now use the desktop clipboard image path, making it easier to paste polished snapshots elsewhere.",
+        details:
+          "The web share-card export path now cooperates with desktop clipboard IPC, including preload contracts and browser-side helpers for copying generated image blobs.",
+      },
+      {
+        id: "claude-credential-keepalive",
+        title: "Claude credentials stay fresh longer",
+        description:
+          "Synara refreshes Claude credential freshness on macOS so long sessions are less likely to hit the familiar stale-token sign-in failure.",
+        details:
+          "A Claude credential keepalive helper, adapter integration, and focused tests now keep the OAuth token file active enough to avoid the roughly eight-hour stale credential path.",
+      },
+      {
+        id: "model-and-sidebar-polish",
+        title: "Models, command rows, and status icons got a polish pass",
+        description:
+          "Sonnet 5 variants, sidebar status icons, branded command rows, chat bubble padding, and tool labels were tightened for a more readable daily workspace.",
+        details:
+          "The release adds Sonnet 5 model variant metadata, refines sidebar status presentation, brands command/tool rows more clearly, and trims chat typography spacing in dense transcript areas.",
+      },
+    ],
+  },
+  {
+    version: "0.3.5",
+    date: "Jun 30",
+    features: [
+      {
+        id: "temporary-thread-promotion",
+        title: "Temporary chats graduate more naturally",
+        description:
+          "Draft and temporary threads now promote into the main chat flow more predictably, with clearer naming and steadier routing once work becomes real.",
+        details:
+          "Disposable-thread helpers were renamed around temporary-thread behavior, ChatView and sidebar state now share the promotion path, and timeline coverage guards the new handoff from temporary work into durable chat rows.",
+      },
+      {
+        id: "archive-undo-toast",
+        title: "Archived chats are easier to recover",
+        description:
+          "Archive actions now use an undo toast instead of an interrupting confirmation dialog, so cleaning up threads is faster while still giving you a quick escape hatch.",
+        details:
+          "The sidebar archive flow, shared toast primitive, settings surfaces, environment panel hints, and threadArchive helper now cooperate around immediate archive plus undo behavior.",
+      },
+      {
+        id: "pending-input-and-work-polish",
+        title: "Pending inputs and work rows feel calmer",
+        description:
+          "User-input prompts, queued composer state, work rows, tool details, markdown spacing, and composer preview surfaces were tightened so active sessions scan better.",
+        details:
+          "Composer pending-input panels now float more cleanly in the stack, queued headers and work rows have focused coverage, and shared rendering helpers reduce small inconsistencies across tool and diff displays.",
+      },
+      {
+        id: "macos-icon-cache-refresh",
+        title: "macOS icon refreshes after app updates",
+        description:
+          "The desktop app now refreshes macOS icon caches on startup/update paths so Dock and Finder icons are less likely to stay stale after an icon change.",
+        details:
+          "A dedicated macOS icon-cache refresh helper was added to the desktop main process with coverage for the app-support marker, cache invalidation command, and platform gating.",
+      },
+      {
+        id: "settings-and-export-cleanup",
+        title: "Settings, heatmaps, and labels got a tidy pass",
+        description:
+          "The settings route, activity heatmap export, share cards, model/traits pickers, sidebar labels, and dark-mode composer border all received small polish fixes.",
+        details:
+          "This release cleans up settings panel primitives, aligns heatmap and diff-rendering helpers, restores a dark-mode composer input border, simplifies repeated labels, and trims a handful of dense UI edges.",
+      },
+    ],
+  },
+  {
+    version: "0.3.4",
+    date: "Jun 29",
+    features: [
+      {
+        id: "assistant-streaming-default",
+        title: "Assistant streaming is on by default",
+        description:
+          "New installs now start with assistant streaming enabled, so replies feel live immediately without needing a settings pass first.",
+        details:
+          "The default app settings and shared settings schema now agree on streamed assistant output, keeping fresh web and server state aligned.",
+      },
+      {
+        id: "smooth-transcript-follow",
+        title: "Live transcript follow feels smoother",
+        description:
+          "Streaming replies, optimistic sends, tool details, and message entry animations now keep the transcript pinned more predictably while work is active.",
+        details:
+          "ChatView, ChatTranscriptPane, MessagesTimeline, smooth streamed text, and browser regression coverage were tightened so live assistant text and tool rows do not fight the scroll position.",
+      },
+      {
+        id: "provider-health-hardening",
+        title: "Provider health handles more real-world CLI states",
+        description:
+          "Claude, Cursor, and OpenCode status checks are sturdier around credentials, headless environments, model probes, and transient command failures.",
+        details:
+          "Provider health now detects usable local Claude CLI credentials before passing process env through, runs Cursor ACP probes with a safer headless env, handles model-probe failures without marking an authenticated provider unusable, and expands focused provider-health coverage.",
+      },
+      {
+        id: "opencode-retry-warnings",
+        title: "OpenCode retry warnings are easier to follow",
+        description:
+          "Retry warnings from OpenCode now stay in the work-log flow and collapse consistently across turns instead of cluttering the main conversation.",
+        details:
+          "Provider runtime ingestion and session logic now preserve OpenCode retry-warning metadata, keep it attached to work rows, and cover repeated warning behavior in both server and web tests.",
+      },
+      {
+        id: "tool-and-agent-polish",
+        title: "Tool rows and agent markers are cleaner",
+        description:
+          "Agent mentions, task rows, tool labels, file-change rows, chat seams, and switches received a small polish pass that makes dense chats easier to scan.",
+        details:
+          "Synara now reuses the central robot glyph for agent chips, improves file-change and tool-call labels, refines chat card contrast, and tightens shared switch sizing, thumb travel, and animation.",
+      },
+      {
+        id: "release-gate-type-fixes",
+        title: "Release gates tightened browser and provider tests",
+        description:
+          "The v0.3.4 deep release pass fixed exact-optional type drift in transcript browser coverage and provider health checks before publishing.",
+        details:
+          "The release pass corrected a browser `scrollTo` test helper so it no longer passes explicit `undefined` optional fields, fixed a Claude health env call the same way, and updated a ProviderHealth test to use the Effect platform error tag supported by this workspace.",
+      },
+    ],
+  },
+  {
+    version: "0.3.3",
+    date: "Jun 28",
+    features: [
+      {
+        id: "windows-vscode-store-launch",
+        title: "VS Code from the Microsoft Store opens correctly on Windows",
+        description:
+          "Synara can now launch VS Code Store installs through the right Windows app identity and URI fallback, so editor buttons work even when the normal `code` command is unavailable.",
+        details:
+          "Editor launch discovery now understands Windows packaged app metadata, adds VS Code and VS Code Insiders Store coverage, falls back from command launch to URI activation, and keeps file-manager launches isolated from editor-specific behavior.",
+      },
+      {
+        id: "provider-update-checks",
+        title: "Provider update checks are now optional",
+        description:
+          "A new settings toggle lets you disable provider update checks when you want Synara to stay quieter about external CLI versions.",
+        details:
+          "Provider health, server settings, app settings migration, settings search, root notifications, and provider update filtering now share the same `enableProviderUpdateChecks` flag so background update notices respect the user's preference.",
+      },
+      {
+        id: "icons-and-logo-refresh",
+        title: "The app icon and Synara mark look cleaner",
+        description:
+          "The desktop, web, marketing, and release assets were refreshed so the Synara icon renders more consistently across macOS, Windows, browser favicons, and update artifacts.",
+        details:
+          "This release refreshes the inline Synara logo path, replaces generated icon assets from the full source image, corrects macOS bundle icon handling after the rounded-icon Ventura pass, and removes a literal Dock-icon workaround that was not the final direction.",
+      },
+      {
+        id: "workspace-explorer-polish",
+        title: "Workspace browsing feels more unified",
+        description:
+          "Workspace explorer navigation, file-row presentation, diff stat labels, and shortcut settings now use more shared behavior, making file browsing and review surfaces easier to scan.",
+        details:
+          "Explorer keyboard navigation moved into shared logic with coverage, DockExplorerPane and workspaceExplorer were simplified, keyboard shortcut settings gained a clearer panel, and file/diff row styling now lines up with the rest of the workspace UI.",
+      },
+      {
+        id: "lighter-idle-polling",
+        title: "Idle server polling is lighter",
+        description:
+          "Synara polls local server state less aggressively while idle, reducing background work without changing the active-session refresh path.",
+        details:
+          "The server React Query helper now separates active and idle refresh intervals, the sidebar uses the calmer idle cadence, and focused tests cover the interval behavior.",
+      },
+      {
+        id: "release-gate-cleanups",
+        title: "Release gates caught a few small compatibility fixes",
+        description:
+          "The v0.3.3 release pass tightened formatting, settings test coverage, and Effect API compatibility before publishing.",
+        details:
+          "The release check formatted recent Windows editor-launch and desktop artifact code, updated the web settings push fixture for provider update checks, and switched one editor fallback path from `Effect.catchAll` to the Effect API used by this workspace.",
+      },
+    ],
+  },
+  {
+    version: "0.3.2",
+    date: "Jun 27",
+    features: [
+      {
+        id: "branch-toolbar-projects",
+        title: "Project switching moved closer to your branch work",
+        description:
+          "The branch toolbar can now show and change the active project, so project, branch, and worktree context are easier to keep aligned while you move around Synara.",
+        details:
+          "This release teaches the branch toolbar about project selection, shared home-chat containers, draft-thread mapping, project creation recovery, and project picker state so navigation does not depend only on the sidebar.",
+      },
+      {
+        id: "absolute-file-previews",
+        title: "Local previews can open more real files",
+        description:
+          "Absolute local file paths now get preview grants, making image, PDF, and workspace previews more reliable when agent output points at files on disk.",
+        details:
+          "The server now grants and validates local preview access more carefully, including trusted-origin checks, local image route coverage, workspace file-system normalization, and web-side preview/download handling for absolute paths.",
+      },
+      {
+        id: "review-file-tree",
+        title: "Review diffs have a collapsible file tree",
+        description:
+          "The diff panel now has a review file tree, giving larger review batches a clearer outline before you dive into individual patches.",
+        details:
+          "Synara now builds file diff trees, renders a collapsible review panel with shared disclosure motion, and reuses file-row styling so review navigation feels closer to the rest of the workspace.",
+      },
+      {
+        id: "workspace-explorer",
+        title: "The workspace explorer is tidier",
+        description:
+          "The right-side workspace explorer and preview header were split into cleaner pieces, reducing composer chrome churn and making file browsing steadier.",
+        details:
+          "Workspace browsing now lives behind a reusable dock explorer pane and workspace explorer helpers, with tighter right-dock activation metadata, preview header behavior, and composer measurement boundaries.",
+      },
+      {
+        id: "send-readiness",
+        title: "Send actions check provider readiness first",
+        description:
+          "Starting a chat, Kanban task, or handoff now refreshes provider availability before sending and returns focus to the composer more consistently.",
+        details:
+          "Provider availability refresh has dedicated helpers and coverage, while ChatView, Kanban submit flows, thread handoff, and route startup paths now share more predictable send-readiness behavior.",
+      },
+      {
+        id: "visual-polish",
+        title: "Explorer icons and working states feel more coherent",
+        description:
+          "File explorer icons, working shimmers, route inset surfaces, composer pickers, and sidebar details received a focused visual cleanup pass.",
+        details:
+          "This release unifies more icon choices through central icon helpers, refines shimmer styling, tightens compact route surfaces, and keeps repeated explorer/sidebar affordances closer to the same visual language.",
+      },
+      {
+        id: "transcript-session-state",
+        title: "Long sessions keep their footing better",
+        description:
+          "Transcript scrolling, session state, sidebar routing, and draft equality checks were refactored so active work stays calmer across thread and project changes.",
+        details:
+          "ChatView now separates more browser-specific behavior, route inset layout has focused coverage, draft-thread comparisons are stricter, and project/chat container helpers handle exact optional state more safely.",
+      },
+    ],
+  },
+  {
+    version: "0.3.1",
+    date: "Jun 26",
+    features: [
+      {
+        id: "tool-call-details",
+        title: "Tool calls are easier to inspect",
+        description:
+          "Transcript tool calls now expose clearer detail dialogs for shell commands, patches, file changes, and tool output, so review-heavy chats are easier to audit.",
+        details:
+          "Synara now formats tool command transcripts, normalizes patch/change output, labels more tool kinds consistently, preserves structured work metadata through the timeline, and adds focused coverage for tool-call labels and formatting.",
+      },
+      {
+        id: "transcript-flow",
+        title: "Long chats stay calmer while work is running",
+        description:
+          "Transcript grouping and scroll behavior were refined so live assistant text, collapsed work rows, sidechat panes, and tool-only activity behave more predictably.",
+        details:
+          "This release tightens message timeline derivation, keeps real assistant text separate from tool/work rows, improves collapsed-turn signatures, preserves assistant selection actions, and adds focused tests for timeline rows and ChatView state.",
+      },
+      {
+        id: "multi-pane-navigation",
+        title: "Multi-pane work is quicker to navigate",
+        description:
+          "Recent views, split chats, pinned threads, hover cards, and project sidebar actions received a round of smaller navigation polish.",
+        details:
+          "Recent view switching, sidebar hover-card anchors, thread/project hover content, pin toggles, chat header actions, project shortcut targets, and split/sidechat affordances now share more predictable state and keyboard routing.",
+      },
+      {
+        id: "keybindings",
+        title: "Keyboard shortcuts got stricter",
+        description:
+          "Shortcut defaults and migrations are now safer, with better handling for chat creation, terminal actions, navigation, and stale keybinding rows.",
+        details:
+          "Server and web keybinding logic now validates persisted bindings more carefully, avoids carrying conflicting defaults forward, improves new-chat/new-terminal command resolution, and has expanded regression coverage.",
+      },
+      {
+        id: "provider-runtime-reliability",
+        title: "Providers recover from more edge cases",
+        description:
+          "Codex, Gemini, Grok, Cursor, OpenCode, and provider health paths are sturdier around runtime events, discovery, process cleanup, and idle sessions.",
+        details:
+          "Provider runtime ingestion now handles more canonical event shapes, Gemini ACP probing is more defensive, provider service behavior has broader coverage, idle runtime cleanup was tightened, process runner handling is safer, and Codex review/compaction progress is easier to reconcile.",
+      },
+      {
+        id: "automation-approval-safety",
+        title: "Automation setup asks for the right approval",
+        description:
+          "Automation creation and updates now separate setup prompts, update-only flows, approval fallbacks, and risk acknowledgement more carefully.",
+        details:
+          "This release hardens conversational automation setup, preserves update-only approval paths, restores the approval fallback, strips carried setup filler from prompts, and keeps the risk acknowledgement gate attached to dispatch.",
+      },
+      {
+        id: "desktop-update-hardening",
+        title: "Desktop updates and startup are quieter",
+        description:
+          "The desktop shell now suppresses noisy Node warnings in more places and hardens electron-updater command handling on Windows.",
+        details:
+          "Desktop startup applies safer warning handling, voice transcription edge cases were tightened, and electron updater command construction now has dedicated security coverage around Windows process spawning.",
+      },
+      {
+        id: "icons-and-ui-polish",
+        title: "The interface has more useful visual signals",
+        description:
+          "Provider icons, central icon assets, model pickers, composer controls, automation banners, Kanban cards, preview cards, and tooltips were cleaned up in small but visible ways.",
+        details:
+          "Synara now ships a curated central-icons set, improves provider/model picker presentation, refines composer picker and automation banners, adds better project/thread hover details, and keeps repeated UI surfaces closer to the same visual language.",
+      },
+    ],
+  },
+  {
+    version: "0.3.0",
+    date: "Jun 24",
+    features: [
+      {
+        id: "automations-workspace",
+        title: "Automations are a real workspace surface",
+        description:
+          "Synara now has first-class Automations for scheduled agent work, with sidebar navigation, list/detail pages, run history, triage actions, and inline editing.",
+        details:
+          "This release wires automation contracts, persistence, scheduler leases, run tracking, RPC methods, sidebar badges, Current/Paused views, detail routes, editable fields, previous-run history, and result triage so scheduled work lives inside the same thread/provider/worktree pipeline as normal chat work.",
+      },
+      {
+        id: "heartbeat-stop-clauses",
+        title: "Heartbeat automations can stop when the goal is met",
+        description:
+          "Heartbeat automations can store an AI-evaluated stop clause, evaluate it after successful runs, and disable themselves with a recorded reason when the condition is satisfied.",
+        details:
+          "Completion policies now support natural-language stop conditions, dedicated background evaluation, visible completion results, timeout handling, stale-result guards, legacy-row defaults, and archive/read preservation so a stop check cannot silently undo user triage state.",
+      },
+      {
+        id: "automation-composer-scheduling",
+        title: "Automation creation understands natural prompts",
+        description:
+          "The composer can turn automation-style prompts into scheduled drafts, including intervals, daily/weekly timing, cron-like schedules, heartbeat targets, and review dialogs.",
+        details:
+          "Automation intent parsing now covers explicit and generated prompts, English and Italian stop/schedule phrasing, bounded fast-loop safety, draft review, source-thread handling, restored plan source metadata, inline editing from composer text, and stricter confirmation for LLM-generated automations.",
+      },
+      {
+        id: "automation-reliability",
+        title: "Scheduled runs are harder to lose or corrupt",
+        description:
+          "Automation scheduling, recovery, and run reconciliation were hardened so crashes, duplicate wakes, approval waits, stale cache updates, and cleanup failures are handled more predictably.",
+        details:
+          "The automation service now has occurrence dedupe, scheduler leases, crash replay, failed-run rollback, startup recovery, bounded completion-evaluation queues, recovery/lease observability, approval ownership re-checks, standalone worktree cleanup, equal-timestamp cache merging, and DST/long-downtime schedule coverage.",
+      },
+      {
+        id: "file-attachments-and-previews",
+        title: "Files attach, preview, and download more reliably",
+        description:
+          "Chat now supports generic file attachments alongside images, with better chips/cards, safer upload normalization, worktree-aware previews, and in-app local image downloads.",
+        details:
+          "File attachments now flow through contracts, upload storage, composer paste/drop, provider prompts, Kanban dispatch, recap/bootstrap surfaces, optimistic timeline rendering, caps/rollback, attachment-bearing plan follow-ups, explicit unsupported-file rejection, worktree-backed file preview roots, and blob-based download handling that keeps failed local image downloads inside Synara.",
+      },
+      {
+        id: "provider-model-scoping",
+        title: "Providers and models stay scoped to the right project",
+        description:
+          "OpenCode and Claude startup paths are more careful about cwd, model discovery, config scope, and sticky plan mode so new threads inherit less accidental state.",
+        details:
+          "OpenCode model discovery can fall back to `opencode models --verbose`, managed OpenCode/Kilo paths run in the request/session cwd, warm server reuse is scoped, file config is no longer replaced with synthetic empty config, OpenCode resume preserves cwd, and fresh Claude threads avoid inheriting plan mode from the previous active thread.",
+      },
+      {
+        id: "chat-panels-and-thread-state",
+        title: "Chats and side panels stay in sync",
+        description:
+          "Deleted chats disappear immediately, the Environment panel behaves better in constrained layouts, automation cards show up in the transcript, and file previews avoid extra full-thread subscriptions.",
+        details:
+          "Client projections now use delete tombstones and responsive archived bulk-delete updates, environment-panel open/close preferences survive chat switches, constrained/floating layouts stay calmer by default, thread automation summaries appear in the environment panel, created automation cards render in chat, and file preview routing avoids unnecessary full thread subscriptions.",
+      },
+      {
+        id: "profile-skill-counts",
+        title: "Profile skill counts reflect more real work",
+        description:
+          "Profile stats now count repeated `/skill` and `$skill` usage more accurately, including retained history that should still contribute to your local activity picture.",
+        details:
+          "Skill aggregation now includes retention-hidden threads while still excluding manually deleted data, counts repeated slash/dollar skill tokens inside one prompt, avoids double-counting structured references, and has regression coverage for retained threads and repeated skill invocation.",
+      },
+    ],
+  },
+  {
+    version: "0.2.41",
+    date: "Jun 17",
+    features: [
+      {
+        id: "header-handoff-menu",
+        title: "Hand off chats from the header again",
+        description:
+          "The chat header now has a compact Hand off menu, so you can start a provider handoff without hunting through the rest of the workspace.",
+        details:
+          "The header handoff action now offers only usable target providers, checks provider availability before creating the handoff thread, and keeps the action disabled while the current thread is busy or waiting on approvals/input.",
+      },
+      {
+        id: "hidden-project-script-runner",
+        title: "Project scripts stay out of the way",
+        description:
+          "Project action dialogs remain available, but the old inline script runner no longer crowds the chat header controls.",
+        details:
+          "Project script controls stay mounted for the shared Open-in/project-action dialog path, while the visible header play/chevron runner is hidden to keep the top bar focused.",
+      },
+    ],
+  },
+  {
+    version: "0.2.4",
+    date: "Jun 17",
+    features: [
+      {
+        id: "restart-chat-restore",
+        title: "Restarts bring you back to the right chat",
+        description:
+          "Synara now waits for one fresh server snapshot before giving up on a remembered chat route, so app restarts are less likely to dump you onto an empty fallback screen.",
+        details:
+          "Chat route restore now validates remembered thread/split routes against refreshed orchestration state, holds fallback while startup data is still empty, and has focused coverage for missing-thread and empty-startup recovery paths.",
+      },
+      {
+        id: "provider-reenable-health",
+        title: "Disabled providers recover more predictably",
+        description:
+          "Provider health refreshes now have regression coverage around re-enabling disabled providers, making settings changes less likely to leave stale unavailable states behind.",
+        details:
+          "Provider health and Pi adapter paths were tightened with coverage for disabled-provider re-enable behavior, while provider badges and menu icons were kept aligned with the refreshed availability state.",
+      },
+      {
+        id: "cleaner-chat-header",
+        title: "The chat header is quieter",
+        description:
+          "The old handoff shortcut has been removed from the chat header, leaving the main conversation controls easier to scan during active work.",
+        details:
+          "The chat header no longer renders the handoff action path, reducing duplicate top-bar controls and keeping project/thread actions focused on the surfaces that still own them.",
+      },
+    ],
+  },
+  {
+    version: "0.2.3",
+    date: "Jun 16",
+    features: [
+      {
+        id: "smarter-profile-stats",
+        title: "Your profile understands more of your work",
+        description:
+          "Synara now tracks richer local profile stats, including your most worked project, skill and agent usage, active hours, provider/model mix, and prompt activity.",
+        details:
+          "Profile stats now derive more signal from Synara's local projection database: most-worked project, prompt/thread activity, skill and agent usage, provider/model usage, reasoning patterns, active-hour windows, and token heatmap data are all represented in the profile contract and settings panel.",
+      },
+      {
+        id: "pasted-text-cards",
+        title: "Large pastes become cleaner composer cards",
+        description:
+          "Big pasted blocks now collapse into tidy attachment-style cards, keeping the composer readable while still letting you restore or remove the full text.",
+        details:
+          "Large pasted text blocks are serialized separately from the visible prompt, shown as compact cards in the composer, expandable in sent messages, and counted with line/character metadata so long prompts are easier to review.",
+      },
+      {
+        id: "pasted-text-editing",
+        title: "Pasted text survives message edits",
+        description:
+          "Editing a message now preserves pasted text blocks instead of dropping or flattening them, so larger prompts stay intact when you refine them.",
+        details:
+          "The composer draft, edit, assistant-selection, terminal-context, and WebSocket send paths now preserve structured pasted text blocks instead of folding them into fragile plain text. Focused tests cover pasted text, draft persistence, terminal context, timeline height, and edit behavior.",
+      },
+    ],
+  },
+  {
+    version: "0.2.2",
+    date: "Jun 14",
+    features: [
+      {
+        id: "profile-and-personalization",
+        title: "Your Synara profile has more personality",
+        description:
+          "Profile settings now include richer identity details, activity stats, and a cleaner editing flow so Synara feels more like your own workspace.",
+        details:
+          "This release adds profile stats aggregation, profile settings UI polish, activity heatmap refinements, avatar/profile editing updates, and focused coverage for the new profile data paths.",
+      },
+      {
+        id: "soft-delete-retention",
+        title: "Deleted threads get a safer recovery window",
+        description:
+          "Thread deletion now keeps soft-deleted data around long enough to avoid accidental loss while still letting cleanup happen predictably.",
+        details:
+          "Synara now tracks thread retention state explicitly, covers soft-delete cleanup behavior with server tests, and keeps deletion/recovery semantics more predictable for early WIP data.",
+      },
+      {
+        id: "live-composer-edits",
+        title: "Live composer edits stay visible per turn",
+        description:
+          "Composer changes made while a turn is running now stay attached to the right turn, reducing confusing stale text or hidden edits during active work.",
+        details:
+          "The chat route and composer state handling were tightened so live edits remain visible in the correct turn lifecycle without bleeding into unrelated transcript updates.",
+      },
+      {
+        id: "release-test-stability",
+        title: "Release checks are steadier",
+        description:
+          "The release test path now avoids known teardown and child-process timing traps, making full validation less likely to stall after tests have passed.",
+        details:
+          "Effect ACP child-process fixture tests now have explicit timeouts, and the server test script runs its Vitest files serially so the root Turbo test gate exits cleanly during release validation.",
+      },
+    ],
+  },
+  {
     version: "0.2.1",
     date: "Jun 14",
     features: [
@@ -896,9 +1480,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "thread-retention-cleanup",
-        title: "Old inactive threads clean up after seven days",
+        title: "Old inactive threads hide after seven days",
         description:
-          "A safer retention job now removes stale inactive threads in batches, publishes maintenance progress, protects running work and approvals, and compacts SQLite when enough space can be reclaimed.",
+          "The retention job now hides stale inactive threads from the app in batches, publishes maintenance progress, and protects running work and approvals while keeping database history available for long-term stats.",
       },
       {
         id: "websocket-and-server-polish",

@@ -1,7 +1,7 @@
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import {
   goBackInAppHistory,
@@ -14,15 +14,16 @@ import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { useDisposableThreadLifecycle } from "../hooks/useDisposableThreadLifecycle";
+import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { useRecentViewSwitcher } from "../hooks/useRecentViewSwitcher";
 import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
-import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
+import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
@@ -31,7 +32,8 @@ import { selectThreadTerminalState, useTerminalStateStore } from "../terminalSta
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
-import { resolveProviderSendAvailability } from "~/lib/providerAvailability";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
@@ -71,7 +73,7 @@ function ThreadRetentionMaintenanceToast() {
         return;
       }
 
-      const { state, purgedCount, totalCount, freePageCount, error } = event.payload;
+      const { state, deletedCount, totalCount, error } = event.payload;
       const eventMs = Date.parse(event.payload.at);
       const isStaleEvent = Number.isFinite(eventMs)
         ? Date.now() - eventMs > MAINTENANCE_EVENT_STALE_MS
@@ -83,8 +85,8 @@ function ThreadRetentionMaintenanceToast() {
       if (state === "started") {
         toastIdRef.current = toastManager.add({
           type: "loading",
-          title: "Cleaning old chats...",
-          description: "Preparing background cleanup.",
+          title: "Hiding old chats...",
+          description: "Preparing background maintenance.",
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -96,41 +98,18 @@ function ThreadRetentionMaintenanceToast() {
           toastIdRef.current ??
           toastManager.add({
             type: "loading",
-            title: "Cleaning old chats...",
+            title: "Hiding old chats...",
             timeout: 0,
             data: { allowCrossThreadVisibility: true },
           });
         toastIdRef.current = toastId;
         toastManager.update(toastId, {
           type: "loading",
-          title: "Cleaning old chats...",
+          title: "Hiding old chats...",
           description:
             totalCount && totalCount > 0
-              ? `${purgedCount ?? 0} of ${totalCount} chats removed.`
-              : `${purgedCount ?? 0} chats removed.`,
-          timeout: 0,
-          data: { allowCrossThreadVisibility: true },
-        });
-        return;
-      }
-
-      if (state === "compacting") {
-        const toastId =
-          toastIdRef.current ??
-          toastManager.add({
-            type: "loading",
-            title: "Compacting chat database...",
-            timeout: 0,
-            data: { allowCrossThreadVisibility: true },
-          });
-        toastIdRef.current = toastId;
-        toastManager.update(toastId, {
-          type: "loading",
-          title: "Compacting chat database...",
-          description:
-            freePageCount && freePageCount > 0
-              ? "Reclaiming unused database space."
-              : "Finishing cleanup.",
+              ? `${deletedCount ?? 0} of ${totalCount} chats hidden.`
+              : `${deletedCount ?? 0} chats hidden.`,
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -143,7 +122,7 @@ function ThreadRetentionMaintenanceToast() {
         if (toastId) {
           toastManager.update(toastId, {
             type: "warning",
-            title: "Cleanup paused",
+            title: "Chat maintenance paused",
             description: error ?? "Old chats will be retried later.",
             timeout: 6000,
             data: { allowCrossThreadVisibility: true },
@@ -152,7 +131,7 @@ function ThreadRetentionMaintenanceToast() {
         }
         toastManager.add({
           type: "warning",
-          title: "Cleanup paused",
+          title: "Chat maintenance paused",
           description: error ?? "Old chats will be retried later.",
           timeout: 6000,
           data: { allowCrossThreadVisibility: true },
@@ -165,11 +144,11 @@ function ThreadRetentionMaintenanceToast() {
       if (!toastId) return;
       toastManager.update(toastId, {
         type: "success",
-        title: "Old chats cleaned",
+        title: "Old chats hidden",
         description:
-          purgedCount && purgedCount > 0
-            ? `${purgedCount} chats removed from the database.`
-            : "No old chats needed cleanup.",
+          deletedCount && deletedCount > 0
+            ? `${deletedCount} old chats hidden from the app.`
+            : "No old chats needed hiding.",
         timeout: 3500,
         data: { allowCrossThreadVisibility: true },
       });
@@ -217,7 +196,6 @@ function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
 
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -247,16 +225,16 @@ function ChatRouteGlobalShortcuts() {
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  useDisposableThreadLifecycle(activeContextThreadId);
+  useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
   const activeThreadTerminalState = activeContextThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
-  const allowProjectFallback = pathname !== "/";
   const activeProject =
     activeProjectId !== null
       ? (projects.find((project) => project.id === activeProjectId) ?? null)
@@ -375,19 +353,14 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command === "chat.newTerminal") {
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
+        void handleNewThread(target.projectId, {
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
           entryPoint: "terminal",
         });
         return;
@@ -407,51 +380,48 @@ function ChatRouteGlobalShortcuts() {
               : command === "chat.newCursor"
                 ? "cursor"
                 : "gemini";
-        const providerAvailability = resolveProviderSendAvailability({
-          provider,
-          statuses: providerStatuses,
-        });
-        if (!providerAvailability.usable) {
-          event.preventDefault();
-          event.stopPropagation();
-          toastManager.add({
-            type: "error",
-            title: providerAvailability.unavailableReason,
-          });
-          return;
-        }
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          provider,
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
-        });
+        void (async () => {
+          const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
+            provider,
+            statuses: providerStatuses,
+            refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+          });
+          if (!providerAvailability.usable) {
+            toastManager.add({
+              type: "error",
+              title: providerAvailability.unavailableReason,
+            });
+            return;
+          }
+          await handleNewThread(target.projectId, {
+            provider,
+            ...(target.inheritContext
+              ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+              : {}),
+          });
+        })();
         return;
       }
 
       if (command !== "chat.new") return;
-      if (!currentProjectId) return;
+      // Falls back to the most recent project when none is focused (e.g. the landing
+      // view) so the primary "new thread" chord always creates a thread; on that
+      // fallback the active branch/worktree context belongs to the absent project, so
+      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+      if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(currentProjectId, {
-        branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-        worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-        envMode:
-          activeDraftThread?.envMode ??
-          resolveThreadEnvironmentMode({
-            envMode: activeThread?.envMode,
-            worktreePath: activeThread?.worktreePath ?? null,
-          }),
-      });
+      void handleNewThread(
+        target.projectId,
+        target.inheritContext
+          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+          : undefined,
+      );
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
@@ -460,9 +430,7 @@ function ChatRouteGlobalShortcuts() {
     };
   }, [
     activeDraftThread,
-    activeProjectId,
     activeThread,
-    allowProjectFallback,
     cancelRecentSwitcher,
     clearSelection,
     commitRecentSwitcherSelection,
@@ -472,8 +440,9 @@ function ChatRouteGlobalShortcuts() {
     keybindings,
     latestUsableProjectId,
     openOrAdvanceRecentSwitcher,
+    platform,
     providerStatuses,
-    projects,
+    refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
     terminalOpen,

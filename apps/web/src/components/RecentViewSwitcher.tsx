@@ -9,7 +9,7 @@ import { formatShortcutLabel } from "../keybindings";
 import {
   MessageCircleIcon,
   PanelLeftIcon,
-  PinIcon,
+  PinFilledIcon,
   PluginIcon,
   SettingsIcon,
   WindowIcon,
@@ -128,7 +128,7 @@ export function RecentViewSwitcher(props: {
                   <div className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-sm font-medium leading-5">{entry.title}</span>
                     {entry.isCurrent ? (
-                      <span className="shrink-0 rounded-full border border-border/60 bg-muted/70 px-1.5 py-px text-[10px] font-medium uppercase leading-4 tracking-wide text-muted-foreground">
+                      <span className="shrink-0 rounded-full border border-border/60 bg-muted/70 px-1.5 py-px text-[10px] font-medium leading-4 text-muted-foreground">
                         Current
                       </span>
                     ) : null}
@@ -141,7 +141,9 @@ export function RecentViewSwitcher(props: {
                   {entry.isSplit ? (
                     <PanelLeftIcon className="size-3.5" aria-label="Split view" />
                   ) : null}
-                  {entry.isPinned ? <PinIcon className="size-3.5" aria-label="Pinned" /> : null}
+                  {entry.isPinned ? (
+                    <PinFilledIcon className="size-3.5" aria-label="Pinned" />
+                  ) : null}
                 </div>
               </div>
             );

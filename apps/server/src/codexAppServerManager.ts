@@ -40,6 +40,7 @@ import {
 } from "@t3tools/contracts";
 import { WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS } from "@t3tools/shared/wandy";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -50,7 +51,10 @@ import {
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
+import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
+
+const log = createLogger("codex");
 
 type PendingRequestKey = string;
 
@@ -525,11 +529,8 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
+// Windows `.cmd` shims still run under an explicit cmd.exe wrapper; taskkill
+// keeps cancellation from leaving the real provider process behind.
 function killChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
@@ -542,6 +543,24 @@ function killChildTree(child: ChildProcessWithoutNullStreams): void {
     }
   }
   child.kill();
+}
+
+function spawnCodexAppServer(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): ChildProcessWithoutNullStreams {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+  return spawn(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env: input.env,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: prepared.shell,
+    windowsHide: prepared.windowsHide,
+  });
 }
 
 export function normalizeCodexModelSlug(
@@ -735,7 +754,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     } catch (error) {
       // Older codex builds (< extra-roots support) keep working; Synara-only
       // skills simply stay invisible to codex on those versions.
-      console.log("codex skills/extraRoots/set unavailable", error);
+      log.warn("skills/extraRoots/set unavailable", { error });
     }
   }
 
@@ -771,13 +790,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -811,21 +829,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.registerSynaraSkillsRoot(context);
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
+        log.info("model/list response", { modelListResponse });
       } catch (error) {
-        console.log("codex model/list failed", error);
+        log.warn("model/list failed", { error });
       }
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
+        log.info("account/read response", { accountReadResponse });
         context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
+        log.info("subscription status", {
           type: context.account.type,
           planType: context.account.planType,
           sparkEnabled: context.account.sparkEnabled,
         });
       } catch (error) {
-        console.log("codex account/read failed", error);
+        log.warn("account/read failed", { error });
       }
 
       const normalizedModel = resolveCodexModelForAccount(
@@ -1194,7 +1212,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
     context.reviewTurnIds.add(turnId);
-    console.log("[codex-review] review/start acknowledged", {
+    log.info("[codex-review] review/start acknowledged", {
       threadId: context.session.threadId,
       providerThreadId,
       turnId,
@@ -1234,7 +1252,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: context.session.resumeCursor,
       });
     if (!effectiveTurnId || !providerThreadId) {
-      console.log("[codex-review] turn/interrupt skipped", {
+      log.info("[codex-review] turn/interrupt skipped", {
         threadId,
         requestedTurnId: turnId ?? null,
         activeTurnId: context.session.activeTurnId ?? null,
@@ -1243,7 +1261,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    console.log("[codex-review] turn/interrupt requested", {
+    log.info("[codex-review] turn/interrupt requested", {
       threadId,
       providerThreadId,
       turnId: effectiveTurnId,
@@ -1254,13 +1272,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId: providerThreadId,
         turnId: effectiveTurnId,
       });
-      console.log("[codex-review] turn/interrupt acknowledged", {
+      log.info("[codex-review] turn/interrupt acknowledged", {
         threadId,
         providerThreadId,
         turnId: effectiveTurnId,
       });
     } catch (error) {
-      console.log("[codex-review] turn/interrupt failed", {
+      log.warn("[codex-review] turn/interrupt failed", {
         threadId,
         providerThreadId,
         turnId: effectiveTurnId,
@@ -1273,7 +1291,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const snapshot = await this.readThread(threadId);
       const latestReviewTurnId = this.findLatestReviewTurnId(snapshot);
-      console.log("[codex-review] review interrupt recovery snapshot", {
+      log.info("[codex-review] review interrupt recovery snapshot", {
         threadId,
         currentTurnId: effectiveTurnId,
         latestReviewTurnId: latestReviewTurnId ?? null,
@@ -1284,7 +1302,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
 
       if (latestReviewTurnId && this.isExitedReviewTurn(snapshot, latestReviewTurnId)) {
-        console.log("[codex-review] settling review from thread/read exitedReviewMode", {
+        log.info("[codex-review] settling review from thread/read exitedReviewMode", {
           threadId,
           turnId: latestReviewTurnId,
         });
@@ -1296,7 +1314,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       if (latestReviewTurnId && latestReviewTurnId !== effectiveTurnId) {
-        console.log("[codex-review] retrying turn/interrupt with refreshed review turn", {
+        log.info("[codex-review] retrying turn/interrupt with refreshed review turn", {
           threadId,
           previousTurnId: effectiveTurnId,
           nextTurnId: latestReviewTurnId,
@@ -1390,13 +1408,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1975,11 +1992,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawn("codex", ["app-server"], {
+    const child = spawnCodexAppServer({
+      binaryPath: "codex",
       cwd: normalizedCwd,
       env: buildCodexProcessEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -2257,7 +2273,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.reviewTurnIds.has(context.session.activeTurnId)
       ) {
         context.reviewTurnIds.add(turnId);
-        console.log("[codex-review] extending tracked review turn set on turn/started", {
+        log.info("[codex-review] extending tracked review turn set on turn/started", {
           threadId: context.session.threadId,
           previousTurnId: context.session.activeTurnId,
           nextTurnId: turnId,
@@ -2320,7 +2336,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const activeTurnTracked =
         context.session.activeTurnId !== undefined &&
         context.reviewTurnIds.has(context.session.activeTurnId);
-      console.log("[codex-review] exitedReviewMode notification", {
+      log.info("[codex-review] exitedReviewMode notification", {
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
         activeTurnId: context.session.activeTurnId ?? null,
@@ -2334,7 +2350,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         !reviewTurnTracked &&
         !activeTurnTracked
       ) {
-        console.log("[codex-review] exitedReviewMode ignored due to turn mismatch", {
+        log.info("[codex-review] exitedReviewMode ignored due to turn mismatch", {
           threadId: context.session.threadId,
           reviewTurnId,
           activeTurnId: context.session.activeTurnId,
@@ -2345,7 +2361,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // before the terminal `turn/completed` notification arrives. If that
       // completion never shows up, settle the session here instead of leaving
       // native review stuck in "running" forever.
-      console.log("[codex-review] settling review from exitedReviewMode notification", {
+      log.info("[codex-review] settling review from exitedReviewMode notification", {
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
       });
@@ -3342,16 +3358,22 @@ function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const env = buildCodexProcessEnv({
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+  });
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: buildCodexProcessEnv({
-      ...(input.homePath ? { homePath: input.homePath } : {}),
-    }),
+    env,
+  });
+  const result = spawnSync(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: prepared.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    windowsHide: prepared.windowsHide,
   });
 
   if (result.error) {

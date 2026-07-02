@@ -2220,6 +2220,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
+    const deleteBranch: GitCoreShape["deleteBranch"] = (input) =>
+      Effect.gen(function* () {
+        const args = ["branch", input.force ? "-D" : "-d", "--", input.branch];
+        yield* executeGit("GitCore.deleteBranch", input.cwd, args, {
+          timeoutMs: 10_000,
+          fallbackErrorMessage: "git branch delete failed",
+        }).pipe(
+          Effect.mapError((error) =>
+            createGitCommandError(
+              "GitCore.deleteBranch",
+              input.cwd,
+              args,
+              `${commandLabel(args)} failed (cwd: ${input.cwd}): ${error instanceof Error ? error.message : String(error)}`,
+              error,
+            ),
+          ),
+        );
+      });
+
     const renameBranch: GitCoreShape["renameBranch"] = (input) =>
       Effect.gen(function* () {
         if (input.oldBranch === input.newBranch) {
@@ -2625,6 +2644,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       fetchRemoteBranch,
       setBranchUpstream,
       removeWorktree,
+      deleteBranch,
       renameBranch,
       createBranch,
       publishBranch,

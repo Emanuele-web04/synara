@@ -31,6 +31,18 @@ describe("parseCodeFenceInfo", () => {
     });
   });
 
+  it("treats a Windows-style bare path as a file reference", () => {
+    const fence = parseCodeFenceInfo("src\\components\\Button.tsx");
+    expect(fence).toMatchObject({
+      isFileReference: true,
+      filePath: "src\\components\\Button.tsx",
+      fileName: "Button.tsx",
+      directory: "src\\components",
+      lineRange: null,
+      language: "tsx",
+    });
+  });
+
   it("resolves a language for files without a directory", () => {
     const fence = parseCodeFenceInfo("12:20:Dockerfile");
     expect(fence.isFileReference).toBe(true);
@@ -47,8 +59,25 @@ describe("parseCodeFenceInfo", () => {
     });
   });
 
+  it("trims whitespace around bare language tokens", () => {
+    expect(parseCodeFenceInfo("  python  ")).toMatchObject({
+      isFileReference: false,
+      language: "python",
+      filePath: null,
+    });
+  });
+
+  it("keeps root-level filename-looking tokens as language tokens", () => {
+    expect(parseCodeFenceInfo("package.json")).toMatchObject({
+      isFileReference: false,
+      language: "package.json",
+      filePath: null,
+    });
+  });
+
   it("falls back to text for an empty info string and maps gitignore to ini", () => {
     expect(parseCodeFenceInfo("").language).toBe("text");
+    expect(parseCodeFenceInfo("   ").language).toBe("text");
     expect(parseCodeFenceInfo("gitignore").language).toBe("ini");
   });
 
@@ -75,5 +104,18 @@ describe("dedentCode", () => {
 
   it("leaves single-line snippets untouched when flush", () => {
     expect(dedentCode("const value = 42;")).toBe("const value = 42;");
+  });
+
+  it("dedents a single indented line", () => {
+    expect(dedentCode("    const value = 42;")).toBe("const value = 42;");
+  });
+
+  it("returns an empty string for empty input", () => {
+    expect(dedentCode("")).toBe("");
+  });
+
+  it("handles tab indentation", () => {
+    const input = ["\t\talpha();", "\t\tbeta();"].join("\n");
+    expect(dedentCode(input)).toBe(["alpha();", "beta();"].join("\n"));
   });
 });

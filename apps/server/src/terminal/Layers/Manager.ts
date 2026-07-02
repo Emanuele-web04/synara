@@ -187,19 +187,30 @@ function normalizeProviderOutputSignature(visibleText: string): string {
     .slice(-256);
 }
 
+const WINDOWS_DEFAULT_TERMINAL_SHELL = "powershell.exe";
+
+type ShellResolutionOptions = {
+  platform?: NodeJS.Platform;
+  envShell?: string;
+  envComSpec?: string;
+};
+
 function defaultShellResolver(): string {
   if (process.platform === "win32") {
-    return process.env.ComSpec ?? "cmd.exe";
+    return WINDOWS_DEFAULT_TERMINAL_SHELL;
   }
   return process.env.SHELL ?? "bash";
 }
 
-function normalizeShellCommand(value: string | undefined): string | null {
+function normalizeShellCommand(
+  value: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return trimmed;
   }
 
@@ -208,10 +219,13 @@ function normalizeShellCommand(value: string | undefined): string | null {
   return firstToken.replace(/^['"]|['"]$/g, "");
 }
 
-function shellCandidateFromCommand(command: string | null): ShellCandidate | null {
+function shellCandidateFromCommand(
+  command: string | null,
+  platform: NodeJS.Platform = process.platform,
+): ShellCandidate | null {
   if (!command || command.length === 0) return null;
   const shellName = path.basename(command).toLowerCase();
-  if (process.platform !== "win32" && shellName === "zsh") {
+  if (platform !== "win32" && shellName === "zsh") {
     return { shell: command, args: ["-l", "-o", "nopromptsp"] };
   }
   return { shell: command };
@@ -235,29 +249,44 @@ function uniqueShellCandidates(candidates: Array<ShellCandidate | null>): ShellC
   return ordered;
 }
 
-function resolveShellCandidates(shellResolver: () => string): ShellCandidate[] {
-  const requested = shellCandidateFromCommand(normalizeShellCommand(shellResolver()));
+function resolveShellCandidates(
+  shellResolver: () => string,
+  options: ShellResolutionOptions = {},
+): ShellCandidate[] {
+  const platform = options.platform ?? process.platform;
+  const requested = shellCandidateFromCommand(
+    normalizeShellCommand(shellResolver(), platform),
+    platform,
+  );
 
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return uniqueShellCandidates([
       requested,
-      shellCandidateFromCommand(process.env.ComSpec ?? null),
-      shellCandidateFromCommand("powershell.exe"),
-      shellCandidateFromCommand("cmd.exe"),
+      shellCandidateFromCommand(options.envComSpec ?? process.env.ComSpec ?? null, platform),
+      shellCandidateFromCommand(WINDOWS_DEFAULT_TERMINAL_SHELL, platform),
+      shellCandidateFromCommand("cmd.exe", platform),
     ]);
   }
 
   return uniqueShellCandidates([
     requested,
-    shellCandidateFromCommand(normalizeShellCommand(process.env.SHELL)),
-    shellCandidateFromCommand("/bin/zsh"),
-    shellCandidateFromCommand("/bin/bash"),
-    shellCandidateFromCommand("/bin/sh"),
-    shellCandidateFromCommand("zsh"),
-    shellCandidateFromCommand("bash"),
-    shellCandidateFromCommand("sh"),
+    shellCandidateFromCommand(
+      normalizeShellCommand(options.envShell ?? process.env.SHELL, platform),
+      platform,
+    ),
+    shellCandidateFromCommand("/bin/zsh", platform),
+    shellCandidateFromCommand("/bin/bash", platform),
+    shellCandidateFromCommand("/bin/sh", platform),
+    shellCandidateFromCommand("zsh", platform),
+    shellCandidateFromCommand("bash", platform),
+    shellCandidateFromCommand("sh", platform),
   ]);
 }
+
+export const __terminalManagerShellTesting = {
+  resolveShellCandidates,
+  windowsDefaultTerminalShell: WINDOWS_DEFAULT_TERMINAL_SHELL,
+};
 
 function isRetryableShellSpawnError(error: unknown): boolean {
   const queue: unknown[] = [error];

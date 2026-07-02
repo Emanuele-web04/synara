@@ -294,6 +294,13 @@ describe("expandCollapsedComposerCursor", () => {
 
     expect(detectComposerTrigger(text, expandedCursor)).toBeNull();
   });
+
+  it("maps collapsed /automation command chip cursor to expanded text cursor", () => {
+    const text = "/automation fra 15 secondi scrivi qui";
+
+    expect(expandCollapsedComposerCursor(text, 1)).toBe("/automation".length);
+    expect(expandCollapsedComposerCursor(text, 2)).toBe("/automation ".length);
+  });
 });
 
 describe("collapseExpandedComposerCursor", () => {
@@ -318,6 +325,13 @@ describe("collapseExpandedComposerCursor", () => {
 
     expect(collapsedCursor).toBe("open ".length + 1 + " then ".length + 2);
     expect(expandCollapsedComposerCursor(text, collapsedCursor)).toBe(expandedCursor);
+  });
+
+  it("maps expanded /automation command text cursor back to the chip cursor", () => {
+    const text = "/automation fra 15 secondi scrivi qui";
+
+    expect(collapseExpandedComposerCursor(text, "/automation".length)).toBe(1);
+    expect(collapseExpandedComposerCursor(text, "/automation ".length)).toBe(2);
   });
 });
 
@@ -402,6 +416,13 @@ describe("isCollapsedCursorAdjacentToInlineToken", () => {
 
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenEnd, "left")).toBe(true);
     expect(isCollapsedCursorAdjacentToInlineToken(text, tokenStart, "right")).toBe(true);
+  });
+
+  it("treats /automation as an inline token once it has trailing text", () => {
+    const text = "/automation fra 15 secondi";
+
+    expect(isCollapsedCursorAdjacentToInlineToken(text, 1, "left")).toBe(true);
+    expect(isCollapsedCursorAdjacentToInlineToken(text, 0, "right")).toBe(true);
   });
 });
 

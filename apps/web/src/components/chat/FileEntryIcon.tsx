@@ -4,7 +4,7 @@
 // Exports: FileEntryIcon
 
 import { memo } from "react";
-import { getFileIconName } from "../../file-icons";
+import { getAttachmentIconName, getFileIconName } from "../../file-icons";
 import { CentralIcon } from "~/lib/central-icons";
 import { cn } from "~/lib/utils";
 import { FolderClosed, FolderOpen } from "../FolderClosed";
@@ -12,6 +12,7 @@ import { FolderClosed, FolderOpen } from "../FolderClosed";
 const FILE_ICON_COLOR_CLASS_BY_ICON_NAME: Record<string, string> = {
   audio: "text-[#38bdf8]",
   bun: "text-[#f4d7a1]",
+  "calendar-days": "text-[#f59e0b]",
   c: "text-[#659ad2]",
   cmd: "text-[#4ade80]",
   "code-brackets": "text-[#9ca3af]",
@@ -20,6 +21,7 @@ const FILE_ICON_COLOR_CLASS_BY_ICON_NAME: Record<string, string> = {
   "file-png": "text-[#22c55e]",
   "file-text": "text-[#94a3b8]",
   "file-zip": "text-[#f97316]",
+  "page-text": "text-[#94a3b8]",
   git: "text-[#f05032]",
   "image-alt-text": "text-[#22c55e]",
   java: "text-[#f89820]",
@@ -45,6 +47,12 @@ const FOLDER_ICON_COLOR_CLASS_NAME = "text-muted-foreground";
 export const FileEntryIcon = memo(function FileEntryIcon(props: {
   pathValue: string;
   kind: "file" | "directory";
+  // When provided, the glyph is resolved attachment-style: the MIME type is
+  // consulted whenever the filename has no recognizable extension, and the
+  // fallback is a generic document rather than the source-code bracket. Left
+  // undefined for source-file surfaces (diff/editor/timeline) that key purely
+  // off the path.
+  mimeType?: string | null | undefined;
   // Vestigial: Central icons are `currentColor` glyphs, so theme no longer
   // affects icon selection. Optional so theme-less surfaces (e.g. markdown
   // file links, code-block headers) can reuse this same primitive.
@@ -66,7 +74,10 @@ export const FileEntryIcon = memo(function FileEntryIcon(props: {
     );
   }
 
-  const iconName = getFileIconName(props.pathValue);
+  const iconName =
+    props.mimeType === undefined
+      ? getFileIconName(props.pathValue)
+      : getAttachmentIconName({ name: props.pathValue, mimeType: props.mimeType });
   const colorClassName =
     props.colorMode === "inherit"
       ? undefined

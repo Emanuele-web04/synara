@@ -84,23 +84,25 @@ import { ThemePackEditor } from "../components/ThemePackEditor";
 import { DebouncedSettingTextInput } from "../components/settings/DebouncedSettingTextInput";
 import {
   SettingsCard,
+  SettingsListRow,
   SettingsRow,
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { SidebarInset } from "../components/ui/sidebar";
+import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
@@ -131,7 +133,7 @@ import {
   serverWorktreesQueryOptions,
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
-import { newCommandId } from "../lib/utils";
+import { unarchiveThreadFromClient } from "../lib/threadArchive";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   buildNotificationSettingsSupportText,
@@ -144,7 +146,10 @@ import {
   SETTINGS_TARGETS,
 } from "../settingsNavigation";
 import {
+  SETTINGS_CARD_ROW_CLASS_NAME,
+  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
+  SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
   SETTINGS_EMPTY_STATE_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
@@ -393,10 +398,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
       { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
     ],
     binaryPathKey: "cursorBinaryPath",
-    binaryPlaceholder: "Cursor Agent binary path",
+    binaryPlaceholder: "Cursor Agent or Cursor CLI path",
     binaryDescription: (
       <>
-        Leave blank to use <code>cursor-agent</code> from your PATH.
+        Leave blank to use <code>cursor-agent</code> from your PATH. Cursor editor CLI paths are
+        accepted too.
       </>
     ),
     apiEndpointKey: "cursorApiEndpoint",
@@ -760,14 +766,24 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
+  const providerUpdateServerSettings = useMemo(
+    () =>
+      serverSettingsQuery.data
+        ? {
+            ...serverSettingsQuery.data,
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }
+        : null,
+    [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
+  );
   const outdatedProviderStatuses = useMemo(
     () =>
       getVisibleProviderUpdateStatuses({
         providers: serverConfigQuery.data?.providers ?? [],
         hiddenProviders: settings.hiddenProviders,
-        serverSettings: serverSettingsQuery.data ?? null,
+        serverSettings: providerUpdateServerSettings,
       }),
-    [serverConfigQuery.data?.providers, serverSettingsQuery.data, settings.hiddenProviders],
+    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
   );
   const outdatedProviderCount = outdatedProviderStatuses.length;
   useSettingsTargetScroll(
@@ -957,10 +973,10 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
-    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
-    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
-      ? ["Prompt suggestions"]
+    ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
+      ? ["Provider update checks"]
       : []),
+    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -1339,7 +1355,6 @@ function SettingsRouteView() {
           api: api.orchestration,
           threadIds: linkedArchivedThreadIds,
           removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
         });
 
         await removeWorktreeMutation.mutateAsync({
@@ -1366,23 +1381,14 @@ function SettingsRouteView() {
         });
       }
     },
-    [
-      queryClient,
-      removeDeletedThreadFromClientState,
-      removeWorktreeMutation,
-      syncServerShellSnapshot,
-    ],
+    [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
   );
 
   const unarchiveThread = useCallback(async (threadId: ThreadId) => {
     const api = readNativeApi();
     if (!api) return;
     try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.unarchive",
-        commandId: newCommandId(),
-        threadId,
-      });
+      await unarchiveThreadFromClient(api.orchestration, threadId);
       toastManager.add({
         type: "success",
         title: "Thread restored",
@@ -1412,7 +1418,6 @@ function SettingsRouteView() {
           api: api.orchestration,
           threadId,
           removeDeletedThreadFromClientState,
-          syncServerShellSnapshot,
         });
         toastManager.add({
           type: "success",
@@ -1427,7 +1432,7 @@ function SettingsRouteView() {
         });
       }
     },
-    [removeDeletedThreadFromClientState, syncServerShellSnapshot],
+    [removeDeletedThreadFromClientState],
   );
 
   const handleArchivedThreadContextMenu = useCallback(
@@ -1724,6 +1729,14 @@ function SettingsRouteView() {
               "Show highlighted and underlined transcript text in the Environment panel.",
             resetLabel: "text markers section",
             ariaLabel: "Show the Text markers section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentInstructions",
+            title: "Project instructions",
+            description: "Show project-level instructions in the Environment panel.",
+            resetLabel: "project instructions section",
+            ariaLabel: "Show the Project instructions section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({
@@ -2094,14 +2107,6 @@ function SettingsRouteView() {
           resetLabel: "diff line wrapping",
           ariaLabel: "Wrap diff lines by default",
         })}
-
-        {renderBooleanSettingRow({
-          settingKey: "enableComposerSuggestions",
-          title: "Prompt suggestions",
-          description: "Show suggested prompts under the composer when starting a new thread.",
-          resetLabel: "prompt suggestions",
-          ariaLabel: "Show composer prompt suggestions",
-        })}
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
@@ -2132,116 +2137,129 @@ function SettingsRouteView() {
     </div>
   );
 
-  const renderWorktreesPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Managed worktrees">
-        <div className="space-y-4">
-          {serverWorktreesQuery.isLoading ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              Loading managed worktrees...
-            </div>
-          ) : serverWorktreesQuery.isError ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
-              )}
-            >
-              {serverWorktreesQuery.error instanceof Error
-                ? serverWorktreesQuery.error.message
-                : "Unable to load worktrees."}
-            </div>
-          ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              No app-managed worktrees found yet.
-            </div>
-          ) : (
-            worktreesByWorkspaceRoot.map((group) => (
-              <section key={group.workspaceRoot} className="space-y-2">
-                <h3 className="px-1 font-mono text-[11px] text-muted-foreground">
-                  {group.workspaceRoot}
-                </h3>
+  const renderWorktreesPanel = () => {
+    if (serverWorktreesQuery.isLoading) {
+      return (
+        <div
+          className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
+        >
+          Loading managed worktrees...
+        </div>
+      );
+    }
+    if (serverWorktreesQuery.isError) {
+      return (
+        <div
+          className={cn(
+            SETTINGS_EMPTY_STATE_CLASS_NAME,
+            "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
+          )}
+        >
+          {serverWorktreesQuery.error instanceof Error
+            ? serverWorktreesQuery.error.message
+            : "Unable to load worktrees."}
+        </div>
+      );
+    }
+    if (worktreesByWorkspaceRoot.length === 0) {
+      return (
+        <div
+          className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
+        >
+          No app-managed worktrees found yet.
+        </div>
+      );
+    }
 
-                <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                  {group.worktrees.map((worktree, index) => {
-                    const deleteDisabled = removeWorktreeMutation.isPending;
-                    return (
-                      <div
-                        key={worktree.path}
-                        className={cn(
-                          "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
-                          index > 0 && "border-t border-[color:var(--color-border)]",
-                        )}
-                      >
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="space-y-0.5">
-                            <div className="text-sm font-medium text-foreground">Worktree</div>
-                            <div className="font-mono text-[11px] text-muted-foreground">
-                              {worktree.path}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              Conversations
-                            </div>
-                            {worktree.linkedThreads.length > 0 ? (
-                              <div className="space-y-1">
-                                {worktree.linkedThreads.map((thread) => (
-                                  <div key={thread.id} className="text-sm text-foreground">
-                                    {thread.title}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-muted-foreground">
-                                No conversations linked to this worktree.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            disabled={deleteDisabled}
-                            onClick={() =>
-                              void deleteManagedWorktree({
-                                workspaceRoot: group.workspaceRoot,
-                                worktreePath: worktree.path,
-                              })
-                            }
-                          >
-                            Delete
-                          </Button>
-                          {worktree.linkedThreads.length > 0 ? (
-                            <p className="max-w-40 text-right text-[11px] text-muted-foreground">
-                              Linked conversations exist. Deleting will ask for confirmation.
-                            </p>
-                          ) : null}
+    // Each workspace root is a standard settings card; worktree rows reuse the
+    // same row chrome/typography as every other settings list (separators come
+    // from the card's `divide-y`), with their richer body kept top-aligned.
+    return (
+      <div className="space-y-6">
+        {worktreesByWorkspaceRoot.map((group) => (
+          <SettingsSection key={group.workspaceRoot} title={group.workspaceRoot}>
+            {group.worktrees.map((worktree) => {
+              const deleteDisabled = removeWorktreeMutation.isPending;
+              return (
+                <div
+                  key={worktree.path}
+                  className={SETTINGS_CARD_ROW_CLASS_NAME}
+                  data-slot="settings-row"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="space-y-0.5">
+                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Worktree</div>
+                        <div
+                          className={cn(
+                            SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                            "truncate font-mono",
+                          )}
+                        >
+                          {worktree.path}
                         </div>
                       </div>
-                    );
-                  })}
+
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-muted-foreground">
+                          Conversations
+                        </div>
+                        {worktree.linkedThreads.length > 0 ? (
+                          <div className="space-y-1">
+                            {worktree.linkedThreads.map((thread) => (
+                              <div
+                                key={thread.id}
+                                className={cn(
+                                  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                                  "text-foreground",
+                                )}
+                              >
+                                {thread.title}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+                            No conversations linked to this worktree.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex w-full shrink-0 flex-col items-end gap-2 sm:w-auto">
+                      <Button
+                        size="xs"
+                        variant="destructive"
+                        disabled={deleteDisabled}
+                        onClick={() =>
+                          void deleteManagedWorktree({
+                            workspaceRoot: group.workspaceRoot,
+                            worktreePath: worktree.path,
+                          })
+                        }
+                      >
+                        Delete
+                      </Button>
+                      {worktree.linkedThreads.length > 0 ? (
+                        <p
+                          className={cn(
+                            SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                            "max-w-40 text-right",
+                          )}
+                        >
+                          Linked conversations exist. Deleting will ask for confirmation.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-              </section>
-            ))
-          )}
-        </div>
-      </SettingsSection>
-    </div>
-  );
+              );
+            })}
+          </SettingsSection>
+        ))}
+      </div>
+    );
+  };
 
   const renderArchivedPanel = () => {
     const archivedGroups = [
@@ -2275,72 +2293,64 @@ function SettingsRouteView() {
       })(),
     ].filter((group) => group.threads.length > 0);
 
+    if (archivedGroups.length === 0) {
+      return (
+        <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
+          <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
+            <ArchiveIcon className="size-5" />
+          </div>
+          <div className="text-sm font-medium text-foreground">No archived threads</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            Archived threads will appear here and can be restored to the sidebar.
+          </div>
+        </div>
+      );
+    }
+
+    // Each project group is a standard settings card (label + bordered list); the
+    // thread rows reuse the same row/typography tokens as every other settings row,
+    // and the card's own `divide-y` draws the separators.
     return (
       <div className="space-y-6">
-        {archivedGroups.length === 0 ? (
-          <SettingsSection title="Archived threads">
-            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
-              <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
-                <ArchiveIcon className="size-5" />
-              </div>
-              <div className="text-sm font-medium text-foreground">No archived threads</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                Archived threads will appear here and can be restored to the sidebar.
-              </div>
-            </div>
+        {archivedGroups.map(({ project, threads: projectThreads }) => (
+          <SettingsSection
+            key={project?.id ?? "unknown-project"}
+            title={project?.name ?? "Unknown project"}
+          >
+            {projectThreads.map((thread) => (
+              <SettingsListRow
+                key={thread.id}
+                title={thread.title}
+                description={`Archived ${formatRelativeTime(thread.archivedAt ?? thread.createdAt)}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  void handleArchivedThreadContextMenu(thread.id, thread.title, {
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                }}
+                actions={
+                  <>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => void unarchiveThread(thread.id)}
+                    >
+                      Restore
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      onClick={() => void deleteArchivedThread(thread.id, thread.title)}
+                    >
+                      Delete
+                    </Button>
+                  </>
+                }
+              />
+            ))}
           </SettingsSection>
-        ) : (
-          archivedGroups.map(({ project, threads: projectThreads }) => (
-            <SettingsSection
-              key={project?.id ?? "unknown-project"}
-              title={project?.name ?? "Unknown project"}
-            >
-              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {projectThreads.map((thread, index) => (
-                  <div
-                    key={thread.id}
-                    className={cn(
-                      "flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
-                      index > 0 && "border-t border-[color:var(--color-border)]",
-                    )}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      void handleArchivedThreadContextMenu(thread.id, thread.title, {
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
-                    }}
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {thread.title}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Archived {formatRelativeTime(thread.archivedAt ?? thread.createdAt)}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void unarchiveThread(thread.id)}
-                      >
-                        Restore
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="destructive"
-                        onClick={() => void deleteArchivedThread(thread.id, thread.title)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </SettingsSection>
-          ))
-        )}
+        ))}
       </div>
     );
   };
@@ -2609,17 +2619,34 @@ function SettingsRouteView() {
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
+        {renderBooleanSettingRow({
+          settingKey: "enableProviderUpdateChecks",
+          title: "Automatic CLI update checks",
+          description:
+            "Check Codex, Claude, and other provider CLIs for newer versions in the background.",
+          resetLabel: "CLI update checks",
+          ariaLabel: "Automatic CLI update checks",
+        })}
+
         <SettingsRow
           title="Provider updates"
-          description="Update installed provider tools that Synara can safely update."
+          description="Review installed provider tools that Synara can safely update."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
         >
-          {outdatedProviderStatuses.length > 0 ? (
-            <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
+          {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
+            <div
+              className={cn(
+                "mt-4",
+                SETTINGS_INSET_LIST_CLASS_NAME,
+                "divide-y divide-[color:var(--color-border)]",
+              )}
+            >
               {outdatedProviderStatuses.map((providerStatus) => {
                 const updateAdvisory = providerStatus.versionAdvisory;
                 const updateState = providerStatus.updateState?.status;
@@ -2632,46 +2659,36 @@ function SettingsRouteView() {
                 const updateLabel = providerUpdateStatusLabel(providerStatus);
 
                 return (
-                  <div
+                  <SettingsListRow
                     key={providerStatus.provider}
-                    className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
-                      </div>
-                      {updateLabel ? (
-                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                          {updateLabel}
-                        </div>
-                      ) : null}
-                    </div>
-                    {updateAdvisory?.canUpdate ? (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={!canUpdateProvider}
-                        title={
-                          updateAdvisory.updateCommand
-                            ? `Run ${updateAdvisory.updateCommand}`
-                            : undefined
-                        }
-                        onClick={() => void runProviderUpdate(providerStatus.provider)}
-                      >
-                        {isProviderUpdateActive ? (
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                        ) : (
-                          <DownloadIcon className="size-3.5" />
-                        )}
-                        {isProviderUpdateActive ? "Updating" : "Update"}
-                      </Button>
-                    ) : (
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        Manual update
-                      </span>
-                    )}
-                  </div>
+                    title={PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
+                    description={updateLabel || undefined}
+                    actions={
+                      updateAdvisory?.canUpdate ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={!canUpdateProvider}
+                          title={
+                            updateAdvisory.updateCommand
+                              ? `Run ${updateAdvisory.updateCommand}`
+                              : undefined
+                          }
+                          onClick={() => void runProviderUpdate(providerStatus.provider)}
+                        >
+                          {isProviderUpdateActive ? (
+                            <Loader2Icon className="size-3.5 animate-spin" />
+                          ) : (
+                            <DownloadIcon className="size-3.5" />
+                          )}
+                          {isProviderUpdateActive ? "Updating" : "Update"}
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">Manual update</span>
+                      )
+                    }
+                  />
                 );
               })}
             </div>
@@ -2688,9 +2705,11 @@ function SettingsRouteView() {
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
           resetAction={
             isInstallSettingsDirty ? (
@@ -2781,16 +2800,21 @@ function SettingsRouteView() {
                   ? shouldShowProviderUpdateStatus({
                       provider: providerStatus,
                       hiddenProviderSet,
-                      serverSettings: serverSettingsQuery.data ?? null,
+                      serverSettings: providerUpdateServerSettings,
                     })
                   : false;
                 const providerUpdateSuppressed =
                   providerStatus?.versionAdvisory?.status === "behind_latest" &&
                   !showProviderUpdateStatus;
+                const currentProviderVersion = formatProviderVersion(providerStatus?.version);
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateSuppressed
-                    ? null
-                    : providerUpdateStatusLabel(providerStatus)
+                  ? !settings.enableProviderUpdateChecks
+                    ? currentProviderVersion
+                      ? `Current ${currentProviderVersion}`
+                      : null
+                    : providerUpdateSuppressed
+                      ? null
+                      : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -3256,6 +3280,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "shortcuts":
+        return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":
         return renderWorktreesPanel();
       case "archived":
@@ -3264,6 +3290,8 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "profile":
+        return <ProfileSettingsPanel />;
       case "skills":
         return <SkillsSettingsPanel />;
       case "usage":
@@ -3283,10 +3311,7 @@ function SettingsRouteView() {
         CHAT_CONTENT_CARD_CLASS_NAME,
       )}
     >
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
-      >
+      <RouteInsetSurface surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}>
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
@@ -3311,30 +3336,37 @@ function SettingsRouteView() {
         </div>
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl px-6 py-8">
-              <div className="mb-8 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-xl font-medium tracking-tight text-foreground">
-                    {activeSectionItem.label}
-                  </h1>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                    {activeSectionItem.description}
-                  </p>
+            {activeSection === "profile" ? (
+              // Profile is a self-contained dashboard: it owns its own header (avatar,
+              // name, share) so it skips the section title bar, and gets a slightly wider
+              // pane than the form sections to fit the heatmap + two-column layout.
+              <div className="mx-auto w-full max-w-3xl px-6 py-8">{renderActivePanel()}</div>
+            ) : (
+              <div className="mx-auto w-full max-w-2xl px-6 py-8">
+                <div className="mb-8 flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h1 className="text-xl font-medium tracking-tight text-foreground">
+                      {activeSectionItem.label}
+                    </h1>
+                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                      {activeSectionItem.description}
+                    </p>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="shrink-0"
+                    disabled={changedSettingLabels.length === 0}
+                    onClick={() => void restoreDefaults()}
+                  >
+                    <RotateCcwIcon className="size-3.5" />
+                    Restore defaults
+                  </Button>
                 </div>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={changedSettingLabels.length === 0}
-                  onClick={() => void restoreDefaults()}
-                >
-                  <RotateCcwIcon className="size-3.5" />
-                  Restore defaults
-                </Button>
-              </div>
 
-              {renderActivePanel()}
-            </div>
+                {renderActivePanel()}
+              </div>
+            )}
           </div>
         </div>
         {/* Mounted at the route level (outside the scrollable panel) so the
@@ -3345,7 +3377,7 @@ function SettingsRouteView() {
           onOpenChange={setReleaseHistoryOpen}
           defaultExpandedVersion={APP_VERSION}
         />
-      </SidebarInset>
+      </RouteInsetSurface>
     </div>
   );
 }

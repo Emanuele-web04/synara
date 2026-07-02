@@ -9,6 +9,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   WsRpcGroup,
+  type AutomationStreamEvent,
   type GitActionProgressEvent,
   type GitRunStackedActionResult,
   type OrchestrationEvent,
@@ -245,9 +246,18 @@ export class WsTransport {
     this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
-      this.runtime.dispose();
-    });
+    // Dispose can race with initial connection or reconnect promises. Mark them
+    // handled before closing the runtime so test/browser teardown stays quiet.
+    void this.clientPromise.catch(() => undefined);
+    void this.reconnectPromise?.catch(() => undefined);
+    const runtime = this.runtime;
+    const clientScope = this.clientScope;
+    void runtime
+      .runPromise(Scope.close(clientScope, Exit.void))
+      .catch(() => undefined)
+      .finally(() => {
+        runtime.dispose();
+      });
   }
 
   private createSession() {
@@ -291,9 +301,12 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
-      oldRuntime.dispose();
-    });
+    void oldRuntime
+      .runPromise(Scope.close(oldClientScope, Exit.void))
+      .catch(() => undefined)
+      .finally(() => {
+        oldRuntime.dispose();
+      });
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -413,6 +426,13 @@ export class WsTransport {
             (event: ProjectDevServerEvent) => this.emit(WS_CHANNELS.projectDevServerEvent, event),
             restartChannel,
           );
+        } else if (channel === WS_CHANNELS.automationEvent) {
+          this.startStream(
+            "automation.events",
+            client[WS_METHODS.subscribeAutomationEvents]({}),
+            (event: AutomationStreamEvent) => this.emit(WS_CHANNELS.automationEvent, event),
+            restartChannel,
+          );
         } else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent) {
           this.startStream(
             "orchestration.domain",
@@ -439,6 +459,7 @@ export class WsTransport {
     else if (channel === WS_CHANNELS.serverSettingsUpdated) this.stopStream("server.settings");
     else if (channel === WS_CHANNELS.terminalEvent) this.stopStream("terminal.events");
     else if (channel === WS_CHANNELS.projectDevServerEvent) this.stopStream("project.devServers");
+    else if (channel === WS_CHANNELS.automationEvent) this.stopStream("automation.events");
     else if (channel === ORCHESTRATION_WS_CHANNELS.domainEvent)
       this.stopStream("orchestration.domain");
   }

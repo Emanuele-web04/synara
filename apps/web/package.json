@@ -1,6 +1,6 @@
 {
   "name": "@t3tools/web",
-  "version": "0.2.1",
+  "version": "0.3.7",
   "private": true,
   "type": "module",
   "scripts": {
@@ -44,6 +44,7 @@
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
     "effect": "catalog:",
+    "html-to-image": "^1.11.13",
     "katex": "^0.16.45",
     "lexical": "^0.41.0",
     "pdfjs-dist": "^5.4.296",

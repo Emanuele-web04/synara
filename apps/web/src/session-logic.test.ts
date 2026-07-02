@@ -934,6 +934,42 @@ describe("deriveWorkLogEntries", () => {
     expect(unfiltered.map((entry) => entry.id)).toEqual(["turn-1", "turn-2"]);
   });
 
+  it("keeps created-automation milestones and exposes their card fields despite a null turn id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1",
+        turnId: "turn-1",
+        summary: "First tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "automation-created",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "automation.created",
+        summary: "Created automation: Watch Synara PR 231 - Every 5m",
+        tone: "info",
+        payload: {
+          source: "chat-composer",
+          automationId: "automation-7",
+          automationName: "Watch Synara PR 231",
+          cadenceLabel: "Every 5m",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+
+    const automationEntry = entries.find((entry) => entry.id === "automation-created");
+    expect(automationEntry).toBeDefined();
+    expect(automationEntry?.automation).toEqual({
+      id: "automation-7",
+      name: "Watch Synara PR 231",
+      cadenceLabel: "Every 5m",
+    });
+  });
+
   it("omits checkpoint captured info entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -977,6 +1013,84 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("shows runtime warning messages and collapses repeated identical warning rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "opencode-retry-1",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "opencode-retry-3",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "opencode-retry-3",
+      label: "OpenCode retrying",
+      detail: "3 notices - Provider request failed; retrying.",
+      preview: "3 notices - Provider request failed; retrying.",
+    });
+  });
+
+  it("does not collapse identical runtime warnings across turn boundaries", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "turn-1-retry",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+      makeActivity({
+        id: "turn-2-retry",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "runtime.warning",
+        summary: "OpenCode retrying",
+        tone: "info",
+        turnId: "turn-2",
+        payload: {
+          message: "Provider request failed; retrying.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["turn-1-retry", "turn-2-retry"]);
+    expect(entries.map((entry) => entry.detail)).toEqual([
+      "Provider request failed; retrying.",
+      "Provider request failed; retrying.",
+    ]);
+  });
+
   it("omits ExitPlanMode lifecycle entries once the plan card is shown", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
@@ -1011,6 +1125,113 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, undefined);
     expect(entries.map((entry) => entry.id)).toEqual(["real-work-log"]);
+  });
+
+  it("collapses interleaved parallel tool calls into one row per tool-call id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "a-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_a", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "b-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "WebFetch: {}",
+          data: { toolCallId: "toolu_b", toolName: "WebFetch", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "a-completed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: 'Workflow: {"script":"x"}',
+          data: { toolCallId: "toolu_a", toolName: "Workflow", input: { script: "x" } },
+        },
+      }),
+      makeActivity({
+        id: "b-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: 'WebFetch: {"url":"https://x.dev"}',
+          data: { toolCallId: "toolu_b", toolName: "WebFetch", input: { url: "https://x.dev" } },
+        },
+      }),
+    ];
+
+    // Without id-based collapse this is 4 rows (a started, b started, a completed,
+    // b completed); each tool call must merge to one row, kept at its start position.
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["a-completed", "b-completed"]);
+    expect(entries.map((entry) => entry.toolName)).toEqual(["Workflow", "WebFetch"]);
+  });
+
+  it("keeps distinct calls of the same tool separate by tool-call id", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "first-started",
+        createdAt: "2026-02-23T00:00:00.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_1", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "second-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_2", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "first-completed",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_1", toolName: "Workflow", input: {} },
+        },
+      }),
+      makeActivity({
+        id: "second-completed",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        kind: "tool.completed",
+        summary: "Tool call",
+        payload: {
+          itemType: "dynamic_tool_call",
+          detail: "Workflow: {}",
+          data: { toolCallId: "toolu_2", toolName: "Workflow", input: {} },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["first-completed", "second-completed"]);
   });
 
   it("orders work log by activity sequence when present", () => {
@@ -1054,6 +1275,117 @@ describe("deriveWorkLogEntries", () => {
 
     const [entry] = deriveWorkLogEntries(activities, undefined);
     expect(entry?.command).toBe("bun run lint");
+  });
+
+  it("keeps full command output details for command tool activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-details",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-detail-1",
+            item: {
+              command: `/bin/zsh -lc 'rg -n "toolDetails" apps/web/src'`,
+            },
+            rawOutput: {
+              stdout: "apps/web/src/session-logic.ts:55: toolDetails\nsecond line",
+              stderr: "warning: ignored binary file",
+              exitCode: 2,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "command",
+      title: "Searched",
+      command: `/bin/zsh -lc 'rg -n "toolDetails" apps/web/src'`,
+      output: {
+        stdout: "apps/web/src/session-logic.ts:55: toolDetails\nsecond line",
+        stderr: "warning: ignored binary file",
+        exitCode: 2,
+      },
+    });
+  });
+
+  it("keeps command output details when rawOutput is stored as a string", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-tool-string-output",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            item: {
+              command: "gemini --version",
+            },
+            rawOutput: "gemini 1.2.3\n",
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "command",
+      title: "Ran",
+      command: "gemini --version",
+      output: {
+        output: "gemini 1.2.3\n",
+      },
+    });
+  });
+
+  it("merges command detail payloads across started and completed lifecycle rows", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-merge-1",
+            command: "bun run --cwd apps/web test session-logic.test.ts",
+          },
+        },
+      }),
+      makeActivity({
+        id: "command-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "tool.completed",
+        summary: "Ran command",
+        payload: {
+          itemType: "command_execution",
+          title: "Ran command",
+          data: {
+            toolCallId: "command-merge-1",
+            rawOutput: {
+              stdout: "passed",
+              exitCode: 0,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.id).toBe("command-complete");
+    expect(entry?.toolDetails).toMatchObject({
+      kind: "command",
+      command: "bun run --cwd apps/web test session-logic.test.ts",
+      output: { stdout: "passed", exitCode: 0 },
+    });
   });
 
   it("falls back to command-like detail when structured command metadata is missing", () => {
@@ -1676,6 +2008,85 @@ describe("deriveWorkLogEntries", () => {
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
     ]);
+    expect(entry?.toolDetails).toBeUndefined();
+  });
+
+  it("does not create tool details from a path-only file-change input", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool-path-only-input",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          data: {
+            rawInput: {
+              path: "apps/web/src/session-logic.ts",
+            },
+            item: {
+              changes: [{ path: "apps/web/src/session-logic.ts" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.changedFiles).toEqual(["apps/web/src/session-logic.ts"]);
+    expect(entry?.toolDetails).toBeUndefined();
+  });
+
+  it("keeps edit diff details for file-change tool activities", () => {
+    const unifiedDiff = [
+      "diff --git a/apps/web/src/session-logic.ts b/apps/web/src/session-logic.ts",
+      "--- a/apps/web/src/session-logic.ts",
+      "+++ b/apps/web/src/session-logic.ts",
+      "@@ -1,1 +1,1 @@",
+      "-old line",
+      "+new line",
+    ].join("\n");
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "file-tool-details",
+        kind: "tool.completed",
+        summary: "File change",
+        payload: {
+          itemType: "file_change",
+          title: "File change",
+          data: {
+            unifiedDiff,
+            rawInput: {
+              path: "apps/web/src/session-logic.ts",
+              oldText: "old line",
+              newText: "new line",
+            },
+            edits: [
+              {
+                path: "apps/web/src/session-logic.ts",
+                oldText: "old line",
+                newText: "new line",
+              },
+            ],
+            files: [{ path: "apps/web/src/session-logic.ts" }],
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.toolDetails).toEqual({
+      kind: "file-change",
+      title: "Edited",
+      diff: unifiedDiff,
+      edits: [
+        {
+          path: "apps/web/src/session-logic.ts",
+          oldText: "old line",
+          newText: "new line",
+        },
+      ],
+      files: ["apps/web/src/session-logic.ts"],
+    });
   });
 
   it("identifies file-change work by lifecycle metadata, not any changedFiles array", () => {
@@ -1996,6 +2407,9 @@ describe("deriveWorkLogEntries", () => {
       detail: 'Read: {"file_path":"/tmp/app.ts"}',
       itemType: "dynamic_tool_call",
       toolTitle: "Read",
+      // toolName must survive derivation so the timeline can pick the file-read
+      // (search) icon instead of the generic wrench fallback.
+      toolName: "Read",
     });
   });
 
@@ -2313,7 +2727,7 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
-  it("uses the OpenCode task description for generic completion rows that cannot collapse", () => {
+  it("collapses an OpenCode task across an interleaved runtime error by tool-call id", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "opencode-task-update",
@@ -2369,7 +2783,11 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    expect(deriveWorkLogEntries(activities, undefined).at(-1)).toEqual(
+    // The task update + completion share a tool-call id and merge into one row even
+    // though a runtime error arrived between them; the runtime error stays separate.
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries).toHaveLength(2);
+    expect(entries.find((entry) => entry.itemType === "collab_agent_tool_call")).toEqual(
       expect.objectContaining({
         id: "opencode-task-complete",
         itemType: "collab_agent_tool_call",
@@ -2377,6 +2795,7 @@ describe("deriveWorkLogEntries", () => {
         detail: "Tool execution aborted",
       }),
     );
+    expect(entries.some((entry) => entry.tone === "error")).toBe(true);
   });
 
   it("uses completed Claude task result content for generic agent task rows", () => {

@@ -5,9 +5,11 @@
 
 export const SETTINGS_SECTION_IDS = [
   "general",
+  "profile",
   "appearance",
   "notifications",
   "behavior",
+  "shortcuts",
   "worktrees",
   "archived",
   "models",
@@ -62,6 +64,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     eyebrow: "Workflow defaults",
   },
   {
+    id: "profile",
+    group: "app",
+    label: "Profile",
+    description: "Your local activity, streaks, and a shareable stats card.",
+    icon: "user",
+    eyebrow: "Your stats",
+  },
+  {
     id: "appearance",
     group: "app",
     label: "Appearance",
@@ -84,6 +94,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "Streaming, diff handling, and destructive confirmations.",
     icon: "settings-slider-hor",
     eyebrow: "Interaction rules",
+  },
+  {
+    id: "shortcuts",
+    group: "app",
+    label: "Keyboard Shortcuts",
+    description: "Every keyboard shortcut available in Synara, grouped by context.",
+    icon: "shortcut",
+    eyebrow: "Key bindings",
   },
   {
     id: "worktrees",

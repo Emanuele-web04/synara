@@ -54,13 +54,12 @@ import {
 } from "~/composer-logic";
 import {
   matchComposerLinkToken,
+  matchComposerSlashCommandChipToken,
   splitPromptIntoComposerSegments,
 } from "~/composer-editor-mentions";
 import { parseBareComposerLink } from "~/lib/linkChips";
-import {
-  INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
-  type TerminalContextDraft,
-} from "~/lib/terminalContext";
+import { type TerminalContextDraft } from "~/lib/terminalContext";
+import { shouldCollapsePastedText } from "~/lib/composerPastedText";
 import type { ProviderMentionReference } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import {
@@ -72,11 +71,13 @@ import {
 import {
   ComposerMentionNode,
   ComposerSkillNode,
+  ComposerSlashCommandNode,
   ComposerAgentMentionNode,
   ComposerTerminalContextNode,
   ComposerLinkNode,
   $createComposerMentionNode,
   $createComposerSkillNode,
+  $createComposerSlashCommandNode,
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
   $createComposerLinkNode,
@@ -231,6 +232,7 @@ function getAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: number): numb
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
+      node instanceof ComposerSlashCommandNode ||
       node instanceof ComposerAgentMentionNode
     ) {
       return getAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
@@ -283,6 +285,7 @@ function getExpandedAbsoluteOffsetForPoint(node: LexicalNode, pointOffset: numbe
     if (
       node instanceof ComposerMentionNode ||
       node instanceof ComposerSkillNode ||
+      node instanceof ComposerSlashCommandNode ||
       node instanceof ComposerAgentMentionNode
     ) {
       return getExpandedAbsoluteOffsetForInlineTokenPoint(node, offset, pointOffset);
@@ -315,6 +318,7 @@ function findSelectionPointAtOffset(
   if (
     node instanceof ComposerMentionNode ||
     node instanceof ComposerSkillNode ||
+    node instanceof ComposerSlashCommandNode ||
     node instanceof ComposerAgentMentionNode ||
     node instanceof ComposerLinkNode ||
     node instanceof ComposerTerminalContextNode
@@ -455,6 +459,10 @@ function $setComposerEditorPrompt(
       paragraph.append($createComposerSkillNode(prefixedName));
       continue;
     }
+    if (segment.type === "slash-command") {
+      paragraph.append($createComposerSlashCommandNode(segment.command));
+      continue;
+    }
     if (segment.type === "terminal-context") {
       if (segment.context) {
         paragraph.append($createComposerTerminalContextNode(segment.context));
@@ -506,6 +514,11 @@ interface ComposerPromptEditorProps {
   placeholder: string;
   className?: string;
   onRemoveTerminalContext: (contextId: string) => void;
+  /**
+   * Invoked when a sufficiently large text paste should collapse into an attachment
+   * card instead of inserting raw text. When omitted, pastes insert as text.
+   */
+  onCollapsePastedText?: (text: string) => void;
   onChange: (
     nextValue: string,
     nextCursor: number,
@@ -748,6 +761,27 @@ function ComposerInlineTokenBackspacePlugin() {
   return null;
 }
 
+function ComposerSlashCommandTransformPlugin() {
+  const [editor] = useLexicalComposerContext();
+
+  useEffect(() => {
+    return editor.registerNodeTransform(TextNode, (node) => {
+      if (isComposerInlineTokenNode(node)) {
+        return;
+      }
+      const match = matchComposerSlashCommandChipToken(node.getTextContent());
+      if (!match) {
+        return;
+      }
+      const splitNodes = node.splitText(match.start, match.end);
+      const commandNode = match.start === 0 ? splitNodes[0] : splitNodes[1];
+      commandNode?.replace($createComposerSlashCommandNode(match.command));
+    });
+  }, [editor]);
+
+  return null;
+}
+
 // Converts a bare URL into a link chip as soon as a delimiter follows it while typing, mirroring
 // the read-only message bubble. The controlled value→editor sync never re-tokenizes user input
 // (the editor text already equals the prompt string, so the rewrite is skipped), so live chipping
@@ -812,6 +846,45 @@ function ComposerLinkPastePlugin() {
   return null;
 }
 
+// A sufficiently large text paste collapses into an attachment card instead of
+// flooding the editor. Intercepting at the Lexical command level (rather than the
+// React onPaste prop) is required: Lexical's own paste listener would otherwise
+// insert the raw text before a bubbled React handler could preventDefault.
+function ComposerBigPastePlugin(props: { onCollapsePastedText: (text: string) => void }) {
+  const [editor] = useLexicalComposerContext();
+  const onCollapseRef = useRef(props.onCollapsePastedText);
+
+  useEffect(() => {
+    onCollapseRef.current = props.onCollapsePastedText;
+  }, [props.onCollapsePastedText]);
+
+  useEffect(() => {
+    return editor.registerCommand(
+      PASTE_COMMAND,
+      (event) => {
+        const clipboardData = event instanceof ClipboardEvent ? event.clipboardData : null;
+        if (!clipboardData) {
+          return false;
+        }
+        // Image/file pastes are handled by the composer dropzone — never collapse them.
+        if (clipboardData.files.length > 0) {
+          return false;
+        }
+        const text = clipboardData.getData("text/plain");
+        if (!shouldCollapsePastedText(text)) {
+          return false;
+        }
+        event.preventDefault();
+        onCollapseRef.current(text);
+        return true;
+      },
+      COMMAND_PRIORITY_HIGH,
+    );
+  }, [editor]);
+
+  return null;
+}
+
 function ComposerPromptEditorInner({
   value,
   cursor,
@@ -821,6 +894,7 @@ function ComposerPromptEditorInner({
   placeholder,
   className,
   onRemoveTerminalContext,
+  onCollapsePastedText,
   onChange,
   onCommandKeyDown,
   onPaste,
@@ -1088,8 +1162,12 @@ function ComposerPromptEditorInner({
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
         <ComposerInlineTokenBackspacePlugin />
+        <ComposerSlashCommandTransformPlugin />
         <ComposerLinkTransformPlugin />
         <ComposerLinkPastePlugin />
+        {onCollapsePastedText ? (
+          <ComposerBigPastePlugin onCollapsePastedText={onCollapsePastedText} />
+        ) : null}
         <HistoryPlugin />
       </div>
     </ComposerTerminalContextActionsContext.Provider>
@@ -1109,6 +1187,7 @@ export const ComposerPromptEditor = forwardRef<
     placeholder,
     className,
     onRemoveTerminalContext,
+    onCollapsePastedText,
     onChange,
     onCommandKeyDown,
     onPaste,
@@ -1152,6 +1231,7 @@ export const ComposerPromptEditor = forwardRef<
         onChange={onChange}
         onPaste={onPaste}
         editorRef={ref}
+        {...(onCollapsePastedText ? { onCollapsePastedText } : {})}
         {...(onCommandKeyDown ? { onCommandKeyDown } : {})}
         {...(className ? { className } : {})}
       />

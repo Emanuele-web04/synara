@@ -57,13 +57,18 @@ import { useProviderModelCatalog } from "~/hooks/useProviderModelCatalog";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
 import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
 import { useComposerDropzone } from "~/hooks/useComposerDropzone";
+import { toastManager } from "~/components/ui/toast";
 import { useTheme } from "~/hooks/useTheme";
 import { ChevronRightIcon, PaperclipIcon } from "~/lib/icons";
 import { findProviderStatus } from "~/lib/providerAvailability";
 import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
-import { type DraftThreadEnvMode, useComposerDraftStore } from "../../composerDraftStore";
+import {
+  type ComposerFileAttachment,
+  type DraftThreadEnvMode,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
 import { buildModelSelection } from "../../providerModelOptions";
 import { type ExpandedImagePreview } from "../chat/ExpandedImagePreview";
 import { useStore } from "../../store";
@@ -75,6 +80,10 @@ import { KanbanTaskProjectPicker } from "./KanbanTaskProjectPicker";
 import { useKanbanTaskComposerMenu } from "./useKanbanTaskComposerMenu";
 import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
+
+const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
+
+function ignoreComposerFileRemoval(_fileId: string): void {}
 
 export interface KanbanNewTaskProjectOption {
   id: ProjectId;
@@ -217,6 +226,9 @@ export function KanbanNewTaskDialog({
     providerStatuses,
     onOpenChange,
   });
+  const handleCreateRequest = useCallback(() => {
+    void handleCreate();
+  }, [handleCreate]);
   const {
     composerCursor,
     composerTrigger,
@@ -257,7 +269,7 @@ export function KanbanNewTaskDialog({
     piAgentDir: settings.piAgentDir || null,
     handleProviderModelChange,
     setInteractionMode,
-    onCreate: handleCreate,
+    onCreate: handleCreateRequest,
   });
 
   // Providers without a static default (e.g. Pi) resolve their model once
@@ -312,10 +324,10 @@ export function KanbanNewTaskDialog({
     (event: React.KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
         event.preventDefault();
-        handleCreate();
+        handleCreateRequest();
       }
     },
-    [handleCreate],
+    [handleCreateRequest],
   );
 
   const {
@@ -326,6 +338,19 @@ export function KanbanNewTaskDialog({
     onComposerDrop,
   } = useComposerDropzone({
     addImages: addComposerImages,
+    fileSupport: {
+      genericFiles: "reject",
+      onUnsupportedFiles: (files) => {
+        toastManager.add({
+          type: "warning",
+          title: "Only images can be attached to new tasks.",
+          description:
+            files.length === 1
+              ? "That file was not added."
+              : `${files.length} files were not added.`,
+        });
+      },
+    },
     appendReferenceText: appendComposerPromptText,
     dragDepthRef,
     focusComposer: scheduleComposerFocus,
@@ -423,11 +448,13 @@ export function KanbanNewTaskDialog({
             <ComposerReferenceAttachments
               assistantSelections={composerAssistantSelections}
               fileComments={composerFileComments}
+              files={EMPTY_COMPOSER_FILES}
               images={composerImages}
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
               onRemoveFileComments={clearComposerFileComments}
+              onRemoveFile={ignoreComposerFileRemoval}
               onRemoveImage={removeComposerImage}
             />
             <ComposerPromptEditor
@@ -555,7 +582,7 @@ export function KanbanNewTaskDialog({
                 />
                 Send as draft
               </label>
-              <Button size="sm" onClick={handleCreate} disabled={!canCreate}>
+              <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
                 {isCreating ? "Creating..." : "Create task"}
               </Button>
             </div>

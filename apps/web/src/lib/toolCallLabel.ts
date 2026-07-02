@@ -1,7 +1,7 @@
 // FILE: toolCallLabel.ts
 // Purpose: Normalizes generic tool-call titles and humanizes command executions for timeline rows.
 // Layer: UI utility
-// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle
+// Exports: deriveReadableToolTitle, deriveReadableCommandDisplay, command icon classifiers, deriveInlineCommandCall, normalizeCompactToolLabel, isGenericToolTitle, extractWebFetchUrl
 // Depends on: @t3tools/contracts tool lifecycle item types
 
 import type { ToolLifecycleItemType } from "@t3tools/contracts";
@@ -10,6 +10,52 @@ export function normalizeCompactToolLabel(value: string): string {
   return value
     .replace(/\s+(?:complete|completed|done|finished|success|succeeded|started|running)\s*$/i, "")
     .trim();
+}
+
+// Web-fetch tool calls (e.g. Claude's `WebFetch`) arrive as generic dynamic tool
+// calls whose detail is the raw `ToolName: {json}` argument summary. Recognizing
+// them lets the timeline surface the target site (favicon + URL) instead of the
+// raw JSON arguments.
+const WEB_FETCH_TOOL_NAMES = new Set(["webfetch", "fetch", "urlfetch", "fetchurl", "httpfetch"]);
+
+function isWebFetchToolName(toolName: string | null | undefined): boolean {
+  if (!toolName) {
+    return false;
+  }
+  const normalized = toolName.toLowerCase().replace(/[^a-z]/g, "");
+  if (WEB_FETCH_TOOL_NAMES.has(normalized)) {
+    return true;
+  }
+  return (
+    normalized.includes("fetch") &&
+    (normalized.includes("web") || normalized.includes("url") || normalized.includes("http"))
+  );
+}
+
+// Pulls the first http(s) URL out of a web-fetch tool call's argument summary.
+// Prefers the JSON `url`/`uri` field (the actual shape) and falls back to a bare
+// URL token so a slightly different summary still resolves. Returns null for
+// non-fetch tools or when no usable URL is present, so callers fall back to the
+// generic tool-call rendering.
+export function extractWebFetchUrl(input: {
+  readonly toolName?: string | null | undefined;
+  readonly detail?: string | null | undefined;
+}): string | null {
+  if (!isWebFetchToolName(input.toolName)) {
+    return null;
+  }
+  const detail = input.detail;
+  if (!detail) {
+    return null;
+  }
+  const fieldMatch = /"(?:url|uri)"\s*:\s*"([^"]+)"/i.exec(detail);
+  const candidate =
+    fieldMatch?.[1]?.trim() ??
+    /https?:\/\/[^\s"'<>)\]}]+/i.exec(detail)?.[0]?.replace(/[.,;:!?]+$/, "");
+  if (candidate && /^https?:\/\//i.test(candidate)) {
+    return candidate;
+  }
+  return null;
 }
 
 // Turns internal MCP identifiers into readable inline labels for timeline rows.
@@ -34,12 +80,20 @@ function humanizeMcpToolIdentifier(value: string): string | null {
 
 const WANDY_MCP_SERVER_ALIASES = new Set([
   "wandy",
-  "wandy",
   "computer-use",
   "computer_use",
   "open-computer-use",
   "open_computer_use",
 ]);
+
+function humanizeMcpServerTool(server: string, tool: string): string | null {
+  const normalizedServer = humanizeMcpToken(server);
+  const normalizedTool = humanizeMcpToken(tool);
+  if (!normalizedServer || !normalizedTool) {
+    return null;
+  }
+  return `${normalizedServer}: ${normalizedTool}`;
+}
 
 export interface ReadableToolTitleInput {
   readonly title?: string | null;
@@ -98,6 +152,8 @@ export interface ReadableCommandDisplay {
   readonly fullCommand: string;
 }
 
+export type CommandVisualKind = "inspect" | "git" | "github" | "terminal";
+
 function humanizeRequestKind(
   requestKind: ReadableToolTitleInput["requestKind"],
   itemType: ReadableToolTitleInput["itemType"],
@@ -130,6 +186,7 @@ export function isGenericToolTitle(value: string): boolean {
     normalized === "ran command" ||
     normalized === "running command" ||
     normalized === "command execution" ||
+    normalized === "file change" ||
     normalized === "find" ||
     normalized === "read file"
   );
@@ -201,6 +258,10 @@ function extractToolDescriptorFromPayload(
   if (!payload) {
     return null;
   }
+  const mcpServerTool = extractMcpServerToolDescriptor(payload, 0);
+  if (mcpServerTool) {
+    return mcpServerTool;
+  }
   const descriptorKeys = ["kind", "name", "tool", "tool_name", "toolName", "title"];
   const candidates: string[] = [];
   collectDescriptorCandidates(payload, descriptorKeys, candidates, 0);
@@ -213,6 +274,33 @@ function extractToolDescriptorFromPayload(
       continue;
     }
     return normalized;
+  }
+  return null;
+}
+
+function extractMcpServerToolDescriptor(value: unknown, depth: number): string | null {
+  if (depth > 4 || !value || typeof value !== "object") {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractMcpServerToolDescriptor(entry, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  const record = value as Record<string, unknown>;
+  if (typeof record.server === "string" && typeof record.tool === "string") {
+    return humanizeMcpServerTool(record.server, record.tool);
+  }
+  for (const nestedKey of ["item", "data", "event", "payload", "result", "input", "call"]) {
+    const nested = extractMcpServerToolDescriptor(record[nestedKey], depth + 1);
+    if (nested) {
+      return nested;
+    }
   }
   return null;
 }
@@ -265,49 +353,63 @@ function collectDescriptorCandidates(
   }
 }
 
+// Read-only inspection commands surfaced with the search/magnifying-glass icon in
+// the timeline (reads, searches, finds, listings), as opposed to commands that
+// mutate or execute, which keep the terminal icon. These sets are the single
+// source of truth for both the command labels below and the icon decision.
+const READ_FILE_COMMAND_TOOLS = new Set(["cat", "nl", "head", "tail", "sed", "less", "more"]);
+const SEARCH_COMMAND_TOOLS = new Set(["rg", "grep", "ag", "ack"]);
+const FIND_COMMAND_TOOLS = new Set(["find", "fd"]);
+const LIST_COMMAND_TOOLS = new Set(["ls"]);
+
+function isInspectCommandTool(tool: string): boolean {
+  return (
+    READ_FILE_COMMAND_TOOLS.has(tool) ||
+    SEARCH_COMMAND_TOOLS.has(tool) ||
+    FIND_COMMAND_TOOLS.has(tool) ||
+    LIST_COMMAND_TOOLS.has(tool)
+  );
+}
+
 // Derives the compact command sentence shown inline while preserving the full command for hover/detail UI.
 export function deriveReadableCommandDisplay(
   rawCommand: string,
   isRunning = false,
 ): ReadableCommandDisplay {
-  const command = unwrapShellCommandIfPresent(rawCommand);
-  const [tool, args] = splitToolAndArgs(command);
+  const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+  const primaryCommand = firstShellCommandSegment(command);
+  const [tool, args] = splitToolAndArgs(primaryCommand);
+
+  if (READ_FILE_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Reading" : "Read",
+      target: lastPathComponents(args, "file"),
+      fullCommand: rawCommand,
+    };
+  }
+  if (SEARCH_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Searching" : "Searched",
+      target: searchSummary(args),
+      fullCommand: rawCommand,
+    };
+  }
+  if (LIST_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Listing" : "Listed",
+      target: lastPathComponents(args, "directory"),
+      fullCommand: rawCommand,
+    };
+  }
+  if (FIND_COMMAND_TOOLS.has(tool)) {
+    return {
+      verb: isRunning ? "Finding" : "Found",
+      target: findTarget(args, "files"),
+      fullCommand: rawCommand,
+    };
+  }
 
   switch (tool) {
-    case "cat":
-    case "nl":
-    case "head":
-    case "tail":
-    case "sed":
-    case "less":
-    case "more":
-      return {
-        verb: isRunning ? "Reading" : "Read",
-        target: lastPathComponents(args, "file"),
-        fullCommand: rawCommand,
-      };
-    case "rg":
-    case "grep":
-    case "ag":
-    case "ack":
-      return {
-        verb: isRunning ? "Searching" : "Searched",
-        target: searchSummary(args),
-        fullCommand: rawCommand,
-      };
-    case "ls":
-      return {
-        verb: isRunning ? "Listing" : "Listed",
-        target: lastPathComponents(args, "directory"),
-        fullCommand: rawCommand,
-      };
-    case "find":
-    case "fd":
-      return {
-        verb: isRunning ? "Finding" : "Found",
-        target: lastPathComponents(args, "files"),
-        fullCommand: rawCommand,
-      };
     case "mkdir":
       return {
         verb: isRunning ? "Creating" : "Created",
@@ -335,17 +437,59 @@ export function deriveReadableCommandDisplay(
       };
     case "git":
       return humanizeGitCommand(args, rawCommand, isRunning);
+    case "node":
+    case "bun":
+    case "deno":
+    case "python":
+    case "python3":
+    case "ruby":
+    case "perl":
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: inlineScriptTarget(tool, command, args) ?? compactInlineCommand(command),
+        fullCommand: rawCommand,
+      };
+    case "osascript":
+      return {
+        verb: isRunning ? "Running" : "Ran",
+        target: "AppleScript",
+        fullCommand: rawCommand,
+      };
     default:
       return {
         verb: isRunning ? "Running" : "Ran",
-        target: command,
+        target: compactInlineCommand(command),
         fullCommand: rawCommand,
       };
   }
 }
 
+// Whether a shell command is a read-only inspection (read/search/find/list).
+// Reuses the same command unwrapping as deriveReadableCommandDisplay so the
+// timeline search icon stays in sync with the derived command label.
+export function isInspectCommand(rawCommand: string): boolean {
+  return resolveCommandVisualKind(rawCommand) === "inspect";
+}
+
+// Classifies command rows for transcript glyphs after peeling away shell/env wrappers.
+// This keeps `git -C`, `env ... gh`, and `/bin/zsh -lc "cd ... && git ..."` visually branded.
+export function resolveCommandVisualKind(rawCommand: string): CommandVisualKind {
+  const command = stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
+  const [tool] = splitToolAndArgs(firstShellCommandSegment(command));
+  if (isInspectCommandTool(tool)) {
+    return "inspect";
+  }
+  if (tool === "git") {
+    return "git";
+  }
+  if (tool === "gh" || tool === "hub") {
+    return "github";
+  }
+  return "terminal";
+}
+
 export function deriveInlineCommandCall(rawCommand: string): string {
-  return unwrapShellCommandIfPresent(rawCommand);
+  return stripCommandDisplayWrappers(unwrapShellCommandIfPresent(rawCommand));
 }
 
 function humanizeGitCommand(
@@ -353,7 +497,8 @@ function humanizeGitCommand(
   rawCommand: string,
   isRunning: boolean,
 ): ReadableCommandDisplay {
-  const subcommand = args.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  const normalizedArgs = stripGitGlobalOptions(args);
+  const subcommand = normalizedArgs.split(/\s+/, 1)[0]?.toLowerCase() ?? "";
   switch (subcommand) {
     case "status":
       return {
@@ -413,10 +558,37 @@ function humanizeGitCommand(
     default:
       return {
         verb: isRunning ? "Running" : "Ran",
-        target: `git ${args}`.trim(),
+        target: compactInlineCommand(`git ${normalizedArgs}`.trim()),
         fullCommand: rawCommand,
       };
   }
+}
+
+function stripGitGlobalOptions(args: string): string {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (token === "-C" || token === "-c" || token === "--git-dir" || token === "--work-tree") {
+      index += 2;
+      continue;
+    }
+    if (
+      token.startsWith("-C") ||
+      token.startsWith("-c") ||
+      token.startsWith("--git-dir=") ||
+      token.startsWith("--work-tree=")
+    ) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("--")) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return tokens.slice(index).join(" ");
 }
 
 function checkoutTarget(args: string): string {
@@ -436,6 +608,31 @@ function lastPathComponents(args: string, fallback: string): string {
   return fallback;
 }
 
+function findTarget(args: string, fallback: string): string {
+  const tokens = tokenizeCommandArgs(args);
+  let skipNext = false;
+  for (const token of tokens) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      if (
+        token === "-maxdepth" ||
+        token === "-mindepth" ||
+        token === "-name" ||
+        token === "-type" ||
+        token === "-path"
+      ) {
+        skipNext = true;
+      }
+      continue;
+    }
+    return compactPath(token);
+  }
+  return fallback;
+}
+
 function compactPath(path: string): string {
   if (path === ".") {
     return "current directory";
@@ -448,6 +645,36 @@ function compactPath(path: string): string {
     return path;
   }
   return parts.slice(-2).join("/");
+}
+
+function compactInlineCommand(command: string): string {
+  const normalized = command.replace(/\s+/g, " ").trim();
+  if (normalized.length <= 140) {
+    return normalized;
+  }
+  return `${normalized.slice(0, 137).trimEnd()}...`;
+}
+
+function firstShellCommandSegment(command: string): string {
+  const chain = findShellChain(command);
+  return chain ? command.slice(0, chain.operatorStart).trim() : command;
+}
+
+function inlineScriptTarget(tool: string, command: string, args: string): string | null {
+  const normalizedTool = tool === "python3" ? "python" : tool;
+  if (containsHeredoc(command) || hasInlineScriptFlag(args)) {
+    return `${normalizedTool} script`;
+  }
+  return null;
+}
+
+function containsHeredoc(command: string): boolean {
+  return /(^|\s)<<-?\s*['"]?[A-Za-z0-9_]+/.test(command);
+}
+
+function hasInlineScriptFlag(args: string): boolean {
+  const tokens = tokenizeCommandArgs(args);
+  return tokens.some((token) => token === "-e" || token === "-c" || token.startsWith("-e="));
 }
 
 function searchSummary(args: string): string {
@@ -641,10 +868,7 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
     ) {
       value = value.slice(1, -1).trim();
     }
-    const chainedCommandIndex = findShellChainIndex(value);
-    if (chainedCommandIndex >= 0) {
-      value = value.slice(chainedCommandIndex).trim();
-    }
+    value = stripLeadingShellPreambles(value);
     break;
   }
 
@@ -656,7 +880,47 @@ function unwrapShellCommandIfPresent(rawCommand: string): string {
   return value;
 }
 
-function findShellChainIndex(value: string): number {
+function stripLeadingShellPreambles(value: string): string {
+  let current = value.trim();
+  for (let attempts = 0; attempts < 4; attempts += 1) {
+    const chain = findShellChain(current);
+    if (!chain) {
+      return current;
+    }
+    const head = current.slice(0, chain.operatorStart).trim();
+    if (!isShellSetupPreamble(head)) {
+      return current;
+    }
+    current = current.slice(chain.commandStart).trim();
+  }
+  return current;
+}
+
+function isShellSetupPreamble(value: string): boolean {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return false;
+  }
+  if (/^(?:builtin\s+)?cd\s+/.test(normalized)) {
+    return true;
+  }
+  if (/^(?:source|\.)\s+/.test(normalized)) {
+    return true;
+  }
+  if (/^set\s+[-+][A-Za-z]/.test(normalized)) {
+    return true;
+  }
+  if (
+    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=[^\s]+(?:\s+[A-Za-z_][A-Za-z0-9_]*=[^\s]+)*$/.test(
+      normalized,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function findShellChain(value: string): { operatorStart: number; commandStart: number } | null {
   let quote: '"' | "'" | null = null;
 
   for (let index = 0; index < value.length - 1; index += 1) {
@@ -677,12 +941,100 @@ function findShellChainIndex(value: string): number {
     }
     const next = value[index + 1];
     if (char === "&" && next === "&") {
-      return index + 2;
+      return { operatorStart: index, commandStart: index + 2 };
     }
     if (char === ";") {
-      return index + 1;
+      return { operatorStart: index, commandStart: index + 1 };
     }
   }
 
-  return -1;
+  return null;
+}
+
+function stripCommandDisplayWrappers(command: string): string {
+  let current = command.replace(/\s+/g, " ").trim();
+  for (let attempts = 0; attempts < 4; attempts += 1) {
+    const [tool, args] = splitToolAndArgs(current);
+    const next =
+      tool === "env"
+        ? stripEnvCommand(args)
+        : tool === "timeout" || tool === "gtimeout"
+          ? stripTimeoutCommand(args)
+          : tool === "nice"
+            ? stripNiceCommand(args)
+            : tool === "arch"
+              ? stripArchCommand(args)
+              : tool === "command"
+                ? args
+                : null;
+    if (!next || next === current) {
+      return current;
+    }
+    current = next.trim();
+  }
+  return current;
+}
+
+function stripEnvCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]!;
+    if (token === "--") {
+      index += 1;
+      break;
+    }
+    if (token === "-u" || token === "--unset" || token === "-C" || token === "--chdir") {
+      index += 2;
+      continue;
+    }
+    if (token.startsWith("--unset=") || token.startsWith("--chdir=")) {
+      index += 1;
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.startsWith("-")) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripTimeoutCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (index < tokens.length && tokens[index]?.startsWith("-")) {
+    index += tokens[index] === "-s" || tokens[index] === "-k" ? 2 : 1;
+  }
+  if (index < tokens.length && /^\d+(?:\.\d+)?[smhd]?$/.test(tokens[index]!)) {
+    index += 1;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripNiceCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  if (tokens[index] === "-n") {
+    index += 2;
+  } else {
+    while (tokens[index]?.startsWith("-")) {
+      index += 1;
+    }
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
+}
+
+function stripArchCommand(args: string): string | null {
+  const tokens = tokenizeCommandArgs(args);
+  let index = 0;
+  while (tokens[index]?.startsWith("-")) {
+    index += 1;
+  }
+  return index < tokens.length ? tokens.slice(index).join(" ") : null;
 }

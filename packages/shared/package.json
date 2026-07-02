@@ -24,6 +24,10 @@
       "types": "./src/shell.ts",
       "import": "./src/shell.ts"
     },
+    "./windowsProcess": {
+      "types": "./src/windowsProcess.ts",
+      "import": "./src/windowsProcess.ts"
+    },
     "./codexConfig": {
       "types": "./src/codexConfig.ts",
       "import": "./src/codexConfig.ts"
@@ -124,6 +128,10 @@
       "types": "./src/localPreviewFiles.ts",
       "import": "./src/localPreviewFiles.ts"
     },
+    "./composerSlashCommands": {
+      "types": "./src/composerSlashCommands.ts",
+      "import": "./src/composerSlashCommands.ts"
+    },
     "./editorIcons": {
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"
@@ -135,6 +143,10 @@
     "./wandy": {
       "types": "./src/wandy.ts",
       "import": "./src/wandy.ts"
+    },
+    "./formatBytes": {
+      "types": "./src/formatBytes.ts",
+      "import": "./src/formatBytes.ts"
     }
   },
   "scripts": {

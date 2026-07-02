@@ -28,11 +28,16 @@ import {
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
+import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
   humanizeSubagentStatus,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
-import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
+import {
+  hasLiveTurnTailWork,
+  isProviderFileEditWorkLogEntry,
+  type WorkLogEntry,
+} from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
 
@@ -68,6 +73,18 @@ export function shouldRenderProviderHealthBanner(input: {
   return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
 }
 
+// Big-paste cards are sent only by the normal chat path; non-chat composer flows
+// read plain editor text, so they must let Lexical insert pasted text normally.
+export function shouldEnableComposerPastedTextCollapse(input: {
+  isComposerApprovalState: boolean;
+  hasPendingUserInput: boolean;
+  showPlanFollowUpPrompt: boolean;
+}): boolean {
+  return (
+    !input.isComposerApprovalState && !input.hasPendingUserInput && !input.showPlanFollowUpPrompt
+  );
+}
+
 export function buildComposerMenuSelectionKey(input: {
   menuOpen: boolean;
   picker: string | null;
@@ -89,10 +106,25 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;
   isCenteredEmptyLanding: boolean;
   isTerminalPrimarySurface: boolean;
+  isConstrainedChatLayout: boolean;
 }): boolean {
   return (
-    input.environmentEnabled && !input.isCenteredEmptyLanding && !input.isTerminalPrimarySurface
+    input.environmentEnabled &&
+    !input.isCenteredEmptyLanding &&
+    !input.isTerminalPrimarySurface &&
+    !input.isConstrainedChatLayout
   );
+}
+
+export function resolveEnvironmentPanelOpen(input: {
+  defaultOpen: boolean;
+  actionDismissed: boolean;
+  userPreferenceOpen: boolean | null;
+}): boolean {
+  if (input.actionDismissed) {
+    return false;
+  }
+  return input.userPreferenceOpen ?? input.defaultOpen;
 }
 
 export function resolveEnvironmentPanelVisible(input: {
@@ -102,24 +134,80 @@ export function resolveEnvironmentPanelVisible(input: {
   return input.environmentEnabled && input.environmentPanelOpen;
 }
 
+// The composer live strip prefers the turn's computed diff (the
+// `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
+// Before that lands, it falls back to mid-turn file-edit work-log activity so
+// the strip can appear while the turn is running, but without a reviewable
+// turn id. Once a turn diff exists, its empty file list is authoritative and
+// must not be overwritten by tool metadata.
 export function resolveActiveTurnLiveDiffState(input: {
-  latestTurnId: string | null | undefined;
+  latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
   turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  workLogEntries?: ReadonlyArray<
+    Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind" | "turnId">
+  >;
 }): {
   turnId: TurnDiffSummary["turnId"] | null;
-  fileCount: number;
+  fileCount: number | null;
   additions: number;
   deletions: number;
+  hasChanges: boolean;
 } {
   const summary = input.latestTurnId
     ? (input.turnDiffSummaries.find((entry) => entry.turnId === input.latestTurnId) ?? null)
     : null;
   const files = summary?.files ?? [];
+  if (summary && files.length > 0) {
+    return {
+      turnId: summary.turnId,
+      fileCount: files.length,
+      additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+      deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      hasChanges: true,
+    };
+  }
+  if (summary) {
+    return {
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    };
+  }
+
+  // No diff totals yet: keep the strip visible from in-turn file-edit work so it
+  // does not vanish between the first edit and the turn-diff-completed event.
+  const workLogFilePaths = new Set<string>();
+  let hasFileEditWork = false;
+  if (input.latestTurnId) {
+    for (const entry of input.workLogEntries ?? []) {
+      if (entry.turnId !== input.latestTurnId || !isProviderFileEditWorkLogEntry(entry)) {
+        continue;
+      }
+      hasFileEditWork = true;
+      for (const filePath of entry.changedFiles ?? []) {
+        workLogFilePaths.add(filePath);
+      }
+    }
+  }
+
+  if (hasFileEditWork && input.latestTurnId) {
+    return {
+      turnId: null,
+      fileCount: workLogFilePaths.size > 0 ? workLogFilePaths.size : null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    };
+  }
+
   return {
-    turnId: summary?.turnId ?? null,
-    fileCount: files.length,
-    additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
-    deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+    turnId: null,
+    fileCount: 0,
+    additions: 0,
+    deletions: 0,
+    hasChanges: false,
   };
 }
 
@@ -467,29 +555,36 @@ export function buildSuggestedWorktreeName(input: {
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
+  fileCount: number;
   assistantSelectionCount: number;
   fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  pastedTexts: ReadonlyArray<PastedTextDraft>;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
+  sendablePastedTexts: PastedTextDraft[];
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
   const sendableTerminalContexts = filterTerminalContextsWithText(options.terminalContexts);
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
+  const sendablePastedTexts = filterPastedTextsWithText(options.pastedTexts);
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
+    sendablePastedTexts,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
+      options.fileCount > 0 ||
       options.assistantSelectionCount > 0 ||
       options.fileCommentCount > 0 ||
-      sendableTerminalContexts.length > 0,
+      sendableTerminalContexts.length > 0 ||
+      sendablePastedTexts.length > 0,
   };
 }
 

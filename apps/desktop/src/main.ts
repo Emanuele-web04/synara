@@ -12,6 +12,7 @@ import * as Path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -35,7 +36,7 @@ import type {
   DesktopUpdateActionResult,
   DesktopUpdateState,
 } from "@t3tools/contracts";
-import { autoUpdater, CancellationToken } from "electron-updater";
+import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
 import {
@@ -50,12 +51,21 @@ import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness"
 import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import {
+  LSREGISTER_PATH,
+  parseLastLaunchVersion,
+  resolveLaunchVersionRecordPath,
+  resolveMacAppBundlePath,
+  serializeLaunchVersionRecord,
+  shouldRefreshIconCache,
+} from "./macIconCacheRefresh";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
 import {
   installResumableUpdateDownloader,
   type ResumableDownloaderTarget,
 } from "./resumableUpdateDownload";
+import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
@@ -133,6 +143,8 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
+const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
 const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
 const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
 const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
@@ -1438,12 +1450,9 @@ function configureAppIdentity(): void {
   }
 }
 
-// macOS 26 (Darwin 25+, "Tahoe") masks the full-bleed bundle icon into a clean squircle
-// on its own, so we leave it completely untouched there. Older macOS does NOT round app
-// icons, so the same square bundle icon would look square in the dock. Only on those
-// older versions do we override the dock tile with a pre-rounded literal image (drawn
-// as-is, no system styling). Baking transparent rounded corners into the bundle icon is
-// not an option because that transparency is exactly what triggers Tahoe's Liquid Glass.
+// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
+// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
+// a runtime dock override because it does not apply the modern system mask itself.
 function applyLegacyMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
@@ -1461,6 +1470,79 @@ function applyLegacyMacDockIcon(): void {
     return;
   }
   app.dock.setIcon(image);
+}
+
+function readLaunchVersionRecordContents(): string | null {
+  try {
+    return FS.readFileSync(resolveLaunchVersionRecordPath(app.getPath("userData")), "utf8");
+  } catch {
+    // No prior record (fresh profile) or an unreadable file.
+    return null;
+  }
+}
+
+function persistLastLaunchVersion(version: string): void {
+  const recordPath = resolveLaunchVersionRecordPath(app.getPath("userData"));
+  try {
+    // The userData directory is not guaranteed to exist this early on a clean
+    // first launch, so ensure it before writing or the record silently fails to
+    // persist and the refresh re-runs on every launch.
+    FS.mkdirSync(Path.dirname(recordPath), { recursive: true });
+    FS.writeFileSync(recordPath, serializeLaunchVersionRecord(version));
+  } catch (error) {
+    console.warn("[desktop] Failed to persist last launch version", error);
+  }
+}
+
+// macOS keeps an aggressive Launch Services / IconServices cache keyed by bundle
+// path + identifier. electron-updater swaps the bundle in place, so after an
+// update the refreshed icon.icns is already on disk while the dock and Finder
+// keep painting the previous icon — most visibly on Tahoe, where we no longer
+// apply a runtime dock icon (see applyLegacyMacDockIcon). When the version
+// changes across launches, force Launch Services to re-read the bundle so the
+// new icon shows on every surface. Best-effort: never blocks startup.
+function refreshMacIconCacheOnVersionChange(): void {
+  if (process.platform !== "darwin" || !app.isPackaged) {
+    return;
+  }
+
+  const currentVersion = app.getVersion();
+  const previousVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+  if (!shouldRefreshIconCache(previousVersion, currentVersion)) {
+    return;
+  }
+
+  // Record the new version before refreshing so a failed re-registration is not
+  // retried on every launch; the icon then heals on the next version bump
+  // instead of spawning lsregister each time.
+  persistLastLaunchVersion(currentVersion);
+
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath || !FS.existsSync(LSREGISTER_PATH)) {
+    return;
+  }
+
+  // Bump the bundle mtime so Launch Services notices the swap, then re-register
+  // it. The codesign signature covers Contents, not the bundle directory mtime,
+  // so this is signature-safe; the bundle may be read-only for this user, in
+  // which case the re-registration below still nudges the cache.
+  try {
+    const now = new Date();
+    FS.utimesSync(bundlePath, now, now);
+  } catch {
+    // Read-only bundle: fall through to lsregister.
+  }
+
+  const child = ChildProcess.spawn(LSREGISTER_PATH, ["-f", bundlePath], { stdio: "ignore" });
+  child.unref();
+  child.once("error", (error) => {
+    console.warn("[desktop] Failed to refresh macOS icon cache after update", error);
+  });
+  child.once("exit", (code) => {
+    console.info(
+      `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
+    );
+  });
 }
 
 function clearUpdatePollTimer(): void {
@@ -1864,6 +1946,7 @@ function configureAutoUpdater(): void {
     return;
   }
   updaterConfigured = true;
+  hardenElectronUpdater({ BaseUpdater }, autoUpdater);
   configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
   if (configuredGitHubUpdateSource !== null) {
     // The updater itself uses app-update.yml; this URL is only the human fallback.
@@ -2430,6 +2513,29 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.removeHandler(CLIPBOARD_WRITE_IMAGE_CHANNEL);
+  ipcMain.handle(CLIPBOARD_WRITE_IMAGE_CHANNEL, async (_event, rawDataUrl: unknown) => {
+    if (typeof rawDataUrl !== "string") {
+      return false;
+    }
+    if (rawDataUrl.length > MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH) {
+      return false;
+    }
+
+    const dataUrl = rawDataUrl.trim();
+    if (!dataUrl.startsWith("data:image/png;base64,")) {
+      return false;
+    }
+
+    const image = nativeImage.createFromDataURL(dataUrl);
+    if (image.isEmpty()) {
+      return false;
+    }
+
+    clipboard.writeImage(image);
+    return true;
+  });
+
   ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);
   ipcMain.handle(SHOW_IN_FOLDER_CHANNEL, async (_event, rawPath: unknown) => {
     if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
@@ -2840,6 +2946,7 @@ if (hasSingleInstanceLock) {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
       applyLegacyMacDockIcon();
+      refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();

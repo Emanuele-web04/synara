@@ -7,6 +7,7 @@
  * @module CodexAdapterLive
  */
 import {
+  type ChatAttachment,
   type CanonicalItemType,
   type CanonicalRequestType,
   type ProviderComposerCapabilities,
@@ -53,6 +54,7 @@ import {
 import { isNonFatalCodexErrorMessage } from "../../codexErrorClassification.ts";
 import { ServerConfig } from "../../config.ts";
 import { extractProposedPlanMarkdown } from "../planMode.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { synaraSkillsDir } from "../skillsCatalog.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -81,6 +83,19 @@ function sanitizeUserFacingErrorMessage(message: string, fallback: string): stri
   const firstLine = normalized.split("\n")[0]?.trim() ?? "";
   const withoutInlineStack = firstLine.replace(/\s+at file:\/\/.*$/s, "").trim();
   return withoutInlineStack.length > 0 ? withoutInlineStack : fallback;
+}
+
+function composeCodexInputWithFileAttachments(input: {
+  readonly input: string | undefined;
+  readonly attachments: ReadonlyArray<ChatAttachment> | undefined;
+  readonly attachmentsDir: string;
+}): string | undefined {
+  return appendFileAttachmentsPromptBlock({
+    text: input.input,
+    attachments: input.attachments,
+    attachmentsDir: input.attachmentsDir,
+    include: "all-files",
+  });
 }
 
 function toSessionError(
@@ -1654,9 +1669,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           { concurrency: 1 },
         );
+        const nativeCodexAttachments = codexAttachments.filter(
+          (attachment): attachment is NonNullable<typeof attachment> => attachment !== null,
+        );
+        const composedInput = composeCodexInputWithFileAttachments({
+          input: input.input,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+        });
         const managerInput = {
           threadId: input.threadId,
-          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(composedInput !== undefined ? { input: composedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
           ...(input.modelSelection?.provider === "codex"
@@ -1672,9 +1695,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
-          ...(codexAttachments.length > 0
-            ? { attachments: codexAttachments.filter((attachment) => attachment !== null) }
-            : {}),
+          ...(nativeCodexAttachments.length > 0 ? { attachments: nativeCodexAttachments } : {}),
         };
 
         return yield* Effect.tryPromise({
@@ -1726,9 +1747,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             }),
           { concurrency: 1 },
         );
+        const nativeCodexAttachments = codexAttachments.filter(
+          (attachment): attachment is NonNullable<typeof attachment> => attachment !== null,
+        );
+        const composedInput = composeCodexInputWithFileAttachments({
+          input: input.input,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+        });
         const managerInput = {
           threadId: input.threadId,
-          ...(input.input !== undefined ? { input: input.input } : {}),
+          ...(composedInput !== undefined ? { input: composedInput } : {}),
           ...(input.skills !== undefined ? { skills: input.skills } : {}),
           ...(input.mentions !== undefined ? { mentions: input.mentions } : {}),
           ...(input.modelSelection?.provider === "codex"
@@ -1744,9 +1773,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
           ...(input.interactionMode !== undefined
             ? { interactionMode: input.interactionMode }
             : {}),
-          ...(codexAttachments.length > 0
-            ? { attachments: codexAttachments.filter((attachment) => attachment !== null) }
-            : {}),
+          ...(nativeCodexAttachments.length > 0 ? { attachments: nativeCodexAttachments } : {}),
         };
 
         return yield* Effect.tryPromise({

@@ -2,8 +2,13 @@
 // Purpose: Renders the chat thread's compact workspace controls, including the
 // local usage popover, inline workspace handoff actions, and runtime access toggle.
 import type { ThreadId, RuntimeMode } from "@t3tools/contracts";
-import { LuSplit } from "react-icons/lu";
-import { CheckIcon, ChevronDownIcon, ChevronRightIcon, HandoffIcon } from "~/lib/icons";
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  HandoffIcon,
+  WorktreeIcon,
+} from "~/lib/icons";
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
@@ -33,6 +38,7 @@ import {
 import {
   RUNTIME_FULL_ACCESS_ACCENT_CLASS_NAME,
   COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
+  COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME,
 } from "./chat/composerPickerStyles";
 import {
   ENVIRONMENT_ROW_CLASS_NAME,
@@ -59,7 +65,7 @@ import {
 import type { ThreadWorkspacePatch } from "../types";
 
 function WorktreeGlyph({ className }: { className?: string }) {
-  return <LuSplit className={cn("rotate-90", className)} />;
+  return <WorktreeIcon className={className} />;
 }
 
 /** Leading glyph treatment shared by every "Continue in" menu row (16px, muted). */
@@ -107,6 +113,8 @@ export interface BranchToolbarProps {
   // `toolbar` renders the compact composer-footer row; `panel` stacks the env and branch
   // pickers as full-width Environment panel rows that open downward.
   variant?: BranchSelectorVariant;
+  // Keeps the Local/Worktree control visible while hiding Git-only branch UI for non-repo cwd.
+  showBranchSelector?: boolean;
 }
 
 export interface RuntimeUsageControlsProps {
@@ -221,6 +229,7 @@ export default function BranchToolbar({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   variant = "toolbar",
+  showBranchSelector = true,
 }: BranchToolbarProps) {
   const isPanel = variant === "panel";
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
@@ -384,7 +393,7 @@ export default function BranchToolbar({
                   className={
                     isPanel
                       ? ENVIRONMENT_ROW_CLASS_NAME
-                      : "inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
+                      : COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME
                   }
                 />
               }
@@ -492,24 +501,27 @@ export default function BranchToolbar({
             />
           </div>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)]">
+          <span className="inline-flex items-center gap-2 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal text-[var(--color-text-foreground-secondary)]">
             <WorktreeGlyph className="size-3.5" />
             {environmentPresentation.shortLabel}
           </span>
         )}
 
-        <BranchToolbarBranchSelector
-          activeProjectCwd={activeProject.cwd}
-          activeThreadBranch={activeThreadBranch}
-          activeWorktreePath={activeWorktreePath}
-          branchCwd={branchCwd}
-          effectiveEnvMode={effectiveEnvMode}
-          envLocked={envLocked}
-          onSetThreadWorkspace={setThreadWorkspace}
-          variant={variant}
-          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
-        />
+        {showBranchSelector ? (
+          <BranchToolbarBranchSelector
+            activeProjectCwd={activeProject.cwd}
+            activeThreadBranch={activeThreadBranch}
+            activeWorktreePath={activeWorktreePath}
+            branchCwd={branchCwd}
+            effectiveEnvMode={effectiveEnvMode}
+            envLocked={envLocked}
+            hasServerThread={hasServerThread}
+            onSetThreadWorkspace={setThreadWorkspace}
+            variant={variant}
+            {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+            {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+          />
+        ) : null}
       </div>
     </div>
   );

@@ -4,6 +4,7 @@
 // Layer: Chat composer styling
 // Exports: stacked panel row/header tokens and divider class name
 
+import { COMPACT_CHAT_MARKDOWN_TIGHT_CLASS_NAME } from "~/components/chatMarkdownSpacing";
 import { COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME } from "./composerPickerStyles";
 
 /** Frame, border, radius, and surface chrome for a stacked composer panel. */
@@ -37,6 +38,17 @@ export const COMPOSER_STACKED_PANEL_ICON_CLASS_NAME =
 
 /** Primary stacked-panel label (queue preview, file-change summary). */
 export const COMPOSER_STACKED_PANEL_LABEL_CLASS_NAME = "truncate font-medium text-foreground/85";
+
+/**
+ * Queued follow-up preview rendered through the shared `ChatMarkdown` pipeline so it parses
+ * exactly like assistant messages and the recap (mentions, inline code, emphasis, links).
+ * Keeps the queue label tone/weight and clamps to one row so raw prompts cannot expand the panel.
+ */
+export const COMPOSER_STACKED_PANEL_PREVIEW_MARKDOWN_CLASS_NAME = [
+  "line-clamp-1 max-h-[1.25rem] overflow-hidden text-[12px] font-medium !text-foreground/85",
+  "[&_p]:truncate [&_p]:whitespace-nowrap",
+  COMPACT_CHAT_MARKDOWN_TIGHT_CLASS_NAME,
+].join(" ");
 
 /** Muted summary label (plan task progress header). */
 export const COMPOSER_STACKED_PANEL_META_CLASS_NAME =

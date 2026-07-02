@@ -162,9 +162,6 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
-  // Local-only UI preference: show prompt suggestions under the composer on the
-  // empty new-thread landing. Off hides the suggestion list entirely.
-  enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showWorkspaceSection` controls the
@@ -182,9 +179,11 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
   enableWandy: Schema.Boolean.pipe(withDefaults(() => true)),
-  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
+  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -253,7 +252,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Claude",
     description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
-    example: "claude-sonnet-5-0",
+    example: "claude-custom-model",
   },
   cursor: {
     provider: "cursor",
@@ -448,6 +447,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableWandy: settings.enableWandy,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -509,6 +509,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   }
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
+  }
+  if (hasOwn(patch, "enableProviderUpdateChecks")) {
+    serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -648,6 +651,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "defaultThreadEnvMode",
     "enableWandy",
     "enableAssistantStreaming",
+    "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
     "kiloBinaryPath",

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isLocalAbsolutePath,
   isWorkspaceRelativePathSafe,
   joinWorkspaceRelativePath,
   workspaceRelativePathOf,
@@ -54,6 +55,19 @@ describe("workspaceRelativePathOf", () => {
   it("returns null for empty inputs", () => {
     expect(workspaceRelativePathOf("", "/repo/app")).toBeNull();
     expect(workspaceRelativePathOf("/repo/app/file.ts", "  ")).toBeNull();
+  });
+});
+
+describe("isLocalAbsolutePath", () => {
+  it("recognizes POSIX and Windows absolute paths", () => {
+    expect(isLocalAbsolutePath("/Users/dev/file.txt")).toBe(true);
+    expect(isLocalAbsolutePath("C:\\Users\\dev\\file.txt")).toBe(true);
+  });
+
+  it("can disable Windows path recognition for native POSIX server reads", () => {
+    expect(isLocalAbsolutePath("C:\\Users\\dev\\file.txt", { allowWindowsPaths: false })).toBe(
+      false,
+    );
   });
 });
 

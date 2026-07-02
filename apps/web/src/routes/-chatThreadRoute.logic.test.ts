@@ -2,6 +2,7 @@ import { ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
@@ -23,6 +24,38 @@ describe("resolveThreadPickerTitle", () => {
 
   it("preserves non-empty thread titles", () => {
     expect(resolveThreadPickerTitle("Bug bash")).toBe("Bug bash");
+  });
+});
+
+describe("resolveFilePreviewWorkspaceRoot", () => {
+  it("uses the project cwd for local threads", () => {
+    expect(
+      resolveFilePreviewWorkspaceRoot({
+        projectCwd: "/repo/project",
+        threadEnvMode: "local",
+        threadWorktreePath: null,
+      }),
+    ).toBe("/repo/project");
+  });
+
+  it("uses the materialized worktree for worktree-backed threads", () => {
+    expect(
+      resolveFilePreviewWorkspaceRoot({
+        projectCwd: "/repo/project",
+        threadEnvMode: "worktree",
+        threadWorktreePath: "/repo/.worktrees/feature",
+      }),
+    ).toBe("/repo/.worktrees/feature");
+  });
+
+  it("does not fall back to the project cwd while a worktree is still pending", () => {
+    expect(
+      resolveFilePreviewWorkspaceRoot({
+        projectCwd: "/repo/project",
+        threadEnvMode: "worktree",
+        threadWorktreePath: null,
+      }),
+    ).toBeNull();
   });
 });
 

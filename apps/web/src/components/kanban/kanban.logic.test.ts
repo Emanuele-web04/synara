@@ -747,6 +747,7 @@ describe("buildKanbanComposerDraftSnapshot", () => {
   it("ignores terminal contexts whose text is not available anymore", () => {
     const snapshot = buildKanbanComposerDraftSnapshot({
       prompt: "",
+      files: [],
       images: [],
       persistedAttachments: [],
       terminalContexts: [
@@ -771,6 +772,30 @@ describe("buildKanbanComposerDraftSnapshot", () => {
       hasAttachments: false,
       provider: null,
     });
+  });
+
+  it("counts file attachments as pending draft attachments", () => {
+    const snapshot = buildKanbanComposerDraftSnapshot({
+      prompt: "",
+      files: [
+        {
+          type: "file",
+          id: "file-1",
+          name: "notes.txt",
+          mimeType: "text/plain",
+          sizeBytes: 12,
+          file: new File(["hello"], "notes.txt", { type: "text/plain" }),
+        },
+      ],
+      images: [],
+      persistedAttachments: [],
+      terminalContexts: [],
+      assistantSelections: [],
+      fileComments: [],
+      activeProvider: null,
+    });
+
+    expect(snapshot?.hasAttachments).toBe(true);
   });
 });
 

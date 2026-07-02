@@ -43,6 +43,8 @@ export type MessagesTimelineRow =
       id: string;
       createdAt: string;
       message: ChatMessage;
+      leadingWorkEntries?: WorkLogEntry[];
+      leadingWorkGroupId?: string;
       inlineWorkEntries?: WorkLogEntry[];
       inlineWorkGroupId?: string;
       collapsedTurnItems?: CollapsedTurnItem[];
@@ -51,6 +53,10 @@ export type MessagesTimelineRow =
       showAssistantCopyButton: boolean;
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
+      // True while this row's turn is still running. The end-of-turn changes
+      // card (Undo / Review) is held back until the turn settles so it cannot
+      // pre-empt the composer's live changes strip mid-turn.
+      assistantTurnInProgress?: boolean | undefined;
       revertTurnCount?: number | undefined;
     }
   | {
@@ -191,8 +197,9 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// Derives transcript rows from timeline entries while preserving the current
-// t3code behavior of attaching trailing work groups to the adjacent assistant reply.
+// Derives transcript rows from timeline entries while keeping live narration and
+// tool rows in visual chronology. Work already waiting when assistant text
+// arrives renders above that text; trailing work renders below it.
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
@@ -215,7 +222,10 @@ export function deriveMessagesTimelineRows(input: {
     right: ReadonlyArray<WorkLogEntry>,
   ) => left.length === right.length && left.every((entry, index) => entry === right[index]);
 
-  const appendWorkEntriesToPreviousAssistant = (groupedEntries: WorkLogEntry[]): boolean => {
+  const appendWorkEntriesToPreviousAssistant = (
+    groupedEntries: WorkLogEntry[],
+    groupId: string,
+  ): boolean => {
     const previousRow = nextRows.at(-1);
     if (
       !previousRow ||
@@ -234,6 +244,7 @@ export function deriveMessagesTimelineRows(input: {
     }
 
     previousRow.inlineWorkEntries = nextInlineWorkEntries;
+    previousRow.inlineWorkGroupId ??= groupId;
     return true;
   };
 
@@ -242,7 +253,7 @@ export function deriveMessagesTimelineRows(input: {
     const shouldAttachToPreviousAssistant = options?.attachToPreviousAssistant ?? true;
     if (
       !shouldAttachToPreviousAssistant ||
-      !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries)
+      !appendWorkEntriesToPreviousAssistant(pendingWorkGroup.groupedEntries, pendingWorkGroup.id)
     ) {
       nextRows.push(pendingWorkGroup);
     }
@@ -288,9 +299,9 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    const inlineWorkEntries =
+    const leadingWorkEntries =
       timelineEntry.message.role === "assistant" ? pendingWorkGroup?.groupedEntries : undefined;
-    const inlineWorkGroupId =
+    const leadingWorkGroupId =
       timelineEntry.message.role === "assistant" ? pendingWorkGroup?.id : undefined;
     if (timelineEntry.message.role === "assistant") {
       pendingWorkGroup = null;
@@ -309,14 +320,15 @@ export function deriveMessagesTimelineRows(input: {
       id: timelineEntry.id,
       createdAt: timelineEntry.createdAt,
       message: timelineEntry.message,
-      ...(inlineWorkEntries ? { inlineWorkEntries } : {}),
-      ...(inlineWorkGroupId ? { inlineWorkGroupId } : {}),
+      ...(leadingWorkEntries ? { leadingWorkEntries } : {}),
+      ...(leadingWorkGroupId ? { leadingWorkGroupId } : {}),
       durationStart:
         durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
       showAssistantCopyButton:
         timelineEntry.message.role === "assistant" &&
         terminalAssistantMessageIds.has(timelineEntry.message.id),
       assistantCopyStreaming: timelineEntry.message.streaming || assistantTurnStillInProgress,
+      assistantTurnInProgress: assistantTurnStillInProgress,
       assistantTurnDiffSummary:
         timelineEntry.message.role === "assistant"
           ? input.turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id)
@@ -444,20 +456,23 @@ function collapseSettledTurns(
             row.assistantTurnDiffSummary ?? folded.assistantTurnDiffSummary,
           );
         }
-        // Work that preceded a narration message was attached as its inline
-        // entries; keep it ahead of the narration text in chronological order.
+        if (folded.leadingWorkEntries) collectWorkItems(folded.leadingWorkEntries, collapsedItems);
         if (folded.collapsedTurnItems) collapsedItems.push(...folded.collapsedTurnItems);
-        if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
         collapsedItems.push({ kind: "narration", id: folded.message.id, message: folded.message });
+        if (folded.inlineWorkEntries) collectWorkItems(folded.inlineWorkEntries, collapsedItems);
       }
     }
-    // The terminal's own inline work happened before its final answer text.
+    // The terminal's own work rows are details around the final answer; fold
+    // them into the disclosure so completed chats do not end with tool-log rows.
+    if (row.leadingWorkEntries) collectWorkItems(row.leadingWorkEntries, collapsedItems);
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
       const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
+      delete row.leadingWorkEntries;
+      delete row.leadingWorkGroupId;
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
@@ -543,6 +558,61 @@ function workLogSubagentsEqual(
   });
 }
 
+// Automation card fields are visible row content, so stale equality would freeze the transcript UI.
+function workLogAutomationsEqual(a: WorkLogEntry["automation"], b: WorkLogEntry["automation"]) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.id === b.id && a.name === b.name && a.cadenceLabel === b.cadenceLabel;
+}
+
+function workLogToolOutputsEqual(
+  a: NonNullable<WorkLogEntry["toolDetails"]>["output"],
+  b: NonNullable<WorkLogEntry["toolDetails"]>["output"],
+) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.output === b.output &&
+    a.stdout === b.stdout &&
+    a.stderr === b.stderr &&
+    a.exitCode === b.exitCode &&
+    a.truncated === b.truncated
+  );
+}
+
+function workLogToolEditsEqual(
+  left: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
+  right: NonNullable<WorkLogEntry["toolDetails"]>["edits"],
+) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  if (left.length !== right.length) return false;
+  return left.every((edit, index) => {
+    const other = right[index];
+    return (
+      other !== undefined &&
+      edit.path === other.path &&
+      edit.oldText === other.oldText &&
+      edit.newText === other.newText
+    );
+  });
+}
+
+function workLogToolDetailsEqual(a: WorkLogEntry["toolDetails"], b: WorkLogEntry["toolDetails"]) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.kind === b.kind &&
+    a.title === b.title &&
+    a.command === b.command &&
+    a.diff === b.diff &&
+    a.content === b.content &&
+    stringArraysEqual(a.files, b.files) &&
+    workLogToolOutputsEqual(a.output, b.output) &&
+    workLogToolEditsEqual(a.edits, b.edits)
+  );
+}
+
 function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
   return (
     a.id === b.id &&
@@ -557,11 +627,14 @@ function workLogEntryContentEqual(a: WorkLogEntry, b: WorkLogEntry): boolean {
     a.tone === b.tone &&
     a.itemType === b.itemType &&
     a.requestKind === b.requestKind &&
+    a.activityKind === b.activityKind &&
     a.toolName === b.toolName &&
     a.toolCallId === b.toolCallId &&
     stringArraysEqual(a.changedFiles, b.changedFiles) &&
     workLogSubagentActionsEqual(a.subagentAction, b.subagentAction) &&
-    workLogSubagentsEqual(a.subagents, b.subagents)
+    workLogSubagentsEqual(a.subagents, b.subagents) &&
+    workLogAutomationsEqual(a.automation, b.automation) &&
+    workLogToolDetailsEqual(a.toolDetails, b.toolDetails)
   );
 }
 
@@ -624,6 +697,8 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
       const bm = b as typeof a;
       return (
         a.message === bm.message &&
+        workLogEntryArraysEqual(a.leadingWorkEntries, bm.leadingWorkEntries) &&
+        a.leadingWorkGroupId === bm.leadingWorkGroupId &&
         workLogEntryArraysEqual(a.inlineWorkEntries, bm.inlineWorkEntries) &&
         a.inlineWorkGroupId === bm.inlineWorkGroupId &&
         collapsedTurnItemsEqual(a.collapsedTurnItems, bm.collapsedTurnItems) &&
@@ -631,6 +706,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.durationStart === bm.durationStart &&
         a.showAssistantCopyButton === bm.showAssistantCopyButton &&
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
+        a.assistantTurnInProgress === bm.assistantTurnInProgress &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount
       );

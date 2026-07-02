@@ -26,6 +26,7 @@ import {
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
@@ -33,6 +34,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -55,6 +57,61 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
+
+function nonEmptyDisplayValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function differentDisplayValue(
+  value: string | null | undefined,
+  existing: string | null,
+): string | null {
+  const normalized = nonEmptyDisplayValue(value);
+  if (!normalized) {
+    return null;
+  }
+  return existing !== null && normalized === existing ? null : normalized;
+}
+
+export type SidebarThreadHoverMetadata = {
+  projectName: string | null;
+  projectCwd: string | null;
+  sourceProjectName: string | null;
+  branch: string | null;
+  worktreeName: string | null;
+};
+
+export function resolveThreadHoverCardMetadata(input: {
+  thread: Pick<
+    SidebarThreadSummary,
+    "envMode" | "branch" | "worktreePath" | "associatedWorktreePath" | "associatedWorktreeBranch"
+  >;
+  project: Pick<Project, "name" | "folderName" | "cwd"> | null;
+}): SidebarThreadHoverMetadata {
+  const projectName =
+    nonEmptyDisplayValue(input.project?.name) ?? nonEmptyDisplayValue(input.project?.folderName);
+  const activeWorktreePath = nonEmptyDisplayValue(input.thread.worktreePath);
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: input.thread.envMode,
+      worktreePath: activeWorktreePath,
+    }) === "worktree";
+  const associatedWorktreePath = nonEmptyDisplayValue(input.thread.associatedWorktreePath);
+  const worktreePath = isWorktree ? (associatedWorktreePath ?? activeWorktreePath) : null;
+
+  return {
+    projectName,
+    projectCwd: input.project?.cwd ?? null,
+    sourceProjectName: isWorktree
+      ? differentDisplayValue(input.project?.folderName, projectName)
+      : null,
+    branch:
+      nonEmptyDisplayValue(input.thread.associatedWorktreeBranch) ??
+      nonEmptyDisplayValue(input.thread.branch),
+    worktreeName: worktreePath ? formatWorktreePathForDisplay(worktreePath) : null,
+  };
+}
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -85,7 +142,17 @@ export type SidebarProjectEntry = {
   isExpanded: boolean;
 };
 
+export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project";
+
+export function createSidebarThreadHoverAnchorId(input: {
+  scope: SidebarThreadHoverAnchorScope;
+  threadId: ThreadId;
+}): string {
+  return `${input.scope}:${input.threadId}`;
+}
+
 export type SidebarDerivedProjectData = {
+  allProjectThreadCount: number;
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
@@ -283,28 +350,40 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
 
 /**
  * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster. Split into two reserves so the title is only truncated by
- * content that is actually on screen:
+ * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
+ * far right as the on-screen content allows:
  *
- * - Idle rows reserve just enough for the timestamp/status glyph plus any
- *   fork/worktree/handoff meta chips. A row with no badges therefore runs the
- *   title nearly to the timestamp instead of truncating against permanently
- *   reserved empty space.
- * - The wider reserve that clears the hover pin/archive actions is only applied
+ * - The relative time now lives in the row hover card, so an idle row with no
+ *   status/jump glyph and no meta chips reserves almost nothing — the title runs
+ *   to the row edge instead of truncating against permanently reserved space.
+ * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
+ *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
+ *   badges that are present.
+ * - The wider reserve that clears the hover pin/archive actions is applied only
  *   on hover/focus (mirroring the project header row), so the title gives up that
  *   width exactly when those actions appear and not a moment sooner.
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
-export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + timestamp fade
-  // out at the same time, so this reserve is a constant regardless of chip count.
+export function resolveThreadRowTrailingReserveClass(input: {
+  metaChipCount: number;
+  hasTrailingGlyph: boolean;
+}): string {
+  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
+  // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
     "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  if (metaChipCount <= 0) return cn("pr-[2.25rem]", hoverReserve);
-  if (metaChipCount === 1) return cn("pr-[3.5rem]", hoverReserve);
-  if (metaChipCount === 2) return cn("pr-[4rem]", hoverReserve);
-  return cn("pr-[4.5rem]", hoverReserve);
+  const { metaChipCount, hasTrailingGlyph } = input;
+  if (metaChipCount <= 0) {
+    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
+  }
+  if (metaChipCount === 1) {
+    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
+  }
+  if (metaChipCount === 2) {
+    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
+  }
+  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
@@ -881,10 +960,20 @@ export function getVisibleSidebarThreadIds(input: {
     threads,
   } = input;
   const visibleThreadIds: Thread["id"][] = [];
+  const threadsByProjectId = new Map<ProjectId, (typeof threads)[number][]>();
+
+  for (const thread of threads) {
+    const projectThreads = threadsByProjectId.get(thread.projectId);
+    if (projectThreads) {
+      projectThreads.push(thread);
+    } else {
+      threadsByProjectId.set(thread.projectId, [thread]);
+    }
+  }
 
   for (const project of projects) {
     const projectThreads = sortThreadsForSidebar(
-      threads.filter((thread) => thread.projectId === project.id),
+      threadsByProjectId.get(project.id) ?? [],
       threadSortOrder,
     );
     const projectThreadTree = buildProjectThreadTree({
@@ -1225,6 +1314,7 @@ export function deriveSidebarProjectData(input: {
             ];
 
       byProjectId.set(project.id, {
+        allProjectThreadCount: allProjectThreads.length,
         projectThreads,
         orderedProjectThreadIds,
         visibleEntries,
@@ -1264,6 +1354,7 @@ export function deriveSidebarProjectData(input: {
     });
 
     byProjectId.set(project.id, {
+      allProjectThreadCount: allProjectThreads.length,
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
@@ -1304,7 +1395,7 @@ export function resolvePrStatePresentation(
   }
   return {
     label: "PR merged",
-    colorClass: "text-violet-500 dark:text-violet-400",
+    colorClass: "text-indigo-500 dark:text-indigo-400",
     iconKind: "merged-simple",
   };
 }

@@ -14,7 +14,9 @@ import { type MouseEvent, useCallback, useMemo, useState } from "react";
 import { useAppSettings } from "~/appSettings";
 import { RenameThreadDialog } from "~/components/RenameThreadDialog";
 import { useCopyPathToClipboard, useCopyThreadIdToClipboard } from "~/hooks/useCopyToClipboard";
+import { reconcileDeletedThreadFromClient } from "~/lib/deletedThreadClientReconciliation";
 import { gitRemoveWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import { pinActionLabel } from "~/lib/pin";
 import { dispatchThreadRename } from "~/lib/threadRename";
 import { newCommandId } from "~/lib/utils";
 import { useComposerDraftStore } from "../../composerDraftStore";
@@ -22,6 +24,7 @@ import { useKanbanUiStore } from "../../kanbanUiStore";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { useTerminalStateStore } from "../../terminalStateStore";
+import { isThreadRunningTurn } from "../../session-logic";
 import { getThreadFromState, getThreadsFromState } from "../../threadDerivation";
 import {
   formatWorktreePathForDisplay,
@@ -73,7 +76,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
     if (!api) return;
     const thread = getThreadFromState(useStore.getState(), threadId);
     if (!thread) return;
-    if (thread.session?.status === "running" && thread.session.activeTurnId != null) {
+    if (isThreadRunningTurn(thread)) {
       toastManager.add({
         type: "error",
         title: "Cannot archive",
@@ -152,6 +155,10 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
         commandId: newCommandId(),
         threadId: card.threadId,
       });
+      void reconcileDeletedThreadFromClient({
+        threadId: card.threadId,
+        removeDeletedThreadFromClientState: useStore.getState().removeDeletedThreadFromClientState,
+      });
       clearDraftThread(card.threadId);
       clearProjectDraftThreadById(thread.projectId, thread.id);
       clearTerminalState(card.threadId);
@@ -216,7 +223,7 @@ export function useKanbanCardContextMenu(): KanbanCardContextMenuController {
                   { id: "rename", label: "Rename thread" },
                   {
                     id: "toggle-pin",
-                    label: card.thread?.isPinned ? "Unpin thread" : "Pin thread",
+                    label: pinActionLabel("thread", card.thread?.isPinned ?? false),
                   },
                 ]
               : []),

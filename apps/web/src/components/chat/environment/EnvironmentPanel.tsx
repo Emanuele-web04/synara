@@ -9,9 +9,11 @@
 // Layer: Environment panel container
 
 import type {
+  AutomationDefinition,
   EditorId,
   MessageId,
   PinnedMessage,
+  ProjectId,
   ProviderKind,
   ResolvedKeybindingsConfig,
   ThreadId,
@@ -35,11 +37,16 @@ import { ArrowUpRightIcon, ChangesIcon, GitHubIcon, SettingsIcon } from "~/lib/i
 import { cn } from "~/lib/utils";
 
 import { EnvironmentEditorSection } from "./EnvironmentEditorSection";
+import {
+  EnvironmentAutomationsSection,
+  type EnvironmentAutomationPanelItem,
+} from "./EnvironmentAutomationsSection";
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
+import { EnvironmentProjectInstructionsSection } from "./EnvironmentProjectInstructionsSection";
 import { ENVIRONMENT_PANEL_RECAP_MARKDOWN_CLASS_NAME } from "./environmentPanelStyles";
 import {
   ENVIRONMENT_ROW_ICON_CLASS_NAME,
@@ -85,6 +92,8 @@ export interface EnvironmentPanelProps {
   showGitActions: boolean;
   /** Current diff-panel open state, so the "Changes" row reflects/toggles it. */
   diffOpen: boolean;
+  /** Heartbeat automations whose target is the active thread. */
+  threadAutomations: readonly EnvironmentAutomationPanelItem[];
   /** Non-null when the diff panel cannot be opened (e.g. no repo / no changes yet). */
   diffDisabledReason?: string | null;
   /** Shared diff totals from ChatView so the mounted panel does not duplicate patch parsing. */
@@ -107,8 +116,20 @@ export interface EnvironmentPanelProps {
   markerMessageTextById: ReadonlyMap<MessageId, string>;
   /** Per-thread freeform scratchpad notes (server-synced). */
   notes: string;
+  /** Active project whose local instructions should be edited. */
+  activeProjectId: ProjectId | null;
+  /** Per-project freeform instructions, persisted locally and optionally copied into notes. */
+  projectInstructions: string;
+  /** Whether the current thread is server-backed enough to accept notepad updates. */
+  canCopyProjectInstructionsToNotes: boolean;
+  /** Persist local project instruction edits. */
+  onProjectInstructionsChange: (projectId: ProjectId, instructions: string) => void;
+  /** Copy/append current project instructions into the active thread's notepad. */
+  onCopyProjectInstructionsToNotes: () => void;
   /** Toggle the Diff panel/route (same handler the header diff toggle used). */
   onToggleDiff: () => void;
+  /** Open the shared automation editor for a thread-bound automation row. */
+  onOpenAutomation: (definition: AutomationDefinition) => void;
   /** Open the repository URL in the in-app browser panel. */
   onOpenGithubRepository?: (url: string) => void;
   /** Scroll the transcript to a pinned message. */
@@ -178,6 +199,7 @@ export function EnvironmentPanel({
   activeProvider,
   showGitActions,
   diffOpen,
+  threadAutomations,
   diffDisabledReason = null,
   diffTotals,
   branchToolbar,
@@ -187,7 +209,13 @@ export function EnvironmentPanel({
   pinnedMessageTextById,
   markerMessageTextById,
   notes,
+  activeProjectId,
+  projectInstructions,
+  canCopyProjectInstructionsToNotes,
+  onProjectInstructionsChange,
+  onCopyProjectInstructionsToNotes,
   onToggleDiff,
+  onOpenAutomation,
   onOpenGithubRepository,
   onJumpToPinnedMessage,
   onTogglePinnedMessageDone,
@@ -213,11 +241,30 @@ export function EnvironmentPanel({
 
   const content = (
     <div className="flex flex-col gap-0.5 p-1.5">
+      {threadAutomations.length > 0 ? (
+        <>
+          <EnvironmentAutomationsSection
+            automations={threadAutomations}
+            onOpenAutomation={(definition) => {
+              onOpenAutomation(definition);
+              onClose();
+            }}
+          />
+          <EnvironmentSectionDivider />
+        </>
+      ) : null}
+
       <div className="flex items-center justify-between gap-2 px-2 pb-0.5 pt-0.5">
         <EnvironmentPanelTitle>Environment</EnvironmentPanelTitle>
+        {/*
+          icon-xs centers the 14px gear inside a 28/24px box, insetting it ~7/5px from the
+          content edge; pull it back so the glyph's right edge lines up with the rows' chevrons
+          (which sit flush against the same px-2 gutter).
+        */}
         <IconButton
           label="Panel sections"
           tooltip="Panel sections"
+          className="-mr-[7px] sm:-mr-[5px]"
           onClick={() =>
             void navigate({
               to: "/settings",
@@ -325,6 +372,21 @@ export function EnvironmentPanel({
             onToggleDone={onToggleThreadMarkerDone}
             onRemove={onRemoveThreadMarker}
             onRename={onRenameThreadMarker}
+          />
+        </>
+      ) : null}
+
+      {settings.showEnvironmentInstructions && activeProjectId ? (
+        <>
+          <EnvironmentSectionDivider />
+          <EnvironmentProjectInstructionsSection
+            key={activeProjectId}
+            projectId={activeProjectId}
+            instructions={projectInstructions}
+            threadNotes={notes}
+            canCopyToThreadNotes={canCopyProjectInstructionsToNotes}
+            onInstructionsChange={onProjectInstructionsChange}
+            onCopyToThreadNotes={onCopyProjectInstructionsToNotes}
           />
         </>
       ) : null}

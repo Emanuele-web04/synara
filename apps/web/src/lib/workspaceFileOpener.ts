@@ -10,7 +10,11 @@
 //          openWorkspaceFileReference, prefetchWorkspaceFile
 
 import { isSupportedLocalPreviewFilePath } from "@t3tools/shared/localPreviewFiles";
-import { isWorkspaceRelativePathSafe, workspaceRelativePathOf } from "@t3tools/shared/path";
+import {
+  isLocalAbsolutePath,
+  isWorkspaceRelativePathSafe,
+  workspaceRelativePathOf,
+} from "@t3tools/shared/path";
 import { isScratchWorkspacePath } from "@t3tools/shared/threadWorkspace";
 import type { QueryClient } from "@tanstack/react-query";
 import { createContext, useContext } from "react";
@@ -39,6 +43,23 @@ export function useWorkspaceFileOpener(): WorkspaceFileOpener | null {
 // Trailing `:line` / `:line:col` suffix carried by resolved markdown file links.
 // The in-app viewer previews whole files, so the position is dropped.
 const FILE_POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
+const SYNARA_PUBLIC_ASSET_PATH_PREFIXES = [
+  "/central-icons-reversed/",
+  "/central-icons-fill/",
+] as const;
+const SYNARA_WEB_PUBLIC_WORKSPACE_DIR = "apps/web/public";
+
+function resolveSynaraPublicAssetOpenTarget(path: string, workspaceRoot: string | null) {
+  if (!workspaceRoot) {
+    return null;
+  }
+  const normalizedPath = path.replace(/\\/g, "/");
+  if (!SYNARA_PUBLIC_ASSET_PATH_PREFIXES.some((prefix) => normalizedPath.startsWith(prefix))) {
+    return null;
+  }
+  const relativePath = `${SYNARA_WEB_PUBLIC_WORKSPACE_DIR}${normalizedPath}`;
+  return isWorkspaceRelativePathSafe(relativePath) ? relativePath : null;
+}
 
 /**
  * Maps a chat file reference (workspace-relative, or absolute as produced by
@@ -60,7 +81,13 @@ export function resolveWorkspaceFileOpenTarget(
   if (!workspaceRoot) {
     return null;
   }
-  return workspaceRelativePathOf(withoutPosition, workspaceRoot);
+  const workspaceRelativePath = workspaceRelativePathOf(withoutPosition, workspaceRoot);
+  if (workspaceRelativePath) {
+    return workspaceRelativePath;
+  }
+  // CentralIcon assets are linked in chat as Vite root URLs
+  // (`/central-icons-...`) but the file viewer needs the repo path.
+  return resolveSynaraPublicAssetOpenTarget(withoutPosition, workspaceRoot);
 }
 
 /**
@@ -81,16 +108,26 @@ export function resolveScratchPreviewFileOpenTarget(rawPath: string): string | n
   return isSupportedLocalPreviewFilePath(withoutPosition) ? withoutPosition : null;
 }
 
-// Right-dock file panes can show workspace text files plus scratch binary previews.
-// Relative paths still require a workspace; absolute scratch images/PDFs do not.
+// Right-dock file panes can show workspace files plus absolute local paths.
+// Relative paths still require a workspace; absolute paths are read as-is.
 export function resolveDockFileOpenTarget(
   rawPath: string,
   workspaceRoot: string | null,
 ): string | null {
+  const withoutPosition = rawPath.trim().replace(FILE_POSITION_SUFFIX_PATTERN, "");
+  if (withoutPosition.length === 0) {
+    return null;
+  }
   const workspaceTarget = workspaceRoot
     ? resolveWorkspaceFileOpenTarget(rawPath, workspaceRoot)
     : null;
-  return workspaceTarget ?? resolveScratchPreviewFileOpenTarget(rawPath);
+  if (workspaceTarget) {
+    return workspaceTarget;
+  }
+  if (isLocalAbsolutePath(withoutPosition)) {
+    return withoutPosition;
+  }
+  return resolveScratchPreviewFileOpenTarget(rawPath);
 }
 
 /**

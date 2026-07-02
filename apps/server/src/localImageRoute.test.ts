@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
 import { resolveDefaultChatWorkspaceRoot, ServerConfig, type ServerConfigShape } from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
+import { createLocalPreviewGrant } from "./localImageFiles";
 
 const tempDirs: string[] = [];
 
@@ -168,6 +169,33 @@ describe("localImageEffectRouteLayer", () => {
       const downloadResponse = await fetch(`${origin}/api/local-image?${params}`);
       expect(downloadResponse.status).toBe(200);
       expect(downloadResponse.headers.get("content-disposition")).toContain("hero.png");
+    });
+  });
+
+  it("serves an absolute local image outside the workspace for file-panel previews", async () => {
+    const workspace = makeTempDir("dpcode-effect-image-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const externalRoot = path.join(
+      process.cwd(),
+      `.test-local-preview-${process.pid}-${Date.now()}`,
+    );
+    tempDirs.push(externalRoot);
+    mkdirSync(externalRoot, { recursive: true });
+    const imagePath = path.join(externalRoot, "downloads-image.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const config = makeServerConfig({ cwd: workspace });
+
+    const grant = await createLocalPreviewGrant({ requestedPath: imagePath });
+
+    await withEffectServer(config, localImageEffectRouteLayer, async (origin) => {
+      const params = new URLSearchParams({ path: imagePath, cwd: workspace, grant: grant.grant });
+      const response = await fetch(`${origin}/api/local-image?${params}`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toContain("image/png");
+
+      params.delete("grant");
+      const ungrantedResponse = await fetch(`${origin}/api/local-image?${params}`);
+      expect(ungrantedResponse.status).toBe(404);
     });
   });
 

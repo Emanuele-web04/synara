@@ -116,6 +116,12 @@ export interface GitRenameBranchResult {
   branch: string;
 }
 
+export interface GitDeleteBranchInput {
+  cwd: string;
+  branch: string;
+  force?: boolean | undefined;
+}
+
 export interface GitFetchPullRequestBranchInput {
   cwd: string;
   prNumber: number;
@@ -286,6 +292,11 @@ export interface GitCoreShape {
    * Remove an existing worktree.
    */
   readonly removeWorktree: (input: GitRemoveWorktreeInput) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Delete an existing local branch.
+   */
+  readonly deleteBranch: (input: GitDeleteBranchInput) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Rename an existing local branch.

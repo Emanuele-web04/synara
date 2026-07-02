@@ -8,8 +8,6 @@ import type { ComponentProps } from "react";
 import { cn } from "~/lib/utils";
 import { MenuPopup, MenuSubPopup } from "../ui/menu";
 import { SelectPopup } from "../ui/select";
-import { TooltipPopup } from "../ui/tooltip";
-import { COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 import {
   type ComposerPickerSize,
   composerPickerMenuFixedShellClassName,
@@ -103,21 +101,6 @@ export function ComposerPickerMenuSubPopup({
           : composerPickerMenuShellClassName(resolvedSize),
         className,
       )}
-      {...props}
-    />
-  );
-}
-
-type ComposerPickerTooltipPopupProps = ComponentProps<typeof TooltipPopup>;
-
-/** Composer-attached tooltip with the same border, shadow, and surface as picker menus. */
-export function ComposerPickerTooltipPopup({
-  className,
-  ...props
-}: ComposerPickerTooltipPopupProps) {
-  return (
-    <TooltipPopup
-      className={cn(COMPOSER_PICKER_TOOLTIP_SURFACE_CLASS_NAME, className)}
       {...props}
     />
   );

@@ -67,11 +67,7 @@ export const PdfViewerToolbar = memo(function PdfViewerToolbar(props: PdfViewerT
         <span className="truncate text-[12px] font-medium text-foreground" title={props.fileName}>
           {props.fileName}
         </span>
-        <Badge
-          variant="outline"
-          size="sm"
-          className="uppercase tracking-wide text-muted-foreground/80"
-        >
+        <Badge variant="outline" size="sm" className="text-muted-foreground/80">
           PDF
         </Badge>
       </div>

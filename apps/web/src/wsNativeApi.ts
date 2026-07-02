@@ -34,6 +34,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type AutomationStreamEvent,
 } from "@t3tools/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
@@ -69,6 +70,7 @@ function omitNullUserInputAnswers(
 }
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
+const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
 const orchestrationThreadEventListeners = new Set<
@@ -401,6 +403,16 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
+    const payload = message.data;
+    for (const listener of automationEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -479,6 +491,8 @@ export function createWsNativeApi(): NativeApi {
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
       readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      createLocalFilePreviewGrant: (input) =>
+        transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
       runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
       stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
@@ -618,6 +632,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
           timeoutMs: null,
         }),
+      generateAutomationIntent: (input) =>
+        transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -625,6 +643,11 @@ export function createWsNativeApi(): NativeApi {
         return transport.request(WS_METHODS.serverTranscribeVoice, input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+    },
+    stats: {
+      getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
+      getProfileTokenStats: (input) =>
+        transport.request(WS_METHODS.statsGetProfileTokenStats, input),
     },
     provider: {
       getComposerCapabilities: (input) =>
@@ -678,6 +701,22 @@ export function createWsNativeApi(): NativeApi {
         orchestrationThreadEventListeners.add(callback);
         return () => {
           orchestrationThreadEventListeners.delete(callback);
+        };
+      },
+    },
+    automation: {
+      list: (input) => transport.request(WS_METHODS.automationList, input),
+      create: (input) => transport.request(WS_METHODS.automationCreate, input),
+      update: (input) => transport.request(WS_METHODS.automationUpdate, input),
+      delete: (input) => transport.request(WS_METHODS.automationDelete, input),
+      runNow: (input) => transport.request(WS_METHODS.automationRunNow, input),
+      cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
+      markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
+      archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
+      onEvent: (callback) => {
+        automationEventListeners.add(callback);
+        return () => {
+          automationEventListeners.delete(callback);
         };
       },
     },
@@ -879,6 +918,7 @@ export function resetWsNativeApiForTest(): void {
   gitActionProgressListeners.clear();
   terminalEventListeners.clear();
   projectDevServerEventListeners.clear();
+  automationEventListeners.clear();
   orchestrationDomainEventListeners.clear();
   orchestrationShellEventListeners.clear();
   orchestrationThreadEventListeners.clear();

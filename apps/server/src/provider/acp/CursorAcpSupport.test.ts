@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
   buildCursorAcpModelDescriptors,
   buildCursorAcpModelDescriptorsFromAvailableModels,
   buildCursorAcpSpawnInput,
@@ -111,12 +112,21 @@ const parameterizedCursorVariantConfigOptions: ReadonlyArray<EffectAcpSchema.Ses
     },
   ];
 
+const noCursorAgentCommandOptions = {
+  env: { PATH: "" },
+  pathExists: () => false,
+};
+
 describe("buildCursorAcpSpawnInput", () => {
   it("builds the default Cursor ACP command", () => {
     expect(buildCursorAcpSpawnInput(undefined, "/tmp/project")).toEqual({
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
     });
   });
 
@@ -125,6 +135,47 @@ describe("buildCursorAcpSpawnInput", () => {
       command: "cursor-agent",
       args: ["acp"],
       cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+
+  it("uses configured Cursor editor launchers when no agent command is resolved", () => {
+    expect(
+      buildCursorAcpSpawnInput(
+        { binaryPath: "/not-real/bin/cursor" },
+        "/tmp/project",
+        noCursorAgentCommandOptions,
+      ),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+
+  it("uses bundled sibling agent commands for Cursor editor ACP startup", () => {
+    const cursorPath = "/Applications/Cursor.app/Contents/Resources/app/bin/cursor";
+    const agentPath = "/Applications/Cursor.app/Contents/Resources/app/bin/agent";
+    expect(
+      buildCursorAcpSpawnInput({ binaryPath: cursorPath }, "/tmp/project", {
+        env: { PATH: "" },
+        pathExists: (path) => path === agentPath,
+      }),
+    ).toEqual({
+      command: agentPath,
+      args: ["acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
     });
   });
 
@@ -141,6 +192,55 @@ describe("buildCursorAcpSpawnInput", () => {
       command: "/usr/local/bin/agent",
       args: ["-e", "http://localhost:3000", "acp"],
       cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+
+  it("passes api endpoint overrides through the Cursor launcher fallback", () => {
+    expect(
+      buildCursorAcpSpawnInput(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        "/tmp/project",
+        noCursorAgentCommandOptions,
+      ),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "acp"],
+      cwd: "/tmp/project",
+      env: {
+        NO_BROWSER: "true",
+        BROWSER: "www-browser",
+      },
+    });
+  });
+});
+
+describe("buildCursorCliModelListCommand", () => {
+  it("builds the default Cursor model list command", () => {
+    expect(buildCursorCliModelListCommand(undefined)).toEqual({
+      command: "cursor-agent",
+      args: ["models"],
+    });
+  });
+
+  it("uses the Cursor launcher fallback for model discovery", () => {
+    expect(
+      buildCursorCliModelListCommand(
+        {
+          binaryPath: "/not-real/bin/cursor",
+          apiEndpoint: "http://localhost:3000",
+        },
+        noCursorAgentCommandOptions,
+      ),
+    ).toEqual({
+      command: "/not-real/bin/cursor",
+      args: ["agent", "-e", "http://localhost:3000", "models"],
     });
   });
 });

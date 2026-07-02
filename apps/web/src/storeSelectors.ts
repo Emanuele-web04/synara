@@ -2,13 +2,23 @@
 // Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
 import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
 
 const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
+
+export interface ThreadWorkspaceMetadata {
+  envMode: ThreadEnvironmentMode | undefined;
+  worktreePath: string | null;
+}
+
+const EMPTY_THREAD_WORKSPACE_METADATA: ThreadWorkspaceMetadata = Object.freeze({
+  envMode: undefined,
+  worktreePath: null,
+});
 
 function createStableEntitySelector<T extends { id: string }>(
   selectItems: (state: AppState) => readonly T[],
@@ -143,6 +153,36 @@ export function createThreadProjectIdSelector(
       state.threads.find((thread) => thread.id === threadId)?.projectId ??
       null
     );
+  };
+}
+
+export function createThreadWorkspaceMetadataSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadWorkspaceMetadata {
+  let previousEnvMode: ThreadEnvironmentMode | undefined = undefined;
+  let previousWorktreePath: string | null = null;
+  let previousResult = EMPTY_THREAD_WORKSPACE_METADATA;
+
+  return (state) => {
+    if (!threadId) {
+      return EMPTY_THREAD_WORKSPACE_METADATA;
+    }
+
+    // Shell-only: avoid subscribing preview panes to live message/activity detail slices.
+    const source = state.threadShellById?.[threadId];
+    const envMode = source?.envMode;
+    const worktreePath = source?.worktreePath ?? null;
+    if (previousEnvMode === envMode && previousWorktreePath === worktreePath) {
+      return previousResult;
+    }
+
+    previousEnvMode = envMode;
+    previousWorktreePath = worktreePath;
+    previousResult =
+      envMode === undefined && worktreePath === null
+        ? EMPTY_THREAD_WORKSPACE_METADATA
+        : { envMode, worktreePath };
+    return previousResult;
   };
 }
 

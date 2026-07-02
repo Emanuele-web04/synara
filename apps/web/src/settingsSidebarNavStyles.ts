@@ -9,7 +9,7 @@ import {
   SIDEBAR_NESTED_LIST_GAP_CLASS_NAME,
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
-  SIDEBAR_ROW_MUTED_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
 } from "./sidebarRowStyles";
 import { SETTINGS_SECTION_LABEL_CLASS_NAME } from "./settingsPanelStyles";
 
@@ -24,22 +24,17 @@ export const SETTINGS_SIDEBAR_ITEM_CLASS_NAME = SIDEBAR_HEADER_ROW_CLASS_NAME;
 
 export const SETTINGS_SIDEBAR_ITEM_LABEL_CLASS_NAME = SIDEBAR_HEADER_LABEL_CLASS_NAME;
 
-/** Inner glyph size; tone comes from the SidebarLeadingIcon wrapper (same as project rows). */
+/** Inner glyph size; tone is set at each call site to `text-inherit` so the glyph tracks the row text. */
 export const SETTINGS_SIDEBAR_ICON_CLASS_NAME = "size-4";
 
-/** Names the row a hover group so the leading icon can follow the row's text color. */
-export const SETTINGS_SIDEBAR_ROW_GROUP_CLASS_NAME = "group/settings-nav-row";
-
 /**
- * Lets the leading icon inherit the row's text color on hover. Pairs with the active state's
- * `tone="text-inherit"` so the glyph matches the label in every interactive state instead of
- * staying muted when the row lights up.
+ * Idle nav rows rest at the same foreground as primary sidebar item rows (thread/project
+ * names) so settings navigation reads as part of the sidebar instead of a muted secondary
+ * list. The leading icon inherits this via `tone="text-inherit"` at the call site, so label
+ * and glyph track together through hover and the active fill.
  */
-export const SETTINGS_SIDEBAR_ICON_HOVER_TONE_CLASS_NAME =
-  "group-hover/settings-nav-row:text-inherit";
-
 export const SETTINGS_SIDEBAR_ROW_FILL_HOVER_CLASS_NAME = [
-  SIDEBAR_ROW_MUTED_TEXT_CLASS_NAME,
+  SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
 ].join(" ");
 

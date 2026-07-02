@@ -1,7 +1,8 @@
 // FILE: ComposerLiveChangesHeader.tsx
-// Purpose: Live "N files changed +X -Y" strip stacked flush onto the top of the
-// composer while a turn is running, mirroring the queued follow-up header. The
-// caller supplies turn-scoped diff totals and the Review action target.
+// Purpose: Live file-changes strip stacked flush onto the top of the composer
+// while a turn is running, mirroring the queued follow-up header. The caller
+// supplies turn-scoped diff totals (or a null count before they land) and the
+// Review action target.
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
 
@@ -20,10 +21,12 @@ import { DiffStatLabel } from "./DiffStatLabel";
 import { ReviewChangesButton } from "./ReviewChangesButton";
 
 interface ComposerLiveChangesHeaderProps {
-  fileCount: number;
+  fileCount: number | null;
   additions: number;
   deletions: number;
-  onReview: () => void;
+  // Explicit `| undefined` (not just `?`) so callers can pass a conditionally-absent
+  // handler under exactOptionalPropertyTypes; the Review button is hidden when omitted.
+  onReview?: (() => void) | undefined;
   attachedToPrevious?: boolean;
 }
 
@@ -37,22 +40,22 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
   if (fileCount === 0) {
     return null;
   }
+  const label =
+    fileCount === null ? "Files changed" : `${fileCount} ${pluralize(fileCount, "file")} changed`;
 
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious}>
       <ComposerStackedPanelRow>
         <ComposerStackedPanelRowMain>
           <ChangesIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
-          <ComposerStackedPanelRowLabel>
-            {`${fileCount} ${pluralize(fileCount, "file")} changed`}
-          </ComposerStackedPanelRowLabel>
+          <ComposerStackedPanelRowLabel>{label}</ComposerStackedPanelRowLabel>
           {additions + deletions > 0 ? (
             <span className="shrink-0 tabular-nums">
               <DiffStatLabel additions={additions} deletions={deletions} />
             </span>
           ) : null}
         </ComposerStackedPanelRowMain>
-        <ReviewChangesButton onClick={onReview} />
+        {onReview ? <ReviewChangesButton onClick={onReview} /> : null}
       </ComposerStackedPanelRow>
     </ComposerStackedPanel>
   );

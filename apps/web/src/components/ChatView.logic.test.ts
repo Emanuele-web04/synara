@@ -15,6 +15,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolveRuntimeModeAfterApprovalDecision,
@@ -22,6 +23,7 @@ import {
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
@@ -79,6 +81,39 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("composer pasted text collapse", () => {
+  it("is enabled only for regular chat sends", () => {
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: true,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: true,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
   });
 });
 
@@ -223,16 +258,18 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(true);
   });
 
-  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(false);
     expect(
@@ -240,6 +277,63 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
+        isConstrainedChatLayout: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets a manual preference override the default while switching chats", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: false,
+        userPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats action dismissals as transient closes instead of stored preferences", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: true,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: true,
+        userPreferenceOpen: true,
       }),
     ).toBe(false);
   });
@@ -297,10 +391,11 @@ describe("resolveActiveTurnLiveDiffState", () => {
       fileCount: 2,
       additions: 5,
       deletions: 1,
+      hasChanges: true,
     });
   });
 
-  it("returns zero totals before the active turn has a diff summary", () => {
+  it("returns zero totals before the active turn has a diff summary or file-edit work", () => {
     expect(
       resolveActiveTurnLiveDiffState({
         latestTurnId: TurnId.makeUnsafe("turn-active"),
@@ -317,6 +412,83 @@ describe("resolveActiveTurnLiveDiffState", () => {
       fileCount: 0,
       additions: 0,
       deletions: 0,
+      hasChanges: false,
+    });
+  });
+
+  it("treats an empty active turn diff summary as authoritative over tool-log file hints", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [],
+          },
+        ],
+        workLogEntries: [
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts"],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    });
+  });
+
+  it("falls back to in-turn file-edit work before the diff summary lands", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [
+          // Other turn / non-edit work is ignored.
+          { turnId: TurnId.makeUnsafe("turn-previous"), itemType: "file_change" },
+          { turnId: activeTurnId, requestKind: "command" },
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts", "src/b.ts"],
+          },
+          { turnId: activeTurnId, itemType: "file_change", changedFiles: ["src/a.ts"] },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 2,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    });
+  });
+
+  it("surfaces a stat-less strip when file-edit work has no changed paths yet", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [{ turnId: activeTurnId, itemType: "file_change" }],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
     });
   });
 });
@@ -464,6 +636,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "\uFFFC",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
@@ -478,6 +651,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -490,6 +664,7 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: `yoo \uFFFC waddup`,
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 0,
       terminalContexts: [
@@ -504,6 +679,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -515,9 +691,11 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 1,
       fileCommentCount: 0,
       terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -527,9 +705,25 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
       fileCommentCount: 1,
       terminalContexts: [],
+      pastedTexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats file attachments as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      fileCount: 1,
+      assistantSelectionCount: 0,
+      fileCommentCount: 0,
+      terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);

@@ -12,7 +12,11 @@ import { type MouseEvent, useCallback } from "react";
 
 import { DownloadIcon, Loader2Icon, Maximize2 } from "~/lib/icons";
 
-import { LocalImageErrorCard, useLocalImagePreview } from "../LocalImagePreview";
+import {
+  LocalImageErrorCard,
+  useLocalImageDownloadClick,
+  useLocalImagePreview,
+} from "../LocalImagePreview";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
 export interface GeneratedMarkdownImageProps {
@@ -27,6 +31,11 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
   const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
     useLocalImagePreview({ src, cwd });
   const accessibleName = alt?.trim() || "Generated image";
+  const downloadImage = useLocalImageDownloadClick({
+    downloadUrl,
+    downloadName,
+    errorTitle: "Could not download generated image",
+  });
 
   const expandImage = useCallback(
     (event: MouseEvent<HTMLElement>) => {
@@ -53,7 +62,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
         downloadName={downloadName}
         className="local-image-error--prose"
         downloadAriaLabel="Download generated image"
-        onDownloadClick={stopPropagation}
+        onDownloadClick={downloadImage}
       />
     );
   }
@@ -82,7 +91,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
       <a
         href={downloadUrl}
         download={downloadName}
-        onClick={stopPropagation}
+        onClick={downloadImage}
         onMouseDown={stopPropagation}
         className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--download"
         aria-label="Download generated image"

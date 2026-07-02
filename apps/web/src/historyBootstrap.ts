@@ -22,6 +22,7 @@ function messageRoleLabel(message: ChatMessage): "USER" | "ASSISTANT" {
 
 function attachmentSummary(message: ChatMessage): string | null {
   const imageAttachments = message.attachments?.filter((attachment) => attachment.type === "image");
+  const fileAttachments = message.attachments?.filter((attachment) => attachment.type === "file");
   const assistantSelections = message.attachments?.filter(
     (attachment) => attachment.type === "assistant-selection",
   );
@@ -34,6 +35,15 @@ function attachmentSummary(message: ChatMessage): string | null {
     const extraCount = count - names.length;
     const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
     summaries.push(`[Attached ${pluralize(count, "image")}: ${namesSummary}${extraSummary}]`);
+  }
+
+  const fileCount = fileAttachments?.length ?? 0;
+  if (fileCount > 0) {
+    const names = fileAttachments?.slice(0, 3).map((file) => file.name) ?? [];
+    const namesSummary = names.join(", ");
+    const extraCount = fileCount - names.length;
+    const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
+    summaries.push(`[Attached ${pluralize(fileCount, "file")}: ${namesSummary}${extraSummary}]`);
   }
 
   const selectionCount = assistantSelections?.length ?? 0;

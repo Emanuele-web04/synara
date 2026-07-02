@@ -15,6 +15,7 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
 const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
 const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
 const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
@@ -51,6 +52,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
   shell: {
     showInFolder: (path: string) => ipcRenderer.invoke(SHOW_IN_FOLDER_CHANNEL, path),
+  },
+  clipboard: {
+    writeImagePngDataUrl: (dataUrl: string) =>
+      ipcRenderer.invoke(CLIPBOARD_WRITE_IMAGE_CHANNEL, dataUrl),
   },
   windowControls: {
     minimize: () => ipcRenderer.invoke(WINDOW_MINIMIZE_CHANNEL),

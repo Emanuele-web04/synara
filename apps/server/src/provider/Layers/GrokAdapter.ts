@@ -21,6 +21,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -43,6 +44,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterRequestError,
@@ -1362,17 +1364,23 @@ export function makeGrokAdapter(
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
-          promptParts.push({
-            type: "text",
-            text: withSynaraWandyPromptContext(
-              withGrokPlanModePrompt({
+        const promptText = appendFileAttachmentsPromptBlock({
+          text: input.input?.trim()
+            ? withGrokPlanModePrompt({
                 text: input.input.trim(),
                 ...(input.interactionMode !== undefined
                   ? { interactionMode: input.interactionMode }
                   : {}),
-              }),
-            ),
+              })
+            : undefined,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        });
+        if (promptText) {
+          promptParts.push({
+            type: "text",
+            text: withSynaraWandyPromptContext(promptText),
           });
         }
         if (input.attachments && input.attachments.length > 0) {
@@ -1679,9 +1687,10 @@ export function makeGrokAdapter(
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
+          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: process.env });
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(binaryPath, ["models"], {
-              shell: process.platform === "win32",
+            ChildProcess.make(prepared.command, prepared.args, {
+              shell: prepared.shell,
               env: process.env,
             }),
           );

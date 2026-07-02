@@ -1,8 +1,15 @@
+// FILE: MessagesTimeline.test.tsx
+// Purpose: Covers transcript row rendering and SSR-safe presentation contracts.
+// Layer: Web chat component tests
+// Depends on: renderToStaticMarkup and a mocked LegendList.
+
 import { MessageId, TurnId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { formatShortTimestamp } from "../../timestampFormat";
 import { COLLAPSED_USER_MESSAGE_MAX_CHARS } from "./userMessagePreview";
+
+const TOOLTIP_TRIGGER_MARKER = 'data-base-ui-tooltip-trigger=""';
 
 vi.mock("@legendapp/list/react", async () => {
   const React = await import("react");
@@ -197,7 +204,7 @@ describe("MessagesTimeline", () => {
       "w-max max-w-full min-w-0 self-end bg-[var(--app-user-message-background)]",
     );
     expect(markup).toContain("rounded-[var(--radius-user-message)]");
-    expect(markup).toContain("py-[8px]");
+    expect(markup).toContain("py-1.5");
     expect(markup).toContain("group-hover:opacity-100");
   });
 
@@ -1561,6 +1568,16 @@ describe("MessagesTimeline", () => {
               tone: "tool",
               requestKind: "file-change",
               changedFiles: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              toolDetails: {
+                kind: "file-change",
+                title: "Edited",
+                diff: [
+                  "diff --git a/apps/web/src/components/chat/MessagesTimeline.test.tsx b/apps/web/src/components/chat/MessagesTimeline.test.tsx",
+                  "-old",
+                  "+new",
+                ].join("\n"),
+                files: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              },
             },
           },
           {
@@ -1620,7 +1637,59 @@ describe("MessagesTimeline", () => {
     );
   });
 
-  it("renders command rows with a readable summary and keeps the full command on hover", async () => {
+  it("marks visible file-change rows with captured details as clickable", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-file-change-details",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-file-change-details",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "File Change",
+              tone: "tool",
+              requestKind: "file-change",
+              changedFiles: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              toolDetails: {
+                kind: "file-change",
+                title: "Edited",
+                diff: "-old\n+new",
+                files: ["apps/web/src/components/chat/MessagesTimeline.test.tsx"],
+              },
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain('data-tool-details-inline="true"');
+    expect(markup).not.toContain("Diff");
+    expect(markup).not.toContain("Details");
+  });
+
+  it("renders command rows with a readable summary and styled hover tooltip trigger", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1662,12 +1731,217 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Searched");
+    expect(markup).toContain("for ProjectionSnapshotQuery in server/src");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src");
-    expect(markup).toContain(
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
+    expect(markup).not.toContain(
       `title="/bin/zsh -lc &#x27;rg -n &quot;ProjectionSnapshotQuery&quot; apps/server/src&#x27;"`,
     );
     expect(markup).not.toContain("&gt;/bin/zsh -lc");
+  });
+
+  it("uses the GitHub logo for git and GitHub CLI command rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-git-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-git-command",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Checked",
+              command: "git status --short",
+            },
+          },
+          {
+            id: "entry-gh-command",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            entry: {
+              id: "work-gh-command",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Ran",
+              command: "gh pr view 274 --repo owner/repo",
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup.match(/data-tool-icon="github"/g)).toHaveLength(2);
+    expect(markup).not.toContain("/central-icons-reversed/git.svg");
+  });
+
+  it("marks command rows with captured details as clickable", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-command-details",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-command-details",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolTitle: "Searched",
+              command: `rg -n "toolDetails" apps/web/src`,
+              toolDetails: {
+                kind: "command",
+                title: "Searched",
+                command: `rg -n "toolDetails" apps/web/src`,
+                output: {
+                  stdout: "apps/web/src/session-logic.ts:55: toolDetails",
+                },
+              },
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain('data-tool-detail-trigger="true"');
+    expect(markup).not.toContain('data-tool-details-inline="true"');
+    expect(markup).not.toContain("Shell");
+    expect(markup).not.toContain("rounded-lg border border-border/45 bg-background/62");
+    expect(markup).not.toContain("chat-markdown-codeblock");
+    expect(markup).not.toContain("$ rg -n &quot;toolDetails&quot; apps/web/src");
+    expect(markup).not.toContain("apps/web/src/session-logic.ts:55: toolDetails");
+    expect(markup).not.toContain("Stdout");
+    expect(markup).toContain("Searched");
+  });
+
+  it("finds tool details entries attached inline to assistant message rows", async () => {
+    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
+    const entry = findToolDetailsEntryById(
+      [
+        {
+          kind: "message",
+          id: "row-assistant-inline-work",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          message: {
+            id: MessageId.makeUnsafe("assistant-inline-work"),
+            role: "assistant",
+            text: "done",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            streaming: false,
+          },
+          inlineWorkEntries: [
+            {
+              id: "inline-command-details",
+              createdAt: "2026-03-17T19:12:27.000Z",
+              label: "Ran command",
+              tone: "tool",
+              itemType: "command_execution",
+              toolDetails: {
+                kind: "command",
+                title: "Searched",
+                command: "rg toolDetails",
+              },
+            },
+          ],
+          durationStart: "2026-03-17T19:12:27.000Z",
+          showAssistantCopyButton: true,
+          assistantCopyStreaming: false,
+        },
+      ],
+      "inline-command-details",
+    );
+
+    expect(entry?.toolDetails?.kind).toBe("command");
+    expect(entry?.toolDetails?.command).toBe("rg toolDetails");
+  });
+
+  it("finds tool details entries inside collapsed assistant work disclosures", async () => {
+    const { findToolDetailsEntryById } = await import("./MessagesTimeline");
+    const entry = findToolDetailsEntryById(
+      [
+        {
+          kind: "message",
+          id: "row-assistant-collapsed-work",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          message: {
+            id: MessageId.makeUnsafe("assistant-collapsed-work"),
+            role: "assistant",
+            text: "done",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            streaming: false,
+          },
+          collapsedTurnItems: [
+            {
+              kind: "work",
+              id: "collapsed-command-details",
+              entry: {
+                id: "collapsed-command-details",
+                createdAt: "2026-03-17T19:12:27.000Z",
+                label: "Ran command",
+                tone: "tool",
+                itemType: "command_execution",
+                toolDetails: {
+                  kind: "command",
+                  title: "Searched",
+                  command: "rg collapsed",
+                },
+              },
+            },
+          ],
+          collapsedWorkElapsed: "1s",
+          durationStart: "2026-03-17T19:12:27.000Z",
+          showAssistantCopyButton: true,
+          assistantCopyStreaming: false,
+        },
+      ],
+      "collapsed-command-details",
+    );
+
+    expect(entry?.toolDetails?.kind).toBe("command");
+    expect(entry?.toolDetails?.command).toBe("rg collapsed");
   });
 
   it("renders command text even when commandActions provide a short preview", async () => {
@@ -1714,7 +1988,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Listed");
     expect(markup).not.toContain("data-work-entry-action-word");
-    expect(markup).toContain("find apps/web/src -maxdepth 2 -type d");
+    expect(markup).toContain("web/src");
+    expect(markup).toContain(TOOLTIP_TRIGGER_MARKER);
     expect(markup).not.toContain(">Listed web<");
   });
 
@@ -1850,7 +2125,8 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Searched the web");
     expect(markup).toContain("48 files found");
-    expect(markup).toContain("tabler-icon-world");
+    expect(markup).toContain("/central-icons-reversed/globe.svg");
+    expect(markup).not.toContain("tabler-icon-world");
   });
 
   it("shows a GitHub icon next to compact GitHub MCP rows", async () => {
