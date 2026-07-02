@@ -648,14 +648,20 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
     const serverSettings = yield* ServerSettingsService;
-    const getAdapterForInstance = (instance: ResolvedProviderInstance) =>
+    const getAdapterForInstance = (
+      instance: ResolvedProviderInstance,
+      options?: { readonly allowDisabled?: boolean },
+    ) =>
       registry.getByInstance
-        ? registry.getByInstance(instance.instanceId)
+        ? registry.getByInstance(instance.instanceId, options)
         : registry.getByProvider(instance.driver);
-    const getAdapterForBinding = (binding: ProviderRuntimeBinding) => {
+    const getAdapterForBinding = (
+      binding: ProviderRuntimeBinding,
+      options?: { readonly allowDisabled?: boolean },
+    ) => {
       const provider = Schema.is(ProviderKind)(binding.provider) ? binding.provider : undefined;
       if (registry.getByInstance) {
-        return registry.getByInstance(providerInstanceIdFromBinding(binding)).pipe(
+        return registry.getByInstance(providerInstanceIdFromBinding(binding), options).pipe(
           Effect.catch(() =>
             provider
               ? registry.getByProvider(provider)
@@ -950,6 +956,12 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
        * where the session's recorded options are the source of truth.
        */
       readonly providerOptionsPrecedence?: "instance" | "caller";
+      /**
+       * Disabled instances must not start new sessions, but stop/cleanup paths
+       * still need to resolve them to tear down runtimes and bindings that were
+       * created before the instance was disabled.
+       */
+      readonly allowDisabled?: boolean;
     }) =>
       Effect.gen(function* () {
         const explicitProvider = input.provider !== undefined;
@@ -978,7 +990,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
             `Requested provider '${provider}' does not match provider instance '${instance.instanceId}' driver '${instance.driver}'.`,
           );
         }
-        if (!instance.enabled) {
+        if (!instance.enabled && input.allowDisabled !== true) {
           return yield* toValidationError(
             input.operation,
             `Provider instance '${instance.displayName}' is disabled in Settings > Providers.`,
@@ -2229,6 +2241,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       readonly threadId: ThreadId;
       readonly operation: string;
       readonly allowRecovery: boolean;
+      /** Stop/cleanup paths must still route sessions of disabled instances. */
+      readonly allowDisabled?: boolean;
     }) =>
       Effect.gen(function* () {
         const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
@@ -2242,9 +2256,15 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               operation: input.operation,
               provider: live.session.provider,
               providerInstanceId,
+              ...(input.allowDisabled !== undefined ? { allowDisabled: input.allowDisabled } : {}),
             });
             return {
-              adapter: yield* getAdapterForInstance(resolved.instance),
+              adapter: yield* getAdapterForInstance(
+                resolved.instance,
+                input.allowDisabled !== undefined
+                  ? { allowDisabled: input.allowDisabled }
+                  : undefined,
+              ),
               threadId: input.threadId,
               providerInstanceId: resolved.instance.instanceId,
               isActive: true,
@@ -2263,11 +2283,22 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               operation: input.operation,
               ...providerKindConstraint(binding.provider),
               providerInstanceId: persistedProviderInstanceId,
+              ...(input.allowDisabled !== undefined ? { allowDisabled: input.allowDisabled } : {}),
             })
           : undefined;
         const adapter = resolved
-          ? yield* getAdapterForInstance(resolved.instance)
-          : yield* getAdapterForBinding(binding);
+          ? yield* getAdapterForInstance(
+              resolved.instance,
+              input.allowDisabled !== undefined
+                ? { allowDisabled: input.allowDisabled }
+                : undefined,
+            )
+          : yield* getAdapterForBinding(
+              binding,
+              input.allowDisabled !== undefined
+                ? { allowDisabled: input.allowDisabled }
+                : undefined,
+            );
         const providerAdapter = Schema.is(ProviderKind)(binding.provider)
           ? yield* registry.getByProvider(binding.provider)
           : adapter;
@@ -3435,6 +3466,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               threadId: input.threadId,
               operation: "ProviderService.stopSession",
               allowRecovery: false,
+              allowDisabled: true,
             }).pipe(
               Effect.catchTag("ProviderValidationError", (error) =>
                 error.issue.includes("no persisted provider binding exists")

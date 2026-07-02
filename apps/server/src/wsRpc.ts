@@ -21,9 +21,11 @@ import {
   type GitActionProgressEvent,
   type GitHubProjectProvisionProgressEvent,
   type GitWorktreeSetupProgressEvent,
+  type ModelSelection,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type ProjectDevServerEvent,
+  type ProviderStartOptions,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadDetailSnapshot,
@@ -31,6 +33,7 @@ import {
   type ServerConfigStreamEvent,
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
+  type ServerSettings,
 } from "@synara/contracts";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Scope, Stream } from "effect";
@@ -318,6 +321,47 @@ function toWsRpcError(cause: unknown, fallbackMessage: string) {
 // (the client id is stable across a socket reconnect), but keyed per
 // subscriber inside the tracker — see makeResnapshotEscalationTracker.
 const resnapshotEscalationTracker = makeResnapshotEscalationTracker();
+
+// Legacy/native callers may pin a text-generation model via the model-only
+// `textGenerationModel` field. Downstream routing prefers a model selection
+// over the raw model, so the global settings selection must only be injected
+// when the caller supplied neither — injecting it alongside an explicit model
+// would silently reroute the request to the globally configured model.
+function resolveTextGenerationRouting(
+  settings: ServerSettings,
+  input: {
+    readonly textGenerationModel?: string | undefined;
+    readonly textGenerationModelSelection?: ModelSelection | undefined;
+    readonly providerOptions?: ProviderStartOptions | undefined;
+  },
+): {
+  readonly model: string;
+  readonly modelSelection: ModelSelection | undefined;
+  readonly providerOptions: ProviderStartOptions | undefined;
+} {
+  const explicitModel = input.textGenerationModel?.trim();
+  if (!input.textGenerationModelSelection && explicitModel) {
+    return {
+      model: explicitModel,
+      modelSelection: undefined,
+      providerOptions: input.providerOptions,
+    };
+  }
+  const modelSelection =
+    input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
+  const instance = resolveProviderInstance(settings, {
+    provider: modelSelection.provider,
+    instanceId: resolveModelSelectionInstanceId(modelSelection),
+  });
+  return {
+    model: explicitModel || modelSelection.model,
+    modelSelection,
+    providerOptions: mergeProviderStartOptions(
+      input.providerOptions,
+      instance ? providerStartOptionsFromInstance(instance) : undefined,
+    ),
+  };
+}
 
 const failLiveUiStreamForSnapshotResync = (report: LiveUiStreamDropReport) =>
   Effect.fail(
@@ -1438,21 +1482,14 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitSummarizeDiff]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
-              if (!input.textGenerationModelSelection) {
-                return yield* gitManager.summarizeDiff(input);
-              }
               const settings = yield* serverSettings.getSettings;
-              const instance = resolveProviderInstance(settings, {
-                provider: input.textGenerationModelSelection.provider,
-                instanceId: resolveModelSelectionInstanceId(input.textGenerationModelSelection),
-              });
-              const providerOptions = mergeProviderStartOptions(
-                input.providerOptions,
-                instance ? providerStartOptionsFromInstance(instance) : undefined,
-              );
+              const routing = resolveTextGenerationRouting(settings, input);
               return yield* gitManager.summarizeDiff({
                 ...input,
-                ...(providerOptions ? { providerOptions } : {}),
+                ...(routing.modelSelection
+                  ? { textGenerationModelSelection: routing.modelSelection }
+                  : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
               });
             }),
             "Failed to summarize diff",
@@ -1468,21 +1505,32 @@ const makeWsRpcHandlersLayer = () =>
         [WS_METHODS.gitRunStackedAction]: (input) =>
           bufferLiveUiStream(
             Stream.callback<GitActionProgressEvent, WsRpcError>((queue) =>
-              gitManager
-                .runStackedAction(input, {
-                  actionId: input.actionId,
-                  progressReporter: {
-                    publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
-                  },
-                })
-                .pipe(
-                  Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
-                  Effect.matchCauseEffect({
-                    onFailure: (cause) =>
-                      Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
-                    onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+              Effect.gen(function* () {
+                const settings = yield* serverSettings.getSettings;
+                const routing = resolveTextGenerationRouting(settings, input);
+                return {
+                  ...input,
+                  ...(routing.modelSelection
+                    ? { textGenerationModelSelection: routing.modelSelection }
+                    : {}),
+                  ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
+                };
+              }).pipe(
+                Effect.flatMap((runInput) =>
+                  gitManager.runStackedAction(runInput, {
+                    actionId: input.actionId,
+                    progressReporter: {
+                      publish: (event) => Queue.offer(queue, event).pipe(Effect.asVoid),
+                    },
                   }),
                 ),
+                Effect.tap(() => refreshGitStatusInBackground(input.cwd)),
+                Effect.matchCauseEffect({
+                  onFailure: (cause) =>
+                    Queue.fail(queue, toWsRpcError(cause, "Git action failed")),
+                  onSuccess: () => Queue.end(queue).pipe(Effect.asVoid),
+                }),
+              ),
             ),
             { label: "git.stacked-action" },
           ),
@@ -1877,25 +1925,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.gen(function* () {
               const settings = yield* serverSettings.getSettings;
-              const modelSelection =
-                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
-              const fallbackInstance = resolveProviderInstance(settings, {
-                provider: modelSelection.provider,
-                instanceId: resolveModelSelectionInstanceId(modelSelection),
-              });
-              const providerOptions = mergeProviderStartOptions(
-                input.providerOptions,
-                fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined,
-              );
+              const routing = resolveTextGenerationRouting(settings, input);
               return yield* textGeneration.generateThreadRecap({
                 cwd: input.cwd,
                 newMaterial: input.newMaterial,
                 ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
                 ...(input.currentState ? { currentState: input.currentState } : {}),
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-                model: input.textGenerationModel ?? modelSelection.model,
-                modelSelection,
-                ...(providerOptions ? { providerOptions } : {}),
+                model: routing.model,
+                ...(routing.modelSelection ? { modelSelection: routing.modelSelection } : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
               });
             }),
             "Failed to generate thread recap",
@@ -1904,25 +1943,16 @@ const makeWsRpcHandlersLayer = () =>
           rpcEffect(
             Effect.gen(function* () {
               const settings = yield* serverSettings.getSettings;
-              const modelSelection =
-                input.textGenerationModelSelection ?? settings.textGenerationModelSelection;
-              const fallbackInstance = resolveProviderInstance(settings, {
-                provider: modelSelection.provider,
-                instanceId: resolveModelSelectionInstanceId(modelSelection),
-              });
-              const providerOptions = mergeProviderStartOptions(
-                input.providerOptions,
-                fallbackInstance ? providerStartOptionsFromInstance(fallbackInstance) : undefined,
-              );
+              const routing = resolveTextGenerationRouting(settings, input);
               return yield* textGeneration.generateAutomationIntent({
                 cwd: input.cwd,
                 message: input.message,
                 ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
                 nowIso: input.nowIso,
                 ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-                model: input.textGenerationModel ?? modelSelection.model,
-                modelSelection,
-                ...(providerOptions ? { providerOptions } : {}),
+                model: routing.model,
+                ...(routing.modelSelection ? { modelSelection: routing.modelSelection } : {}),
+                ...(routing.providerOptions ? { providerOptions: routing.providerOptions } : {}),
               });
             }),
             "Failed to generate automation intent",

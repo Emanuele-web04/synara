@@ -212,13 +212,14 @@ const makeProviderAdapterRegistry = (options?: ProviderAdapterRegistryLiveOption
 
     const getByInstance: NonNullable<ProviderAdapterRegistryShape["getByInstance"]> = (
       instanceId,
+      options,
     ) =>
       serverSettings.getSettings.pipe(
         Effect.flatMap((settings) => {
           const instance = deriveProviderInstances(settings).find(
             (candidate) => candidate.instanceId === instanceId,
           );
-          if (!instance || !instance.enabled) {
+          if (!instance || (!instance.enabled && options?.allowDisabled !== true)) {
             return Effect.fail(new ProviderUnsupportedError({ provider: instanceId }));
           }
           return getByProvider(instance.driver).pipe(
