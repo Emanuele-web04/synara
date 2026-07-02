@@ -68,6 +68,10 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  ProjectApplyStyleEditInput,
+  ProjectApplyStyleEditResult,
+  ProjectApplyTextEditInput,
+  ProjectApplyTextEditResult,
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -165,6 +169,14 @@ import type {
 } from "./providerDiscovery";
 import type { ProviderCompactThreadInput } from "./provider";
 import type {
+  PreviewRuntimeEvent,
+  PreviewRuntimeInput,
+  PreviewRuntimeState,
+  PreviewStartInput,
+  PreviewStopAllInput,
+  PreviewStopAllResult,
+} from "./preview";
+import type {
   StatsGetProfileStatsInput,
   StatsGetProfileStatsResult,
   StatsGetProfileTokenStatsInput,
@@ -259,6 +271,16 @@ export interface BrowserThreadInput {
 export interface BrowserTabInput {
   threadId: ThreadId;
   tabId: string;
+}
+
+export interface BrowserEditorShortcutsInput extends BrowserThreadInput {
+  enabled: boolean;
+}
+
+export interface BrowserEditorShortcutEvent extends BrowserTabInput {
+  type: "modifier" | "shortcut";
+  key: string;
+  down?: boolean;
 }
 
 export interface BrowserNavigateInput {
@@ -377,6 +399,7 @@ export interface DesktopBridge {
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    listStates: () => Promise<ThreadBrowserState[]>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
@@ -392,7 +415,9 @@ export interface DesktopBridge {
     closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     openDevTools: (input: BrowserTabInput) => Promise<void>;
+    setEditorShortcutsEnabled: (input: BrowserEditorShortcutsInput) => Promise<void>;
     onState: (listener: (state: ThreadBrowserState) => void) => () => void;
+    onEditorShortcut: (listener: (event: BrowserEditorShortcutEvent) => void) => () => void;
     onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
     onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
@@ -418,6 +443,14 @@ export interface NativeApi {
     close: (input: TerminalCloseInput) => Promise<void>;
     onEvent: (callback: (event: TerminalEvent) => void) => () => void;
   };
+  preview: {
+    getState: (input: PreviewRuntimeInput) => Promise<PreviewRuntimeState>;
+    start: (input: PreviewStartInput) => Promise<PreviewRuntimeState>;
+    stop: (input: PreviewRuntimeInput) => Promise<PreviewRuntimeState>;
+    stopAll: (input: PreviewStopAllInput) => Promise<PreviewStopAllResult>;
+    restart: (input: PreviewStartInput) => Promise<PreviewRuntimeState>;
+    onState: (callback: (event: PreviewRuntimeEvent) => void) => () => void;
+  };
   projects: {
     discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
@@ -430,6 +463,8 @@ export interface NativeApi {
       input: ProjectCreateLocalFilePreviewGrantInput,
     ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
+    applyTextEdit: (input: ProjectApplyTextEditInput) => Promise<ProjectApplyTextEditResult>;
+    applyStyleEdit: (input: ProjectApplyStyleEditInput) => Promise<ProjectApplyStyleEditResult>;
     runDevServer: (input: ProjectRunDevServerInput) => Promise<ProjectRunDevServerResult>;
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
     listDevServers: () => Promise<ProjectListDevServersResult>;
@@ -578,6 +613,7 @@ export interface NativeApi {
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
     hide: (input: BrowserThreadInput) => Promise<void>;
     getState: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
+    listStates: () => Promise<ThreadBrowserState[]>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
     detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
@@ -593,7 +629,9 @@ export interface NativeApi {
     closeTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     selectTab: (input: BrowserTabInput) => Promise<ThreadBrowserState>;
     openDevTools: (input: BrowserTabInput) => Promise<void>;
+    setEditorShortcutsEnabled: (input: BrowserEditorShortcutsInput) => Promise<void>;
     onState: (callback: (state: ThreadBrowserState) => void) => () => void;
+    onEditorShortcut: (callback: (event: BrowserEditorShortcutEvent) => void) => () => void;
     onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

@@ -263,7 +263,9 @@ export function RightDock(props: RightDockProps) {
                   )}
                   aria-hidden={isActive ? undefined : true}
                   data-native-browser-surface={
-                    pane.kind === "browser" && isActive && runtimeMode === "live"
+                    (pane.kind === "browser" || pane.kind === "live-editor") &&
+                    isActive &&
+                    runtimeMode === "live"
                       ? "true"
                       : undefined
                   }

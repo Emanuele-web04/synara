@@ -48,6 +48,7 @@ function makeComposerDraftState(
   return {
     prompt: "",
     images: [],
+    browserContexts: [],
     files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],

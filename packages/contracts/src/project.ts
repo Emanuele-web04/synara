@@ -13,6 +13,10 @@ const PROJECT_FILE_PATH_MAX_LENGTH = 512;
 const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
+const PROJECT_TEXT_EDIT_MAX_LENGTH = 20_000;
+const PROJECT_STYLE_EDIT_TEXT_MAX_LENGTH = 4_000;
+const PROJECT_STYLE_EDIT_HTML_MAX_LENGTH = 12_000;
+const PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH = 2_000;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
 const ProjectEntryKind = Schema.Literals(["file", "directory"]);
 
@@ -136,6 +140,78 @@ export const ProjectWriteFileResult = Schema.Struct({
 });
 export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
+const ProjectEditableElement = Schema.Struct({
+  tagName: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  text: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_TEXT_MAX_LENGTH)),
+  ),
+  outerHTML: Schema.optional(
+    Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_HTML_MAX_LENGTH)),
+  ),
+  attributes: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+});
+
+export const ProjectApplyTextEditInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  originalText: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_TEXT_EDIT_MAX_LENGTH)),
+  nextText: Schema.String.check(Schema.isMaxLength(PROJECT_TEXT_EDIT_MAX_LENGTH)),
+  element: Schema.optional(ProjectEditableElement),
+});
+export type ProjectApplyTextEditInput = typeof ProjectApplyTextEditInput.Type;
+
+export const ProjectApplyTextEditResult = Schema.Struct({
+  relativePath: TrimmedNonEmptyString,
+  replacements: PositiveInt,
+});
+export type ProjectApplyTextEditResult = typeof ProjectApplyTextEditResult.Type;
+
+// Every style-patch property shares the same shape: an optional CSS value capped at
+// the style-edit length limit. Declared once so the patch fields cannot drift.
+const ProjectStyleEditValue = Schema.optional(
+  Schema.String.check(Schema.isMaxLength(PROJECT_STYLE_EDIT_VALUE_MAX_LENGTH)),
+);
+
+export const ProjectElementStylePatch = Schema.Struct({
+  color: ProjectStyleEditValue,
+  backgroundColor: ProjectStyleEditValue,
+  backgroundImage: ProjectStyleEditValue,
+  backgroundPosition: ProjectStyleEditValue,
+  backgroundSize: ProjectStyleEditValue,
+  fontFamily: ProjectStyleEditValue,
+  fontSize: ProjectStyleEditValue,
+  fontWeight: ProjectStyleEditValue,
+  fontStyle: ProjectStyleEditValue,
+  lineHeight: ProjectStyleEditValue,
+  letterSpacing: ProjectStyleEditValue,
+  textAlign: ProjectStyleEditValue,
+  opacity: ProjectStyleEditValue,
+  padding: ProjectStyleEditValue,
+  margin: ProjectStyleEditValue,
+  borderWidth: ProjectStyleEditValue,
+  borderColor: ProjectStyleEditValue,
+  borderRadius: ProjectStyleEditValue,
+  boxShadow: ProjectStyleEditValue,
+  filter: ProjectStyleEditValue,
+  animationName: ProjectStyleEditValue,
+  animationDuration: ProjectStyleEditValue,
+  animationTimingFunction: ProjectStyleEditValue,
+  animationIterationCount: ProjectStyleEditValue,
+  effectTarget: Schema.optional(Schema.Literals(["element", "::before", "::after"])),
+});
+export type ProjectElementStylePatch = typeof ProjectElementStylePatch.Type;
+
+export const ProjectApplyStyleEditInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  element: ProjectEditableElement,
+  patch: ProjectElementStylePatch,
+});
+export type ProjectApplyStyleEditInput = typeof ProjectApplyStyleEditInput.Type;
+
+export const ProjectApplyStyleEditResult = Schema.Struct({
+  relativePath: TrimmedNonEmptyString,
+  replacements: PositiveInt,
+});
+export type ProjectApplyStyleEditResult = typeof ProjectApplyStyleEditResult.Type;
 export const ProjectReadFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),

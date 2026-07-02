@@ -197,6 +197,41 @@ describe("splitPromptIntoComposerSegments", () => {
     ]);
   });
 
+  it("converts browser editor blocks into context card segments", () => {
+    const block = [
+      "<browser-element-selection>",
+      "url: http://localhost:8891/browser-editor-demo/index.html",
+      "title: Northstar Studio - Browser Editor Demo",
+      "selector: div.page > main > section.hero > h1",
+      "tag: h1",
+      "role: (none)",
+      "accessibleName: Launch experiments without losing the plot.",
+      "viewport: width=447, height=806, devicePixelRatio=2",
+      "bounds: x=22, y=108, width=387, height=184",
+      "attributes:",
+      "none",
+      "text: Launch experiments without losing the plot.",
+      "outerHTML:",
+      "<h1>Launch experiments without losing the plot.</h1>",
+      "</browser-element-selection>",
+    ].join("\n");
+
+    expect(splitPromptIntoComposerSegments(`Please edit this\n\n${block}`)).toEqual([
+      { type: "text", text: "Please edit this\n\n" },
+      {
+        type: "browser-context",
+        context: expect.objectContaining({
+          block,
+          detail: "Launch experiments without losing the plot.",
+          kind: "element",
+          label: "Browser element: h1",
+          title: "Northstar Studio - Browser Editor Demo",
+          url: "http://localhost:8891/browser-editor-demo/index.html",
+        }),
+      },
+    ]);
+  });
+
   it("converts a URL into a link segment once a delimiter follows it", () => {
     expect(
       splitPromptIntoComposerSegments("see https://github.com/openai/codex/pull/1 thanks"),

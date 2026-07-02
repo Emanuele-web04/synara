@@ -1,6 +1,10 @@
 import { Effect, Schema, ServiceMap } from "effect";
 
 import type {
+  ProjectApplyStyleEditInput,
+  ProjectApplyStyleEditResult,
+  ProjectApplyTextEditInput,
+  ProjectApplyTextEditResult,
   ProjectReadFileInput,
   ProjectReadFileResult,
   ProjectWriteFileInput,
@@ -36,6 +40,12 @@ export interface WorkspaceFileSystemShape {
     ProjectWriteFileResult,
     WorkspaceFileSystemError | WorkspacePathOutsideRootError
   >;
+  readonly applyTextEdit: (
+    input: ProjectApplyTextEditInput,
+  ) => Effect.Effect<ProjectApplyTextEditResult, WorkspaceFileSystemError>;
+  readonly applyStyleEdit: (
+    input: ProjectApplyStyleEditInput,
+  ) => Effect.Effect<ProjectApplyStyleEditResult, WorkspaceFileSystemError>;
 }
 
 export class WorkspaceFileSystem extends ServiceMap.Service<

@@ -127,6 +127,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     close: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.close, input),
     hide: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.hide, input),
     getState: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.getState, input),
+    listStates: () => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.listStates),
     setPanelBounds: async (input) => {
       ipcRenderer.send(BROWSER_IPC_CHANNELS.setBounds, input);
     },
@@ -145,6 +146,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     closeTab: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.closeTab, input),
     selectTab: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.selectTab, input),
     openDevTools: (input) => ipcRenderer.invoke(BROWSER_IPC_CHANNELS.openDevTools, input),
+    setEditorShortcutsEnabled: (input) =>
+      ipcRenderer.invoke(BROWSER_IPC_CHANNELS.setEditorShortcutsEnabled, input),
     onState: (listener) => {
       const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
         if (typeof state !== "object" || state === null) return;
@@ -154,6 +157,17 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.on(BROWSER_IPC_CHANNELS.state, wrappedListener);
       return () => {
         ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.state, wrappedListener);
+      };
+    },
+    onEditorShortcut: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+        if (typeof event !== "object" || event === null) return;
+        listener(event as Parameters<typeof listener>[0]);
+      };
+
+      ipcRenderer.on(BROWSER_IPC_CHANNELS.editorShortcut, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(BROWSER_IPC_CHANNELS.editorShortcut, wrappedListener);
       };
     },
     onBrowserUseOpenPanelRequest: (listener) => {

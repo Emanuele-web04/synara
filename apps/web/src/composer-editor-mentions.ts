@@ -10,6 +10,11 @@ import {
   providerMentionMatchesToken,
 } from "./lib/composerMentions";
 import {
+  createBrowserEditorContextBlockRegex,
+  summarizeBrowserEditorPromptBlock,
+  type BrowserEditorPromptContextSummary,
+} from "./lib/browserEditorContext";
+import {
   LINK_TOKEN_SOURCE,
   normalizeComposerLinkUrl,
   trimTrailingLinkPunctuation,
@@ -39,6 +44,10 @@ export type ComposerPromptSegment =
   | {
       type: "terminal-context";
       context: TerminalContextDraft | null;
+    }
+  | {
+      type: "browser-context";
+      context: BrowserEditorPromptContextSummary;
     }
   | {
       /** Agent mention: @alias - chip for subagent reference (parens are plain text) */
@@ -365,39 +374,65 @@ export function splitPromptIntoComposerSegments(
   }
 
   const segments: ComposerPromptSegment[] = [];
-  let textCursor = 0;
   let terminalContextIndex = 0;
 
-  for (let index = 0; index < prompt.length; index += 1) {
-    if (prompt[index] !== INLINE_TERMINAL_CONTEXT_PLACEHOLDER) {
-      continue;
+  const pushPromptTextSegments = (text: string): void => {
+    let textCursor = 0;
+    for (let index = 0; index < text.length; index += 1) {
+      if (text[index] !== INLINE_TERMINAL_CONTEXT_PLACEHOLDER) {
+        continue;
+      }
+
+      if (index > textCursor) {
+        segments.push(
+          ...splitTextIntoPromptSegments(text.slice(textCursor, index), {
+            includeTrailingTokenAtEnd: false,
+            includeSlashCommandChips: true,
+            mentionReferences,
+          }),
+        );
+      }
+      segments.push({
+        type: "terminal-context",
+        context: terminalContexts[terminalContextIndex] ?? null,
+      });
+      terminalContextIndex += 1;
+      textCursor = index + 1;
     }
 
-    if (index > textCursor) {
+    if (textCursor < text.length) {
       segments.push(
-        ...splitTextIntoPromptSegments(prompt.slice(textCursor, index), {
+        ...splitTextIntoPromptSegments(text.slice(textCursor), {
           includeTrailingTokenAtEnd: false,
           includeSlashCommandChips: true,
           mentionReferences,
         }),
       );
     }
-    segments.push({
-      type: "terminal-context",
-      context: terminalContexts[terminalContextIndex] ?? null,
-    });
-    terminalContextIndex += 1;
-    textCursor = index + 1;
+  };
+
+  const blockRegex = createBrowserEditorContextBlockRegex();
+  let textCursor = 0;
+  for (const match of prompt.matchAll(blockRegex)) {
+    const start = match.index ?? 0;
+    const block = match[0];
+    if (start > textCursor) {
+      pushPromptTextSegments(prompt.slice(textCursor, start));
+    }
+    const context = summarizeBrowserEditorPromptBlock(block);
+    if (context) {
+      segments.push({
+        type: "browser-context",
+        context,
+      });
+    } else {
+      pushTextSegment(segments, block);
+    }
+    textCursor = start + block.length;
   }
 
   if (textCursor < prompt.length) {
-    segments.push(
-      ...splitTextIntoPromptSegments(prompt.slice(textCursor), {
-        includeTrailingTokenAtEnd: false,
-        includeSlashCommandChips: true,
-        mentionReferences,
-      }),
-    );
+    pushPromptTextSegments(prompt.slice(textCursor));
   }
 
   return segments;

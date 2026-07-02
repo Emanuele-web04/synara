@@ -21,6 +21,8 @@ import type {
   BrowserCaptureScreenshotResult,
   BrowserCopyLinkEvent,
   BrowserDetachWebviewInput,
+  BrowserEditorShortcutEvent,
+  BrowserEditorShortcutsInput,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
@@ -45,12 +47,15 @@ import {
   resolveCopyableBrowserTabUrl,
 } from "@t3tools/shared/browserSession";
 
+import { BROWSER_IPC_CHANNELS } from "./browserIpc";
+
 const BROWSER_SESSION_PARTITION = "persist:synara-browser";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
 const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
 const BROWSER_ERROR_ABORTED = -3;
+const BROWSER_EDITOR_SHORTCUT_KEYS = new Set(["b", "d", "i", "t"]);
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
 type BrowserCopyLinkListener = (event: BrowserCopyLinkEvent) => void;
@@ -205,6 +210,22 @@ function isAbortedNavigationError(error: unknown): boolean {
   return /ERR_ABORTED|\(-3\)/i.test(error.message);
 }
 
+const BROWSER_NO_CACHE_HEADERS = "pragma: no-cache\ncache-control: no-cache\n";
+
+function isLoopbackPreviewUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.toLowerCase();
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      url.port.length > 0 &&
+      (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function mapBrowserLoadError(errorCode: number): string {
   switch (errorCode) {
     case -102:
@@ -254,6 +275,7 @@ export class DesktopBrowserManager {
   private readonly runtimeLastActiveAtByKey = new Map<string, number>();
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
+  private readonly editorShortcutThreadIds = new Set<ThreadId>();
   private readonly copyLinkListeners = new Set<BrowserCopyLinkListener>();
   // OAuth/sign-in popups opened by pages via `window.open`. Tracked so they can be sized over
   // the panel and torn down cleanly without leaking native windows.
@@ -675,6 +697,12 @@ export class DesktopBrowserManager {
     return this.snapshotThreadState(input.threadId);
   }
 
+  listStates(): ThreadBrowserState[] {
+    return Array.from(this.states, ([threadId, state]) =>
+      this.snapshotThreadState(threadId, state),
+    );
+  }
+
   setPanelBounds(input: BrowserSetPanelBoundsInput): void {
     this.perfCounters.setPanelBoundsCalls += 1;
     const state = this.getOrCreateState(input.threadId);
@@ -907,7 +935,10 @@ export class DesktopBrowserManager {
   }
 
   closeTab(input: BrowserTabInput): ThreadBrowserState {
-    const state = this.ensureWorkspace(input.threadId);
+    const state = this.states.get(input.threadId);
+    if (!state) {
+      return cloneThreadState(defaultThreadBrowserState(input.threadId));
+    }
     const nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
     if (nextTabs.length === state.tabs.length) {
       return this.snapshotThreadState(input.threadId, state);
@@ -984,6 +1015,14 @@ export class DesktopBrowserManager {
       this.attachActiveTab(input.threadId, bounds);
     }
     runtime.webContents.openDevTools({ mode: "detach" });
+  }
+
+  setEditorShortcutsEnabled(input: BrowserEditorShortcutsInput): void {
+    if (input.enabled) {
+      this.editorShortcutThreadIds.add(input.threadId);
+      return;
+    }
+    this.editorShortcutThreadIds.delete(input.threadId);
   }
 
   // Ensures the requested tab is active/live, then returns a fresh PNG capture
@@ -1581,9 +1620,42 @@ export class DesktopBrowserManager {
       webContents.removeListener("did-create-window", didCreateWindow);
     });
 
-    // The native page owns keyboard focus while browsing, so the renderer never sees the
-    // copy-link chord. Intercept it here, copy the live URL, and let the shell toast.
+    // The native page owns keyboard focus while browsing, so the renderer never sees
+    // editor shortcuts or the copy-link chord. Intercept both here: forward editor
+    // shortcuts when Live Edit owns the thread, then fall through to copy-link.
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
+      if (this.editorShortcutThreadIds.has(threadId)) {
+        const key = input.key.toLowerCase();
+        const isMetaModifier =
+          key === "meta" || input.code === "MetaLeft" || input.code === "MetaRight";
+        if (isMetaModifier) {
+          this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
+            threadId,
+            tabId,
+            type: "modifier",
+            key: "meta",
+            down: input.type === "keyDown",
+          } satisfies BrowserEditorShortcutEvent);
+          return;
+        }
+        if (
+          input.type === "keyDown" &&
+          input.meta &&
+          !input.control &&
+          !input.alt &&
+          !input.shift &&
+          BROWSER_EDITOR_SHORTCUT_KEYS.has(key)
+        ) {
+          event.preventDefault();
+          this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
+            threadId,
+            tabId,
+            type: "shortcut",
+            key,
+          } satisfies BrowserEditorShortcutEvent);
+          return;
+        }
+      }
       if (input.type !== "keyDown") {
         return;
       }
@@ -1743,7 +1815,10 @@ export class DesktopBrowserManager {
     this.emitState(threadId);
 
     try {
-      await webContents.loadURL(nextUrl);
+      await webContents.loadURL(
+        nextUrl,
+        isLoopbackPreviewUrl(nextUrl) ? { extraHeaders: BROWSER_NO_CACHE_HEADERS } : undefined,
+      );
       this.queueRuntimeStateSync(threadId, tabId);
     } catch (error) {
       if (isAbortedNavigationError(error)) {

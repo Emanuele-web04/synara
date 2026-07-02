@@ -8,6 +8,7 @@ import type { IpcMain, WebContents } from "electron";
 import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
+  BrowserEditorShortcutsInput,
   BrowserCopyLinkEvent,
   BrowserDetachWebviewInput,
   BrowserExecuteCdpInput,
@@ -28,6 +29,7 @@ export const BROWSER_IPC_CHANNELS = {
   close: "desktop:browser-close",
   hide: "desktop:browser-hide",
   getState: "desktop:browser-get-state",
+  listStates: "desktop:browser-list-states",
   setBounds: "desktop:browser-set-bounds",
   attachWebview: "desktop:browser-attach-webview",
   detachWebview: "desktop:browser-detach-webview",
@@ -45,6 +47,8 @@ export const BROWSER_IPC_CHANNELS = {
   closeTab: "desktop:browser-close-tab",
   selectTab: "desktop:browser-select-tab",
   openDevTools: "desktop:browser-open-devtools",
+  setEditorShortcutsEnabled: "desktop:browser-set-editor-shortcuts-enabled",
+  editorShortcut: "desktop:browser-editor-shortcut",
 } as const;
 
 // Pushes the latest browser state snapshot to the renderer shell.
@@ -88,6 +92,9 @@ export function registerBrowserIpcHandlers(
   ipcMain.handle(BROWSER_IPC_CHANNELS.getState, async (_event, input: BrowserThreadInput) =>
     browserManager.getState(input),
   );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.listStates);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.listStates, async () => browserManager.listStates());
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.setBounds);
   ipcMain.removeAllListeners(BROWSER_IPC_CHANNELS.setBounds);
@@ -173,4 +180,12 @@ export function registerBrowserIpcHandlers(
   ipcMain.handle(BROWSER_IPC_CHANNELS.openDevTools, async (_event, input: BrowserTabInput) => {
     browserManager.openDevTools(input);
   });
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.setEditorShortcutsEnabled);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.setEditorShortcutsEnabled,
+    async (_event, input: BrowserEditorShortcutsInput) => {
+      browserManager.setEditorShortcutsEnabled(input);
+    },
+  );
 }

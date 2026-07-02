@@ -74,12 +74,14 @@ import {
   ComposerSlashCommandNode,
   ComposerAgentMentionNode,
   ComposerTerminalContextNode,
+  ComposerBrowserContextNode,
   ComposerLinkNode,
   $createComposerMentionNode,
   $createComposerSkillNode,
   $createComposerSlashCommandNode,
   $createComposerAgentMentionNode,
   $createComposerTerminalContextNode,
+  $createComposerBrowserContextNode,
   $createComposerLinkNode,
   isComposerInlineTokenNode,
   COMPOSER_NODE_CLASSES,
@@ -467,6 +469,10 @@ function $setComposerEditorPrompt(
       if (segment.context) {
         paragraph.append($createComposerTerminalContextNode(segment.context));
       }
+      continue;
+    }
+    if (segment.type === "browser-context") {
+      paragraph.append($createComposerBrowserContextNode(segment.context));
       continue;
     }
     if (segment.type === "agent-mention") {

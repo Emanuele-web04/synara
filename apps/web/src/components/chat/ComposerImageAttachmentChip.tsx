@@ -12,6 +12,7 @@ import {
   DraftAttachmentWarningIcon,
 } from "./DraftAttachmentWarning";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { ComposerLiveEditorContextChip } from "./ComposerLiveEditorContextChip";
 
 interface ComposerImageAttachmentChipProps {
   image: ComposerImageAttachment;
@@ -28,6 +29,27 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
   onExpandImage,
   onRemoveImage,
 }: ComposerImageAttachmentChipProps) {
+  const expandImage = () => {
+    const preview = buildExpandedImagePreview(images, image.id);
+    if (!preview) return;
+    onExpandImage(preview);
+  };
+
+  if (image.source === "browser-annotation") {
+    const context = image.browserAnnotation;
+    const title = context?.title?.trim() || "Browser page";
+
+    return (
+      <ComposerLiveEditorContextChip
+        title={title}
+        nonPersisted={nonPersisted}
+        nonPersistedTitle="Draft annotation could not be saved locally and may be lost on navigation."
+        onPreview={expandImage}
+        onRemove={() => onRemoveImage(image.id)}
+      />
+    );
+  }
+
   return (
     <div className="group relative shrink-0">
       <button
@@ -35,11 +57,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
         className="block size-16 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] transition-colors hover:border-[color:var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`Preview ${image.name}`}
         title={image.name}
-        onClick={() => {
-          const preview = buildExpandedImagePreview(images, image.id);
-          if (!preview) return;
-          onExpandImage(preview);
-        }}
+        onClick={expandImage}
       >
         {image.previewUrl ? (
           <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />

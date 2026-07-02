@@ -9,7 +9,11 @@ import {
 } from "@t3tools/contracts";
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
-import { type ComposerSlashCommand } from "../../composerSlashCommands";
+import { type ComposerAppSkillId } from "../../composerAppSkills";
+import {
+  getComposerSlashCommandMenuTitle,
+  type ComposerSlashCommand,
+} from "../../composerSlashCommands";
 import {
   BotIcon,
   BrainIcon,
@@ -21,6 +25,7 @@ import {
   FastModeIcon,
   GitBranchIcon,
   GitForkIcon,
+  EyeIcon,
   InfoIcon,
   ListTodoIcon,
   type LucideIcon,
@@ -60,32 +65,9 @@ function humanizeProviderCommandName(command: string): string {
 function commandMenuTitle(
   item: Extract<ComposerCommandItem, { type: "slash-command" | "provider-native-command" }>,
 ): string {
-  switch (item.command) {
-    case "clear":
-      return "Clear";
-    case "compact":
-      return "Compact Context";
-    case "model":
-      return "Model";
-    case "fast":
-      return "Fast Mode";
-    case "plan":
-      return "Plan Mode";
-    case "default":
-      return "Default Mode";
-    case "review":
-      return "Code Review";
-    case "fork":
-      return "Fork";
-    case "side":
-      return "Sidechat";
-    case "status":
-      return "Status";
-    case "subagents":
-      return "Subagents";
-    default:
-      return humanizeProviderCommandName(item.command);
-  }
+  return item.type === "slash-command"
+    ? getComposerSlashCommandMenuTitle(item.command)
+    : humanizeProviderCommandName(item.command);
 }
 
 function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
@@ -103,6 +85,10 @@ function commandMenuTrailingMeta(item: ComposerCommandItem): string | null {
 
   if (item.type === "skill") {
     return formatSkillScope(item.skill.scope);
+  }
+
+  if (item.type === "app-skill") {
+    return item.trigger;
   }
 
   if (item.type === "model") {
@@ -135,6 +121,10 @@ function commandMenuSecondaryText(item: ComposerCommandItem): string | null {
     return item.description;
   }
 
+  if (item.type === "app-skill") {
+    return item.description;
+  }
+
   return null;
 }
 
@@ -151,6 +141,14 @@ export type ComposerCommandItem =
       id: string;
       type: "local-root";
       label: string;
+      description: string;
+    }
+  | {
+      id: string;
+      type: "app-skill";
+      skillId: ComposerAppSkillId;
+      label: string;
+      trigger: `/${ComposerAppSkillId}`;
       description: string;
     }
   | {
@@ -262,12 +260,15 @@ export function groupCommandItems(
     return [{ id: "default", label: null, items }];
   }
 
-  const builtInItems = items.filter((item) => item.type === "slash-command");
+  const builtInItems = items.filter(
+    (item) => item.type === "app-skill" || item.type === "slash-command",
+  );
   const providerItems = items.filter((item) => item.type === "provider-native-command");
   const skillItems = items.filter((item) => item.type === "skill");
   const otherItems = items.filter(
     (item) =>
       item.type !== "slash-command" &&
+      item.type !== "app-skill" &&
       item.type !== "provider-native-command" &&
       item.type !== "skill",
   );
@@ -466,6 +467,8 @@ function commandMenuItemGlyph(item: ComposerCommandItem, theme: "light" | "dark"
       // slash commands), so default to the skill block glyph used for skill
       // tokens in the composer/timeline — named commands still keep their icon.
       return commandMenuSlashGlyph(item.command, SkillCubeIcon);
+    case "app-skill":
+      return <EyeIcon className={cls} />;
     case "model":
       return <BrainIcon className={cls} />;
     case "agent":

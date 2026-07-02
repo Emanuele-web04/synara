@@ -6,6 +6,7 @@ export * from "./terminal";
 export * from "./provider";
 export * from "./providerDiscovery";
 export * from "./providerRuntime";
+export * from "./preview";
 export * from "./model";
 export * from "./agentMentions";
 export * from "./ws";

@@ -203,6 +203,35 @@ export function getComposerSlashCommandDefinition(
   return COMPOSER_SLASH_COMMAND_DEFINITIONS[command];
 }
 
+export function getComposerSlashCommandMenuTitle(command: ComposerSlashCommand): string {
+  switch (command) {
+    case "clear":
+      return "Clear";
+    case "compact":
+      return "Compact Context";
+    case "model":
+      return "Model";
+    case "fast":
+      return "Fast Mode";
+    case "plan":
+      return "Plan Mode";
+    case "default":
+      return "Default Mode";
+    case "review":
+      return "Code Review";
+    case "fork":
+      return "Fork";
+    case "side":
+      return "Sidechat";
+    case "status":
+      return "Status";
+    case "subagents":
+      return "Subagents";
+    case "automation":
+      return "Automation";
+  }
+}
+
 export function filterComposerSlashCommands(
   query: string,
   commands: ReadonlyArray<ComposerSlashCommand> = BUILT_IN_COMPOSER_SLASH_COMMANDS,

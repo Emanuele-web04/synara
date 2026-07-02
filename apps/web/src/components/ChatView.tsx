@@ -26,6 +26,7 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   type ResolvedKeybindingsConfig,
   type ServerProviderStatus,
+  type ThreadBrowserState,
   ThreadId,
   ThreadMarkerId,
   type ThreadMarker,
@@ -62,6 +63,8 @@ import {
   useRef,
   useState,
   type MouseEvent,
+  type PointerEvent as ReactPointerEvent,
+  type WheelEvent as ReactWheelEvent,
 } from "react";
 import { GoTasklist } from "react-icons/go";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -125,6 +128,11 @@ import {
   type BrowserPromptAttachmentResolution,
 } from "../lib/browserPromptContext";
 import {
+  appendBrowserEditorContextPrompt,
+  buildUnifiedBrowserEditorPromptBlock,
+  removeBrowserAnnotationContextPrompt,
+} from "../lib/browserEditorContext";
+import {
   buildComposerFileAttachmentsFromFiles,
   IMAGE_SIZE_LIMIT_LABEL,
   buildComposerImageAttachmentsFromFiles,
@@ -183,6 +191,13 @@ import {
   ensureLeadingSpaceForReplacement,
   extendReplacementRangeForTrailingSpace,
 } from "../composerTriggerInsertion";
+import { parseLiveEditAppSkillArgs, type ComposerAppSkillId } from "../composerAppSkills";
+import {
+  closeLiveEditPreviewTabs,
+  hasLiveEditPreviewForThread,
+  openLiveEditPreviewTab,
+  stopLiveEditPreview,
+} from "../lib/liveEditPreviewTabs";
 import { createProjectSelector, createThreadSelector } from "../storeSelectors";
 import {
   canOfferForkSlashCommand,
@@ -258,6 +273,10 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposerSendArrowIcon,
+  Maximize2,
+  MinusIcon,
+  PlusIcon,
+  SteerIcon,
   LayoutSidebarIcon,
   RefreshCwIcon,
   TemporaryThreadIcon,
@@ -283,6 +302,7 @@ import {
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
+import { useBrowserStateStore } from "../browserStateStore";
 import {
   confirmTerminalTabClose,
   resolveTerminalCloseTitle,
@@ -302,6 +322,7 @@ import { resolveTerminalNewAction } from "../lib/terminalNewAction";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { compareProvidersByOrder } from "../providerOrdering";
 import {
+  type ComposerBrowserContextAttachment,
   type ComposerFileAttachment,
   type ComposerImageAttachment,
   type ComposerAssistantSelectionAttachment,
@@ -416,7 +437,10 @@ import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
-import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
+import {
+  ExpandedImagePreview,
+  extractBrowserAnnotationSelectedCode,
+} from "./chat/ExpandedImagePreview";
 import {
   AVAILABLE_PROVIDER_OPTIONS,
   ProviderModelPicker,
@@ -733,10 +757,26 @@ type ComposerPluginSuggestion = {
 
 const EMPTY_COMPOSER_PLUGIN_SUGGESTIONS: ComposerPluginSuggestion[] = [];
 
+function appendBrowserAnnotationAttachmentContextsToPrompt(
+  prompt: string,
+  images: ReadonlyArray<ComposerImageAttachment>,
+  browserContexts: ReadonlyArray<ComposerBrowserContextAttachment>,
+): string {
+  const promptWithoutGeneratedBlock = removeBrowserAnnotationContextPrompt(prompt);
+  const block = buildUnifiedBrowserEditorPromptBlock([
+    ...browserContexts.map((context) => context.promptBlock),
+    ...images.map((image) => image.browserAnnotation?.promptBlock),
+  ]);
+  return block
+    ? appendBrowserEditorContextPrompt(promptWithoutGeneratedBlock, block)
+    : promptWithoutGeneratedBlock;
+}
+
 function buildQueuedComposerPreviewText(input: {
   trimmedPrompt: string;
   images: ReadonlyArray<ComposerImageAttachment>;
   files: ReadonlyArray<ComposerFileAttachment>;
+  browserContexts: ReadonlyArray<ComposerBrowserContextAttachment>;
   assistantSelections: ReadonlyArray<{ id: string }>;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
   fileComments: ReadonlyArray<FileCommentDraft>;
@@ -752,6 +792,12 @@ function buildQueuedComposerPreviewText(input: {
   const firstFile = input.files[0];
   if (firstFile) {
     return `File: ${firstFile.name}`;
+  }
+  const firstBrowserContext = input.browserContexts[0];
+  if (firstBrowserContext) {
+    return firstBrowserContext.selectedSelector
+      ? `Selection: ${firstBrowserContext.selectedSelector}`
+      : "Browser selection context";
   }
   if (input.assistantSelections.length > 0) {
     return formatAssistantSelectionQueuePreview(input.assistantSelections.length);
@@ -783,6 +829,63 @@ function formatPastedTextTitleSeed(pastedTexts: ReadonlyArray<PastedTextDraft>):
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
+type ExpandedBrowserContextPane = "image" | "code" | "payload";
+type ExpandedImageZoomMode = "fit" | "manual";
+type ExpandedImageWheelZoomAnchor = {
+  clientX: number;
+  clientY: number;
+  imageRatioX: number;
+  imageRatioY: number;
+};
+const EXPANDED_IMAGE_ZOOM_MIN = 0.12;
+const EXPANDED_IMAGE_ZOOM_MAX = 4;
+const EXPANDED_IMAGE_ZOOM_FACTOR = 1.16;
+const EXPANDED_IMAGE_ZOOM_ANIMATION_MS = 200;
+const EXPANDED_IMAGE_WHEEL_ZOOM_SENSITIVITY = 0.0065;
+const EXPANDED_IMAGE_WHEEL_ZOOM_MIN_FACTOR = 0.58;
+const EXPANDED_IMAGE_WHEEL_ZOOM_MAX_FACTOR = 1.72;
+const EXPANDED_IMAGE_WHEEL_ZOOM_END_DELAY_MS = 120;
+
+function clampExpandedImageZoom(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(EXPANDED_IMAGE_ZOOM_MAX, Math.max(EXPANDED_IMAGE_ZOOM_MIN, value));
+}
+
+function getExpandedImageWheelZoomFactor(deltaY: number, deltaMode: number): number {
+  const normalizedDeltaY = deltaMode === 1 ? deltaY * 16 : deltaMode === 2 ? deltaY * 400 : deltaY;
+  const rawFactor = Math.exp(-normalizedDeltaY * EXPANDED_IMAGE_WHEEL_ZOOM_SENSITIVITY);
+  return Math.min(
+    EXPANDED_IMAGE_WHEEL_ZOOM_MAX_FACTOR,
+    Math.max(EXPANDED_IMAGE_WHEEL_ZOOM_MIN_FACTOR, rawFactor),
+  );
+}
+
+function centerExpandedImageStage(stage: HTMLDivElement | null) {
+  if (!stage) {
+    return;
+  }
+  const maxScrollLeft = Math.max(0, stage.scrollWidth - stage.clientWidth);
+  const maxScrollTop = Math.max(0, stage.scrollHeight - stage.clientHeight);
+  stage.scrollLeft = maxScrollLeft / 2;
+  stage.scrollTop = maxScrollTop / 2;
+}
+
+function anchorExpandedImageStageToCursor(
+  stage: HTMLDivElement | null,
+  image: HTMLImageElement | null,
+  anchor: ExpandedImageWheelZoomAnchor,
+) {
+  if (!stage || !image) {
+    return;
+  }
+  const imageRect = image.getBoundingClientRect();
+  const anchoredImageX = imageRect.left + imageRect.width * anchor.imageRatioX;
+  const anchoredImageY = imageRect.top + imageRect.height * anchor.imageRatioY;
+  stage.scrollLeft += anchoredImageX - anchor.clientX;
+  stage.scrollTop += anchoredImageY - anchor.clientY;
+}
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) {
@@ -850,6 +953,8 @@ interface ChatViewProps {
   panelState?: SplitViewPanePanelState;
   onToggleDiffPanel?: () => void;
   onToggleBrowserPanel?: () => void;
+  onOpenBrowserPanel?: () => void;
+  onOpenLiveEditorPanel?: () => void;
   onOpenBrowserUrl?: (url: string) => void;
   onOpenTurnDiffPanel?: (turnId: TurnId, filePath?: string) => void;
   onSplitSurface?: () => void;
@@ -861,6 +966,27 @@ interface ChatViewProps {
   } | null;
   onChangeThreadInSplitPane?: () => void;
   onCloseThreadPane?: () => void;
+}
+
+function closeLiveEditorDockPanesForThreadIds(threadIds: Iterable<ThreadId>): void {
+  const dockStore = useRightDockStore.getState();
+  for (const threadId of threadIds) {
+    if (hasLiveEditPreviewForThread(threadId)) {
+      continue;
+    }
+    const dockState = dockStore.dockStateByThreadId[threadId];
+    for (const pane of dockState?.panes ?? []) {
+      if (pane.kind === "live-editor") {
+        dockStore.closePane(threadId, pane.id);
+      }
+    }
+  }
+}
+
+function closeAllLiveEditorDockPanesWithoutPreviews(): void {
+  closeLiveEditorDockPanesForThreadIds(
+    Object.keys(useRightDockStore.getState().dockStateByThreadId) as ThreadId[],
+  );
 }
 
 function normalizeRestoredQueuedPrompt(value: string): string {
@@ -912,6 +1038,8 @@ export default function ChatView({
   panelState,
   onToggleDiffPanel,
   onToggleBrowserPanel,
+  onOpenBrowserPanel,
+  onOpenLiveEditorPanel,
   onOpenBrowserUrl,
   onOpenTurnDiffPanel,
   onSplitSurface,
@@ -949,6 +1077,7 @@ export default function ChatView({
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
   const composerFiles = composerDraft.files;
+  const composerBrowserContexts = composerDraft.browserContexts;
   const composerAssistantSelections = composerDraft.assistantSelections;
   const composerFileComments = composerDraft.fileComments;
   const composerTerminalContexts = composerDraft.terminalContexts;
@@ -971,6 +1100,7 @@ export default function ChatView({
       deriveComposerSendState({
         prompt,
         imageCount: composerImages.length,
+        browserContextCount: composerBrowserContexts.length,
         fileCount: composerFiles.length,
         assistantSelectionCount: composerAssistantSelections.length,
         fileCommentCount: composerFileComments.length,
@@ -979,6 +1109,7 @@ export default function ChatView({
       }),
     [
       composerAssistantSelections.length,
+      composerBrowserContexts.length,
       composerFileComments.length,
       composerFiles.length,
       composerImages.length,
@@ -1005,6 +1136,10 @@ export default function ChatView({
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
+  const addComposerDraftBrowserContext = useComposerDraftStore((store) => store.addBrowserContext);
+  const removeComposerDraftBrowserContext = useComposerDraftStore(
+    (store) => store.removeBrowserContext,
+  );
   const addComposerDraftFiles = useComposerDraftStore((store) => store.addFiles);
   const removeComposerDraftFile = useComposerDraftStore((store) => store.removeFile);
   const addComposerDraftAssistantSelection = useComposerDraftStore(
@@ -1060,6 +1195,14 @@ export default function ChatView({
   const markTemporaryThread = useTemporaryThreadStore((store) => store.markTemporaryThread);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const serverThread = useStore(useMemo(() => createThreadSelector(threadId), [threadId]));
+  const upsertThreadBrowserState = useBrowserStateStore((store) => store.upsertThreadState);
+  const getLiveEditBrowserThreadIds = useCallback((): ThreadId[] => {
+    const ids = new Set<ThreadId>([threadId]);
+    for (const id of Object.keys(useBrowserStateStore.getState().threadStatesByThreadId)) {
+      ids.add(id as ThreadId);
+    }
+    return [...ids];
+  }, [threadId]);
   const fallbackDraftProjectId = draftThread?.projectId ?? null;
   const fallbackDraftProject = useStore(
     useMemo(() => createProjectSelector(fallbackDraftProjectId), [fallbackDraftProjectId]),
@@ -1067,11 +1210,25 @@ export default function ChatView({
   const promptRef = useRef(prompt);
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [expandedImagePane, setExpandedImagePane] = useState<ExpandedBrowserContextPane>("image");
+  const [expandedImageZoomMode, setExpandedImageZoomMode] = useState<ExpandedImageZoomMode>("fit");
+  const [expandedImageZoom, setExpandedImageZoom] = useState(1);
+  const [expandedImageNaturalSize, setExpandedImageNaturalSize] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const [isExpandedImagePanning, setIsExpandedImagePanning] = useState(false);
+  const [isExpandedImageWheelZooming, setIsExpandedImageWheelZooming] = useState(false);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const composerAssistantSelectionsRef = useRef<ComposerAssistantSelectionAttachment[]>(
     composerAssistantSelections,
+  );
+  const composerBrowserContextsRef =
+    useRef<ComposerBrowserContextAttachment[]>(composerBrowserContexts);
+  const browserSelectionFocusKeyRef = useRef(
+    composerBrowserContexts.map((context) => context.id).join("\0"),
   );
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>(composerTerminalContexts);
   const composerFileCommentsRef = useRef<FileCommentDraft[]>(composerFileComments);
@@ -1217,6 +1374,23 @@ export default function ChatView({
   }, [threadId]);
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
+  const expandedImageStageRef = useRef<HTMLDivElement>(null);
+  const expandedImageElementRef = useRef<HTMLImageElement>(null);
+  const expandedImageZoomRef = useRef(1);
+  const expandedImageZoomAnimationFrameRef = useRef<number | null>(null);
+  const expandedImageZoomAnimatingRef = useRef(false);
+  const expandedImageWheelZoomFrameRef = useRef<number | null>(null);
+  const expandedImageWheelZoomTargetRef = useRef<number | null>(null);
+  const pendingExpandedImageWheelZoomAnchorRef = useRef<ExpandedImageWheelZoomAnchor | null>(null);
+  const expandedImageWheelZoomEndTimerRef = useRef<number | null>(null);
+  const expandedImagePanRef = useRef<{
+    pointerId: number;
+    clientX: number;
+    clientY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
+  const pendingExpandedImageCenterRef = useRef(false);
   const pendingComposerFocusRef = useRef(false);
   const composerFormHeightRef = useRef(0);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
@@ -1297,6 +1471,12 @@ export default function ChatView({
     },
     [addComposerDraftImages, threadId],
   );
+  const addComposerBrowserContextToDraft = useCallback(
+    (context: ComposerBrowserContextAttachment) => {
+      addComposerDraftBrowserContext(threadId, context);
+    },
+    [addComposerDraftBrowserContext, threadId],
+  );
   const addComposerFilesToDraft = useCallback(
     (files: ComposerFileAttachment[]) => {
       addComposerDraftFiles(threadId, files);
@@ -1331,6 +1511,12 @@ export default function ChatView({
       removeComposerDraftImage(threadId, imageId);
     },
     [removeComposerDraftImage, threadId],
+  );
+  const removeComposerBrowserContextFromDraft = useCallback(
+    (contextId: string) => {
+      removeComposerDraftBrowserContext(threadId, contextId);
+    },
+    [removeComposerDraftBrowserContext, threadId],
   );
   const clearComposerAssistantSelectionsFromDraft = useCallback(() => {
     clearComposerDraftAssistantSelections(threadId);
@@ -1416,6 +1602,7 @@ export default function ChatView({
   const diffOpen = rawSearch.panel === "diff";
   const browserOpen = rawSearch.panel === "browser";
   const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
+  const resolvedBrowserOpen = panelState ? panelState.panel === "browser" : browserOpen;
   const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
@@ -3367,6 +3554,10 @@ export default function ChatView({
     () => shortcutLabelForCommand(keybindings, "diff.toggle"),
     [keybindings],
   );
+  const browserPanelShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "browser.toggle"),
+    [keybindings],
+  );
   const chatSplitShortcutLabel = useMemo(
     () => shortcutLabelForCommand(keybindings, "chat.split"),
     [keybindings],
@@ -3444,6 +3635,186 @@ export default function ChatView({
       },
     });
   }, [browserOpen, navigate, onToggleBrowserPanel, threadId]);
+  // Shared route fallback for revealing the browser pane when no host callback is wired.
+  const revealBrowserPaneViaRoute = useCallback(() => {
+    void navigate({
+      to: "/$threadId",
+      params: { threadId },
+      replace: true,
+      search: (previous) => ({
+        ...stripDiffSearchParams(previous),
+        panel: "browser",
+      }),
+    });
+  }, [navigate, threadId]);
+  const onOpenBrowser = useCallback(() => {
+    if (resolvedBrowserOpen) {
+      return;
+    }
+    if (onOpenBrowserPanel) {
+      onOpenBrowserPanel();
+      return;
+    }
+    if (onToggleBrowserPanel) {
+      onToggleBrowserPanel();
+      return;
+    }
+    revealBrowserPaneViaRoute();
+  }, [onOpenBrowserPanel, onToggleBrowserPanel, resolvedBrowserOpen, revealBrowserPaneViaRoute]);
+  const onOpenLiveEditor = useCallback(() => {
+    if (onOpenLiveEditorPanel) {
+      onOpenLiveEditorPanel();
+      return;
+    }
+    onOpenBrowser();
+  }, [onOpenBrowser, onOpenLiveEditorPanel]);
+  const handleLiveEditSkill = useCallback(
+    async (args: string) => {
+      const api = readNativeApi();
+      const parsedArgs = parseLiveEditAppSkillArgs(args);
+      const cwd = resolvedThreadWorktreePath ?? activeProject?.cwd ?? null;
+      if (!api) {
+        toastManager.add({
+          type: "warning",
+          title: "Live Edit is unavailable",
+          description: "The app API is not available in this window.",
+        });
+        return;
+      }
+      if (parsedArgs.action !== "nuke" && !cwd) {
+        toastManager.add({
+          type: "warning",
+          title: "Live Edit is unavailable",
+          description: "Open a project or worktree before using Live Edit.",
+        });
+        return;
+      }
+
+      try {
+        if (parsedArgs.action === "nuke") {
+          const result = await api.preview.stopAll({ threadId });
+          const closedStates = await closeLiveEditPreviewTabs(api, {
+            urls: result.urls,
+            fallbackThreadIds: getLiveEditBrowserThreadIds(),
+            closeLocalPreviewTabs: true,
+          }).catch(() => []);
+          for (const closedState of closedStates) {
+            upsertThreadBrowserState(closedState);
+          }
+          closeAllLiveEditorDockPanesWithoutPreviews();
+          const portDetail =
+            result.killedPortCount > 0
+              ? ` Freed ${result.killedPortCount} local preview port${result.killedPortCount === 1 ? "" : "s"}.`
+              : "";
+          const failureDetail =
+            result.failedCount > 0
+              ? ` ${result.failedCount} cleanup ${result.failedCount === 1 ? "step" : "steps"} reported errors.`
+              : "";
+          toastManager.add({
+            type: result.failedCount > 0 ? "warning" : "success",
+            title: "Live Edit previews stopped",
+            description: `Stopped ${result.stoppedCount} Live Edit preview${result.stoppedCount === 1 ? "" : "s"}.${portDetail}${failureDetail}`,
+          });
+          return;
+        }
+
+        const liveEditCwd = cwd;
+        if (!liveEditCwd) {
+          toastManager.add({
+            type: "warning",
+            title: "Live Edit is unavailable",
+            description: "Open a project or worktree before using Live Edit.",
+          });
+          return;
+        }
+
+        if (parsedArgs.action === "stop") {
+          // The preview may have been started before this thread's worktree was
+          // provisioned (keyed by the project cwd), so stop every candidate cwd —
+          // otherwise the original dev server keeps running after a "successful" stop.
+          const { closedStates } = await stopLiveEditPreview(api, {
+            threadId,
+            cwds: [liveEditCwd, resolvedThreadWorktreePath, activeProject?.cwd ?? null],
+            projectId: activeProjectId,
+          });
+          for (const closedState of closedStates) {
+            upsertThreadBrowserState(closedState);
+          }
+          closeLiveEditorDockPanesForThreadIds([threadId]);
+          toastManager.add({
+            type: "success",
+            title: "Live Edit stopped",
+            description: "Stopped the current project preview.",
+          });
+          return;
+        }
+
+        const previewState = await api.preview.start({
+          threadId,
+          cwd: liveEditCwd,
+          ...(activeProjectId ? { projectId: activeProjectId } : {}),
+          ...(parsedArgs.target ? { target: parsedArgs.target } : {}),
+          ...(parsedArgs.url ? { url: parsedArgs.url } : {}),
+          ...(parsedArgs.command ? { command: parsedArgs.command } : {}),
+          ...(parsedArgs.preferredPort ? { preferredPort: parsedArgs.preferredPort } : {}),
+        });
+        if (!previewState.url) {
+          throw new Error("Live Edit did not return a preview URL.");
+        }
+        await openLiveEditPreviewTab(api, {
+          threadId,
+          cwd: liveEditCwd,
+          projectId: activeProjectId,
+          targetCwd: previewState.targetCwd ?? null,
+          url: previewState.url,
+        });
+        onOpenLiveEditor();
+        toastManager.add({
+          type: "success",
+          title: "Live Edit starting",
+          description:
+            previewState.framework && previewState.framework !== "unknown"
+              ? `Opened ${previewState.framework} preview in the browser editor.`
+              : "Opened the preview in the browser editor.",
+        });
+      } catch (error) {
+        const failureTitle =
+          parsedArgs.action === "nuke"
+            ? "Could not nuke Live Edit previews"
+            : parsedArgs.action === "stop"
+              ? "Could not stop Live Edit"
+              : "Could not start Live Edit";
+        const fallbackDescription =
+          parsedArgs.action === "nuke"
+            ? "An error occurred while stopping Live Edit previews."
+            : parsedArgs.action === "stop"
+              ? "An error occurred while stopping the frontend preview."
+              : "An error occurred while starting the frontend preview.";
+        toastManager.add({
+          type: "error",
+          title: failureTitle,
+          description: error instanceof Error ? error.message : fallbackDescription,
+        });
+      }
+    },
+    [
+      activeProject?.cwd,
+      activeProjectId,
+      getLiveEditBrowserThreadIds,
+      onOpenLiveEditor,
+      resolvedThreadWorktreePath,
+      threadId,
+      upsertThreadBrowserState,
+    ],
+  );
+  const handleAppSkill = useCallback(
+    async (skillId: ComposerAppSkillId, args: string) => {
+      if (skillId === "live-edit") {
+        await handleLiveEditSkill(args);
+      }
+    },
+    [handleLiveEditSkill],
+  );
   const openBrowserUrl = useCallback(
     (url: string) => {
       const api = readNativeApi();
@@ -3459,17 +3830,9 @@ export default function ChatView({
         onOpenBrowserUrl(url);
         return;
       }
-      void navigate({
-        to: "/$threadId",
-        params: { threadId },
-        replace: true,
-        search: (previous) => ({
-          ...stripDiffSearchParams(previous),
-          panel: "browser",
-        }),
-      });
+      revealBrowserPaneViaRoute();
     },
-    [navigate, onOpenBrowserUrl, threadId],
+    [onOpenBrowserUrl, revealBrowserPaneViaRoute, threadId],
   );
 
   const envLocked = Boolean(
@@ -3591,6 +3954,15 @@ export default function ChatView({
       focusComposer();
     });
   }, [focusComposer]);
+  useEffect(() => {
+    const nextFocusKey = composerBrowserContexts.map((context) => context.id).join("\0");
+    const previousFocusKey = browserSelectionFocusKeyRef.current;
+    browserSelectionFocusKeyRef.current = nextFocusKey;
+    if (nextFocusKey.length === 0 || nextFocusKey === previousFocusKey) {
+      return;
+    }
+    scheduleComposerFocus();
+  }, [composerBrowserContexts, scheduleComposerFocus]);
   // External panels (diff headers, file explorer, preview) bump this nonce after
   // inserting a reference so the composer visibly receives the text.
   const composerFocusRequestNonce = useComposerFocusRequestStore(
@@ -4963,6 +5335,10 @@ export default function ChatView({
   }, [composerAssistantSelections]);
 
   useEffect(() => {
+    composerBrowserContextsRef.current = composerBrowserContexts;
+  }, [composerBrowserContexts]);
+
+  useEffect(() => {
     composerTerminalContextsRef.current = composerTerminalContexts;
   }, [composerTerminalContexts]);
 
@@ -5133,6 +5509,8 @@ export default function ChatView({
                 mimeType: image.mimeType,
                 sizeBytes: image.sizeBytes,
                 dataUrl,
+                ...(image.source ? { source: image.source } : {}),
+                ...(image.browserAnnotation ? { browserAnnotation: image.browserAnnotation } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -5174,8 +5552,260 @@ export default function ChatView({
     threadId,
   ]);
 
+  useEffect(() => {
+    expandedImageZoomRef.current = expandedImageZoom;
+  }, [expandedImageZoom]);
+  const cancelExpandedImageZoomAnimation = useCallback(() => {
+    if (expandedImageZoomAnimationFrameRef.current !== null) {
+      window.cancelAnimationFrame(expandedImageZoomAnimationFrameRef.current);
+      expandedImageZoomAnimationFrameRef.current = null;
+    }
+    expandedImageZoomAnimatingRef.current = false;
+  }, []);
+  const clearExpandedImageWheelZoomEndTimer = useCallback(() => {
+    if (expandedImageWheelZoomEndTimerRef.current !== null) {
+      window.clearTimeout(expandedImageWheelZoomEndTimerRef.current);
+      expandedImageWheelZoomEndTimerRef.current = null;
+    }
+  }, []);
+  const cancelPendingExpandedImageWheelZoomFrame = useCallback(() => {
+    if (expandedImageWheelZoomFrameRef.current !== null) {
+      window.cancelAnimationFrame(expandedImageWheelZoomFrameRef.current);
+      expandedImageWheelZoomFrameRef.current = null;
+    }
+    expandedImageWheelZoomTargetRef.current = null;
+    pendingExpandedImageWheelZoomAnchorRef.current = null;
+  }, []);
+  const endExpandedImageWheelZoom = useCallback(() => {
+    clearExpandedImageWheelZoomEndTimer();
+    cancelPendingExpandedImageWheelZoomFrame();
+    setIsExpandedImageWheelZooming(false);
+  }, [cancelPendingExpandedImageWheelZoomFrame, clearExpandedImageWheelZoomEndTimer]);
   const closeExpandedImage = useCallback(() => {
+    cancelExpandedImageZoomAnimation();
+    endExpandedImageWheelZoom();
     setExpandedImage(null);
+  }, [cancelExpandedImageZoomAnimation, endExpandedImageWheelZoom]);
+  const resetExpandedImageZoom = useCallback(() => {
+    cancelExpandedImageZoomAnimation();
+    endExpandedImageWheelZoom();
+    setExpandedImageZoomMode("fit");
+    setExpandedImageZoom(1);
+    expandedImageZoomRef.current = 1;
+    setIsExpandedImagePanning(false);
+    expandedImagePanRef.current = null;
+    pendingExpandedImageCenterRef.current = false;
+    window.requestAnimationFrame(() => {
+      const stage = expandedImageStageRef.current;
+      if (!stage) return;
+      stage.scrollLeft = 0;
+      stage.scrollTop = 0;
+    });
+  }, [cancelExpandedImageZoomAnimation, endExpandedImageWheelZoom]);
+  const readExpandedImageRenderedZoom = useCallback(() => {
+    const image = expandedImageElementRef.current;
+    if (image && image.naturalWidth > 0) {
+      const renderedWidth = image.getBoundingClientRect().width;
+      if (renderedWidth > 0) {
+        return clampExpandedImageZoom(renderedWidth / image.naturalWidth);
+      }
+    }
+    return clampExpandedImageZoom(expandedImageZoomRef.current);
+  }, []);
+  const animateExpandedImageZoom = useCallback(
+    (targetZoomInput: number) => {
+      const targetZoom = clampExpandedImageZoom(targetZoomInput);
+      const startZoom = readExpandedImageRenderedZoom();
+      cancelExpandedImageZoomAnimation();
+      endExpandedImageWheelZoom();
+      setExpandedImageZoomMode("manual");
+      setExpandedImageZoom(startZoom);
+      expandedImageZoomRef.current = startZoom;
+      pendingExpandedImageCenterRef.current = true;
+
+      if (Math.abs(targetZoom - startZoom) < 0.001) {
+        setExpandedImageZoom(targetZoom);
+        expandedImageZoomRef.current = targetZoom;
+        window.requestAnimationFrame(() => {
+          centerExpandedImageStage(expandedImageStageRef.current);
+          pendingExpandedImageCenterRef.current = false;
+        });
+        return;
+      }
+
+      expandedImageZoomAnimatingRef.current = true;
+
+      expandedImageZoomAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        expandedImageZoomAnimationFrameRef.current = window.requestAnimationFrame(() => {
+          expandedImageZoomRef.current = targetZoom;
+          pendingExpandedImageCenterRef.current = true;
+          setExpandedImageZoom(targetZoom);
+
+          const startTime = window.performance.now();
+          const tick = (time: number) => {
+            centerExpandedImageStage(expandedImageStageRef.current);
+
+            if (time - startTime < EXPANDED_IMAGE_ZOOM_ANIMATION_MS + 60) {
+              expandedImageZoomAnimationFrameRef.current = window.requestAnimationFrame(tick);
+              return;
+            }
+
+            expandedImageZoomAnimationFrameRef.current = null;
+            expandedImageZoomAnimatingRef.current = false;
+            pendingExpandedImageCenterRef.current = false;
+            centerExpandedImageStage(expandedImageStageRef.current);
+          };
+          expandedImageZoomAnimationFrameRef.current = window.requestAnimationFrame(tick);
+        });
+      });
+    },
+    [cancelExpandedImageZoomAnimation, endExpandedImageWheelZoom, readExpandedImageRenderedZoom],
+  );
+  const setExpandedImageActualSize = useCallback(() => {
+    animateExpandedImageZoom(1);
+  }, [animateExpandedImageZoom]);
+  const stepExpandedImageZoom = useCallback(
+    (direction: -1 | 1) => {
+      if (expandedImageZoomMode === "fit" && direction < 0) {
+        return;
+      }
+      const currentZoom = readExpandedImageRenderedZoom();
+      animateExpandedImageZoom(
+        direction > 0
+          ? currentZoom * EXPANDED_IMAGE_ZOOM_FACTOR
+          : currentZoom / EXPANDED_IMAGE_ZOOM_FACTOR,
+      );
+    },
+    [animateExpandedImageZoom, expandedImageZoomMode, readExpandedImageRenderedZoom],
+  );
+  const wheelZoomExpandedImage = useCallback(
+    (event: ReactWheelEvent<HTMLDivElement>) => {
+      const image = expandedImageElementRef.current;
+      const imageRect = image?.getBoundingClientRect();
+      if (!image || !imageRect || imageRect.width <= 0 || imageRect.height <= 0) {
+        return;
+      }
+      const currentZoom =
+        expandedImageWheelZoomTargetRef.current ?? readExpandedImageRenderedZoom();
+      const targetZoom = clampExpandedImageZoom(
+        currentZoom * getExpandedImageWheelZoomFactor(event.deltaY, event.deltaMode),
+      );
+
+      if (
+        expandedImageZoomMode === "fit" &&
+        expandedImageWheelZoomTargetRef.current === null &&
+        targetZoom <= currentZoom
+      ) {
+        return;
+      }
+      if (Math.abs(targetZoom - currentZoom) < 0.0005) {
+        return;
+      }
+
+      cancelExpandedImageZoomAnimation();
+      clearExpandedImageWheelZoomEndTimer();
+      setIsExpandedImageWheelZooming(true);
+      expandedImageWheelZoomEndTimerRef.current = window.setTimeout(() => {
+        expandedImageWheelZoomEndTimerRef.current = null;
+        setIsExpandedImageWheelZooming(false);
+      }, EXPANDED_IMAGE_WHEEL_ZOOM_END_DELAY_MS);
+
+      expandedImageWheelZoomTargetRef.current = targetZoom;
+      pendingExpandedImageWheelZoomAnchorRef.current = {
+        clientX: event.clientX,
+        clientY: event.clientY,
+        imageRatioX: Math.min(1, Math.max(0, (event.clientX - imageRect.left) / imageRect.width)),
+        imageRatioY: Math.min(1, Math.max(0, (event.clientY - imageRect.top) / imageRect.height)),
+      };
+      if (expandedImageWheelZoomFrameRef.current !== null) {
+        return;
+      }
+
+      expandedImageWheelZoomFrameRef.current = window.requestAnimationFrame(() => {
+        expandedImageWheelZoomFrameRef.current = null;
+        const nextZoom = expandedImageWheelZoomTargetRef.current;
+        expandedImageWheelZoomTargetRef.current = null;
+        if (nextZoom === null) {
+          pendingExpandedImageWheelZoomAnchorRef.current = null;
+          return;
+        }
+        setExpandedImageZoomMode("manual");
+        expandedImageZoomRef.current = nextZoom;
+        pendingExpandedImageCenterRef.current = false;
+        setExpandedImageZoom(nextZoom);
+      });
+    },
+    [
+      cancelExpandedImageZoomAnimation,
+      clearExpandedImageWheelZoomEndTimer,
+      expandedImageZoomMode,
+      readExpandedImageRenderedZoom,
+    ],
+  );
+  useLayoutEffect(() => {
+    if (expandedImageZoomMode !== "manual") {
+      return;
+    }
+    const pendingWheelAnchor = pendingExpandedImageWheelZoomAnchorRef.current;
+    if (pendingWheelAnchor) {
+      pendingExpandedImageWheelZoomAnchorRef.current = null;
+      anchorExpandedImageStageToCursor(
+        expandedImageStageRef.current,
+        expandedImageElementRef.current,
+        pendingWheelAnchor,
+      );
+      pendingExpandedImageCenterRef.current = false;
+      return;
+    }
+    if (!pendingExpandedImageCenterRef.current && !expandedImageZoomAnimatingRef.current) {
+      return;
+    }
+    centerExpandedImageStage(expandedImageStageRef.current);
+    if (!expandedImageZoomAnimatingRef.current) {
+      pendingExpandedImageCenterRef.current = false;
+    }
+  }, [expandedImageZoom, expandedImageZoomMode]);
+  useEffect(
+    () => () => {
+      cancelExpandedImageZoomAnimation();
+      clearExpandedImageWheelZoomEndTimer();
+    },
+    [cancelExpandedImageZoomAnimation, clearExpandedImageWheelZoomEndTimer],
+  );
+  const beginExpandedImagePan = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (expandedImageZoomMode !== "manual") {
+        return;
+      }
+      expandedImagePanRef.current = {
+        pointerId: event.pointerId,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        scrollLeft: event.currentTarget.scrollLeft,
+        scrollTop: event.currentTarget.scrollTop,
+      };
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setIsExpandedImagePanning(true);
+    },
+    [expandedImageZoomMode],
+  );
+  const moveExpandedImagePan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = expandedImagePanRef.current;
+    if (!pan || pan.pointerId !== event.pointerId) {
+      return;
+    }
+    event.currentTarget.scrollLeft = pan.scrollLeft - (event.clientX - pan.clientX);
+    event.currentTarget.scrollTop = pan.scrollTop - (event.clientY - pan.clientY);
+  }, []);
+  const endExpandedImagePan = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    const pan = expandedImagePanRef.current;
+    if (pan && pan.pointerId === event.pointerId) {
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    }
+    expandedImagePanRef.current = null;
+    setIsExpandedImagePanning(false);
   }, []);
   const navigateExpandedImage = useCallback((direction: -1 | 1) => {
     setExpandedImage((existing) => {
@@ -5518,7 +6148,6 @@ export default function ChatView({
       if (command === "browser.toggle") {
         event.preventDefault();
         event.stopPropagation();
-        if (!isElectron) return;
         onToggleBrowser();
         return;
       }
@@ -5791,6 +6420,7 @@ export default function ChatView({
           return (
             (currentDraft?.images.length ?? 0) +
             (currentDraft?.files.length ?? 0) +
+            (currentDraft?.browserContexts.length ?? 0) +
             (currentDraft?.assistantSelections.length ?? 0)
           );
         })(),
@@ -5835,6 +6465,7 @@ export default function ChatView({
           return (
             (currentDraft?.images.length ?? 0) +
             (currentDraft?.files.length ?? 0) +
+            (currentDraft?.browserContexts.length ?? 0) +
             (currentDraft?.assistantSelections.length ?? 0)
           );
         })(),
@@ -6365,6 +6996,7 @@ export default function ChatView({
       const nextPrompt = queuedTurn.kind === "chat" ? queuedTurn.prompt : queuedTurn.text;
       const restoredImages =
         queuedTurn.kind === "chat" ? queuedTurn.images.map(cloneComposerImageAttachment) : [];
+      const restoredBrowserContexts = queuedTurn.kind === "chat" ? queuedTurn.browserContexts : [];
       const restoredFiles = queuedTurn.kind === "chat" ? queuedTurn.files : [];
       const restoredAssistantSelections =
         queuedTurn.kind === "chat" ? queuedTurn.assistantSelections : [];
@@ -6381,6 +7013,9 @@ export default function ChatView({
       if (queuedTurn.kind === "chat") {
         if (restoredImages.length > 0) {
           addComposerImagesToDraft(restoredImages);
+        }
+        for (const context of restoredBrowserContexts) {
+          addComposerBrowserContextToDraft(context);
         }
         if (restoredFiles.length > 0) {
           addComposerFilesToDraft(restoredFiles);
@@ -6422,6 +7057,7 @@ export default function ChatView({
     },
     [
       activeThread,
+      addComposerBrowserContextToDraft,
       addComposerAssistantSelectionToDraft,
       addComposerFileCommentToDraft,
       addComposerFilesToDraft,
@@ -6507,6 +7143,8 @@ export default function ChatView({
     let promptForSend = queuedChatTurn?.prompt ?? liveComposerSnapshot?.value ?? promptRef.current;
     let composerImagesForSend = queuedChatTurn?.images ?? composerImages;
     const composerFilesForSend = queuedChatTurn?.files ?? composerFiles;
+    const composerBrowserContextsForSend =
+      queuedChatTurn?.browserContexts ?? composerBrowserContexts;
     const composerAssistantSelectionsForSend =
       queuedChatTurn?.assistantSelections ?? composerAssistantSelections;
     const composerFileCommentsForSend = queuedChatTurn?.fileComments ?? composerFileComments;
@@ -6536,6 +7174,7 @@ export default function ChatView({
     } = deriveComposerSendState({
       prompt: promptForSend,
       imageCount: composerImagesForSend.length,
+      browserContextCount: composerBrowserContextsForSend.length,
       fileCount: composerFilesForSend.length,
       assistantSelectionCount: composerAssistantSelectionsForSend.length,
       fileCommentCount: composerFileCommentsForSend.length,
@@ -6560,6 +7199,7 @@ export default function ChatView({
     const hasStructuredPlanFollowUpContent =
       composerImagesForSend.length > 0 ||
       composerFilesForSend.length > 0 ||
+      composerBrowserContextsForSend.length > 0 ||
       composerAssistantSelectionsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||
@@ -6606,6 +7246,7 @@ export default function ChatView({
     }
     const hasNoStructuredComposerContext =
       composerImagesForSend.length === 0 &&
+      composerBrowserContextsForSend.length === 0 &&
       composerFilesForSend.length === 0 &&
       composerAssistantSelectionsForSend.length === 0 &&
       composerFileCommentsForSend.length === 0 &&
@@ -6863,6 +7504,7 @@ export default function ChatView({
         previewText: buildQueuedComposerPreviewText({
           trimmedPrompt: trimmed,
           images: queuedImagesForPersistence,
+          browserContexts: composerBrowserContextsForSend,
           files: composerFilesForSend,
           assistantSelections: composerAssistantSelectionsForSend,
           terminalContexts: sendableComposerTerminalContexts,
@@ -6871,6 +7513,7 @@ export default function ChatView({
         }),
         prompt: promptForSend,
         images: queuedImagesForPersistence,
+        browserContexts: composerBrowserContextsForSend,
         files: composerFilesForSend,
         assistantSelections: composerAssistantSelectionsForSend,
         fileComments: composerFileCommentsForSend,
@@ -6905,6 +7548,9 @@ export default function ChatView({
         titleSeed = `Image: ${firstComposerImageNameForTitle}`;
       } else if (composerFilesForSend.length > 0) {
         titleSeed = `File: ${composerFilesForSend[0]?.name ?? "attachment"}`;
+      } else if (composerBrowserContextsForSend.length > 0) {
+        titleSeed =
+          composerBrowserContextsForSend[0]?.selectedSelector ?? "Browser selection context";
       } else if (composerAssistantSelectionsForSend.length > 0) {
         titleSeed = formatAssistantSelectionTitleSeed(composerAssistantSelectionsForSend.length);
       } else if (sendableComposerTerminalContexts.length > 0) {
@@ -7038,6 +7684,7 @@ export default function ChatView({
     beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
 
     const composerImagesSnapshot = [...composerImagesForSend];
+    const composerBrowserContextsSnapshot = [...composerBrowserContextsForSend];
     const composerFilesSnapshot = [...composerFilesForSend];
     const composerAssistantSelectionsSnapshot = [...composerAssistantSelectionsForSend];
     const composerFileCommentsSnapshot = [...composerFileCommentsForSend];
@@ -7045,13 +7692,20 @@ export default function ChatView({
     const composerPastedTextsSnapshot = [...sendableComposerPastedTexts];
     const composerSkillsSnapshot = [...selectedComposerSkillsForSend];
     const composerMentionsSnapshot = [...selectedComposerMentionsForSend];
-    // Trailing blocks are appended innermost-to-outermost: assistant selections,
-    // terminal contexts, file comments, then pasted text (outermost). The display
-    // extractors unwrap them in the reverse order.
+    // Trailing blocks are appended innermost-to-outermost: browser editor context,
+    // assistant selections, terminal contexts, file comments, then pasted text
+    // (outermost). The display extractors unwrap them in the reverse order.
     const messageTextForSend = appendPastedTextsToPrompt(
       appendFileCommentsToPrompt(
         appendTerminalContextsToPrompt(
-          appendAssistantSelectionsToPrompt(promptForSend, composerAssistantSelectionsSnapshot),
+          appendAssistantSelectionsToPrompt(
+            appendBrowserAnnotationAttachmentContextsToPrompt(
+              promptForSend,
+              composerImagesSnapshot,
+              composerBrowserContextsSnapshot,
+            ),
+            composerAssistantSelectionsSnapshot,
+          ),
           composerTerminalContextsSnapshot,
         ),
         composerFileCommentsSnapshot,
@@ -7344,6 +7998,7 @@ export default function ChatView({
         !turnStartSucceeded &&
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
+        composerBrowserContextsRef.current.length === 0 &&
         composerFilesRef.current.length === 0 &&
         composerAssistantSelectionsRef.current.length === 0 &&
         composerFileCommentsRef.current.length === 0 &&
@@ -7369,6 +8024,9 @@ export default function ChatView({
         }
         setComposerCursor(collapseExpandedComposerCursor(promptForSend, promptForSend.length));
         addComposerImagesToDraft(composerImagesSnapshot.map(cloneComposerImageAttachment));
+        for (const context of composerBrowserContextsSnapshot) {
+          addComposerBrowserContextToDraft(context);
+        }
         addComposerFilesToDraft(composerFilesSnapshot);
         for (const selection of composerAssistantSelectionsSnapshot) {
           addComposerAssistantSelectionToDraft(selection);
@@ -8798,6 +9456,7 @@ export default function ChatView({
       await handleNewThread(activeProject.id, { entryPoint: "chat" });
     },
     handleInteractionModeChange,
+    handleAppSkill,
     openForkTargetPicker: () => {
       setComposerCommandPicker("fork-target");
       setComposerHighlightedItemId("fork-target:worktree");
@@ -8843,7 +9502,7 @@ export default function ChatView({
         handleNavigateLocalFolder(localFolderBrowseRootPath ?? "/");
         return;
       }
-      if (item.type === "slash-command") {
+      if (item.type === "slash-command" || item.type === "app-skill") {
         handleSlashCommandSelection(item);
         return;
       }
@@ -9112,6 +9771,31 @@ export default function ChatView({
     setExpandedImage(preview);
   }, []);
   const expandedImageItem = expandedImage ? expandedImage.images[expandedImage.index] : null;
+  const expandedImageAnnotation = expandedImageItem?.browserAnnotation ?? null;
+  const expandedImageSelectedCode = expandedImageAnnotation
+    ? extractBrowserAnnotationSelectedCode(expandedImageAnnotation.promptBlock)
+    : null;
+  const expandedImagePaneOptions: ExpandedBrowserContextPane[] = expandedImageAnnotation
+    ? [...(expandedImageItem?.src ? (["image"] as const) : []), "code", "payload"]
+    : ["image"];
+  const expandedImageActivePane = expandedImagePaneOptions.includes(expandedImagePane)
+    ? expandedImagePane
+    : expandedImagePaneOptions[0]!;
+  const expandedImageContextTitle = expandedImageAnnotation ? "Live Editor Context" : null;
+  const expandedImageZoomLabel =
+    expandedImageZoomMode === "fit" ? "Fit" : `${Math.round(expandedImageZoom * 100)}%`;
+  useEffect(() => {
+    if (!expandedImageItem) {
+      return;
+    }
+    setExpandedImagePane(expandedImageItem.src ? "image" : "code");
+    setExpandedImageNaturalSize(null);
+    resetExpandedImageZoom();
+  }, [
+    expandedImageItem?.browserAnnotation?.promptBlock,
+    expandedImageItem?.src,
+    resetExpandedImageZoom,
+  ]);
   const onScrollToBottom = useCallback(() => {
     isAtEndRef.current = true;
     showScrollDebouncer.current.cancel();
@@ -9707,6 +10391,7 @@ export default function ChatView({
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
                     (composerAssistantSelections.length > 0 ||
+                      composerBrowserContexts.length > 0 ||
                       composerFileComments.length > 0 ||
                       composerPastedTexts.length > 0 ||
                       composerFiles.length > 0 ||
@@ -9717,9 +10402,12 @@ export default function ChatView({
                         pastedTexts={composerPastedTexts}
                         files={composerFiles}
                         images={composerImages}
+                        browserContexts={composerBrowserContexts}
                         nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
+                        onExpandBrowserContext={setExpandedImage}
                         onExpandImage={setExpandedImage}
                         onRemoveAssistantSelections={clearComposerAssistantSelectionsFromDraft}
+                        onRemoveBrowserContext={removeComposerBrowserContextFromDraft}
                         onRemoveFileComments={clearComposerFileCommentsFromDraft}
                         onRemovePastedText={removeComposerPastedTextFromDraft}
                         onShowPastedTextInField={showComposerPastedTextInField}
@@ -10129,7 +10817,9 @@ export default function ChatView({
           showGitActions={showGitActions && !isEditorRail}
           showDiffToggle={!isEditorRail}
           diffOpen={resolvedDiffOpen}
+          browserOpen={resolvedBrowserOpen}
           diffDisabledReason={diffDisabledReason}
+          browserToggleShortcutLabel={browserPanelShortcutLabel}
           environment={isEditorRail ? null : environmentHeaderState}
           surfaceMode={surfaceMode}
           chatLayoutAction={
@@ -10177,6 +10867,7 @@ export default function ChatView({
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleDiff={onToggleDiff}
+          onToggleBrowser={onToggleBrowser}
           onCreateHandoff={onCreateHandoffThread}
           onNavigateToThread={onNavigateToThread}
           onRenameThread={() => setRenameDialogOpen(true)}
@@ -10521,7 +11212,8 @@ export default function ChatView({
 
       {expandedImage && expandedImageItem && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
+          data-live-editor-context-preview="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/62 px-4 py-6 backdrop-blur-xl [-webkit-app-region:no-drag]"
           role="dialog"
           aria-modal="true"
           aria-label="Expanded image preview"
@@ -10547,30 +11239,235 @@ export default function ChatView({
               <ChevronLeftIcon className="size-5" />
             </Button>
           )}
-          <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
-            <Button
-              type="button"
-              size="icon-xs"
-              variant="ghost"
-              className="absolute right-2 top-2"
-              onClick={closeExpandedImage}
-              aria-label="Close image preview"
-            >
-              <XIcon />
-            </Button>
-            <img
-              src={expandedImageItem.src}
-              alt={expandedImageItem.name}
-              className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
-              draggable={false}
-            />
-            <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
-              {expandedImageItem.name}
-              {expandedImage.images.length > 1
-                ? ` (${expandedImage.index + 1}/${expandedImage.images.length})`
-                : ""}
-            </p>
-          </div>
+          {expandedImageAnnotation ? (
+            <div className="relative isolate z-10 grid h-[min(760px,90vh)] max-h-[90vh] w-[min(1040px,92vw)] grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/54 text-slate-950 shadow-[0_28px_100px_rgba(15,23,42,0.24),0_0_0_1px_rgba(255,255,255,0.62)_inset] backdrop-blur-2xl dark:border-white/12 dark:bg-[rgba(18,20,22,0.68)] dark:text-foreground dark:shadow-[0_28px_100px_rgba(0,0,0,0.58),0_0_0_1px_rgba(255,255,255,0.04)_inset]">
+              <header className="flex min-w-0 items-start gap-3 border-b border-black/10 bg-white/26 px-4 py-3 backdrop-blur-xl dark:border-white/10 dark:bg-white/[0.035]">
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold text-foreground">
+                    {expandedImageContextTitle}
+                  </p>
+                  <p className="mt-0.5 truncate text-xs text-muted-foreground">
+                    {expandedImageAnnotation.title ||
+                      expandedImageAnnotation.url ||
+                      "Browser context"}
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {expandedImageAnnotation.strokeCount > 0 ? (
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                        {expandedImageAnnotation.strokeCount} stroke
+                        {expandedImageAnnotation.strokeCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    {expandedImageAnnotation.textCount > 0 ? (
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                        {expandedImageAnnotation.textCount} note
+                        {expandedImageAnnotation.textCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    {(expandedImageAnnotation.arrowCount ?? 0) > 0 ? (
+                      <span className="rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                        {expandedImageAnnotation.arrowCount} arrow
+                        {expandedImageAnnotation.arrowCount === 1 ? "" : "s"}
+                      </span>
+                    ) : null}
+                    {expandedImageAnnotation.selectedSelector ? (
+                      <span className="max-w-[520px] truncate rounded-full border border-black/10 bg-white/36 px-2 py-0.5 text-[11px] text-muted-foreground shadow-[0_1px_0_rgba(255,255,255,0.48)_inset] dark:border-white/12 dark:bg-white/[0.055] dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                        {expandedImageAnnotation.selectedSelector}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <div className="inline-flex rounded-lg border border-black/10 bg-white/36 p-0.5 shadow-[0_1px_0_rgba(255,255,255,0.52)_inset] backdrop-blur-xl dark:border-white/12 dark:bg-black/22 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset]">
+                    {expandedImagePaneOptions.map((pane) => (
+                      <button
+                        key={pane}
+                        type="button"
+                        className="rounded-md px-2 py-1 text-[11px] font-medium capitalize text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/68 data-[active=true]:text-slate-950 data-[active=true]:shadow-sm dark:hover:bg-white/8 dark:data-[active=true]:bg-white/14 dark:data-[active=true]:text-foreground"
+                        data-active={expandedImageActivePane === pane}
+                        onClick={() => setExpandedImagePane(pane)}
+                      >
+                        {pane === "image" ? "Image" : pane === "code" ? "Code" : "Payload"}
+                      </button>
+                    ))}
+                  </div>
+                  <Button
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    onClick={closeExpandedImage}
+                    aria-label="Close image preview"
+                  >
+                    <XIcon />
+                  </Button>
+                </div>
+              </header>
+              <div className="min-h-0 overflow-hidden bg-white/12 p-4 backdrop-blur-xl dark:bg-black/[0.08]">
+                {expandedImageActivePane === "image" && expandedImageItem.src ? (
+                  <div className="relative h-full min-h-0 rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.14)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.26)]">
+                    <div
+                      ref={expandedImageStageRef}
+                      className={cn(
+                        "h-full min-h-0",
+                        expandedImageZoomMode === "manual"
+                          ? isExpandedImagePanning
+                            ? "cursor-grabbing overflow-auto"
+                            : "cursor-grab overflow-auto"
+                          : "overflow-hidden",
+                      )}
+                      onPointerDown={beginExpandedImagePan}
+                      onPointerMove={moveExpandedImagePan}
+                      onPointerUp={endExpandedImagePan}
+                      onPointerCancel={endExpandedImagePan}
+                      onWheel={(event) => {
+                        if (!event.metaKey && !event.ctrlKey) {
+                          return;
+                        }
+                        event.preventDefault();
+                        wheelZoomExpandedImage(event);
+                      }}
+                    >
+                      <div
+                        className={cn(
+                          "min-h-full min-w-full",
+                          expandedImageZoomMode === "fit"
+                            ? "flex h-full w-full items-center justify-center p-6"
+                            : "flex h-max min-h-full w-max min-w-full items-center justify-center p-8",
+                        )}
+                      >
+                        <img
+                          ref={expandedImageElementRef}
+                          src={expandedImageItem.src}
+                          alt={expandedImageItem.name}
+                          className={cn(
+                            "select-none rounded-md object-contain shadow-[0_18px_60px_rgba(0,0,0,0.42)] will-change-[width] motion-reduce:transition-none",
+                            isExpandedImageWheelZooming
+                              ? "transition-none"
+                              : "transition-[width] duration-200 ease-out",
+                            expandedImageZoomMode === "fit"
+                              ? "max-h-full max-w-full"
+                              : "max-h-none max-w-none",
+                          )}
+                          style={
+                            expandedImageZoomMode === "manual" && expandedImageNaturalSize
+                              ? {
+                                  width: `${expandedImageNaturalSize.width * expandedImageZoom}px`,
+                                  height: "auto",
+                                }
+                              : undefined
+                          }
+                          draggable={false}
+                          onLoad={(event) => {
+                            setExpandedImageNaturalSize({
+                              width: event.currentTarget.naturalWidth,
+                              height: event.currentTarget.naturalHeight,
+                            });
+                          }}
+                        />
+                      </div>
+                    </div>
+                    <div
+                      className="absolute right-3 top-3 z-10 inline-flex items-center gap-1 rounded-lg border border-black/10 bg-white/56 p-1 shadow-[0_10px_32px_rgba(15,23,42,0.18),0_1px_0_rgba(255,255,255,0.62)_inset] backdrop-blur-xl dark:border-white/12 dark:bg-black/32 dark:shadow-[0_10px_32px_rgba(0,0,0,0.34),0_1px_0_rgba(255,255,255,0.06)_inset]"
+                      onPointerDown={(event) => event.stopPropagation()}
+                    >
+                      <button
+                        type="button"
+                        className="inline-flex h-7 items-center gap-1 rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/70 data-[active=true]:text-slate-950 dark:hover:bg-white/6 dark:data-[active=true]:bg-[rgba(58,62,67,0.9)] dark:data-[active=true]:text-foreground"
+                        data-active={expandedImageZoomMode === "fit"}
+                        onClick={resetExpandedImageZoom}
+                        title="Fit image"
+                      >
+                        <Maximize2 className="size-3" />
+                        Fit
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex h-7 items-center rounded px-2 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground data-[active=true]:bg-white/70 data-[active=true]:text-slate-950 dark:hover:bg-white/6 dark:data-[active=true]:bg-[rgba(58,62,67,0.9)] dark:data-[active=true]:text-foreground"
+                        data-active={expandedImageZoomMode === "manual" && expandedImageZoom === 1}
+                        onClick={setExpandedImageActualSize}
+                        title="View at 100%"
+                      >
+                        100%
+                      </button>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 dark:hover:bg-white/6"
+                        disabled={expandedImageZoomMode === "fit"}
+                        onClick={() => stepExpandedImageZoom(-1)}
+                        title="Zoom out"
+                        aria-label="Zoom out"
+                      >
+                        <MinusIcon className="size-3" />
+                      </button>
+                      <span className="min-w-10 text-center text-[11px] font-medium text-muted-foreground">
+                        {expandedImageZoomLabel}
+                      </span>
+                      <button
+                        type="button"
+                        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-white/46 hover:text-foreground dark:hover:bg-white/6"
+                        onClick={() => stepExpandedImageZoom(1)}
+                        title="Zoom in"
+                        aria-label="Zoom in"
+                      >
+                        <PlusIcon className="size-3" />
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+                {expandedImageActivePane === "code" ? (
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)]">
+                    <div className="border-b border-black/10 bg-white/26 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
+                      Selected code
+                    </div>
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-white/14 p-3 font-mono text-[11px] leading-relaxed text-foreground/88 dark:bg-black/[0.12]">
+                      {expandedImageSelectedCode ?? "No selected element code captured."}
+                    </pre>
+                  </section>
+                ) : null}
+                {expandedImageActivePane === "payload" ? (
+                  <section className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border border-black/10 bg-white/24 shadow-[0_1px_0_rgba(255,255,255,0.58)_inset,0_18px_70px_rgba(15,23,42,0.12)] backdrop-blur-xl dark:border-white/12 dark:bg-black/24 dark:shadow-[0_1px_0_rgba(255,255,255,0.05)_inset,0_18px_70px_rgba(0,0,0,0.22)]">
+                    <div className="border-b border-black/10 bg-white/26 px-3 py-2 text-[11px] font-semibold uppercase text-muted-foreground backdrop-blur-md dark:border-white/10 dark:bg-white/[0.04]">
+                      Metadata payload
+                    </div>
+                    <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap break-words bg-white/14 p-3 font-mono text-[11px] leading-relaxed text-foreground/88 dark:bg-black/[0.12]">
+                      {expandedImageAnnotation.promptBlock}
+                    </pre>
+                  </section>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <div className="relative isolate z-10 max-h-[92vh] max-w-[92vw]">
+              <Button
+                type="button"
+                size="icon-xs"
+                variant="ghost"
+                className="absolute right-2 top-2 z-10"
+                onClick={closeExpandedImage}
+                aria-label="Close image preview"
+              >
+                <XIcon />
+              </Button>
+              {expandedImageItem.src ? (
+                <img
+                  src={expandedImageItem.src}
+                  alt={expandedImageItem.name}
+                  className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] object-contain shadow-2xl"
+                  draggable={false}
+                />
+              ) : (
+                <div className="rounded-lg border border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] p-8 text-sm text-muted-foreground shadow-2xl">
+                  Preview unavailable.
+                </div>
+              )}
+              <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
+                {expandedImageItem.name}
+                {expandedImage.images.length > 1
+                  ? ` (${expandedImage.index + 1}/${expandedImage.images.length})`
+                  : ""}
+              </p>
+            </div>
+          )}
           {expandedImage.images.length > 1 && (
             <Button
               type="button"

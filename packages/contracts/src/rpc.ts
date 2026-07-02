@@ -72,6 +72,14 @@ import {
 } from "./orchestration";
 import { ProviderCompactThreadInput } from "./provider";
 import {
+  PreviewRuntimeEvent,
+  PreviewRuntimeInput,
+  PreviewRuntimeState,
+  PreviewStartInput,
+  PreviewStopAllInput,
+  PreviewStopAllResult,
+} from "./preview";
+import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
   ProviderListAgentsInput,
@@ -90,6 +98,10 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectApplyStyleEditInput,
+  ProjectApplyStyleEditResult,
+  ProjectApplyTextEditInput,
+  ProjectApplyTextEditResult,
   ProjectCreateLocalFilePreviewGrantInput,
   ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
@@ -311,6 +323,18 @@ export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   error: WsRpcError,
 });
 
+export const WsProjectsApplyTextEditRpc = Rpc.make(WS_METHODS.projectsApplyTextEdit, {
+  payload: ProjectApplyTextEditInput,
+  success: ProjectApplyTextEditResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsApplyStyleEditRpc = Rpc.make(WS_METHODS.projectsApplyStyleEdit, {
+  payload: ProjectApplyStyleEditInput,
+  success: ProjectApplyStyleEditResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsRunDevServerRpc = Rpc.make(WS_METHODS.projectsRunDevServer, {
   payload: ProjectRunDevServerInput,
   success: ProjectRunDevServerResult,
@@ -529,6 +553,43 @@ export const WsTerminalCloseRpc = Rpc.make(WS_METHODS.terminalClose, {
 export const WsSubscribeTerminalEventsRpc = Rpc.make(WS_METHODS.subscribeTerminalEvents, {
   payload: Schema.Struct({}),
   success: TerminalEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
+export const WsPreviewGetStateRpc = Rpc.make(WS_METHODS.previewGetState, {
+  payload: PreviewRuntimeInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewStartRpc = Rpc.make(WS_METHODS.previewStart, {
+  payload: PreviewStartInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewStopRpc = Rpc.make(WS_METHODS.previewStop, {
+  payload: PreviewRuntimeInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsPreviewStopAllRpc = Rpc.make(WS_METHODS.previewStopAll, {
+  payload: PreviewStopAllInput,
+  success: PreviewStopAllResult,
+  error: WsRpcError,
+});
+
+export const WsPreviewRestartRpc = Rpc.make(WS_METHODS.previewRestart, {
+  payload: PreviewStartInput,
+  success: PreviewRuntimeState,
+  error: WsRpcError,
+});
+
+export const WsSubscribePreviewEventsRpc = Rpc.make(WS_METHODS.subscribePreviewEvents, {
+  payload: Schema.Struct({}),
+  success: PreviewRuntimeEvent,
   error: WsRpcError,
   stream: true,
 });
@@ -811,6 +872,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsReadFileRpc,
   WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
+  WsProjectsApplyTextEditRpc,
+  WsProjectsApplyStyleEditRpc,
   WsProjectsRunDevServerRpc,
   WsProjectsStopDevServerRpc,
   WsProjectsListDevServersRpc,
@@ -847,6 +910,12 @@ export const WsRpcGroup = RpcGroup.make(
   WsTerminalRestartRpc,
   WsTerminalCloseRpc,
   WsSubscribeTerminalEventsRpc,
+  WsPreviewGetStateRpc,
+  WsPreviewStartRpc,
+  WsPreviewStopRpc,
+  WsPreviewStopAllRpc,
+  WsPreviewRestartRpc,
+  WsSubscribePreviewEventsRpc,
   WsServerGetConfigRpc,
   WsServerGetEnvironmentRpc,
   WsServerGetSettingsRpc,

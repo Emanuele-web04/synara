@@ -22,13 +22,21 @@ import {
 } from "~/lib/localFolderMentions";
 import { basenameOfPath } from "../file-icons";
 import type { ComposerTrigger } from "../composer-logic";
+import { filterComposerAppSkills } from "../composerAppSkills";
 import {
   filterComposerSlashCommands,
   getAvailableComposerSlashCommands,
+  getComposerSlashCommandMenuTitle,
   getProviderNativeSlashCommandSearchTerms,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "../composerSlashCommands";
 import type { ComposerCommandItem } from "../components/chat/ComposerCommandMenu";
+
+function builtInComposerItemTitle(
+  item: Extract<ComposerCommandItem, { type: "app-skill" | "slash-command" }>,
+): string {
+  return item.type === "app-skill" ? item.label : getComposerSlashCommandMenuTitle(item.command);
+}
 
 type ComposerPluginSuggestion = {
   plugin: ProviderPluginDescriptor;
@@ -174,6 +182,17 @@ export function useComposerCommandMenuItems(input: {
         description: definition.description,
         source: definition.source,
       }));
+      const appSkillItems = filterComposerAppSkills(composerTrigger.query).map((definition) => ({
+        id: `app-skill:${definition.id}`,
+        type: "app-skill" as const,
+        skillId: definition.id,
+        label: definition.label,
+        trigger: definition.trigger,
+        description: definition.description,
+      }));
+      const builtInMenuItems = [...appSkillItems, ...builtInItems].sort((a, b) =>
+        builtInComposerItemTitle(a).localeCompare(builtInComposerItemTitle(b)),
+      );
       const providerCommandItems = providerNativeCommands
         .filter(
           (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
@@ -211,7 +230,7 @@ export function useComposerCommandMenuItems(input: {
         label: skill.interface?.displayName ?? skill.name,
         description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
       }));
-      return [...builtInItems, ...rankedProviderCommandItems, ...skillItems];
+      return [...builtInMenuItems, ...rankedProviderCommandItems, ...skillItems];
     }
 
     if (composerTrigger.kind === "skill") {

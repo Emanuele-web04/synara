@@ -16,6 +16,7 @@ import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
 import type { ComposerTrigger } from "../composer-logic";
 import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
+import { parseComposerAppSkillInvocation, type ComposerAppSkillId } from "../composerAppSkills";
 import {
   buildSlashReviewComposerPrompt,
   buildSubagentsPrompt,
@@ -42,6 +43,7 @@ type ComposerSnapshot = {
 };
 
 type SlashCommandItem = Extract<ComposerCommandItem, { type: "slash-command" }>;
+type AppSkillItem = Extract<ComposerCommandItem, { type: "app-skill" }>;
 
 function wasPromptReplacementApplied(result: number | false): boolean {
   return result !== false;
@@ -69,6 +71,7 @@ export function useComposerSlashCommands(input: {
   navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
+  handleAppSkill: (skillId: ComposerAppSkillId, args: string) => Promise<void> | void;
   openForkTargetPicker: () => void;
   openReviewTargetPicker: () => void;
   setComposerDraftProviderModelOptions: (
@@ -117,6 +120,7 @@ export function useComposerSlashCommands(input: {
     navigateToThread,
     handleClearConversation,
     handleInteractionModeChange,
+    handleAppSkill,
     openForkTargetPicker,
     openReviewTargetPicker,
     setComposerDraftProviderModelOptions,
@@ -575,6 +579,13 @@ export function useComposerSlashCommands(input: {
         return true;
       }
 
+      const appSkillInvocation = parseComposerAppSkillInvocation(trimmed);
+      if (appSkillInvocation) {
+        editorActions.clearComposerSlashDraft();
+        await handleAppSkill(appSkillInvocation.id, appSkillInvocation.args);
+        return true;
+      }
+
       const slashInvocation = parseComposerSlashInvocationForCommands(
         trimmed,
         availableBuiltInSlashCommands,
@@ -700,6 +711,7 @@ export function useComposerSlashCommands(input: {
       createSidechatFromSlashCommand,
       editorActions,
       handleClearConversation,
+      handleAppSkill,
       handleInteractionModeChange,
       openForkTargetPicker,
       openReviewTargetPicker,
@@ -711,9 +723,26 @@ export function useComposerSlashCommands(input: {
   );
 
   const handleSlashCommandSelection = useCallback(
-    (item: SlashCommandItem) => {
+    (item: SlashCommandItem | AppSkillItem) => {
       const { snapshot, trigger } = editorActions.resolveActiveComposerTrigger();
       if (!trigger) {
+        return;
+      }
+
+      const clearSlashCommandFromComposer = () =>
+        editorActions.applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
+          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
+        });
+
+      if (item.type === "app-skill") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        void Promise.resolve(handleAppSkill(item.skillId, "")).finally(() =>
+          editorActions.scheduleComposerFocus(),
+        );
         return;
       }
 
@@ -755,11 +784,6 @@ export function useComposerSlashCommands(input: {
         }
         return;
       }
-
-      const clearSlashCommandFromComposer = () =>
-        editorActions.applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
-          expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
-        });
 
       if (item.command === "clear") {
         const applied = clearSlashCommandFromComposer();
@@ -896,6 +920,7 @@ export function useComposerSlashCommands(input: {
       createSidechatFromSlashCommand,
       editorActions,
       handleClearConversation,
+      handleAppSkill,
       handleInteractionModeChange,
       openForkTargetPicker,
       openReviewTargetPicker,

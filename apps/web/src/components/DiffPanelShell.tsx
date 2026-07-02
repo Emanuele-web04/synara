@@ -11,13 +11,14 @@ import { Skeleton } from "./ui/skeleton";
 
 export type DiffPanelMode = "inline" | "sheet" | "sidebar";
 
-function getDiffPanelHeaderRowClassName(mode: DiffPanelMode) {
+function getDiffPanelHeaderRowClassName(mode: DiffPanelMode, className?: string) {
   const shouldUseDragRegion = isElectron && mode !== "sheet";
   // Match RightDock tab strip inset (`px-1.5`) so picker triggers line up under dock tabs.
   return cn(
     "flex w-full min-w-0 items-center gap-1.5 px-1.5",
     CHAT_SURFACE_HEADER_HEIGHT_CLASS,
     shouldUseDragRegion && cn("drag-region", CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME),
+    className,
   );
 }
 
@@ -25,6 +26,7 @@ export function DiffPanelShell(props: {
   mode: DiffPanelMode;
   header?: ReactNode;
   children: ReactNode;
+  headerRowClassName?: string;
 }) {
   const shouldUseDragRegion = isElectron && props.mode !== "sheet";
   const hasHeader = props.header !== null && props.header !== undefined;
@@ -40,10 +42,14 @@ export function DiffPanelShell(props: {
     >
       {hasHeader ? (
         shouldUseDragRegion ? (
-          <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
+          <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
+            {props.header}
+          </div>
         ) : (
           <div className={CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}>
-            <div className={getDiffPanelHeaderRowClassName(props.mode)}>{props.header}</div>
+            <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
+              {props.header}
+            </div>
           </div>
         )
       ) : null}

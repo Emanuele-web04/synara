@@ -88,6 +88,7 @@ async function mountClaudePicker(props?: {
     [CLAUDE_THREAD_ID]: {
       prompt: props?.prompt ?? "",
       images: [],
+      browserContexts: [],
       files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
@@ -322,6 +323,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
     [threadId]: {
       prompt: "",
       images: [],
+      browserContexts: [],
       files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
@@ -659,6 +661,7 @@ async function mountOpenCodePicker(props?: {
     [OPENCODE_THREAD_ID]: {
       prompt: "",
       images: [],
+      browserContexts: [],
       files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],

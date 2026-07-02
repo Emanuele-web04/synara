@@ -65,6 +65,7 @@ import { resolveProviderDiscoveryCwd } from "~/lib/providerDiscovery";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
 import { cn } from "~/lib/utils";
 import {
+  type ComposerBrowserContextAttachment,
   type ComposerFileAttachment,
   type DraftThreadEnvMode,
   useComposerDraftStore,
@@ -82,8 +83,11 @@ import { useKanbanTaskScratchDraft } from "./useKanbanTaskScratchDraft";
 import { useKanbanTaskSubmit } from "./useKanbanTaskSubmit";
 
 const EMPTY_COMPOSER_FILES: ReadonlyArray<ComposerFileAttachment> = [];
+const EMPTY_COMPOSER_BROWSER_CONTEXTS: ReadonlyArray<ComposerBrowserContextAttachment> = [];
 
 function ignoreComposerFileRemoval(_fileId: string): void {}
+
+function ignoreComposerBrowserContextRemoval(_contextId: string): void {}
 
 export interface KanbanNewTaskProjectOption {
   id: ProjectId;
@@ -450,9 +454,12 @@ export function KanbanNewTaskDialog({
               fileComments={composerFileComments}
               files={EMPTY_COMPOSER_FILES}
               images={composerImages}
+              browserContexts={EMPTY_COMPOSER_BROWSER_CONTEXTS}
               nonPersistedImageIdSet={nonPersistedComposerImageIdSet}
+              onExpandBrowserContext={setExpandedImage}
               onExpandImage={setExpandedImage}
               onRemoveAssistantSelections={clearComposerAssistantSelections}
+              onRemoveBrowserContext={ignoreComposerBrowserContextRemoval}
               onRemoveFileComments={clearComposerFileComments}
               onRemoveFile={ignoreComposerFileRemoval}
               onRemoveImage={removeComposerImage}

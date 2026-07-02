@@ -221,7 +221,7 @@ export interface CodexThreadSnapshot {
   cwd?: string | null;
 }
 
-const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_VERSION_CHECK_TIMEOUT_MS = 12_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -722,6 +722,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
   private readonly discoverySessionIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly supportedCodexCliVersionChecks = new Set<string>();
   private readonly skillsCache = new Map<string, ProviderListSkillsResult>();
   private readonly pluginsCache = new Map<string, ProviderListPluginsResult>();
   private readonly pluginDetailCache = new Map<string, ProviderReadPluginResult>();
@@ -2626,7 +2627,17 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     readonly cwd: string;
     readonly homePath?: string;
   }): void {
+    const cacheKey = [
+      input.binaryPath,
+      input.cwd,
+      input.homePath ?? "",
+      process.env.PATH ?? "",
+    ].join("\0");
+    if (this.supportedCodexCliVersionChecks.has(cacheKey)) {
+      return;
+    }
     assertSupportedCodexCliVersion(input);
+    this.supportedCodexCliVersionChecks.add(cacheKey);
   }
 
   private updateSession(context: CodexSessionContext, updates: Partial<ProviderSession>): void {

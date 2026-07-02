@@ -22,6 +22,7 @@ import GitActionsControl from "../GitActionsControl";
 import {
   ArrowRightIcon,
   CheckIcon,
+  GlobeIcon,
   HandoffIcon,
   HistoryIcon,
   MessageCircleIcon,
@@ -102,7 +103,9 @@ interface ChatHeaderProps {
   showGitActions?: boolean;
   showDiffToggle?: boolean;
   diffOpen: boolean;
+  browserOpen: boolean;
   diffDisabledReason?: string | null;
+  browserToggleShortcutLabel: string | null;
   surfaceMode?: "single" | "split";
   isSidechat?: boolean;
   // When provided, the header collapses the
@@ -137,6 +140,7 @@ interface ChatHeaderProps {
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
   onDeleteProjectScript: (scriptId: string) => Promise<void>;
   onToggleDiff: () => void;
+  onToggleBrowser: () => void;
   onCreateHandoff: (targetProvider: ProviderKind) => void;
   onNavigateToThread: (threadId: ThreadId) => void;
   onRenameThread: () => void;
@@ -503,7 +507,9 @@ export const ChatHeader = memo(function ChatHeader({
   showGitActions = true,
   showDiffToggle = true,
   diffOpen,
+  browserOpen,
   diffDisabledReason = null,
+  browserToggleShortcutLabel,
   surfaceMode = "single",
   isSidechat = false,
   environment = null,
@@ -515,6 +521,7 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
   onToggleDiff,
+  onToggleBrowser,
   onCreateHandoff,
   onNavigateToThread,
   onRenameThread,
@@ -613,6 +620,32 @@ export const ChatHeader = memo(function ChatHeader({
       </TooltipPopup>
     </Tooltip>
   ) : null;
+
+  // The browser panel toggle mirrors the diff toggle: declared once so both the
+  // Environment layout and the legacy control cluster render the same control.
+  const browserToggleControl = (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Toggle
+            className={cn(CHAT_HEADER_TOGGLE_CLASS_NAME, "!size-7 [&_svg]:mx-0")}
+            pressed={browserOpen}
+            onPressedChange={onToggleBrowser}
+            aria-label="Toggle browser panel"
+            variant="default"
+            size="xs"
+          >
+            <SurfaceChipIcon icon={GlobeIcon} className="size-4" />
+          </Toggle>
+        }
+      />
+      <TooltipPopup side="bottom">
+        {browserToggleShortcutLabel
+          ? `Toggle browser panel (${browserToggleShortcutLabel})`
+          : "Toggle browser panel"}
+      </TooltipPopup>
+    </Tooltip>
+  );
 
   return (
     <div ref={headerRef} className={cn("flex min-w-0 flex-1 items-center gap-2", className)}>
@@ -838,6 +871,7 @@ export const ChatHeader = memo(function ChatHeader({
         {environment ? (
           <>
             <EnvironmentToggle environment={environment} />
+            {browserToggleControl}
             {diffToggleControl}
           </>
         ) : (
@@ -862,6 +896,7 @@ export const ChatHeader = memo(function ChatHeader({
                 hideQuickActionLabel={compact}
               />
             ) : null}
+            {browserToggleControl}
             {diffToggleControl}
           </>
         )}

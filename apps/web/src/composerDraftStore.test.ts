@@ -99,6 +99,7 @@ function makeQueuedChatTurn(id: string, image?: ComposerImageAttachment): Queued
     previewText: `queued chat ${id}`,
     prompt: "queued chat prompt",
     images: image ? [image] : [],
+    browserContexts: [],
     files: [],
     assistantSelections: [],
     terminalContexts: [makeTerminalContext({ id: `ctx-${id}` })],

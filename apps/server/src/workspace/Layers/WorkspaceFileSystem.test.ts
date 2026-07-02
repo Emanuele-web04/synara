@@ -308,4 +308,174 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
   });
+
+  describe("applyTextEdit", () => {
+    it.effect("updates a unique rendered text match in source files", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          "export function App() { return <h1>Original title</h1>; }\n",
+        );
+
+        const result = yield* workspaceFileSystem.applyTextEdit({
+          cwd,
+          originalText: "Original title",
+          nextText: "Edited title",
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(saved).toBe("export function App() { return <h1>Edited title</h1>; }\n");
+      }),
+    );
+
+    it.effect("writes replacement text containing dollar-sign patterns verbatim", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          "export function App() { return <h1>Original title</h1>; }\n",
+        );
+
+        const result = yield* workspaceFileSystem.applyTextEdit({
+          cwd,
+          originalText: "Original title",
+          nextText: "Get $$ off & keep $& intact",
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(saved).toBe(
+          "export function App() { return <h1>Get $$ off & keep $& intact</h1>; }\n",
+        );
+      }),
+    );
+
+    it.effect("rejects ambiguous text matches", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/App.tsx", "<button>Save</button>\n<button>Save</button>\n");
+
+        const error = yield* workspaceFileSystem
+          .applyTextEdit({
+            cwd,
+            originalText: "Save",
+            nextText: "Publish",
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("Selected text appears in multiple source locations.");
+      }),
+    );
+
+    it.effect("uses selected element metadata to update duplicated text safely", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          [
+            "export function App() {",
+            "  return (",
+            "    <>",
+            '      <h1 id="hero-title">Save</h1>',
+            "      <button>Save</button>",
+            "    </>",
+            "  );",
+            "}",
+            "",
+          ].join("\n"),
+        );
+
+        const result = yield* workspaceFileSystem.applyTextEdit({
+          cwd,
+          originalText: "Save",
+          nextText: "Launch",
+          element: {
+            tagName: "h1",
+            text: "Save",
+            attributes: { id: "hero-title" },
+          },
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(saved).toContain('<h1 id="hero-title">Launch</h1>');
+        expect(saved).toContain("<button>Save</button>");
+      }),
+    );
+  });
+
+  describe("applyStyleEdit", () => {
+    it.effect("adds an inline JSX style object to a unique selected element", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          'export function App() { return <h1 id="hero-title">Original title</h1>; }\n',
+        );
+
+        const result = yield* workspaceFileSystem.applyStyleEdit({
+          cwd,
+          element: {
+            tagName: "h1",
+            text: "Original title",
+            attributes: { id: "hero-title" },
+          },
+          patch: { color: "rgb(17, 19, 24)", fontSize: "72px" },
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(saved).toContain(
+          '<h1 id="hero-title" style={{ color: "rgb(17, 19, 24)", fontSize: "72px" }}>Original title</h1>',
+        );
+      }),
+    );
+
+    it.effect("rejects ambiguous style edit source matches", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(cwd, "src/App.tsx", "<h1>Save</h1>\n<h1>Save</h1>\n");
+
+        const error = yield* workspaceFileSystem
+          .applyStyleEdit({
+            cwd,
+            element: { tagName: "h1", text: "Save", attributes: {} },
+            patch: { color: "red" },
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain(
+          "Selected element maps to multiple possible source locations.",
+        );
+      }),
+    );
+  });
 });
