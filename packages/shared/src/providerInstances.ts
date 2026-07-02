@@ -360,12 +360,16 @@ export function providerStartOptionsFromInstance(
     case "codex": {
       const homePath = trimString(config.homePath);
       const shadowHomePath = trimString(config.shadowHomePath);
-      // A non-default Codex instance with no isolating config must not run
-      // against the default overlay/auth: seed the instance id as a stable
-      // account discriminator so it gets its own signed-out managed overlay.
+      // A non-default Codex instance must never run against the default
+      // account's overlay/auth: seed the instance id as a stable account
+      // discriminator so it gets its own managed overlay. This includes
+      // home-only instances — without a discriminator their overlay path can
+      // collide with the default instance's overlay (e.g. under SYNARA_HOME).
+      // A shadow home already yields its own overlay segment, so it keeps its
+      // established overlay identity.
       const accountId =
         trimString(config.accountId) ||
-        (instance.isDefault || homePath || shadowHomePath ? "" : String(instance.instanceId));
+        (instance.isDefault || shadowHomePath ? "" : String(instance.instanceId));
       return binaryPath || homePath || shadowHomePath || accountId || environment.environment
         ? {
             codex: {
