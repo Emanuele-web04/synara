@@ -2,6 +2,14 @@ import * as path from "node:path";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  test: {
+    env: {
+      // Wandy enablement is derived from the host env (the desktop app exports
+      // DPCODE_MODE=desktop to spawned shells). Pin it off so suites behave
+      // like CI everywhere; tests that exercise Wandy pass explicit envs.
+      SYNARA_ENABLE_WANDY: "0",
+    },
+  },
   resolve: {
     alias: [
       {

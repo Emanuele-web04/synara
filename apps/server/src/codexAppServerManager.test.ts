@@ -31,10 +31,6 @@ import {
 } from "./codexAppServerManager";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 
-// Wandy MCP availability depends on the host env (desktop mode + bundled
-// runtime); pin it off so developer-instruction assertions are deterministic.
-process.env.SYNARA_ENABLE_WANDY = "0";
-
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
   approvalPolicy: "never",

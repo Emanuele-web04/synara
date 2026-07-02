@@ -5,6 +5,7 @@ import * as Path from "node:path";
 
 const WANDY_APP_BUNDLE_NAME = "Wandy.app";
 const WANDY_EXECUTABLE_RELATIVE_PATH = Path.join("Contents", "MacOS", "Wandy");
+const WANDY_SOURCE_FINGERPRINT_FILE = ".wandy-source-fingerprint";
 
 export type EnsureStableWandyHelperResult = {
   readonly status: "ready" | "fallback";
@@ -99,13 +100,17 @@ export function ensureStableWandyHelper(
   // fail transiently (Gatekeeper scans, dangling symlinks, permission hiccups).
   let stableExists = false;
   try {
+    const stableAppDir = Path.resolve(input.stableAppDir);
+    const fingerprintPath = Path.join(stableAppDir, WANDY_SOURCE_FINGERPRINT_FILE);
     const sourceFingerprint = fingerprintDirectory(normalizedSourceAppPath);
     stableExists = FS.existsSync(normalizedStableAppPath);
-    const stableFingerprint = stableExists
-      ? fingerprintDirectory(normalizedStableAppPath)
-      : null;
 
-    if (sourceFingerprint === stableFingerprint) {
+    // The recorded fingerprint of the source bundle that produced the stable
+    // copy is the staleness signal. Fingerprinting the copy itself would
+    // compare timestamps through cpSync, which loses sub-millisecond
+    // precision and would force a reinstall on every launch.
+    const recordedFingerprint = stableExists ? readFingerprintRecord(fingerprintPath) : null;
+    if (recordedFingerprint === sourceFingerprint && FS.existsSync(stableLauncherPath)) {
       ensureExecutable(stableLauncherPath);
       return {
         status: "ready",
@@ -123,9 +128,10 @@ export function ensureStableWandyHelper(
     installStableAppBundle({
       sourceAppPath: normalizedSourceAppPath,
       stableAppPath: normalizedStableAppPath,
-      stableAppDir: Path.resolve(input.stableAppDir),
+      stableAppDir,
     });
     ensureExecutable(stableLauncherPath);
+    FS.writeFileSync(fingerprintPath, `${sourceFingerprint}\n`);
   } catch (error) {
     return {
       status: "fallback",
@@ -214,15 +220,21 @@ function installStableAppBundle(input: {
       force: true,
       dereference: false,
       errorOnExist: false,
-      // Keep source mtimes so the metadata fingerprint of the installed copy
-      // matches the bundle and future launches take the cheap reuse path.
-      preserveTimestamps: true,
     });
     FS.rmSync(input.stableAppPath, { recursive: true, force: true });
     FS.renameSync(temporaryAppPath, input.stableAppPath);
   } catch (error) {
     FS.rmSync(temporaryAppPath, { recursive: true, force: true });
     throw error;
+  }
+}
+
+function readFingerprintRecord(fingerprintPath: string): string | null {
+  try {
+    const value = FS.readFileSync(fingerprintPath, "utf8").trim();
+    return value.length > 0 ? value : null;
+  } catch {
+    return null;
   }
 }
 
@@ -235,10 +247,10 @@ function ensureExecutable(filePath: string): void {
   }
 }
 
-// Metadata fingerprint (path + size + mtime + symlink target). Content hashing
-// re-read every byte of both bundles on the Electron main thread at each
-// launch; installStableAppBundle preserves timestamps so metadata alone is a
-// faithful staleness signal, at the cost of a few lstat calls.
+// Metadata fingerprint (path + size + mtime + symlink target) of the source
+// bundle. Content hashing re-read every byte on the Electron main thread at
+// each launch; the source bundle is immutable per install, so metadata is a
+// faithful staleness signal at the cost of a few lstat calls.
 function fingerprintDirectory(rootPath: string): string {
   const hash = Crypto.createHash("sha256");
   for (const filePath of listFiles(rootPath)) {

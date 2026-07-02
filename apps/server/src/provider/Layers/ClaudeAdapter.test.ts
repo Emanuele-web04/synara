@@ -25,10 +25,6 @@ import { ProviderAdapterValidationError } from "../Errors.ts";
 import { ClaudeAdapter } from "../Services/ClaudeAdapter.ts";
 import { makeClaudeAdapterLive, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
 
-// Wandy MCP availability depends on the host env (desktop mode + bundled
-// runtime); pin it off so system-prompt assertions are deterministic.
-process.env.SYNARA_ENABLE_WANDY = "0";
-
 class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
   private readonly queue: Array<SDKMessage> = [];
   private readonly waiters: Array<{

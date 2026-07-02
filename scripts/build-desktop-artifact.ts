@@ -594,8 +594,7 @@ const stageWandyPackage = Effect.fn("stageWandyPackage")(function* (
   );
 
   if (!(yield* fs.exists(runtimeBinary))) {
-    const hint =
-      platform === "mac" ? " Run 'cd packages/wandy && bun run build:macos' first." : "";
+    const hint = platform === "mac" ? " Run 'cd packages/wandy && bun run build:macos' first." : "";
     return yield* new BuildScriptError({
       message: `Missing Wandy runtime at ${runtimeBinary}.${hint}`,
     });
@@ -621,7 +620,10 @@ const stageWandyPackage = Effect.fn("stageWandyPackage")(function* (
   const targetDir = path.join(stageAppDir, WANDY_STAGE_RELATIVE_DIR);
   yield* fs.makeDirectory(targetDir, { recursive: true });
 
-  const entries = [...WANDY_RUNTIME_PACKAGE_ENTRIES, ...wandyDistEntriesForPlatform(platform, arch)];
+  const entries = [
+    ...WANDY_RUNTIME_PACKAGE_ENTRIES,
+    ...wandyDistEntriesForPlatform(platform, arch),
+  ];
   for (const entry of entries) {
     const from = path.join(sourceDir, ...entry.split("/"));
     if (!(yield* fs.exists(from))) {

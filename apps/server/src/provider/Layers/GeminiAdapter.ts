@@ -39,10 +39,7 @@ import {
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
-import {
-  buildWandyAcpMcpServers,
-  withSynaraWandyPromptContext,
-} from "@t3tools/shared/wandy";
+import { buildWandyAcpMcpServers, withSynaraWandyPromptContext } from "@t3tools/shared/wandy";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 

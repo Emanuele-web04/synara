@@ -602,9 +602,7 @@ function codexDeveloperInstructionsForMode(interactionMode: "default" | "plan"):
     interactionMode === "plan"
       ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
       : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
-  return resolveWandyMcpLauncher()
-    ? `${base}${WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS}`
-    : base;
+  return resolveWandyMcpLauncher() ? `${base}${WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS}` : base;
 }
 
 function buildCodexCollaborationMode(input: {
