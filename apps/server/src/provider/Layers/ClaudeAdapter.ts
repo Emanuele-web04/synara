@@ -74,12 +74,15 @@ import {
   FileSystem,
   Fiber,
   Layer,
+  Option,
   Queue,
   Random,
   Ref,
   Stream,
 } from "effect";
 
+import { buildClaudeMcpServers } from "../../agentGateway/mcpInjection.ts";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { buildFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -1300,6 +1303,11 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
   return Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const serverConfig = yield* ServerConfig;
+    // Optional so adapter tests can run without the gateway layer; when
+    // present, every session gets the synara_* MCP tools.
+    const agentGatewayCredentials = Option.getOrUndefined(
+      yield* Effect.serviceOption(AgentGatewayCredentials),
+    );
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -3352,6 +3360,13 @@ function makeClaudeAdapter(options?: ClaudeAdapterLiveOptions) {
           canUseTool,
           env: claudeSdkEnv,
           ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
+          ...(agentGatewayCredentials
+            ? {
+                mcpServers: buildClaudeMcpServers(
+                  agentGatewayCredentials.connectionForThread(threadId),
+                ),
+              }
+            : {}),
         };
 
         const queryRuntime = yield* Effect.try({

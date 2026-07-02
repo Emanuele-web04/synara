@@ -40,8 +40,10 @@ import {
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
-import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Queue, Stream } from "effect";
 
+import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -698,6 +700,11 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
 ) {
   const serverConfig = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
+  // Optional so adapter tests can run without the gateway layer; when
+  // present, every session gets the synara_* MCP tools.
+  const agentGatewayCredentials = Option.getOrUndefined(
+    yield* Effect.serviceOption(AgentGatewayCredentials),
+  );
   const runtimeServices = yield* Effect.services<ServerConfig | FileSystem.FileSystem>();
   const runPromise = Effect.runPromiseWith(runtimeServices);
   const runFork = Effect.runForkWith(runtimeServices);
@@ -1883,42 +1890,58 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
   ) {
     context.suppressSessionUpdates = true;
     return yield* Effect.gen(function* () {
-      yield* sendRequest(context, "initialize", {
-        protocolVersion: 1,
-        clientInfo: {
-          name: "synara",
-          title: "Synara",
-          version: "0.1.0",
+      const initializeResponse = yield* sendRequest<Record<string, unknown>>(
+        context,
+        "initialize",
+        {
+          protocolVersion: 1,
+          clientInfo: {
+            name: "synara",
+            title: "Synara",
+            version: "0.1.0",
+          },
+          clientCapabilities: {
+            fs: { readTextFile: false, writeTextFile: false },
+            terminal: false,
+            auth: { terminal: false },
+          },
         },
-        clientCapabilities: {
-          fs: { readTextFile: false, writeTextFile: false },
-          terminal: false,
-          auth: { terminal: false },
-        },
-      });
+      );
+
+      const mcpServers = agentGatewayCredentials
+        ? buildAcpSynaraMcpServers({
+            connection: agentGatewayCredentials.connectionForThread(context.session.threadId),
+            initializeResult: initializeResponse as {
+              readonly agentCapabilities?: {
+                readonly mcpCapabilities?: { readonly http?: boolean };
+              };
+            },
+            stdioProxy: agentGatewayCredentials.stdioProxy,
+          })
+        : [];
 
       const startResponse = yield* input.resumeSessionId
         ? input.allowResumeFallback !== false
           ? sendRequest<Record<string, unknown>>(context, "session/load", {
               sessionId: input.resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             }).pipe(
               Effect.catch(() =>
                 sendRequest<Record<string, unknown>>(context, "session/new", {
                   cwd: context.session.cwd ?? process.cwd(),
-                  mcpServers: [],
+                  mcpServers,
                 }),
               ),
             )
           : sendRequest<Record<string, unknown>>(context, "session/load", {
               sessionId: input.resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             })
         : sendRequest<Record<string, unknown>>(context, "session/new", {
             cwd: context.session.cwd ?? process.cwd(),
-            mcpServers: [],
+            mcpServers,
           });
 
       context.sessionId = resolveStartedGeminiSessionId(input.resumeSessionId, startResponse) ?? "";

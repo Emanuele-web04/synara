@@ -1,6 +1,8 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Layer } from "effect";
 
+import { AgentGatewayLive } from "./agentGateway/Layers/AgentGateway";
+import { AgentGatewayCredentialsWithSecretsLive } from "./agentGateway/Layers/AgentGatewayCredentials";
 import { AutomationRunReactorLive } from "./automation/Layers/AutomationRunReactor";
 import { AutomationSchedulerLive } from "./automation/Layers/AutomationScheduler";
 import { AutomationServiceLive } from "./automation/Layers/AutomationService";
@@ -110,8 +112,15 @@ export function makeServerRuntimeServicesLayer() {
   const automationRunReactorLayer = AutomationRunReactorLive.pipe(
     Layer.provideMerge(automationServiceLayer),
   );
+  const agentGatewayLayer = AgentGatewayLive.pipe(
+    Layer.provideMerge(AgentGatewayCredentialsWithSecretsLive),
+    Layer.provideMerge(automationServiceLayer),
+    Layer.provideMerge(runtimeServicesLayer),
+    Layer.provideMerge(GitCoreLive),
+  );
 
   return Layer.mergeAll(
+    agentGatewayLayer,
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,

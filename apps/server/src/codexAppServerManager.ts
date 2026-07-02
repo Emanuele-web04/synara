@@ -47,6 +47,10 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import {
+  buildCodexMcpConfigToml,
+  SYNARA_AGENT_GATEWAY_TOKEN_ENV,
+} from "./agentGateway/mcpInjection.ts";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
 import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
@@ -729,13 +733,42 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
   private readonly synaraSkillsDir: string | undefined;
+  private readonly agentGatewayMcp:
+    | {
+        readonly endpointUrl: string;
+        readonly issueBearerToken: (threadId: ThreadId) => string;
+      }
+    | undefined;
   constructor(
     services?: ServiceMap.ServiceMap<never>,
-    options?: { readonly synaraSkillsDir?: string },
+    options?: {
+      readonly synaraSkillsDir?: string;
+      readonly agentGatewayMcp?: {
+        readonly endpointUrl: string;
+        readonly issueBearerToken: (threadId: ThreadId) => string;
+      };
+    },
   ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
     this.synaraSkillsDir = options?.synaraSkillsDir;
+    this.agentGatewayMcp = options?.agentGatewayMcp;
+  }
+
+  // The Synara MCP server rides on the shared overlay config (no secrets),
+  // while the per-thread bearer token travels through the app-server process
+  // env referenced by `bearer_token_env_var`.
+  private buildSessionProcessEnv(threadId: ThreadId, homePath: string | undefined) {
+    const env = buildCodexProcessEnv({
+      ...(homePath ? { homePath } : {}),
+      ...(this.agentGatewayMcp
+        ? { appendConfigToml: buildCodexMcpConfigToml(this.agentGatewayMcp.endpointUrl) }
+        : {}),
+    });
+    if (this.agentGatewayMcp) {
+      env[SYNARA_AGENT_GATEWAY_TOKEN_ENV] = this.agentGatewayMcp.issueBearerToken(threadId);
+    }
+    return env;
   }
 
   // Registers `~/.synara/skills` as a codex skill root so portable skills are
@@ -792,9 +825,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: this.buildSessionProcessEnv(threadId, codexHomePath),
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1410,9 +1441,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const child = spawnCodexAppServer({
         binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
-        env: buildCodexProcessEnv({
-          ...(codexHomePath ? { homePath: codexHomePath } : {}),
-        }),
+        env: this.buildSessionProcessEnv(threadId, codexHomePath),
       });
       const output = readline.createInterface({ input: child.stdout });
 

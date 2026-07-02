@@ -34,25 +34,25 @@ describe("Sidebar.uiState", () => {
     Reflect.deleteProperty(globalThis, "window");
   });
 
-  it("defaults collapsed sidebar UI state with no expanded project thread lists", () => {
+  it("defaults collapsed sidebar UI state with no thread list paging", () => {
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: false,
-      chatThreadListExpanded: false,
-      expandedProjectThreadListCwds: [],
+      chatThreadListExtraPages: 0,
+      projectThreadListExtraPagesByCwd: {},
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
     });
   });
 
-  it("persists expanded project thread lists by normalized cwd", () => {
+  it("persists project thread list paging by normalized cwd", () => {
     persistSidebarUiState({
       chatSectionExpanded: true,
-      chatThreadListExpanded: true,
-      expandedProjectThreadListCwds: [
-        "/Users/tester/Code/demo",
-        "/Users/tester/Code/demo/",
-        "/Users/tester/Code/other",
-      ],
+      chatThreadListExtraPages: 2,
+      projectThreadListExtraPagesByCwd: {
+        "/Users/tester/Code/demo": 1,
+        "/Users/tester/Code/demo/": 3,
+        "/Users/tester/Code/other": 2,
+      },
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Plan Ready:turn-1",
       },
@@ -64,11 +64,12 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: true,
-      chatThreadListExpanded: true,
-      expandedProjectThreadListCwds: [
-        normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
-        normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other"),
-      ],
+      chatThreadListExtraPages: 2,
+      projectThreadListExtraPagesByCwd: {
+        // Duplicate cwds that normalize to the same key keep the deepest paging.
+        [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 3,
+        [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other")]: 2,
+      },
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Plan Ready:turn-1",
       },
@@ -79,13 +80,19 @@ describe("Sidebar.uiState", () => {
     });
   });
 
-  it("ignores malformed persisted project thread list entries", () => {
+  it("ignores malformed persisted thread list paging entries", () => {
     window.localStorage.setItem(
       "synara:sidebar-ui:v1",
       JSON.stringify({
         chatSectionExpanded: true,
-        chatThreadListExpanded: false,
-        expandedProjectThreadListCwds: ["/Users/tester/Code/demo", 42, null, ""],
+        chatThreadListExtraPages: -4,
+        projectThreadListExtraPagesByCwd: {
+          "/Users/tester/Code/demo": 2,
+          "/Users/tester/Code/zero": 0,
+          "/Users/tester/Code/negative": -1,
+          "/Users/tester/Code/bad": "nope",
+          "": 3,
+        },
         dismissedThreadStatusKeyByThreadId: {
           "thread-123": "Awaiting Input:turn-2",
           "": "bad",
@@ -100,15 +107,34 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: true,
-      chatThreadListExpanded: false,
-      expandedProjectThreadListCwds: [
-        normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo"),
-      ],
+      chatThreadListExtraPages: 0,
+      projectThreadListExtraPagesByCwd: {
+        [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 2,
+      },
       dismissedThreadStatusKeyByThreadId: {
         "thread-123": "Awaiting Input:turn-2",
       },
       lastThreadRoute: {
         threadId: "thread-123",
+      },
+    });
+  });
+
+  it("migrates legacy all-or-nothing show-more state to one extra page", () => {
+    window.localStorage.setItem(
+      "synara:sidebar-ui:v1",
+      JSON.stringify({
+        chatSectionExpanded: false,
+        chatThreadListExpanded: true,
+        expandedProjectThreadListCwds: ["/Users/tester/Code/demo", "/Users/tester/Code/other"],
+      }),
+    );
+
+    expect(readSidebarUiState()).toMatchObject({
+      chatThreadListExtraPages: 1,
+      projectThreadListExtraPagesByCwd: {
+        [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/demo")]: 1,
+        [normalizeSidebarProjectThreadListCwd("/Users/tester/Code/other")]: 1,
       },
     });
   });
@@ -126,8 +152,8 @@ describe("Sidebar.uiState", () => {
 
     expect(readSidebarUiState()).toEqual({
       chatSectionExpanded: false,
-      chatThreadListExpanded: false,
-      expandedProjectThreadListCwds: [],
+      chatThreadListExtraPages: 0,
+      projectThreadListExtraPagesByCwd: {},
       dismissedThreadStatusKeyByThreadId: {},
       lastThreadRoute: null,
     });

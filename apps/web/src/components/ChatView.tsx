@@ -496,6 +496,8 @@ import {
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
   PullRequestDialogState,
+  type QueuedSteerGate,
+  resolveQueuedSteerGateTransition,
   shouldRenderProviderHealthBanner,
   resolveRuntimeModeAfterApprovalDecision,
   revokeBlobPreviewUrl,
@@ -1229,6 +1231,12 @@ export default function ChatView({
     restoredSourceProposedPlan ?? null,
   );
   const autoDispatchingQueuedTurnRef = useRef(false);
+  // Holds queued-composer auto-dispatch through a non-Codex steer's
+  // interrupt→re-dispatch gap; see resolveQueuedSteerGateTransition.
+  const [queuedSteerGate, setQueuedSteerGate] = useState<QueuedSteerGate | null>(null);
+  // Bumped to re-evaluate auto-dispatch when only non-reactive guards (refs)
+  // blocked it; nothing else re-triggers the effect once they reset.
+  const [queuedAutoDispatchTick, setQueuedAutoDispatchTick] = useState(0);
   const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
   const localDirectoryMenuRef = useRef<ComposerLocalDirectoryMenuHandle | null>(null);
   const attachmentPreviewHandoffByMessageIdRef = useRef<Record<string, string[]>>({});
@@ -2448,6 +2456,7 @@ export default function ChatView({
     activeThreadId === null ? null : `${activeThreadId}:${activeLatestTurn?.turnId ?? "idle"}`;
   const activeTurnInProgress = activeTurnLayoutLive || keepSettledActiveTurnLayout;
   const isComposerApprovalState = activePendingApproval !== null;
+  const isComposerEditorDisabled = isConnecting || isComposerApprovalState;
   const canCollapsePastedTextToDraft = shouldEnableComposerPastedTextCollapse({
     isComposerApprovalState,
     hasPendingUserInput: pendingUserInputs.length > 0,
@@ -3567,15 +3576,17 @@ export default function ChatView({
   );
 
   const focusComposer = useCallback(() => {
-    // Secondary chrome is deferred during thread switches; replay focus once it mounts.
+    // Secondary chrome is deferred during thread switches; replay focus once it
+    // mounts. A disabled editor (dispatch connecting, pending approval) cannot
+    // take focus either, so keep the request pending until it re-enables.
     const editor = composerEditorRef.current;
-    if (!secondaryChromeReady || !editor) {
+    if (!secondaryChromeReady || !editor || isComposerEditorDisabled) {
       pendingComposerFocusRef.current = true;
       return;
     }
     pendingComposerFocusRef.current = false;
     editor.focusAtEnd();
-  }, [secondaryChromeReady]);
+  }, [secondaryChromeReady, isComposerEditorDisabled]);
   const toggleComposerFocus = useCallback(() => {
     const editor = composerEditorRef.current;
     if (secondaryChromeReady && editor?.isFocused()) {
@@ -4980,6 +4991,7 @@ export default function ChatView({
 
   useEffect(() => {
     autoDispatchingQueuedTurnRef.current = false;
+    setQueuedSteerGate(null);
   }, [threadId]);
 
   useEffect(() => {
@@ -7321,6 +7333,11 @@ export default function ChatView({
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      // Non-Codex steers interrupt the live turn before re-dispatching; hold
+      // queued auto-dispatch through that gap so it can't race the steer.
+      if (dispatchMode === "steer" && selectedModelSelectionForSend.provider !== "codex") {
+        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      }
       if (sourceProposedPlanForSend) {
         planSidebarDismissedForTurnRef.current = null;
         setPlanSidebarOpen(true);
@@ -7724,6 +7741,11 @@ export default function ChatView({
         ...(sourceProposedPlan ? { sourceProposedPlan } : {}),
         createdAt: messageCreatedAt,
       });
+      // Non-Codex steers interrupt the live turn before re-dispatching; hold
+      // queued auto-dispatch through that gap so it can't race the steer.
+      if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
+        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+      }
       // Optimistically open the plan sidebar when implementing (not refining).
       // "default" mode here means the agent is executing the plan, which produces
       // step-tracking activities that the sidebar will display.
@@ -7889,22 +7911,61 @@ export default function ChatView({
     [removeQueuedComposerTurn, restoreQueuedTurnToComposer],
   );
 
+  // Advance/expire the steer gate as the session moves through the
+  // interrupt→steered-turn handoff (or fails out of it).
+  const sessionErroredForSteerGate = activeThread?.session?.status === "error";
   useEffect(() => {
-    if (autoDispatchingQueuedTurnRef.current) {
+    if (!queuedSteerGate) {
       return;
     }
+    const transition = resolveQueuedSteerGateTransition({
+      gate: queuedSteerGate,
+      phase,
+      sessionErrored: sessionErroredForSteerGate,
+      now: Date.now(),
+    });
+    if (transition.kind === "clear") {
+      setQueuedSteerGate(null);
+      return;
+    }
+    if (
+      transition.gate.sawInterruptGap !== queuedSteerGate.sawInterruptGap ||
+      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt
+    ) {
+      setQueuedSteerGate(transition.gate);
+      return;
+    }
+    if (transition.expiresInMs === null) {
+      return;
+    }
+    const timer = window.setTimeout(() => setQueuedSteerGate(null), transition.expiresInMs);
+    return () => window.clearTimeout(timer);
+  }, [phase, queuedSteerGate, sessionErroredForSteerGate]);
+
+  useEffect(() => {
     if (
       hasLiveTurn ||
       phase === "disconnected" ||
       isSendBusy ||
       isConnecting ||
-      sendInFlightRef.current ||
+      queuedSteerGate !== null ||
       activePendingApproval !== null ||
       activePendingProgress !== null ||
       pendingUserInputs.length > 0 ||
       queuedComposerTurns.length === 0
     ) {
       return;
+    }
+    if (
+      autoDispatchingQueuedTurnRef.current ||
+      sendInFlightRef.current ||
+      sendPreflightInFlightRef.current
+    ) {
+      // These guards are refs, so nothing re-triggers this effect once they
+      // reset; poll until the in-flight send settles instead of leaving the
+      // queue stuck at the end of a turn.
+      const timer = window.setTimeout(() => setQueuedAutoDispatchTick((tick) => tick + 1), 250);
+      return () => window.clearTimeout(timer);
     }
     const nextQueuedTurn = queuedComposerTurns[0];
     if (!nextQueuedTurn) {
@@ -7927,7 +7988,9 @@ export default function ChatView({
     isSendBusy,
     pendingUserInputs.length,
     hasLiveTurn,
+    queuedAutoDispatchTick,
     queuedComposerTurns,
+    queuedSteerGate,
     removeQueuedComposerTurnFromDraft,
     threadId,
   ]);
@@ -9765,7 +9828,7 @@ export default function ChatView({
                                 ? "Ask for follow-up changes or attach images"
                                 : "Ask anything, @tag files/folders, or use / to show available commands"
                     }
-                    disabled={isConnecting || isComposerApprovalState}
+                    disabled={isComposerEditorDisabled}
                   />
                 </div>
                 {/* Bottom toolbar */}

@@ -880,6 +880,7 @@ function normalizeChatMessage(
     previous.role === incoming.role &&
     previous.text === incoming.text &&
     previous.dispatchMode === incoming.dispatchMode &&
+    previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.turnId === incoming.turnId &&
     previous.createdAt === incoming.createdAt &&
     previous.streaming === incoming.streaming &&
@@ -897,6 +898,7 @@ function normalizeChatMessage(
     role: incoming.role,
     text: incoming.text,
     ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
+    ...(incoming.dispatchOrigin ? { dispatchOrigin: incoming.dispatchOrigin } : {}),
     turnId: incoming.turnId,
     createdAt: incoming.createdAt,
     streaming: incoming.streaming,
@@ -958,6 +960,7 @@ function readModelMessageFromChatMessage(
     role: message.role,
     text: message.text,
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
+    ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     source: message.source ?? "native",
@@ -1043,6 +1046,7 @@ function mergeReadModelMessagesWithLiveHotPath(
       ...incomingMessage,
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
+      dispatchOrigin: previousMessage.dispatchOrigin ?? incomingMessage.dispatchOrigin,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
@@ -2982,6 +2986,10 @@ function mergeStreamingMessage(
     incomingMessage.dispatchMode !== undefined
       ? incomingMessage.dispatchMode
       : existingMessage.dispatchMode;
+  const nextDispatchOrigin =
+    incomingMessage.dispatchOrigin !== undefined
+      ? incomingMessage.dispatchOrigin
+      : existingMessage.dispatchOrigin;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
@@ -2993,6 +3001,7 @@ function mergeStreamingMessage(
     existingMessage.completedAt === nextCompletedAt &&
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
+    existingMessage.dispatchOrigin === nextDispatchOrigin &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -3007,6 +3016,7 @@ function mergeStreamingMessage(
     ...(nextMentions && nextMentions.length > 0 ? { mentions: [...nextMentions] } : {}),
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
+    ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -3020,6 +3030,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       role: payload.role,
       text: payload.text,
       dispatchMode: payload.dispatchMode,
+      dispatchOrigin: payload.dispatchOrigin,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       ...(payload.skills !== undefined ? { skills: payload.skills } : {}),

@@ -31,9 +31,14 @@ const viewNames = (sql: SqlClient.SqlClient) =>
 layer("automation migration", (it) => {
   it.effect("registers automation backlog migration in the Synara lineage", () =>
     Effect.sync(() => {
+      assert.isTrue(
+        migrationEntries.some(
+          (entry) => entry[0] === 48 && entry[1] === "AutomationCompletionEvaluationBacklog",
+        ),
+      );
       assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        48,
-        "AutomationCompletionEvaluationBacklog",
+        49,
+        "ProjectionThreadMessagesDispatchOrigin",
       ]);
     }),
   );

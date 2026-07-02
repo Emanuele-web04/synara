@@ -133,9 +133,25 @@ function ensureCodexOverlaySymlink(input: {
   symlinkSync(input.sourcePath, input.targetPath, input.type);
 }
 
+export function appendCodexConfigSection(config: string, section: string): string {
+  const trimmedSection = section.trim();
+  if (!trimmedSection) {
+    return config;
+  }
+  if (config.includes(trimmedSection.split("\n")[0] ?? trimmedSection)) {
+    // Section header already present (e.g. user configured it manually):
+    // don't duplicate the table, which would make the TOML invalid.
+    return config;
+  }
+  const base = config.trimEnd();
+  return base.length > 0 ? `${base}\n\n${trimmedSection}\n` : `${trimmedSection}\n`;
+}
+
 function prepareDpCodeCodexHomeOverlay(input: {
   readonly env: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  readonly disableBrowserPlugin: boolean;
+  readonly appendConfigToml?: string;
 }): string | undefined {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
   const overlayHomePath = resolveDpCodeCodexHomeOverlayPath(input.env, sourceHomePath);
@@ -167,11 +183,13 @@ function prepareDpCodeCodexHomeOverlay(input: {
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
-  writeFileSync(
-    path.join(overlayHomePath, "config.toml"),
-    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
-    "utf8",
-  );
+  let overlayConfig = input.disableBrowserPlugin
+    ? disableDpCodeBrowserPluginInCodexConfig(sourceConfig)
+    : sourceConfig;
+  if (input.appendConfigToml) {
+    overlayConfig = appendCodexConfigSection(overlayConfig, input.appendConfigToml);
+  }
+  writeFileSync(path.join(overlayHomePath, "config.toml"), overlayConfig, "utf8");
 
   return overlayHomePath;
 }
@@ -182,15 +200,26 @@ export function buildCodexProcessEnv(
     readonly homePath?: string;
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
+    /**
+     * Extra config.toml content (e.g. the Synara agent-gateway MCP server)
+     * written into the overlay home. Never mutates the user's real config:
+     * providing it forces the overlay even when the browser-plugin disable is
+     * opted out.
+     */
+    readonly appendConfigToml?: string;
   } = {},
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = shouldDisableDpCodeBrowserPlugin(baseEnv)
-    ? prepareDpCodeCodexHomeOverlay({
-        env: baseEnv,
-        ...(input.homePath ? { homePath: input.homePath } : {}),
-      })
-    : undefined;
+  const disableBrowserPlugin = shouldDisableDpCodeBrowserPlugin(baseEnv);
+  const overlayHomePath =
+    disableBrowserPlugin || input.appendConfigToml
+      ? prepareDpCodeCodexHomeOverlay({
+          env: baseEnv,
+          disableBrowserPlugin,
+          ...(input.homePath ? { homePath: input.homePath } : {}),
+          ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
+        })
+      : undefined;
   const effectiveEnv =
     overlayHomePath || input.homePath
       ? { ...baseEnv, CODEX_HOME: overlayHomePath ?? input.homePath }

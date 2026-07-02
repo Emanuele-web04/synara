@@ -42,6 +42,8 @@ import {
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
+import { buildAcpSynaraMcpServers } from "../../agentGateway/mcpInjection.ts";
+import { AgentGatewayCredentials } from "../../agentGateway/Services/AgentGatewayCredentials.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
@@ -444,6 +446,11 @@ export function makeCursorAdapter(
     const fileSystem = yield* FileSystem.FileSystem;
     const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const serverConfig = yield* Effect.service(ServerConfig);
+    // Optional so adapter tests can run without the gateway layer; when
+    // present, every session gets the synara_* MCP tools.
+    const agentGatewayCredentials = Option.getOrUndefined(
+      yield* Effect.serviceOption(AgentGatewayCredentials),
+    );
     const nativeEventLogger =
       options?.nativeEventLogger ??
       (options?.nativeEventLogPath !== undefined
@@ -716,6 +723,16 @@ export function makeCursorAdapter(
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
             clientInfo: { name: "Synara", version: "0.0.0" },
+            ...(agentGatewayCredentials
+              ? {
+                  buildMcpServers: (initializeResult) =>
+                    buildAcpSynaraMcpServers({
+                      connection: agentGatewayCredentials.connectionForThread(input.threadId),
+                      initializeResult,
+                      stdioProxy: agentGatewayCredentials.stdioProxy,
+                    }),
+                }
+              : {}),
             ...acpNativeLoggers,
           }).pipe(
             Effect.provideService(Scope.Scope, sessionScope),

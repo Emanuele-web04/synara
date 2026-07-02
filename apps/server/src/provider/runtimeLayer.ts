@@ -2,6 +2,7 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { AgentGatewayCredentialsWithSecretsLive } from "../agentGateway/Layers/AgentGatewayCredentials";
 import { ServerConfig } from "../config";
 import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
@@ -49,12 +50,17 @@ export function makeServerProviderLayer(): Layer.Layer<
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
       Layer.provide(ProviderSessionRuntimeRepositoryLive),
     );
+    // Gives sessions their synara_* MCP tool credentials. OpenCode/Kilo are
+    // excluded for now: their server processes are pooled across threads, so a
+    // per-thread bearer token cannot be attached to the shared server config.
+    // Pi has no MCP client support.
+    const agentGatewayCredentialsLayer = AgentGatewayCredentialsWithSecretsLive;
     const codexAdapterLayer = makeCodexAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const claudeAdapterLayer = makeClaudeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const openCodeAdapterLayer = makeOpenCodeAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
     );
@@ -63,15 +69,15 @@ export function makeServerProviderLayer(): Layer.Layer<
     );
     const geminiAdapterLayer = makeGeminiAdapterLive(
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const grokAdapterLayer = makeGrokAdapterLive(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const cursorAdapterLayer = makeCursorAdapterLive(
       {},
       nativeEventLogger ? { nativeEventLogger } : undefined,
-    );
+    ).pipe(Layer.provide(agentGatewayCredentialsLayer));
     const piAdapterLayer = makePiAdapterLive(nativeEventLogger ? { nativeEventLogger } : undefined);
     const adapterRegistryLayer = ProviderAdapterRegistryLive.pipe(
       Layer.provide(codexAdapterLayer),

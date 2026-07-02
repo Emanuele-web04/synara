@@ -451,6 +451,57 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", () =>
+  Effect.gen(function* () {
+    // dispatchOrigin is server-assigned (automation engine only). The client command
+    // schema deliberately omits it, so a spoofed value must not survive decoding —
+    // otherwise any WS client could fake the "Sent via Automation" label.
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-start-origin",
+      threadId: "thread-1",
+      message: {
+        messageId: "message-1",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      dispatchMode: "queue",
+      dispatchOrigin: "automation",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.turn.start");
+    assert.strictEqual("dispatchOrigin" in command, false);
+  }),
+);
+
+it.effect("strips client-sent agent dispatchOrigin from thread.turn.start commands", () =>
+  Effect.gen(function* () {
+    // The "agent" origin is reserved for turns dispatched through the Synara
+    // agent gateway; WS clients must not be able to spoof it either.
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-start-agent-origin",
+      threadId: "thread-1",
+      message: {
+        messageId: "message-1",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      dispatchMode: "queue",
+      dispatchOrigin: "agent",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.turn.start");
+    assert.strictEqual("dispatchOrigin" in command, false);
+  }),
+);
+
 it.effect("decodes pinned-message commands and events", () =>
   Effect.gen(function* () {
     const command = yield* decodeClientOrchestrationCommand({

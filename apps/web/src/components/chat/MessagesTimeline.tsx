@@ -44,6 +44,7 @@ import {
   ChangesIcon,
   CircleAlertIcon,
   CircleQuestionIcon,
+  ClockIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
@@ -80,6 +81,11 @@ import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
 import {
+  hasLeadingUserMedia,
+  resolveUserTurnMarker,
+  type UserTurnMarkerKind,
+} from "./userTurnMarker";
+import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   MAX_VISIBLE_WORK_LOG_ENTRIES,
@@ -96,6 +102,7 @@ import {
 } from "../../lib/toolCallLabel";
 import { describeLinkChip } from "~/lib/linkChips";
 import { LinkChipIcon } from "../LinkChipIcon";
+import { SynaraLogo } from "../SynaraLogo";
 import { openWorkspaceFileReference, useWorkspaceFileOpener } from "../../lib/workspaceFileOpener";
 import { isAgentActivityWorkEntry } from "./agentActivity.logic";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -201,18 +208,39 @@ export interface MessagesTimelineController {
 // target agent-task rows specifically; both render the shared central robot glyph.
 const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
-// Keeps the steer marker visually attached to the whole sent-message stack.
+// Synara mark sized/toned like the other tool-row glyphs: `text-current` beats
+// the logo's built-in `text-foreground` so the row's muted tone applies.
+const SynaraToolIcon: LucideIcon = ({ className, ...props }) => (
+  <SynaraLogo {...props} className={cn("text-current", className)} />
+);
+
+// Keeps the origin/steer marker visually attached to the whole sent-message stack.
+// Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
+// which the timelineHeight estimator also uses — keep presentation-only concerns here.
+const USER_TURN_MARKER_PRESENTATION: Record<
+  UserTurnMarkerKind,
+  { readonly Icon: LucideIcon; readonly label: string }
+> = {
+  automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  agent: { Icon: BotIcon, label: "Sent by agent" },
+  steer: { Icon: SteerIcon, label: "Steering conversation" },
+};
+
 function UserDispatchModeChip({
   dispatchMode,
+  dispatchOrigin,
   hasLeadingMedia,
 }: {
   dispatchMode: TimelineMessage["dispatchMode"];
+  dispatchOrigin: TimelineMessage["dispatchOrigin"];
   hasLeadingMedia: boolean;
 }) {
-  if (dispatchMode !== "steer") {
+  const markerKind = resolveUserTurnMarker({ dispatchMode, dispatchOrigin });
+  if (!markerKind) {
     return null;
   }
 
+  const { Icon, label } = USER_TURN_MARKER_PRESENTATION[markerKind];
   return (
     <div
       className={cn(
@@ -220,8 +248,8 @@ function UserDispatchModeChip({
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
-      <SteerIcon className="size-3 shrink-0 text-muted-foreground/75" />
-      <span>Steering conversation</span>
+      <Icon className="size-3 shrink-0 text-muted-foreground/75" />
+      <span>{label}</span>
     </div>
   );
 }
@@ -961,11 +989,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
-          const hasLeadingMedia =
-            renderedAssistantSelections.length > 0 ||
-            renderedFileComments.length > 0 ||
-            renderedPastedTexts.length > 0 ||
-            userImages.length > 0;
+          const hasLeadingMedia = hasLeadingUserMedia({
+            imageCount: userImages.length,
+            fileCount: userFiles.length,
+            assistantSelectionCount: renderedAssistantSelections.length,
+            fileCommentCount: renderedFileComments.length,
+            pastedTextCount: renderedPastedTexts.length,
+          });
           const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
@@ -978,6 +1008,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 <UserDispatchModeChip
                   dispatchMode={row.message.dispatchMode}
+                  dispatchOrigin={row.message.dispatchOrigin}
                   hasLeadingMedia={hasLeadingMedia}
                 />
                 {renderedAssistantSelections.length > 0 && (
@@ -2587,7 +2618,26 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Render command, agent-task, and file-change rows at the tighter compact density.
+// Synara's own agent-gateway tools (synara_list_threads, synara_create_thread,
+// ...) get the Synara mark instead of the generic MCP glyph. Providers report
+// the call differently: Claude prefixes the MCP server (mcp__synara__*), ACP
+// agents surface the bare tool name (synara_*), and Codex reports server/tool
+// pairs that the label humanizer renders as "Synara: ...".
+function isSynaraMcpToolCall(workEntry: TimelineWorkEntry): boolean {
+  if (workEntry.itemType !== "mcp_tool_call") {
+    return false;
+  }
+  const toolName = workEntry.toolName?.trim().toLowerCase() ?? "";
+  if (toolName.startsWith("mcp__synara__") || toolName.startsWith("synara_")) {
+    return true;
+  }
+  const title = (workEntry.toolTitle ?? workEntry.label ?? "").trim().toLowerCase();
+  return title.startsWith("synara:") || title.startsWith("synara ");
+}
+
+// Render command, agent-task, file-change, and file-read rows at the tighter
+// compact density so every tool-call line shares one height regardless of whether
+// it carries a disclosure chevron.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
   // inspections like `cat` now use the file-read search icon).
@@ -2600,7 +2650,10 @@ function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
     EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon
+    EntryIcon === SkillCubeIcon ||
+    // File-read / inspect rows (e.g. `Read …`) surface the search icon and have no
+    // disclosure chevron; keep them at the same compact height as command rows.
+    EntryIcon === SearchIcon
   );
 }
 
@@ -2788,15 +2841,25 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   // Every tool row leads with a single left icon; keep branded glyphs discoverable
   // for command rows and app-backed tool rows.
   const isGitHubToolRow = isGitHubMcpToolCall(workEntry);
-  const isMcpToolRow = workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow;
-  const LeftIcon = isGitHubToolRow ? GitHubIcon : isMcpToolRow ? McpIcon : EntryIcon;
+  const isSynaraToolRow = !isGitHubToolRow && isSynaraMcpToolCall(workEntry);
+  const isMcpToolRow =
+    workEntry.itemType === "mcp_tool_call" && !isGitHubToolRow && !isSynaraToolRow;
+  const LeftIcon = isGitHubToolRow
+    ? GitHubIcon
+    : isSynaraToolRow
+      ? SynaraToolIcon
+      : isMcpToolRow
+        ? McpIcon
+        : EntryIcon;
   const leftIconKind = webFetchUrl
     ? "web-fetch"
     : isGitHubToolRow || EntryIcon === GitHubIcon
       ? "github"
-      : isMcpToolRow
-        ? "mcp"
-        : undefined;
+      : isSynaraToolRow
+        ? "synara"
+        : isMcpToolRow
+          ? "mcp"
+          : undefined;
   const heading = toolWorkEntryHeading(workEntry);
   const preview = workEntryPreview(workEntry);
   const displayText = webFetchUrl

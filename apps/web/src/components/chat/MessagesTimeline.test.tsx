@@ -510,6 +510,93 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("mb-1.5");
   });
 
+  it("renders a 'Sent via Automation' chip above automation-dispatched user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-automation-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-automation-user"),
+              role: "user",
+              text: "hello",
+              dispatchOrigin: "automation",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent via Automation");
+    expect(markup).not.toContain("Steering conversation");
+  });
+
+  it("renders a 'Sent by agent' chip above agent-dispatched user messages", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        hasMessages
+        isWorking={false}
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        timelineEntries={[
+          {
+            id: "entry-agent-user-message",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("message-agent-user"),
+              role: "user",
+              text: "status check from the coordinator",
+              dispatchOrigin: "agent",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="light"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />,
+    );
+
+    expect(markup).toContain("Sent by agent");
+    expect(markup).not.toContain("Sent via Automation");
+    expect(markup).not.toContain("Steering conversation");
+  });
+
   it("pushes the steering chip higher when the user message has chips or photos", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -2215,6 +2302,77 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Codex Apps: Slack Search");
     expect(markup).toContain('data-tool-icon="mcp"');
+  });
+
+  it("shows the Synara mark next to Synara agent-gateway tool rows", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const baseProps = {
+      hasMessages: true,
+      isWorking: false,
+      activeTurnInProgress: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaryByAssistantMessageId: new Map(),
+      nowIso: "2026-03-17T19:12:30.000Z",
+      expandedWorkGroups: {},
+      onToggleWorkGroup: () => {},
+      onOpenTurnDiff: () => {},
+      revertTurnCountByUserMessageId: new Map(),
+      onRevertUserMessage: () => {},
+      isRevertingCheckpoint: false,
+      onImageExpand: () => {},
+      markdownCwd: undefined,
+      resolvedTheme: "dark" as const,
+      timestampFormat: "locale" as const,
+      workspaceRoot: undefined,
+    };
+
+    // Claude-style prefixed tool name.
+    const claudeMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-claude",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-claude",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolTitle: "Synara: List Threads",
+              toolName: "mcp__synara__synara_list_threads",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(claudeMarkup).toContain('data-tool-icon="synara"');
+    expect(claudeMarkup).not.toContain('data-tool-icon="mcp"');
+
+    // Codex-style humanized title without a prefixed tool name.
+    const codexMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...baseProps}
+        timelineEntries={[
+          {
+            id: "entry-inline-synara-codex",
+            kind: "work",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            entry: {
+              id: "work-inline-synara-codex",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              label: "MCP tool call",
+              tone: "tool",
+              itemType: "mcp_tool_call",
+              toolTitle: "Synara: Synara List Threads",
+            },
+          },
+        ]}
+      />,
+    );
+    expect(codexMarkup).toContain('data-tool-icon="synara"');
   });
 
   it("anchors the changed-files summary at the end of a collapsed file-change turn", async () => {

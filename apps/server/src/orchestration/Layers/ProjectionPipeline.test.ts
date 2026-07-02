@@ -2722,4 +2722,92 @@ it.layer(
       assert.deepEqual(rows, [{ dispatchMode: "steer" }]);
     }),
   );
+
+  it.effect("projects the automation dispatch origin onto the triggering user message", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-automation-chip");
+      const messageId = MessageId.makeUnsafe("message-automation-chip");
+      const createdAt = "2026-02-27T11:05:00.000Z";
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-automation-chip-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-automation-chip-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-automation-chip-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "run the nightly review",
+          dispatchOrigin: "automation",
+          turnId: null,
+          streaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{ readonly dispatchOrigin: string | null }>`
+        SELECT dispatch_origin AS "dispatchOrigin"
+        FROM projection_thread_messages
+        WHERE message_id = ${messageId}
+      `;
+
+      assert.deepEqual(rows, [{ dispatchOrigin: "automation" }]);
+    }),
+  );
+
+  it.effect("projects the agent dispatch origin onto the triggering user message", () =>
+    Effect.gen(function* () {
+      const eventStore = yield* OrchestrationEventStore;
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = ThreadId.makeUnsafe("thread-agent-chip");
+      const messageId = MessageId.makeUnsafe("message-agent-chip");
+      const createdAt = "2026-02-27T11:06:00.000Z";
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-agent-chip-1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-agent-chip-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-agent-chip-1"),
+        metadata: {},
+        payload: {
+          threadId,
+          messageId,
+          role: "user",
+          text: "status check from the coordinating agent",
+          dispatchOrigin: "agent",
+          turnId: null,
+          streaming: false,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{ readonly dispatchOrigin: string | null }>`
+        SELECT dispatch_origin AS "dispatchOrigin"
+        FROM projection_thread_messages
+        WHERE message_id = ${messageId}
+      `;
+
+      assert.deepEqual(rows, [{ dispatchOrigin: "agent" }]);
+    }),
+  );
 });

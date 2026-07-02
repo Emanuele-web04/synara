@@ -49,6 +49,14 @@ export interface AcpSessionRuntimeOptions {
   readonly resolveAuthMethodId?: (
     initializeResult: EffectAcpSchema.InitializeResponse,
   ) => Effect.Effect<string, EffectAcpErrors.AcpError>;
+  /**
+   * MCP servers to attach to the session. Invoked after `initialize` so the
+   * builder can pick a transport based on the agent's advertised
+   * `mcpCapabilities` (e.g. HTTP vs stdio for the Synara agent gateway).
+   */
+  readonly buildMcpServers?: (
+    initializeResult: EffectAcpSchema.InitializeResponse,
+  ) => ReadonlyArray<EffectAcpSchema.McpServer>;
   readonly authenticateMeta?: Record<string, unknown>;
   readonly requestLogger?: (event: AcpSessionRequestLogEvent) => Effect.Effect<void, never>;
   readonly protocolLogging?: {
@@ -414,6 +422,8 @@ const makeAcpSessionRuntime = (
         acp.agent.authenticate(authenticatePayload),
       );
 
+      const mcpServers = options.buildMcpServers?.(initializeResult) ?? [];
+
       let sessionId: string;
       let sessionSetupResult:
         | EffectAcpSchema.LoadSessionResponse
@@ -423,7 +433,7 @@ const makeAcpSessionRuntime = (
         const loadPayload = {
           sessionId: options.resumeSessionId,
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.LoadSessionRequest;
         const resumed = yield* runLoggedRequest(
           "session/load",
@@ -436,7 +446,7 @@ const makeAcpSessionRuntime = (
         } else {
           const createPayload = {
             cwd: options.cwd,
-            mcpServers: [],
+            mcpServers,
           } satisfies EffectAcpSchema.NewSessionRequest;
           const created = yield* runLoggedRequest(
             "session/new",
@@ -449,7 +459,7 @@ const makeAcpSessionRuntime = (
       } else {
         const createPayload = {
           cwd: options.cwd,
-          mcpServers: [],
+          mcpServers,
         } satisfies EffectAcpSchema.NewSessionRequest;
         const created = yield* runLoggedRequest(
           "session/new",
