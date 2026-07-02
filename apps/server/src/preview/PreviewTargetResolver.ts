@@ -365,6 +365,13 @@ export async function resolvePreviewTarget(input: {
 
   const runRoot =
     input.target && input.target.trim().length > 0 ? path.resolve(root, input.target.trim()) : root;
+  // Keep explicit targets confined to the project: an absolute path or `..` segments
+  // must not let the preview command run outside the workspace root.
+  if (runRoot !== root && !runRoot.startsWith(`${root}${path.sep}`)) {
+    throw new Error(
+      `Live Edit target path must stay inside the project: ${input.target?.trim() ?? ""}`,
+    );
+  }
   if (!(await directoryExists(runRoot))) {
     throw new Error(
       `Live Edit target path does not exist: ${runRoot}. Check the /live-edit path argument, or omit it to auto-detect the frontend.`,

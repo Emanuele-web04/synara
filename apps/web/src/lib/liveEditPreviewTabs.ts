@@ -165,6 +165,22 @@ export async function openLiveEditPreviewTab(
     previewTabRecordsByKey.delete(recordKey);
   }
 
+  // Adopt an existing same-URL tab that no other live preview scope tracks. This
+  // keeps a page reload (which wipes the in-memory record map) from spawning a
+  // duplicate preview tab next to the orphaned one, while still refusing to steal
+  // a tab that belongs to a different project's tracked preview.
+  const trackedTabIds = new Set(
+    Array.from(previewTabRecordsByKey.values())
+      .filter((record) => record.threadId === target.threadId)
+      .map((record) => record.tabId),
+  );
+  const adoptableTab =
+    initialState.tabs.find((tab) => !trackedTabIds.has(tab.id) && tabMatchesUrl(tab, target.url)) ??
+    null;
+  if (adoptableTab) {
+    return selectAndNavigatePreviewTab(api, initialState, target, adoptableTab);
+  }
+
   const currentActiveTab = activeTab(initialState);
   const reusableTab =
     currentActiveTab && isReusableBlankTab(currentActiveTab)
@@ -329,6 +345,12 @@ export async function closeLiveEditPreviewTabs(
     ...(target.threadId ? [target.threadId] : []),
     ...records.map(([, record]) => record.threadId),
   ]);
+  // Tabs still tracked by another live preview scope must survive the URL-based
+  // sweeps below: two projects can legitimately share the same preview URL, and
+  // stopping one must not close the other's still-running tab.
+  for (const record of previewTabRecordsByKey.values()) {
+    closedTabKeys.add(`${record.threadId}:${record.tabId}`);
+  }
   const globalBrowserStates = target.closeLocalPreviewTabs
     ? await api.browser.listStates().catch(() => null)
     : null;

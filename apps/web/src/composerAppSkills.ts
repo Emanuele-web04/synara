@@ -78,18 +78,10 @@ export function parseLiveEditAppSkillArgs(args: string): LiveEditAppSkillArgs {
   if (trimmed.length === 0) {
     return {};
   }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return { url: trimmed };
-  }
 
   const tokens = tokenizeSkillArgs(trimmed);
   const parsed: LiveEditAppSkillArgs = {};
   const targetParts: string[] = [];
-  const actionToken = tokens[0]?.toLowerCase();
-  if (actionToken === "stop" || actionToken === "nuke") {
-    parsed.action = actionToken;
-    tokens.shift();
-  }
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
     if (!token) continue;
@@ -109,6 +101,19 @@ export function parseLiveEditAppSkillArgs(args: string): LiveEditAppSkillArgs {
       const preferredPort = parsePort(tokens[index + 1]);
       if (preferredPort !== undefined) parsed.preferredPort = preferredPort;
       index += 1;
+      continue;
+    }
+    // A bare URL token is a URL wherever it appears, so `/live-edit http://... --port 5174`
+    // does not glue trailing flags into the URL string.
+    if (/^https?:\/\//i.test(token)) {
+      parsed.url ??= token;
+      continue;
+    }
+    // Recognize the stop/nuke action anywhere among positional tokens so
+    // `/live-edit --port 3000 stop` does not turn into a start request.
+    const lowered = token.toLowerCase();
+    if ((lowered === "stop" || lowered === "nuke") && parsed.action === undefined) {
+      parsed.action = lowered;
       continue;
     }
     targetParts.push(token);

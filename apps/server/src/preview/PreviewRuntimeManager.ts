@@ -28,7 +28,11 @@ const PREVIEW_MONITOR_INTERVAL_MS = 5_000;
 const PREVIEW_MONITOR_FAILURE_LIMIT = 3;
 const PREVIEW_PORT_KILL_GRACE_MS = 500;
 const PREVIEW_SOURCE_CHANGE_DEBOUNCE_MS = 450;
-const SAFE_PREVIEW_TERMINAL_PREFIX = "_cHJldmlldy0";
+// base64url encodes 3-byte groups, so only the first floor(8/3)*3 = 6 bytes of the
+// "preview-" terminal-id prefix ("previe") produce output characters that do not
+// depend on the hash suffix that follows. Encoding all 8 bytes here would make the
+// marker miss every terminal whose cwd hash starts with a letter.
+const SAFE_PREVIEW_TERMINAL_PREFIX = `_${Buffer.from("previe", "utf8").toString("base64url")}`;
 const LOG_SAMPLE_BYTES = 96 * 1024;
 
 interface PreviewRuntimeRecord {
@@ -291,6 +295,9 @@ export class PreviewRuntimeManager {
   private readonly records = new Map<string, PreviewRuntimeRecord>();
   private readonly listeners = new Set<(event: PreviewRuntimeEvent) => void>();
   private readonly terminalIds = new Map<string, string>();
+  // Guards the async gap between the status check and the "starting" state write so
+  // two concurrent start() calls for one cwd cannot both spawn into the same terminal.
+  private readonly startsInFlight = new Set<string>();
 
   constructor(
     private readonly terminalManager: TerminalManagerShape,
@@ -303,8 +310,8 @@ export class PreviewRuntimeManager {
 
   start(input: PreviewStartInput): Effect.Effect<PreviewRuntimeState, unknown> {
     const self = this;
+    const cwd = runtimeKey(input.cwd);
     return Effect.gen(function* () {
-      const cwd = runtimeKey(input.cwd);
       const record = self.getOrCreateRecord({ ...input, cwd });
 
       if (input.reuseOnly === true) {
@@ -314,6 +321,10 @@ export class PreviewRuntimeManager {
       if (record.state.status === "running" || record.state.status === "starting") {
         return record.state;
       }
+      if (self.startsInFlight.has(cwd)) {
+        return record.state;
+      }
+      self.startsInFlight.add(cwd);
 
       const previewPort = input.url
         ? (input.preferredPort ?? DEFAULT_PREVIEW_PORT)
@@ -387,7 +398,7 @@ export class PreviewRuntimeManager {
 
       self.scheduleStartPoll(record, target.url);
       return record.state;
-    });
+    }).pipe(Effect.ensuring(Effect.sync(() => self.startsInFlight.delete(cwd))));
   }
 
   stop(input: PreviewRuntimeInput): Effect.Effect<PreviewRuntimeState, unknown> {
@@ -648,7 +659,11 @@ export class PreviewRuntimeManager {
 
       const port = localPreviewKillPort(record.state);
       let killedPortCount = 0;
-      if (options.killPort && port) {
+      // Also kill by port when terminal cleanup failed on a Synara-owned preview:
+      // otherwise the dev server keeps running while the record reports "stopped".
+      const shouldKillPort =
+        options.killPort || (failedCount > 0 && record.state.ownedBySynara === true);
+      if (shouldKillPort && port) {
         killedPortCount = yield* Effect.promise(() => killLocalPreviewPort(port).catch(() => 0));
       }
 

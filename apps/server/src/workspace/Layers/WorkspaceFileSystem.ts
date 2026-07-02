@@ -118,6 +118,17 @@ function toRelativeWorkspacePath(cwd: string, absolutePath: string): string {
   return nodePath.relative(cwd, absolutePath).replaceAll(nodePath.sep, "/");
 }
 
+// `String.prototype.replace` interprets `$$`/`$&`-style substitution patterns in the
+// replacement string, which would corrupt user-typed text containing `$`. Splice by
+// index instead so the replacement lands verbatim.
+function replaceFirstOccurrence(content: string, needle: string, replacement: string): string {
+  const index = content.indexOf(needle);
+  if (index === -1) {
+    return content;
+  }
+  return `${content.slice(0, index)}${replacement}${content.slice(index + needle.length)}`;
+}
+
 function countTextOccurrences(content: string, needle: string): number {
   let count = 0;
   let index = content.indexOf(needle);
@@ -404,7 +415,7 @@ function replaceElementBodyText(input: {
   const occurrences = countTextOccurrences(body, input.originalText);
   let nextBody: string;
   if (occurrences === 1) {
-    nextBody = body.replace(input.originalText, input.nextText);
+    nextBody = replaceFirstOccurrence(body, input.originalText, input.nextText);
   } else if (occurrences > 1) {
     throw new Error("Selected text appears multiple times inside the matched element.");
   } else {
@@ -499,6 +510,11 @@ async function applyElementScopedTextEdit(input: {
     originalText: input.originalText,
     tagName,
   });
+  // Guard against the file changing between the candidate scan and this write.
+  const freshContent = await nodeFs.readFile(best.absolutePath, "utf8");
+  if (freshContent !== best.content) {
+    throw new Error("The source file changed while applying the text edit. Try again.");
+  }
   await nodeFs.writeFile(best.absolutePath, nextContent, "utf8");
   return { relativePath: best.relativePath, replacements: 1 };
 }
@@ -806,9 +822,15 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         if (!match) {
           throw new Error("Could not find the selected text in project source files.");
         }
+        // Re-read just before writing: the workspace scan above can take a while, and
+        // the file may have changed underneath us (editor save, another live edit).
+        const freshContent = await nodeFs.readFile(match.absolutePath, "utf8");
+        if (countTextOccurrences(freshContent, input.originalText) !== 1) {
+          throw new Error("The source file changed while applying the text edit. Try again.");
+        }
         await nodeFs.writeFile(
           match.absolutePath,
-          match.content.replace(input.originalText, input.nextText),
+          replaceFirstOccurrence(freshContent, input.originalText, input.nextText),
           "utf8",
         );
         return { relativePath: match.relativePath, replacements: 1 };
@@ -890,6 +912,11 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           throw new Error("Style edit did not change the matched source element.");
         }
 
+        // Guard against the file changing between the candidate scan and this write.
+        const freshContent = await nodeFs.readFile(best.absolutePath, "utf8");
+        if (freshContent !== best.content) {
+          throw new Error("The source file changed while applying the style edit. Try again.");
+        }
         await nodeFs.writeFile(
           best.absolutePath,
           `${best.content.slice(0, best.openStart)}${nextOpeningTag}${best.content.slice(best.openEnd)}`,

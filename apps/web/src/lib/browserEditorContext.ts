@@ -194,6 +194,18 @@ const MAX_ELEMENT_HTML_PAYLOAD_LENGTH = 4_000;
 const MAX_ATTRIBUTE_VALUE_LENGTH = 200;
 const BROWSER_EDITOR_BLOCK_PATTERN =
   /<browser-(element|drawing|selection|style-edit|live-editor)-selection>[\s\S]*?<\/browser-\1-selection>/g;
+
+// Page-derived text (element text, outerHTML, attribute values) is spliced verbatim
+// into prompt blocks whose boundaries are the tags above. Neutralize any literal
+// occurrence of those delimiter tags inside embedded content so a page that happens
+// to contain them cannot prematurely close (or open) a block and corrupt the
+// extraction/removal/replacement regexes.
+function sanitizeBrowserEditorBlockText(value: string): string {
+  return value.replace(
+    /<(\/?)(browser-(?:element|drawing|selection|style-edit|live-editor)-selection)>/g,
+    "<$1$2 >",
+  );
+}
 export const BROWSER_STYLE_EDIT_STYLING_NOTE =
   "Implement these visual changes in accordance with the project's styling framework and configuration. Prefer the closest local styling source first: component props/classes, nearby module CSS, scoped styles, Tailwind utilities, design tokens/theme config, then broader/global styles only when appropriate. Avoid permanent inline styles unless the project already uses them or no better styling location exists. If a requested font is not already loaded, add it through the project's existing font pipeline, framework font helper, theme config, or CSS import before applying it.";
 const BROWSER_STYLE_PATCH_KEYS = [
@@ -313,11 +325,12 @@ function readElementText(element: Element): string {
 }
 
 function truncateElementPayloadValue(value: string, limit: number): string {
-  if (value.length <= limit) {
-    return value;
+  const sanitized = sanitizeBrowserEditorBlockText(value);
+  if (sanitized.length <= limit) {
+    return sanitized;
   }
-  const suffix = `\n...[truncated; original length ${value.length} chars]`;
-  return `${value.slice(0, Math.max(0, limit - suffix.length)).trimEnd()}${suffix}`;
+  const suffix = `\n...[truncated; original length ${sanitized.length} chars]`;
+  return `${sanitized.slice(0, Math.max(0, limit - suffix.length)).trimEnd()}${suffix}`;
 }
 
 function buildElementPayloadMetadata(input: {
@@ -1299,7 +1312,7 @@ export function isBrowserElementEditorContext(
 }
 
 function truncateText(value: string, limit: number): string {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const normalized = sanitizeBrowserEditorBlockText(value).replace(/\s+/g, " ").trim();
   if (normalized.length <= limit) {
     return normalized;
   }
@@ -1682,7 +1695,7 @@ export function buildUnifiedBrowserEditorPromptBlock(
     "<browser-live-editor-selection>",
     "source: live-editor-context",
     ...(url ? [`url: ${url}`] : []),
-    `title: ${title}`,
+    `title: ${sanitizeBrowserEditorBlockText(title)}`,
     `selectedSelector: ${selectedSelector}`,
     `sectionCount: ${uniqueBlocks.length}`,
     "sections:",
@@ -1732,7 +1745,7 @@ export function buildBrowserSelectionPromptBlock(context: BrowserElementEditorCo
     "<browser-selection-selection>",
     "source: browser-selection",
     `url: ${context.url}`,
-    `title: ${context.title || "(untitled)"}`,
+    `title: ${sanitizeBrowserEditorBlockText(context.title) || "(untitled)"}`,
     `selectedSelector: ${context.selector || "(unavailable)"}`,
     `tag: ${context.tagName.toLowerCase()}`,
     `role: ${context.role ?? "(none)"}`,
@@ -1755,7 +1768,7 @@ export function buildBrowserStyleEditPromptBlock(context: BrowserStyleEditContex
     "<browser-style-edit-selection>",
     "source: browser-style-edit",
     `url: ${context.element.url}`,
-    `title: ${context.element.title || "(untitled)"}`,
+    `title: ${sanitizeBrowserEditorBlockText(context.element.title) || "(untitled)"}`,
     `selectedSelector: ${context.element.selector || "(unavailable)"}`,
     `tag: ${context.element.tagName.toLowerCase()}`,
     `role: ${context.element.role ?? "(none)"}`,
@@ -1795,7 +1808,7 @@ export function buildBrowserDrawingPromptBlock(context: BrowserDrawingEditorCont
     "<browser-drawing-selection>",
     ...(context.source ? [`source: ${context.source}`] : []),
     `url: ${context.url}`,
-    `title: ${context.title || "(untitled)"}`,
+    `title: ${sanitizeBrowserEditorBlockText(context.title) || "(untitled)"}`,
     `viewport: ${formatViewport(context.viewport)}`,
     ...(context.document ? [`document: ${formatDocumentSize(context.document)}`] : []),
     ...(context.scroll ? [`scroll: ${formatScrollPosition(context.scroll)}`] : []),

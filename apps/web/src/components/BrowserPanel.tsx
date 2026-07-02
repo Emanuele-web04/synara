@@ -261,6 +261,21 @@ function liveEditorPreviewLabel(value: string | null | undefined): string {
   }
 }
 
+// Identifies "the same page" for style-preview reapplication: origin + path + search,
+// ignoring the hash so in-page anchors do not drop an active preview.
+function stylePreviewPageKey(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  try {
+    const url = new URL(value);
+    const pathname = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+    return `${url.origin}${pathname}${url.search}`;
+  } catch {
+    return value.trim().replace(/\/$/, "");
+  }
+}
+
 function livePreviewOriginsMatch(
   left: string | null | undefined,
   right: string | null | undefined,
@@ -3073,8 +3088,11 @@ export function BrowserPanel({
   const annotationStateInitializedRef = useRef(false);
   const editorClearUndoSnapshotRef = useRef<BrowserEditorVisibleStateSnapshot | null>(null);
   const stylePreviewRuntimeKeysByTabRef = useRef(new Map<string, string>());
-  const stylePreviewTargetRef = useRef<{ selector: string; tabId: string } | null>(null);
+  const stylePreviewTargetRef = useRef<{ selector: string; tabId: string; url: string } | null>(
+    null,
+  );
   const previousStyleTargetKeyRef = useRef<string>("");
+  const editorPageKeyRef = useRef<string>("");
   const previewAutoStartedCwdRef = useRef<string | null>(null);
   const previewLastRoutedKeyRef = useRef<string | null>(null);
   const previewPendingNavigationUrlRef = useRef<string | null>(null);
@@ -3528,6 +3546,8 @@ export function BrowserPanel({
       const effectiveAttachmentCount =
         (currentDraft?.images.length ?? 0) -
         existingAnnotationImages.length +
+        (currentDraft?.files.length ?? 0) +
+        (currentDraft?.browserContexts.length ?? 0) +
         composerDraftAssistantSelectionCount;
       if (
         existingAnnotationImages.length === 0 &&
@@ -4042,6 +4062,7 @@ export function BrowserPanel({
         stylePreviewTargetRef.current = {
           selector: selectedElementContext.selector,
           tabId: activeTab.id,
+          url: activeTab.lastCommittedUrl ?? activeTab.url,
         };
         stylePreviewActivePatchRef.current = mode === "preview" ? normalizedPatch : null;
       }
@@ -4306,6 +4327,15 @@ export function BrowserPanel({
     const target = stylePreviewTargetRef.current;
     const patch = stylePreviewActivePatchRef.current;
     if (!target || !patch || !activeTab || target.tabId !== activeTab.id) {
+      return;
+    }
+    // Only reapply onto the page the preview was captured on. After a navigation the
+    // same selector can match an unrelated element, so drop the stale preview instead
+    // of silently mutating the new page.
+    const currentPageUrl = activeTab.lastCommittedUrl ?? activeTab.url;
+    if (stylePreviewPageKey(currentPageUrl) !== stylePreviewPageKey(target.url)) {
+      stylePreviewTargetRef.current = null;
+      stylePreviewActivePatchRef.current = null;
       return;
     }
     if (stylePreviewReapplyFrameRef.current !== null) {
@@ -6708,6 +6738,25 @@ export function BrowserPanel({
     resetActiveDrawStroke,
   ]);
 
+  // Selection boxes, strokes, text annotations, and arrows are all positioned
+  // against the page they were captured on. Drop them whenever the page changes -
+  // tab switch or same-tab navigation (address bar, back/forward, reload) - so
+  // stale overlays never float over unrelated content.
+  const editorPageKey = `${activeTab?.id ?? ""} ${stylePreviewPageKey(
+    activeTab ? (activeTab.lastCommittedUrl ?? activeTab.url) : null,
+  )}`;
+  useEffect(() => {
+    if (editorPageKeyRef.current === "") {
+      editorPageKeyRef.current = editorPageKey;
+      return;
+    }
+    if (editorPageKeyRef.current === editorPageKey) {
+      return;
+    }
+    editorPageKeyRef.current = editorPageKey;
+    clearDrawingAnnotations();
+  }, [clearDrawingAnnotations, editorPageKey]);
+
   const undoLastDrawingStroke = useCallback(() => {
     resetActiveDrawStroke();
     if (annotationArrowsRef.current.length > 0) {
@@ -6906,6 +6955,7 @@ export function BrowserPanel({
       const selector = snapshot.selectedElementContext.selector;
       const patch = snapshot.styleEditorInitialPatch;
       const tabId = activeTab.id;
+      const tabPageUrl = activeTab.lastCommittedUrl ?? activeTab.url;
       window.requestAnimationFrame(() => {
         void runStylePreviewAction({
           selector,
@@ -6917,7 +6967,7 @@ export function BrowserPanel({
             setLocalError("Could not restore the style preview for the selected element.");
             return;
           }
-          stylePreviewTargetRef.current = { selector, tabId };
+          stylePreviewTargetRef.current = { selector, tabId, url: tabPageUrl };
           stylePreviewActivePatchRef.current = patch;
         });
       });

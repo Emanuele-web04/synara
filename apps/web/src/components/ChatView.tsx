@@ -982,13 +982,6 @@ function closeLiveEditorDockPanesForThreadIds(threadIds: Iterable<ThreadId>): vo
   }
 }
 
-function closeLiveEditorDockPanesForBrowserStates(states: readonly ThreadBrowserState[]): void {
-  const threadIds = states
-    .filter((state) => !state.open && state.tabs.length === 0)
-    .map((state) => state.threadId);
-  closeLiveEditorDockPanesForThreadIds(threadIds);
-}
-
 function closeAllLiveEditorDockPanesWithoutPreviews(): void {
   closeLiveEditorDockPanesForThreadIds(
     Object.keys(useRightDockStore.getState().dockStateByThreadId) as ThreadId[],
@@ -3731,29 +3724,50 @@ export default function ChatView({
         }
 
         if (parsedArgs.action === "stop") {
-          const runningPreviewState = await api.preview
-            .getState({
+          // The preview may have been started before this thread's worktree was
+          // provisioned (keyed by the project cwd), so stop every candidate cwd —
+          // otherwise the original dev server keeps running after a "successful" stop.
+          const stopCwds = [
+            ...new Set(
+              [liveEditCwd, resolvedThreadWorktreePath, activeProject?.cwd ?? null].filter(
+                (candidate): candidate is string => Boolean(candidate),
+              ),
+            ),
+          ];
+          const stopUrls = new Set<string>();
+          for (const stopCwd of stopCwds) {
+            const runningPreviewState = await api.preview
+              .getState({
+                threadId,
+                cwd: stopCwd,
+                ...(activeProjectId ? { projectId: activeProjectId } : {}),
+              })
+              .catch(() => null);
+            if (runningPreviewState?.url) {
+              stopUrls.add(runningPreviewState.url);
+            }
+            await api.preview.stop({
               threadId,
-              cwd: liveEditCwd,
+              cwd: stopCwd,
               ...(activeProjectId ? { projectId: activeProjectId } : {}),
-            })
-            .catch(() => null);
-          await api.preview.stop({
-            threadId,
-            cwd: liveEditCwd,
-            ...(activeProjectId ? { projectId: activeProjectId } : {}),
-          });
-          const closedStates = await closeLiveEditPreviewTabs(api, {
-            threadId,
-            cwd: liveEditCwd,
-            projectId: activeProjectId,
-            urls: runningPreviewState?.url ? [runningPreviewState.url] : [],
-            fallbackThreadIds: [threadId],
-          }).catch(() => []);
+            });
+          }
+          const closedStates = (
+            await Promise.all(
+              stopCwds.map((stopCwd) =>
+                closeLiveEditPreviewTabs(api, {
+                  threadId,
+                  cwd: stopCwd,
+                  projectId: activeProjectId,
+                  urls: [...stopUrls],
+                  fallbackThreadIds: [threadId],
+                }).catch(() => []),
+              ),
+            )
+          ).flat();
           for (const closedState of closedStates) {
             upsertThreadBrowserState(closedState);
           }
-          closeLiveEditorDockPanesForBrowserStates(closedStates);
           closeLiveEditorDockPanesForThreadIds([threadId]);
           toastManager.add({
             type: "success",
@@ -6442,6 +6456,7 @@ export default function ChatView({
           return (
             (currentDraft?.images.length ?? 0) +
             (currentDraft?.files.length ?? 0) +
+            (currentDraft?.browserContexts.length ?? 0) +
             (currentDraft?.assistantSelections.length ?? 0)
           );
         })(),
@@ -6486,6 +6501,7 @@ export default function ChatView({
           return (
             (currentDraft?.images.length ?? 0) +
             (currentDraft?.files.length ?? 0) +
+            (currentDraft?.browserContexts.length ?? 0) +
             (currentDraft?.assistantSelections.length ?? 0)
           );
         })(),
@@ -7219,6 +7235,7 @@ export default function ChatView({
     const hasStructuredPlanFollowUpContent =
       composerImagesForSend.length > 0 ||
       composerFilesForSend.length > 0 ||
+      composerBrowserContextsForSend.length > 0 ||
       composerAssistantSelectionsForSend.length > 0 ||
       composerFileCommentsForSend.length > 0 ||
       sendableComposerTerminalContexts.length > 0 ||

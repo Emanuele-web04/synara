@@ -38,4 +38,25 @@ describe("composer app skills", () => {
     expect(parseLiveEditAppSkillArgs("stop")).toEqual({ action: "stop" });
     expect(parseLiveEditAppSkillArgs("NUKE")).toEqual({ action: "nuke" });
   });
+
+  it("parses a bare leading URL without swallowing trailing flags", () => {
+    expect(parseLiveEditAppSkillArgs("http://localhost:5173 --port 5174")).toEqual({
+      url: "http://localhost:5173",
+      preferredPort: 5174,
+    });
+    expect(parseLiveEditAppSkillArgs("https://localhost:5173/app")).toEqual({
+      url: "https://localhost:5173/app",
+    });
+  });
+
+  it("recognizes stop/nuke anywhere among positional tokens", () => {
+    expect(parseLiveEditAppSkillArgs("--port 3000 stop")).toEqual({
+      action: "stop",
+      preferredPort: 3000,
+    });
+    expect(parseLiveEditAppSkillArgs("stop apps/web")).toEqual({
+      action: "stop",
+      target: "apps/web",
+    });
+  });
 });

@@ -19,7 +19,14 @@ export interface BrowserAnnotationViewportAnnotations {
 }
 
 function safeScale(numerator: number, denominator: number): number {
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0) {
+  // A zero/unmeasured viewport dimension must fall back to identity, not scale
+  // everything to the origin and destroy the annotation coordinates.
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    numerator <= 0 ||
+    denominator <= 0
+  ) {
     return 1;
   }
   return numerator / denominator;

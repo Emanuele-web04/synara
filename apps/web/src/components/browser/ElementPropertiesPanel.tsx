@@ -845,21 +845,24 @@ export const ElementPropertiesPanel = memo(function ElementPropertiesPanel({
     [element.availableFonts],
   );
 
+  // The style patch carries a single target (`effectTarget` ⇒ ::before/::after,
+  // otherwise the element itself), so switching between base-element edits and
+  // effect edits restarts the patch for the new target. Merging across targets
+  // would misroute values — e.g. a color tweak landing on ::before.
   const setPatchValue = useCallback((name: StylePatchKey, value: string) => {
-    setDraftPatch((current) => ({
-      ...current,
-      [name]: value,
-    }));
+    setDraftPatch((current) =>
+      current.effectTarget !== undefined ? { [name]: value } : { ...current, [name]: value },
+    );
   }, []);
 
   const setEffectPatchValue = useCallback(
     (name: EffectPatchKey, value: string) => {
       if (!activeEffect) return;
-      setDraftPatch((current) => ({
-        ...current,
-        effectTarget: activeEffect.source,
-        [name]: value,
-      }));
+      setDraftPatch((current) =>
+        current.effectTarget === activeEffect.source
+          ? { ...current, [name]: value }
+          : { effectTarget: activeEffect.source, [name]: value },
+      );
     },
     [activeEffect],
   );

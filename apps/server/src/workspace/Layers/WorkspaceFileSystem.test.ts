@@ -336,6 +336,34 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
       }),
     );
 
+    it.effect("writes replacement text containing dollar-sign patterns verbatim", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          "export function App() { return <h1>Original title</h1>; }\n",
+        );
+
+        const result = yield* workspaceFileSystem.applyTextEdit({
+          cwd,
+          originalText: "Original title",
+          nextText: "Get $$ off & keep $& intact",
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(saved).toBe(
+          "export function App() { return <h1>Get $$ off & keep $& intact</h1>; }\n",
+        );
+      }),
+    );
+
     it.effect("rejects ambiguous text matches", () =>
       Effect.gen(function* () {
         const workspaceFileSystem = yield* WorkspaceFileSystem;
