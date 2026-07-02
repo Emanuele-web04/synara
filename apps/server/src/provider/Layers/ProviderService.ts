@@ -269,6 +269,13 @@ function toRuntimePayloadFromSession(
     readonly lastRuntimeEvent?: string;
     readonly lastRuntimeEventAt?: string;
     readonly lifecycleGeneration?: string;
+    /**
+     * Launch paths own the persisted launch options: when they carry no
+     * providerOptions, the previous binding's options must be cleared instead
+     * of surviving the runtime-payload merge, or recovery keeps starting the
+     * thread with a home/credentials override the user already removed.
+     */
+    readonly launchOptionsAuthoritative?: boolean;
   },
 ): Record<string, unknown> {
   const persistedProviderOptions =
@@ -291,10 +298,14 @@ function toRuntimePayloadFromSession(
     ...(extra?.modelSelection !== undefined ? { modelSelection: extra.modelSelection } : {}),
     ...(persistedProviderOptions !== undefined
       ? { providerOptions: persistedProviderOptions }
-      : {}),
+      : extra?.launchOptionsAuthoritative
+        ? { providerOptions: null }
+        : {}),
     ...(hasPersistableProviderOptions
       ? { providerOptionsCredentialsFingerprint: credentialsFingerprint ?? null }
-      : {}),
+      : extra?.launchOptionsAuthoritative
+        ? { providerOptionsCredentialsFingerprint: null }
+        : {}),
     ...(extra?.lastRuntimeEvent !== undefined ? { lastRuntimeEvent: extra.lastRuntimeEvent } : {}),
     ...(extra?.lastRuntimeEventAt !== undefined
       ? { lastRuntimeEventAt: extra.lastRuntimeEventAt }
@@ -1207,6 +1218,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         readonly lastRuntimeEvent?: string;
         readonly lastRuntimeEventAt?: string;
         readonly runtimePayload?: Record<string, unknown>;
+        readonly launchOptionsAuthoritative?: boolean;
       },
     ) =>
       directory.upsert({
@@ -2070,6 +2082,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 lifecycleGeneration: lease.generation,
                 ...(resolved.modelSelection ? { modelSelection: resolved.modelSelection } : {}),
                 ...(resolved.providerOptions ? { providerOptions: resolved.providerOptions } : {}),
+                launchOptionsAuthoritative: true,
               }).pipe(
                 Effect.andThen(
                   requiresCredentialRotation
@@ -2565,6 +2578,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   providerOptions: effectiveProviderOptions,
                   providerInstanceId: resolved.instance.instanceId,
                   lifecycleGeneration: lease.generation,
+                  launchOptionsAuthoritative: true,
                   runtimePayload: {
                     [AGENT_GATEWAY_CREDENTIAL_ROTATION_REQUIRED]: false,
                     [PRIOR_TRANSCRIPT_BOOTSTRAP_PENDING]: priorTranscriptBootstrapPending,
@@ -2879,6 +2893,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                   : {}),
                 lastRuntimeEvent: "provider.thread.forked",
                 lastRuntimeEventAt: new Date().toISOString(),
+                launchOptionsAuthoritative: true,
               });
             } else {
               yield* directory.upsert({
@@ -2902,13 +2917,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                         providerOptions:
                           redactProviderOptionsForPersistence(effectiveProviderOptions),
                       }
-                    : {}),
-                  ...(effectiveProviderCredentialsFingerprint !== undefined
-                    ? {
-                        providerOptionsCredentialsFingerprint:
-                          effectiveProviderCredentialsFingerprint,
-                      }
-                    : {}),
+                    : { providerOptions: null }),
+                  providerOptionsCredentialsFingerprint:
+                    effectiveProviderCredentialsFingerprint ?? null,
                   lastRuntimeEvent: "provider.thread.forked",
                   lastRuntimeEventAt: new Date().toISOString(),
                 },
