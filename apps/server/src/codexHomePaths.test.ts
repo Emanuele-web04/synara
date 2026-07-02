@@ -7,6 +7,7 @@ import {
   resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
   resolveDpCodeCodexHomeOverlayPath,
+  setCodexConfigOverlayForced,
   shouldDisableDpCodeBrowserPlugin,
 } from "./codexHomePaths.ts";
 
@@ -93,6 +94,42 @@ describe("resolveActiveCodexHomeWritePath", () => {
       }),
       "/users/me/.codex",
     );
+  });
+
+  it("returns the overlay home despite the plugin opt-out when config injection forces it", () => {
+    // Mirrors buildCodexProcessEnv: appended config.toml (agent-gateway MCP)
+    // forces the overlay even with DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN=0.
+    assert.equal(
+      resolveActiveCodexHomeWritePath({
+        env: {
+          DPCODE_HOME: "/dp/runtime",
+          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+        },
+        homePath: "/users/me/.codex",
+        configOverlayForced: true,
+      }),
+      path.join("/dp/runtime", "codex-home-overlay"),
+    );
+  });
+
+  it("follows the process-wide forced-overlay flag when no explicit override is given", () => {
+    const optOutInput = {
+      env: {
+        DPCODE_HOME: "/dp/runtime",
+        DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+      },
+      homePath: "/users/me/.codex",
+    };
+    try {
+      setCodexConfigOverlayForced(true);
+      assert.equal(
+        resolveActiveCodexHomeWritePath(optOutInput),
+        path.join("/dp/runtime", "codex-home-overlay"),
+      );
+    } finally {
+      setCodexConfigOverlayForced(false);
+    }
+    assert.equal(resolveActiveCodexHomeWritePath(optOutInput), "/users/me/.codex");
   });
 });
 

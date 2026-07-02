@@ -7,7 +7,7 @@ import type {
   OrchestrationThreadShell,
   ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -439,7 +439,21 @@ describe("AgentGateway", () => {
   });
 
   it.effect("sends a follow-up message with the agent dispatch origin", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads.filter((thread) => thread.id !== "thread-child"),
+      makeThreadShell("thread-child", {
+        parentThreadId: ThreadId.makeUnsafe("thread-parent"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-child"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: TurnId.makeUnsafe("turn-live"),
+          lastError: null,
+          updatedAt: NOW,
+        },
+      }),
+    ]);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
@@ -455,6 +469,40 @@ describe("AgentGateway", () => {
         assert.equal(turn.dispatchMode, "steer");
         assert.equal(turn.threadId, "thread-child");
       }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("downgrades a steer to queue when the target thread has no live turn", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_send_message",
+        args: { threadId: "thread-child", message: "status check please", mode: "steer" },
+      });
+      assert.isFalse(isToolError(response.result), toolErrorText(response.result));
+      assert.equal(toolResultJson(response.result).dispatched, "queue");
+      const turn = harness.dispatched[0]!;
+      assert.equal(turn.type, "thread.turn.start");
+      if (turn.type === "thread.turn.start") {
+        assert.equal(turn.dispatchMode, "queue");
+      }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects runtime-mode escalation beyond the calling thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_thread",
+        args: { prompt: "escalate please", provider: "codex", runtimeMode: "full-access" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "approval-required");
+      assert.equal(harness.dispatched.length, 0);
     }).pipe(Effect.provide(gatewayLayer));
   });
 
@@ -474,6 +522,10 @@ describe("AgentGateway", () => {
       assert.equal(created.targetThreadId, "thread-parent");
       assert.deepEqual(created.schedule, { type: "interval", everySeconds: 300 });
       assert.equal(created.maxIterations, 50);
+      // Local-checkout targets must carry the matching environment + risk
+      // acknowledgement so AutomationService policy checks stay enforced.
+      assert.equal(created.worktreeMode, "local");
+      assert.deepEqual(created.acknowledgedRisks, ["local-checkout"]);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

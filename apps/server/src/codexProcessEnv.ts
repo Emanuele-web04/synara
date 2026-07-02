@@ -27,6 +27,7 @@ import {
 import {
   resolveBaseCodexHomePath,
   resolveDpCodeCodexHomeOverlayPath,
+  setCodexConfigOverlayForced,
   shouldDisableDpCodeBrowserPlugin,
 } from "./codexHomePaths.ts";
 
@@ -211,6 +212,12 @@ export function buildCodexProcessEnv(
 ): NodeJS.ProcessEnv {
   const baseEnv = { ...(input.env ?? process.env) };
   const disableBrowserPlugin = shouldDisableDpCodeBrowserPlugin(baseEnv);
+  if (input.appendConfigToml && !disableBrowserPlugin) {
+    // The overlay is being forced despite the browser-plugin opt-out; record
+    // it so codexHomePaths write-path predictions (generated images) keep
+    // pointing at the home the child process actually writes under.
+    setCodexConfigOverlayForced(true);
+  }
   const overlayHomePath =
     disableBrowserPlugin || input.appendConfigToml
       ? prepareDpCodeCodexHomeOverlay({

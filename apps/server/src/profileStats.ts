@@ -580,6 +580,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         LEFT JOIN projection_projects p ON p.project_id = t.project_id
         WHERE m.role = 'user'
           AND m.source = 'native'
+          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
           AND (
             t.deleted_at IS NULL
             OR EXISTS (
@@ -753,6 +754,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       LEFT JOIN projection_projects p ON p.project_id = t.project_id
       WHERE m.role = 'user'
         AND m.source = 'native'
+        AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
         AND (
           t.deleted_at IS NULL
           OR EXISTS (
@@ -827,6 +829,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         JOIN projection_projects p ON p.project_id = t.project_id
         WHERE m.role = 'user'
           AND m.source = 'native'
+          AND (m.dispatch_origin IS NULL OR m.dispatch_origin = 'user')
           AND (
             t.deleted_at IS NULL
             OR EXISTS (

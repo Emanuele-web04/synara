@@ -17,6 +17,28 @@ export const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
 export interface CodexHomePathsInput {
   readonly env?: NodeJS.ProcessEnv;
   readonly homePath?: string;
+  /**
+   * Whether the codex child process env appends extra config.toml content
+   * (e.g. the Synara agent-gateway MCP server). buildCodexProcessEnv forces
+   * the overlay home in that case even when the browser-plugin disable is
+   * opted out, so write-path predictions must follow the same rule.
+   */
+  readonly configOverlayForced?: boolean;
+}
+
+// Process-wide record of buildCodexProcessEnv's actual overlay decision.
+// Config-append injection (agent-gateway MCP) forces the overlay even when the
+// browser-plugin disable is opted out via env; write-path predictions in this
+// process must mirror what the child actually received, and the prediction
+// call sites are pure helpers with no access to the adapter's session state.
+let codexConfigOverlayForcedInProcess = false;
+
+export function setCodexConfigOverlayForced(forced: boolean): void {
+  codexConfigOverlayForcedInProcess = forced;
+}
+
+export function isCodexConfigOverlayForced(): boolean {
+  return codexConfigOverlayForcedInProcess;
 }
 
 export function resolveBaseCodexHomePath(
@@ -49,7 +71,8 @@ export function resolveDpCodeCodexHomeOverlayPath(
 export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {}): string {
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
-  if (!shouldDisableDpCodeBrowserPlugin(env)) {
+  const overlayForced = input.configOverlayForced ?? isCodexConfigOverlayForced();
+  if (!shouldDisableDpCodeBrowserPlugin(env) && !overlayForced) {
     return source;
   }
   const overlay = resolveDpCodeCodexHomeOverlayPath(env, source);

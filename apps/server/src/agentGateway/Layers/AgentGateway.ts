@@ -355,7 +355,8 @@ export const makeAgentGateway = Effect.gen(function* () {
           runtimeMode: {
             type: "string",
             enum: ["approval-required", "full-access"],
-            description: "Defaults to your thread's runtime mode.",
+            description:
+              "Defaults to your thread's runtime mode. Cannot exceed it: an approval-required caller cannot spawn full-access threads.",
           },
         },
         required: ["prompt", "provider"],
@@ -400,6 +401,14 @@ export const makeAgentGateway = Effect.gen(function* () {
         );
 
         const modelSelection = buildModelSelection(provider, model);
+        // Privilege boundary: a delegated agent must not escalate its workers
+        // beyond what the user granted the calling thread. Only the user can
+        // grant full access (by running the caller itself in full-access).
+        if (runtimeModeArg === "full-access" && caller.runtimeMode !== "full-access") {
+          throw new ToolInputError(
+            'Your thread runs in "approval-required" mode, so spawned threads cannot use "full-access". Omit runtimeMode or ask the user to switch your thread to full access first.',
+          );
+        }
         const runtimeMode = runtimeModeArg ?? caller.runtimeMode;
         // Same flow as UI-created threads: start with the deterministic
         // placeholder so the first-turn reactor auto-renames it with a
@@ -525,6 +534,14 @@ export const makeAgentGateway = Effect.gen(function* () {
           throw new ToolInputError(`Argument "mode" must be "queue" or "steer".`);
         }
         const target = yield* requireThreadShell(threadId);
+        // Steering only makes sense against a live turn. An idle "steer" would
+        // ride the Codex native-steer fast path in the reactor (skipping the
+        // turn-start checkpoint) instead of queueing as the tool promises, so
+        // downgrade it based on the projected session state.
+        const hasLiveTurn =
+          target.session?.status === "running" && target.session.activeTurnId !== null;
+        const dispatchMode: TurnDispatchMode =
+          modeArg === "steer" && !hasLiveTurn ? "queue" : modeArg;
         const suffix = randomUUID();
         yield* orchestrationEngine
           .dispatch({
@@ -537,14 +554,14 @@ export const makeAgentGateway = Effect.gen(function* () {
               text: message,
               attachments: [],
             },
-            dispatchMode: modeArg satisfies TurnDispatchMode,
+            dispatchMode,
             dispatchOrigin: "agent",
             runtimeMode: target.runtimeMode,
             interactionMode: target.interactionMode,
             createdAt: isoNow(),
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-        return mcpToolResultJson({ threadId: target.id, dispatched: modeArg });
+        return mcpToolResultJson({ threadId: target.id, dispatched: dispatchMode });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 
@@ -689,6 +706,20 @@ export const makeAgentGateway = Effect.gen(function* () {
           Math.round(readNumberArg(args, "maxIterations") ?? HEARTBEAT_DEFAULT_MAX_ITERATIONS),
         );
         const target = yield* requireThreadShell(targetThreadId);
+        // Heartbeats run in the target thread's existing environment, so the
+        // automation policy must see that environment: a local-checkout target
+        // requires the matching risk acknowledgement (the user already accepted
+        // that environment when creating the thread), and full-access targets
+        // require the full-access acknowledgement.
+        const worktreeMode =
+          target.envMode === "worktree" ? ("worktree" as const) : ("local" as const);
+        const acknowledgedRisks: Array<"full-access" | "local-checkout"> = [];
+        if (target.runtimeMode === "full-access") {
+          acknowledgedRisks.push("full-access");
+        }
+        if (worktreeMode === "local") {
+          acknowledgedRisks.push("local-checkout");
+        }
         const definition = yield* automationService
           .create({
             projectId: target.projectId,
@@ -703,9 +734,8 @@ export const makeAgentGateway = Effect.gen(function* () {
             targetThreadId: target.id,
             maxIterations,
             stopOnError: true,
-            // The gateway inherits the target thread's runtime mode, so a
-            // full-access target requires the matching risk acknowledgement.
-            acknowledgedRisks: target.runtimeMode === "full-access" ? ["full-access"] : [],
+            worktreeMode,
+            acknowledgedRisks,
           })
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
         return mcpToolResultJson({
