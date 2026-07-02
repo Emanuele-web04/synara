@@ -64,6 +64,8 @@ import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
+import { APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME } from "./chat/composerPickerStyles";
+import { Kbd } from "./ui/kbd";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
@@ -139,6 +141,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuItem, MenuSeparator, MenuTrigger } from "./ui/menu";
 import { Skeleton } from "./ui/skeleton";
 import { toastManager } from "./ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { ElementPropertiesPanel } from "./browser/ElementPropertiesPanel";
 
 interface BrowserPanelProps {
@@ -704,10 +707,13 @@ const BROWSER_TOOLBAR_SECTION_CLASS_NAME = "flex shrink-0 items-center gap-0.5";
 const BROWSER_TOOLBAR_DIVIDER_CLASS_NAME = "h-5 w-px shrink-0 bg-border/60";
 const BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME =
   "flex h-6 w-7 items-center justify-center rounded-[5px] border border-black/10 bg-white/62 text-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.62)] backdrop-blur-xl transition hover:bg-white/76 dark:border-white/18 dark:bg-slate-950/82 dark:text-white dark:shadow-[0_8px_24px_rgba(0,0,0,0.22)] dark:hover:bg-slate-900";
-const BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME =
-  "pointer-events-auto fixed z-[80] w-48 rounded-xl border border-black/10 bg-white/58 p-2.5 text-slate-950 shadow-[0_18px_54px_rgba(15,23,42,0.2),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-2xl dark:border-white/10 dark:bg-slate-950/82 dark:text-white dark:shadow-[0_18px_50px_rgba(0,0,0,0.34),inset_0_1px_0_rgba(255,255,255,0.06)]";
+// Tool flyouts are pickers, so they wear the app's shared translucent popup shell
+// instead of a bespoke glass surface.
+const BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME = `pointer-events-auto fixed z-[80] w-48 rounded-xl p-2.5 shadow-xl ${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME}`;
+// Floating shortcut chips reuse the shared <Kbd> chrome; this only shrinks it and
+// adds a border + blur so the chip stays legible over arbitrary page content.
 const BROWSER_SHORTCUT_HINT_CLASS_NAME =
-  "h-4 min-w-4 rounded-[4px] border border-black/10 bg-white/66 px-[5px] py-[2px] font-mono text-[8.5px] font-semibold leading-none text-slate-600 shadow-[0_8px_18px_rgba(15,23,42,0.14),inset_0_1px_0_rgba(255,255,255,0.72)] backdrop-blur-xl dark:border-white/10 dark:bg-slate-950/82 dark:text-white/70 dark:shadow-[0_8px_18px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.06)]";
+  "pointer-events-none h-4 min-w-4 rounded-[4px] border border-border bg-popover/80 px-[5px] text-[8.5px] shadow-md backdrop-blur-xl";
 const BROWSER_TOOL_OPTIONS_RANGE_CLASS_NAME =
   "mt-2 h-1.5 w-full cursor-pointer appearance-none rounded-full border border-black/15 shadow-[inset_0_1px_2px_rgba(15,23,42,0.22)] outline-none [&::-moz-range-thumb]:size-3.5 [&::-moz-range-thumb]:rounded-full [&::-moz-range-thumb]:border [&::-moz-range-thumb]:border-white/90 [&::-moz-range-thumb]:bg-slate-50 [&::-moz-range-thumb]:shadow-[0_1px_4px_rgba(15,23,42,0.32)] [&::-moz-range-track]:bg-transparent [&::-webkit-slider-thumb]:size-3.5 [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:border [&::-webkit-slider-thumb]:border-white/90 [&::-webkit-slider-thumb]:bg-slate-50 [&::-webkit-slider-thumb]:shadow-[0_1px_4px_rgba(15,23,42,0.32)] dark:border-white/18 dark:shadow-[inset_0_1px_2px_rgba(0,0,0,0.45)] dark:[&::-moz-range-thumb]:border-white/75 dark:[&::-moz-range-thumb]:bg-slate-100 dark:[&::-webkit-slider-thumb]:border-white/75 dark:[&::-webkit-slider-thumb]:bg-slate-100";
 const BROWSER_EDITOR_SWITCH_CLASS_NAME =
@@ -7651,134 +7657,182 @@ export function BrowserPanel({
   const editorToolbar = isLiveRuntime ? (
     <>
       <div className={BROWSER_TOOLBAR_SECTION_CLASS_NAME}>
-        <button
-          ref={(node) => {
-            editorToolbarButtonRefs.current.browse = node;
-          }}
-          type="button"
-          className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-          data-active={editorMode === "browse"}
-          title="Browse"
-          onClick={() => {
-            setEditorMode("browse");
-          }}
-        >
-          <GlobeIcon className="size-3.5" />
-          <span className="sr-only">Browse</span>
-        </button>
-        <button
-          ref={(node) => {
-            editorToolbarButtonRefs.current.inspect = node;
-          }}
-          type="button"
-          className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-          data-active={editorMode === "inspect"}
-          title="Inspect"
-          onClick={() => {
-            setEditorMode("inspect");
-          }}
-        >
-          <EyeIcon className="size-3.5" />
-          <span className="sr-only">Inspect</span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                ref={(node) => {
+                  editorToolbarButtonRefs.current.browse = node;
+                }}
+                type="button"
+                className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                data-active={editorMode === "browse"}
+                onClick={() => {
+                  setEditorMode("browse");
+                }}
+              >
+                <GlobeIcon className="size-3.5" />
+                <span className="sr-only">Browse</span>
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">Browse (⌘B)</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                ref={(node) => {
+                  editorToolbarButtonRefs.current.inspect = node;
+                }}
+                type="button"
+                className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                data-active={editorMode === "inspect"}
+                onClick={() => {
+                  setEditorMode("inspect");
+                }}
+              >
+                <EyeIcon className="size-3.5" />
+                <span className="sr-only">Inspect</span>
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">Inspect (⌘I)</TooltipPopup>
+        </Tooltip>
         <div
           className="flex items-center"
           onPointerEnter={() => scheduleToolOptionsOpen("draw")}
           onPointerLeave={scheduleToolOptionsClose}
         >
-          <button
-            ref={(node) => {
-              editorToolbarButtonRefs.current.draw = node;
-            }}
-            type="button"
-            className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-            data-active={editorMode === "draw"}
-            title="Draw"
-            onClick={() => {
-              setEditorMode("draw");
-            }}
-          >
-            <PencilIcon className="size-3.5" />
-            <span className="sr-only">Draw</span>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  ref={(node) => {
+                    editorToolbarButtonRefs.current.draw = node;
+                  }}
+                  type="button"
+                  className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                  data-active={editorMode === "draw"}
+                  onClick={() => {
+                    setEditorMode("draw");
+                  }}
+                >
+                  <PencilIcon className="size-3.5" />
+                  <span className="sr-only">Draw</span>
+                </button>
+              }
+            />
+            <TooltipPopup side="bottom">Draw (⌘D)</TooltipPopup>
+          </Tooltip>
         </div>
         <div
           className="flex items-center"
           onPointerEnter={() => scheduleToolOptionsOpen("text")}
           onPointerLeave={scheduleToolOptionsClose}
         >
-          <button
-            ref={(node) => {
-              editorToolbarButtonRefs.current.text = node;
-            }}
-            type="button"
-            className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-            data-active={editorMode === "text"}
-            title="Text annotation"
-            onClick={() => {
-              setEditorMode("text");
-            }}
-          >
-            <TextIcon className="size-3.5" />
-            <span className="sr-only">Text annotation</span>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  ref={(node) => {
+                    editorToolbarButtonRefs.current.text = node;
+                  }}
+                  type="button"
+                  className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                  data-active={editorMode === "text"}
+                  onClick={() => {
+                    setEditorMode("text");
+                  }}
+                >
+                  <TextIcon className="size-3.5" />
+                  <span className="sr-only">Text annotation</span>
+                </button>
+              }
+            />
+            <TooltipPopup side="bottom">Text annotation (⌘T)</TooltipPopup>
+          </Tooltip>
         </div>
       </div>
       <div aria-hidden="true" className={BROWSER_TOOLBAR_DIVIDER_CLASS_NAME} />
       <div className={BROWSER_TOOLBAR_SECTION_CLASS_NAME}>
-        <button
-          type="button"
-          className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-          disabled={!canUndoAnnotation}
-          title="Undo annotation"
-          onClick={undoLastDrawingStroke}
-        >
-          <Undo2Icon className="size-3.5" />
-          <span className="sr-only">Undo annotation</span>
-        </button>
-        <button
-          type="button"
-          className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-          disabled={!hasBrowserAnnotation}
-          title="Clear annotation"
-          onClick={clearDrawingAnnotations}
-        >
-          <EraserIcon className="size-3.5" />
-          <span className="sr-only">Clear annotation</span>
-        </button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                disabled={!canUndoAnnotation}
+                onClick={undoLastDrawingStroke}
+              >
+                <Undo2Icon className="size-3.5" />
+                <span className="sr-only">Undo annotation</span>
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">Undo annotation</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                disabled={!hasBrowserAnnotation}
+                onClick={clearDrawingAnnotations}
+              >
+                <EraserIcon className="size-3.5" />
+                <span className="sr-only">Clear annotation</span>
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">Clear annotation</TooltipPopup>
+        </Tooltip>
       </div>
       <div aria-hidden="true" className={BROWSER_TOOLBAR_DIVIDER_CLASS_NAME} />
       <div className={BROWSER_TOOLBAR_SECTION_CLASS_NAME}>
-        <button
-          type="button"
-          className={cn(BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME, "gap-1.5")}
-          aria-pressed={autoAttachAnnotationScreenshot}
-          aria-label={autoAttachAnnotationScreenshot ? "AUTO camera" : "MANUAL camera"}
-          title={
-            autoAttachAnnotationScreenshot
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <button
+                type="button"
+                className={cn(BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME, "gap-1.5")}
+                aria-pressed={autoAttachAnnotationScreenshot}
+                aria-label={autoAttachAnnotationScreenshot ? "AUTO camera" : "MANUAL camera"}
+                onClick={() => {
+                  setAutoAttachAnnotationScreenshot((current) => !current);
+                }}
+              >
+                <span className="text-[10px] font-semibold uppercase">
+                  {autoAttachAnnotationScreenshot ? "AUTO" : "MANUAL"}
+                </span>
+                <CameraIcon className="size-3.5" />
+              </button>
+            }
+          />
+          <TooltipPopup side="bottom">
+            {autoAttachAnnotationScreenshot
               ? "Switch annotation capture to manual"
-              : "Switch annotation capture to auto"
-          }
-          onClick={() => {
-            setAutoAttachAnnotationScreenshot((current) => !current);
-          }}
-        >
-          <span className="text-[10px] font-semibold uppercase">
-            {autoAttachAnnotationScreenshot ? "AUTO" : "MANUAL"}
-          </span>
-          <CameraIcon className="size-3.5" />
-        </button>
+              : "Switch annotation capture to auto"}
+          </TooltipPopup>
+        </Tooltip>
         {!autoAttachAnnotationScreenshot ? (
-          <button
-            type="button"
-            className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-            disabled={!hasBrowserAnnotation}
-            title="Attach live editor context"
-            onClick={addDrawingToPrompt}
-          >
-            <PlusIcon className="size-3.5" />
-            <span className="sr-only">Attach live editor context</span>
-          </button>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+                  disabled={!hasBrowserAnnotation}
+                  onClick={addDrawingToPrompt}
+                >
+                  <PlusIcon className="size-3.5" />
+                  <span className="sr-only">Attach live editor context</span>
+                </button>
+              }
+            />
+            <TooltipPopup side="bottom">Attach live editor context</TooltipPopup>
+          </Tooltip>
         ) : null}
       </div>
     </>
@@ -7795,68 +7849,95 @@ export function BrowserPanel({
         {previewStatusLabel}
       </span>
       <div className={BROWSER_TOOLBAR_SECTION_CLASS_NAME}>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-6"
-          disabled={!previewCanStart}
-          title="Start preview"
-          onClick={() => {
-            void startPreview({ autoNavigate: true });
-          }}
-        >
-          {previewActionPending || previewIsStarting ? (
-            <LoaderCircleIcon className="size-3 animate-spin" />
-          ) : (
-            <PlayIcon className="size-3" />
-          )}
-          <span className="sr-only">Start preview</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-6"
-          disabled={!previewCanStop}
-          title="Stop preview"
-          onClick={() => {
-            void stopPreview();
-          }}
-        >
-          <StopIcon className="size-3" />
-          <span className="sr-only">Stop preview</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-6"
-          disabled={!previewCanRestart}
-          title="Restart preview"
-          onClick={() => {
-            void restartPreview();
-          }}
-        >
-          <RefreshCwIcon className="size-3" />
-          <span className="sr-only">Restart preview</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-6"
-          disabled={!previewState?.url}
-          title="Open preview"
-          onClick={() => {
-            if (previewState?.url) {
-              void navigateBrowserToPreviewUrl(previewState.url, previewState.targetCwd ?? null);
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-6"
+                disabled={!previewCanStart}
+                onClick={() => {
+                  void startPreview({ autoNavigate: true });
+                }}
+              >
+                {previewActionPending || previewIsStarting ? (
+                  <LoaderCircleIcon className="size-3 animate-spin" />
+                ) : (
+                  <PlayIcon className="size-3" />
+                )}
+                <span className="sr-only">Start preview</span>
+              </Button>
             }
-          }}
-        >
-          <ExternalLinkIcon className="size-3" />
-          <span className="sr-only">Open preview</span>
-        </Button>
+          />
+          <TooltipPopup side="bottom">Start preview</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-6"
+                disabled={!previewCanStop}
+                onClick={() => {
+                  void stopPreview();
+                }}
+              >
+                <StopIcon className="size-3" />
+                <span className="sr-only">Stop preview</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Stop preview</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-6"
+                disabled={!previewCanRestart}
+                onClick={() => {
+                  void restartPreview();
+                }}
+              >
+                <RefreshCwIcon className="size-3" />
+                <span className="sr-only">Restart preview</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Restart preview</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-6"
+                disabled={!previewState?.url}
+                onClick={() => {
+                  if (previewState?.url) {
+                    void navigateBrowserToPreviewUrl(
+                      previewState.url,
+                      previewState.targetCwd ?? null,
+                    );
+                  }
+                }}
+              >
+                <ExternalLinkIcon className="size-3" />
+                <span className="sr-only">Open preview</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Open preview</TooltipPopup>
+        </Tooltip>
       </div>
     </>
   ) : null;
@@ -7885,7 +7966,7 @@ export function BrowserPanel({
               transform: "translateX(-50%)",
             }}
           >
-            <span className={BROWSER_SHORTCUT_HINT_CLASS_NAME}>{item.label}</span>
+            <Kbd className={BROWSER_SHORTCUT_HINT_CLASS_NAME}>{item.label}</Kbd>
           </div>,
         ];
       })
@@ -7914,10 +7995,8 @@ export function BrowserPanel({
         {openToolOptions === "draw" ? (
           <>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-medium text-slate-600 dark:text-muted-foreground">
-                Stroke
-              </span>
-              <span className="text-[11px] font-semibold text-slate-950 dark:text-foreground">
+              <span className="text-[11px] font-medium text-muted-foreground">Stroke</span>
+              <span className="text-[11px] font-semibold text-foreground">
                 {drawStrokeSize.toFixed(1)}px
               </span>
             </div>
@@ -7966,10 +8045,8 @@ export function BrowserPanel({
         ) : (
           <>
             <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-medium text-slate-600 dark:text-muted-foreground">
-                Font size
-              </span>
-              <span className="text-[11px] font-semibold text-slate-950 dark:text-foreground">
+              <span className="text-[11px] font-medium text-muted-foreground">Font size</span>
+              <span className="text-[11px] font-semibold text-foreground">
                 {textAnnotationFontSize}px
               </span>
             </div>
@@ -8204,33 +8281,45 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
-        <Button
-          ref={copyScreenshotButtonRef}
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy screenshot"
-          title="Copy screenshot"
-          onClick={onCopyScreenshotToClipboard}
-        >
-          <CameraIcon className="size-3.5" />
-          <span className="sr-only">Copy screenshot</span>
-        </Button>
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="size-7"
-          disabled={!activeTab}
-          aria-label="Copy link"
-          title="Copy link"
-          onClick={copyActiveTabLink}
-        >
-          <LinkIcon className="size-3.5" />
-          <span className="sr-only">Copy link</span>
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                ref={copyScreenshotButtonRef}
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                disabled={!activeTab}
+                aria-label="Copy screenshot"
+                onClick={onCopyScreenshotToClipboard}
+              >
+                <CameraIcon className="size-3.5" />
+                <span className="sr-only">Copy screenshot</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Copy screenshot</TooltipPopup>
+        </Tooltip>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                className="size-7"
+                disabled={!activeTab}
+                aria-label="Copy link"
+                onClick={copyActiveTabLink}
+              >
+                <LinkIcon className="size-3.5" />
+                <span className="sr-only">Copy link</span>
+              </Button>
+            }
+          />
+          <TooltipPopup side="bottom">Copy link</TooltipPopup>
+        </Tooltip>
         <Menu modal={false}>
           <MenuTrigger
             render={
@@ -8301,20 +8390,30 @@ export function BrowserPanel({
     >
       <div className="flex min-h-0 flex-1 flex-col">
         {!isLiveEditorVariant ? (
-          <div ref={browserTabsBarRef} className="border-b border-border px-2 py-1.5">
+          <div
+            ref={browserTabsBarRef}
+            className={cn(
+              "border-b border-border px-2 py-1.5",
+              // Extend the frameless window drag region across the tab strip's empty space so
+              // the panel is easy to grab; interactive children stay no-drag via global CSS.
+              isElectron && mode !== "sheet" && "drag-region",
+            )}
+          >
             <div className="flex min-w-0 items-center gap-2">
-              <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+              <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto">
                 {threadBrowserState?.tabs.map((tab) => {
                   const isActive = tab.id === activeTab?.id;
+                  const tabIsBlank = isBlankBrowserTabUrl(tab);
                   return (
                     <div
                       key={tab.id}
                       className={cn(
-                        "group flex h-8 min-w-0 max-w-[14rem] items-center rounded-md border px-2 text-left text-xs transition-colors",
+                        "group flex min-w-0 max-w-[14rem] items-center px-2.5 text-left transition-colors",
+                        BROWSER_CHROME_CONTROL_CLASS_NAME,
                         isActive
-                          ? "border-border/70 text-foreground"
-                          : "border-transparent text-muted-foreground hover:border-border/50 hover:text-foreground",
-                        tab.status === "suspended" ? "opacity-75" : "",
+                          ? cn(BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME, "text-foreground")
+                          : "border-transparent text-muted-foreground hover:border-border/60 hover:bg-background/40 hover:text-foreground",
+                        tab.status === "suspended" && !tabIsBlank ? "opacity-75" : "",
                       )}
                     >
                       <span className="mr-2 flex size-4 shrink-0 items-center justify-center rounded-sm">
@@ -9059,35 +9158,47 @@ export function BrowserPanel({
                     className="absolute z-40 flex items-center gap-0.5"
                     style={selectedStyleEditorAnchor.button}
                   >
-                    <button
-                      type="button"
-                      className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
-                      title="Edit text inline"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        void startInlineTextEditing();
-                      }}
-                    >
-                      <PencilIcon className="size-3.5" />
-                      <span className="sr-only">Edit text inline</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
-                      title="Edit element properties"
-                      onClick={(event) => {
-                        event.preventDefault();
-                        event.stopPropagation();
-                        if (inlineTextEditorRef.current) {
-                          commitInlineTextEditing();
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              void startInlineTextEditing();
+                            }}
+                          >
+                            <PencilIcon className="size-3.5" />
+                            <span className="sr-only">Edit text inline</span>
+                          </button>
                         }
-                        setStylePropertiesPanelOpen((current) => !current);
-                      }}
-                    >
-                      <AdjustmentsIcon className="size-3.5" />
-                      <span className="sr-only">Edit element properties</span>
-                    </button>
+                      />
+                      <TooltipPopup side="bottom">Edit text inline</TooltipPopup>
+                    </Tooltip>
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              if (inlineTextEditorRef.current) {
+                                commitInlineTextEditing();
+                              }
+                              setStylePropertiesPanelOpen((current) => !current);
+                            }}
+                          >
+                            <AdjustmentsIcon className="size-3.5" />
+                            <span className="sr-only">Edit element properties</span>
+                          </button>
+                        }
+                      />
+                      <TooltipPopup side="bottom">Edit element properties</TooltipPopup>
+                    </Tooltip>
                   </div>
                   {stylePropertiesPanelOpen && stylePropertiesPanelPosition ? (
                     <div
