@@ -280,6 +280,10 @@ interface GrokSessionContext {
   // compactThread reads it so a compaction prompt cannot slip into the gap
   // before ctx.activeTurnId is assigned.
   turnStarting: boolean;
+  // Set by interruptTurn while a turn is still starting (no prompt fiber to
+  // interrupt yet, e.g. gated on resume replay); startGrokTurn re-checks it
+  // before dispatching so a cancelled turn is never prompted.
+  pendingTurnInterrupted: boolean;
   compactingThread: boolean;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
@@ -1150,6 +1154,7 @@ export function makeGrokAdapter(
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             turnStarting: false,
+            pendingTurnInterrupted: false,
             compactingThread: false,
             latestSessionCostUsd: undefined,
             stopped: false,
@@ -1228,19 +1233,22 @@ export function makeGrokAdapter(
                           ctx.activeTurnId === undefined &&
                           isGrokContextCompactionToolCall(event.toolCall));
                       if (treatAsCompaction) {
-                        const lifecycle =
+                        // During a manual /compact, compactThread emits the single
+                        // terminal row itself (and knows about cancellation), so
+                        // tool-call updates stay progress-only to avoid duplicate
+                        // "Context compacted" rows. Grok-initiated auto-compaction
+                        // has no other completion source and keeps its terminal row.
+                        const isTerminal =
                           event.toolCall.status === "completed" ||
-                          event.toolCall.status === "failed"
-                            ? "item.completed"
-                            : "item.updated";
-                        const status =
-                          event.toolCall.status === "failed"
+                          event.toolCall.status === "failed";
+                        const emitTerminal = isTerminal && !ctx.compactingThread;
+                        const status = emitTerminal
+                          ? event.toolCall.status === "failed"
                             ? "failed"
-                            : event.toolCall.status === "completed"
-                              ? "completed"
-                              : "inProgress";
+                            : "completed"
+                          : "inProgress";
                         yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-                          lifecycle,
+                          lifecycle: emitTerminal ? "item.completed" : "item.updated",
                           status,
                           title:
                             event.toolCall.title?.trim() ||
@@ -1451,6 +1459,7 @@ export function makeGrokAdapter(
           });
         }
         ctx.turnStarting = true;
+        ctx.pendingTurnInterrupted = false;
         return yield* startGrokTurn(ctx, input).pipe(
           Effect.ensuring(
             Effect.sync(() => {
@@ -1546,6 +1555,18 @@ export function makeGrokAdapter(
           });
         }
 
+        // The pre-prompt waits above (resume replay settling, config RPCs,
+        // attachment reads) can outlive an interrupt or a session stop; re-check
+        // here so a turn the user already cancelled is never dispatched.
+        if (ctx.stopped || ctx.pendingTurnInterrupted) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/prompt",
+            detail: ctx.stopped
+              ? "Grok session stopped before the turn could start."
+              : "Grok turn was interrupted before it could start.",
+          });
+        }
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
@@ -1709,6 +1730,12 @@ export function makeGrokAdapter(
     const interruptTurn: GrokAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        // A turn that is still starting has no prompt fiber to interrupt yet
+        // (it may be gated on resume replay); flag it so startGrokTurn aborts
+        // before prompting instead of running the cancelled turn anyway.
+        if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
+          ctx.pendingTurnInterrupted = true;
+        }
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         const activePromptFiber = ctx.activePromptFiber;
@@ -1805,12 +1832,31 @@ export function makeGrokAdapter(
       } satisfies ProviderComposerCapabilities);
 
     const compactThread: NonNullable<GrokAdapterShape["compactThread"]> = (threadId) =>
+      Effect.gen(function* () {
+        // Wait for a settling resume replay before taking the thread lock:
+        // stopSession/startSession need that lock, and stopping the session is
+        // what resolves the deferred early, so awaiting under the lock would
+        // stall stop/restart until the replay quiets or the hard timeout fires.
+        const preLockCtx = yield* requireSession(threadId);
+        if (preLockCtx.resumeReplayReady !== undefined) {
+          yield* Deferred.await(preLockCtx.resumeReplayReady);
+        }
+        return yield* compactThreadLocked(threadId);
+      });
+
+    const compactThreadLocked = (threadId: ThreadId) =>
       withThreadLock(
         threadId,
         Effect.gen(function* () {
           const ctx = yield* requireSession(threadId);
           if (ctx.resumeReplayReady !== undefined) {
-            yield* Deferred.await(ctx.resumeReplayReady);
+            // The session was restarted while waiting above and its new replay
+            // window is still settling; reject instead of blocking the lock.
+            return yield* new ProviderAdapterValidationError({
+              provider: PROVIDER,
+              operation: "compactThread",
+              issue: "Cannot compact while the resumed Grok thread is still replaying history.",
+            });
           }
           // turnStarting covers a sendTurn that is past its compaction check but
           // has not assigned ctx.activeTurnId yet; the check and the flag write
@@ -1841,7 +1887,10 @@ export function makeGrokAdapter(
               Effect.exit,
             );
 
-          ctx.compactingThread = false;
+          // compactingThread stays set until the ensuring block below clears it:
+          // sendTurn only rejects while the flag is true, so clearing before the
+          // completion/thread-state events publish would let a new turn start and
+          // then be trailed by stale compaction bookkeeping.
 
           if (Exit.isFailure(compactResult)) {
             // Interruption (session stopping) is not a compaction failure; let it unwind.

@@ -430,7 +430,6 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
-      let resumedExistingSession = false;
       if (options.resumeSessionId) {
         const loadPayload = {
           sessionId: options.resumeSessionId,
@@ -443,10 +442,16 @@ const makeAcpSessionRuntime = (
           acp.agent.loadSession(loadPayload),
         ).pipe(Effect.exit);
         if (Exit.isSuccess(resumed)) {
+          // A resumed session may keep replaying history after session/load
+          // returns; keep dropping until getEvents() attaches a consumer so
+          // the replay cannot pile up in the unbounded queue.
           sessionId = options.resumeSessionId;
           sessionSetupResult = resumed.value;
-          resumedExistingSession = true;
         } else {
+          // Fresh fallback session: no replay risk, and agents may emit early
+          // session/update from inside session/new — accept from here so those
+          // buffer for the consumer instead of being dropped.
+          acceptingSessionUpdates = true;
           const createPayload = {
             cwd: options.cwd,
             mcpServers: [],
@@ -460,6 +465,9 @@ const makeAcpSessionRuntime = (
           sessionSetupResult = created;
         }
       } else {
+        // Fresh session: accept updates from before session/new so any early
+        // agent output emitted while the request is in flight is buffered.
+        acceptingSessionUpdates = true;
         const createPayload = {
           cwd: options.cwd,
           mcpServers: [],
@@ -477,13 +485,6 @@ const makeAcpSessionRuntime = (
       yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
       yield* Ref.set(toolCallsRef, new Map());
       yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
-      // A resumed session may keep replaying history after session/load returns;
-      // keep dropping until getEvents() attaches a consumer so the replay cannot
-      // pile up in the unbounded queue. Fresh sessions have no replay, so events
-      // may buffer from here until the consumer attaches.
-      if (!resumedExistingSession) {
-        acceptingSessionUpdates = true;
-      }
 
       const nextState = {
         sessionId,
