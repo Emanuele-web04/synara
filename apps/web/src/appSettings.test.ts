@@ -444,6 +444,37 @@ describe("normalizeStoredAppSettings", () => {
     });
   });
 
+  it("redacts provider instance secrets so plaintext never persists locally", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        providerInstances: {
+          grok_work: {
+            driver: "grok",
+            environment: [
+              { name: "XAI_API_KEY", value: "super-secret", sensitive: true },
+              { name: "XAI_BASE_URL", value: "https://example.test", sensitive: false },
+            ],
+          },
+          opencode_work: {
+            driver: "opencode",
+            config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+          },
+        },
+      }),
+    );
+
+    const normalized = normalizeStoredAppSettings(decodedSettings);
+    expect(normalized.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+      { name: "XAI_BASE_URL", value: "https://example.test", sensitive: false },
+    ]);
+    expect(normalized.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "",
+      serverPasswordRedacted: true,
+    });
+  });
+
   it("drops default provider command names so they do not look like custom paths", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({

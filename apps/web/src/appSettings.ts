@@ -12,6 +12,7 @@ import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_CODEX_ACCOUNT_ID,
   DEFAULT_SERVER_SETTINGS,
+  type ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
   ProviderInstanceId,
@@ -1154,8 +1155,50 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
   return appSettingsPatchToServerSettingsPatch(patch);
 }
 
+// Browser storage must never hold plaintext secrets: the server materializes
+// sensitive values from the update patch and returns them redacted, so the
+// locally persisted copy keeps only the redaction markers.
+export function redactProviderInstanceSecretsForClient(
+  providerInstances: ProviderInstanceConfigMap,
+): ProviderInstanceConfigMap {
+  let didChange = false;
+  const redacted: Record<string, ProviderInstanceConfig> = {};
+  for (const [instanceId, instance] of Object.entries(providerInstances)) {
+    let nextInstance = instance;
+    if (instance.environment?.some((entry) => entry.sensitive && entry.value)) {
+      nextInstance = {
+        ...nextInstance,
+        environment: instance.environment.map((entry) =>
+          entry.sensitive && entry.value
+            ? { name: entry.name, value: "", sensitive: true, valueRedacted: true }
+            : entry,
+        ),
+      };
+    }
+    const config = isRecord(nextInstance.config) ? nextInstance.config : undefined;
+    if (config && typeof config.serverPassword === "string" && config.serverPassword) {
+      nextInstance = {
+        ...nextInstance,
+        config: { ...config, serverPassword: "", serverPasswordRedacted: true },
+      };
+    }
+    if (nextInstance !== instance) {
+      didChange = true;
+    }
+    redacted[instanceId] = nextInstance;
+  }
+  return didChange ? (redacted as ProviderInstanceConfigMap) : providerInstances;
+}
+
+function redactAppSettingsSecretsForClient(settings: AppSettings): AppSettings {
+  const redactedInstances = redactProviderInstanceSecretsForClient(settings.providerInstances);
+  return redactedInstances === settings.providerInstances
+    ? settings
+    : { ...settings, providerInstances: redactedInstances };
+}
+
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
-  return normalizeAppSettings(settings);
+  return redactAppSettingsSecretsForClient(normalizeAppSettings(settings));
 }
 
 export function getCustomModelsForProvider(
@@ -1853,7 +1896,11 @@ export function useAppSettings() {
 
   const updateSettings = useCallback(
     (patch: Partial<AppSettings>) => {
-      setSettings((prev) => normalizeAppSettings({ ...prev, ...patch }));
+      // The server patch below carries the live values; state and localStorage
+      // only ever keep the redacted representation of instance secrets.
+      setSettings((prev) =>
+        redactAppSettingsSecretsForClient(normalizeAppSettings({ ...prev, ...patch })),
+      );
       if (touchesProviderDiscoverySettings(patch)) {
         void queryClient.invalidateQueries({ queryKey: providerDiscoveryQueryKeys.all });
       }

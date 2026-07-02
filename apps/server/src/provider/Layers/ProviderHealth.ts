@@ -2828,7 +2828,18 @@ export const ProviderHealthLive = Layer.effect(
     yield* ensureRefreshFiber;
 
     yield* serverSettings.streamChanges.pipe(
-      Stream.runForEach(() => ensureRefreshFiber.pipe(Effect.flatMap(Fiber.join), Effect.asVoid)),
+      Stream.runForEach(() =>
+        Effect.gen(function* () {
+          // A refresh already in flight may have read the previous settings
+          // before spending time in CLI probes; wait it out, then run a fresh
+          // pass that is guaranteed to observe this change.
+          const inFlight = yield* Ref.get(refreshFiberRef);
+          if (inFlight) {
+            yield* Fiber.join(inFlight).pipe(Effect.asVoid);
+          }
+          yield* ensureRefreshFiber.pipe(Effect.flatMap(Fiber.join), Effect.asVoid);
+        }),
+      ),
       Effect.forkIn(refreshScope),
     );
 
