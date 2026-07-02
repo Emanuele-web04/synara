@@ -147,6 +147,17 @@ export function disableCodexConfigSections(
   return output.join("\n");
 }
 
+export function disableCompetingCodexBrowserPluginsInConfig(config: string): string {
+  return disableCodexConfigSections(
+    config,
+    [
+      ...SYNARA_COMPETING_BROWSER_PLUGIN_SECTION_HEADERS,
+      ...findConflictingLocalBrowserPluginSections(config),
+    ],
+    true,
+  );
+}
+
 async function writeSynaraConfigSuppressions(
   markerPath: string,
   sectionHeaders: readonly string[],
@@ -876,16 +887,19 @@ export async function buildCodexProcessEnv(
     readonly platform?: NodeJS.Platform;
     readonly readEnvironment?: ShellEnvironmentReader;
     readonly appendConfigToml?: string;
+    readonly skipHomeOverlay?: boolean;
   } = {},
 ): Promise<NodeJS.ProcessEnv> {
   const baseEnv = { ...(input.env ?? process.env) };
-  const overlayHomePath = await prepareSynaraCodexHomeOverlay({
-    env: baseEnv,
-    ...(input.homePath ? { homePath: input.homePath } : {}),
-    ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
-    ...(input.accountId ? { accountId: input.accountId } : {}),
-    ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
-  });
+  const overlayHomePath = input.skipHomeOverlay
+    ? undefined
+    : await prepareSynaraCodexHomeOverlay({
+        env: baseEnv,
+        ...(input.homePath ? { homePath: input.homePath } : {}),
+        ...(input.shadowHomePath ? { shadowHomePath: input.shadowHomePath } : {}),
+        ...(input.accountId ? { accountId: input.accountId } : {}),
+        ...(input.appendConfigToml ? { appendConfigToml: input.appendConfigToml } : {}),
+      });
   const directAccountHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(baseEnv, input.shadowHomePath)
     : input.homePath

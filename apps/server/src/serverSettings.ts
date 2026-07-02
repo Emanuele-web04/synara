@@ -830,6 +830,34 @@ const makeServerSettings = Effect.gen(function* () {
       ),
     );
 
+  const hasPlaintextProviderInstanceSecrets = (settings: ServerSettings): boolean => {
+    for (const instance of Object.values(settings.providerInstances)) {
+      if (
+        instance.environment?.some(
+          (variable) =>
+            variable.sensitive &&
+            variable.valueRedacted !== true &&
+            (variable.value ?? "").length > 0,
+        )
+      ) {
+        return true;
+      }
+      if (isRecord(instance.config)) {
+        for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+          const value = instance.config[key];
+          if (
+            typeof value === "string" &&
+            value.length > 0 &&
+            instance.config[`${key}Redacted`] !== true
+          ) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  };
+
   const loadSettingsFromDisk = Effect.gen(function* () {
     const exists = yield* fs.exists(settingsPath).pipe(
       Effect.mapError(
@@ -874,6 +902,7 @@ const makeServerSettings = Effect.gen(function* () {
         migrated: false,
       };
     }
+    const hasPlaintextInstanceSecrets = hasPlaintextProviderInstanceSecrets(decoded.value);
     const legacyPasswords = readLegacyProviderPasswords(raw);
     yield* Effect.forEach(
       legacyPasswords,
@@ -895,6 +924,7 @@ const makeServerSettings = Effect.gen(function* () {
       ),
       revision: decoded.revision,
       migrated:
+        hasPlaintextInstanceSecrets ||
         legacyPasswords.size > 0 ||
         decoded.legacyFormat ||
         decoded.migrationVersion !== SERVER_SETTINGS_MIGRATION_VERSION,

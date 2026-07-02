@@ -17,7 +17,10 @@ import {
   resolveCodexHomeOverlayAccountSegment,
   resolveSynaraCodexHomeOverlayPath,
 } from "../../codexHomePaths.ts";
-import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  disableCompetingCodexBrowserPluginsInConfig,
+} from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -195,7 +198,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const hasDedicatedAccountHome = Boolean(sourceHomePath?.trim());
       const trimmedAccountId = accountId?.trim();
       const accountOverlayAuthHome = (() => {
-        if (!trimmedAccountId || sourceAuthHome || hasDedicatedAccountHome) {
+        if (!trimmedAccountId || sourceAuthHome) {
           return undefined;
         }
         const accountSegment = resolveCodexHomeOverlayAccountSegment({
@@ -230,11 +233,13 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const sourceConfig = yield* fileSystem
         .readFileString(path.join(sourceCodexHome, "config.toml"))
         .pipe(Effect.catch(() => Effect.succeed(null)));
-      if (sourceConfig !== null) {
+      {
         yield* fileSystem
           .writeFileString(
             path.join(isolatedHomePath, "config.toml"),
-            sanitizeCodexConfigForTextGeneration(sourceConfig),
+            disableCompetingCodexBrowserPluginsInConfig(
+              sanitizeCodexConfigForTextGeneration(sourceConfig ?? ""),
+            ),
           )
           .pipe(
             Effect.mapError(
@@ -249,11 +254,25 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       }
 
       if (shouldCopyAuth) {
-        const sourceAuth = yield* fileSystem
-          .readFileString(
-            path.join(sourceAuthHome || accountOverlayAuthHome || sourceCodexHome, "auth.json"),
-          )
-          .pipe(Effect.catch(() => Effect.succeed(null)));
+        // Auth precedence: explicit shadow home, then the account's own home,
+        // then the Synara account overlay (where in-app logins land when the
+        // account home has no credentials of its own).
+        const authHomeCandidates = [
+          ...(sourceAuthHome ? [sourceAuthHome] : []),
+          ...(!trimmedAccountId || hasDedicatedAccountHome ? [sourceCodexHome] : []),
+          ...(accountOverlayAuthHome ? [accountOverlayAuthHome] : []),
+        ];
+        const sourceAuth = yield* Effect.gen(function* () {
+          for (const authHome of authHomeCandidates) {
+            const content = yield* fileSystem
+              .readFileString(path.join(authHome, "auth.json"))
+              .pipe(Effect.catch(() => Effect.succeed(null)));
+            if (content !== null) {
+              return content;
+            }
+          }
+          return null;
+        });
         if (sourceAuth !== null) {
           yield* fileSystem
             .writeFileString(path.join(isolatedHomePath, "auth.json"), sourceAuth)
@@ -362,15 +381,21 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           return yield* missingWorkingDirectoryError();
         }
 
+        // The isolated home is already fully materialized (sanitized config
+        // with the browser plugin disabled, account auth copied in), so opt
+        // out of the overlay machinery: hashing the per-call temp path with
+        // the account id would leak a fresh overlay directory per generation.
         const env = yield* Effect.promise(() =>
           buildCodexProcessEnv({
-            ...(providerOptions?.codex?.environment
-              ? { env: { ...process.env, ...providerOptions.codex.environment } }
-              : {}),
+            env: {
+              ...process.env,
+              ...providerOptions?.codex?.environment,
+            },
             homePath: isolatedCodexHome.homePath,
-            ...(resolvedCodexAccountId ? { accountId: resolvedCodexAccountId } : {}),
+            skipHomeOverlay: true,
           }),
         );
+        delete env.CODEX_SQLITE_HOME;
         const args = [
           "exec",
           "--ephemeral",
@@ -749,7 +774,9 @@ function resolveCodexHomePath(
   codexHomePath: string | undefined,
   providerOptions: BranchNameGenerationInput["providerOptions"] | undefined,
 ): string | undefined {
-  const resolved = codexHomePath?.trim() || providerOptions?.codex?.homePath?.trim();
+  // The routed instance home wins: the legacy top-level codexHomePath is the
+  // global default and must not override a selected account's own home.
+  const resolved = providerOptions?.codex?.homePath?.trim() || codexHomePath?.trim();
   return resolved && resolved.length > 0 ? resolved : undefined;
 }
 
