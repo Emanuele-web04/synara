@@ -285,6 +285,11 @@ interface GrokSessionContext {
   // before dispatching so a cancelled turn is never prompted.
   pendingTurnInterrupted: boolean;
   compactingThread: boolean;
+  // Failed compaction tool-call detail recorded while compactingThread is set;
+  // runGrokCompaction reads it so a failed compaction whose /compact prompt
+  // still resolves successfully is not persisted as compacted (mirrors how
+  // normal turns use activeTurnFailedToolDetail).
+  compactionFailedToolDetail: string | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
 }
@@ -1156,6 +1161,7 @@ export function makeGrokAdapter(
             turnStarting: false,
             pendingTurnInterrupted: false,
             compactingThread: false,
+            compactionFailedToolDetail: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
           };
@@ -1241,6 +1247,16 @@ export function makeGrokAdapter(
                         const isTerminal =
                           event.toolCall.status === "completed" ||
                           event.toolCall.status === "failed";
+                        // Manual compaction downgrades terminal tool events to
+                        // progress rows, so remember a failure here for
+                        // runGrokCompaction to honor after the prompt resolves.
+                        if (ctx.compactingThread && event.toolCall.status === "failed") {
+                          ctx.compactionFailedToolDetail =
+                            readAcpFailedToolDetail(event.toolCall) ??
+                            event.toolCall.detail ??
+                            event.toolCall.title ??
+                            "Grok reported a failed compaction tool call.";
+                        }
                         const emitTerminal = isTerminal && !ctx.compactingThread;
                         const status = emitTerminal
                           ? event.toolCall.status === "failed"
@@ -1555,18 +1571,10 @@ export function makeGrokAdapter(
           });
         }
 
-        // The pre-prompt waits above (resume replay settling, config RPCs,
-        // attachment reads) can outlive an interrupt or a session stop; re-check
-        // here so a turn the user already cancelled is never dispatched.
-        if (ctx.stopped || ctx.pendingTurnInterrupted) {
-          return yield* new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "session/prompt",
-            detail: ctx.stopped
-              ? "Grok session stopped before the turn could start."
-              : "Grok turn was interrupted before it could start.",
-          });
-        }
+        // Interrupts that landed during the pre-prompt waits (resume replay,
+        // config RPCs, attachment reads) are honored by the prompt fiber's
+        // dispatch guard below, so the turn completes through the normal
+        // cancelled path instead of surfacing as a provider turn-start failure.
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
@@ -1592,11 +1600,12 @@ export function makeGrokAdapter(
         });
 
         const runPrompt = Effect.suspend(() =>
-          // interruptTurn can land between the pre-dispatch check above and this
-          // fiber being registered as ctx.activePromptFiber (turn.started publish,
-          // fork scheduling); honor the flag and a concurrent stop here so a
-          // cancelled turn is never prompted — self-interrupting routes through
-          // the onInterrupt branch below, which completes the turn as cancelled.
+          // interruptTurn during the pre-prompt waits (resume replay, config
+          // RPCs, attachment reads) or between turn.started publishing and this
+          // fiber being registered sets pendingTurnInterrupted; honor it (and a
+          // concurrent stop) here so a cancelled turn is never prompted.
+          // Self-interrupting routes through the onInterrupt branch below, which
+          // completes the turn as cancelled rather than as a provider failure.
           ctx.pendingTurnInterrupted || ctx.stopped
             ? Effect.interrupt
             : ctx.acp.prompt({ prompt: promptParts }),
@@ -1900,6 +1909,7 @@ export function makeGrokAdapter(
           });
         }
         ctx.compactingThread = true;
+        ctx.compactionFailedToolDetail = undefined;
         return ctx;
       });
 
@@ -1960,6 +1970,26 @@ export function makeGrokAdapter(
               provider: PROVIDER,
               method: "session/prompt",
               detail,
+            }),
+          );
+        }
+
+        // A compaction tool call can fail while the /compact prompt itself
+        // still resolves successfully; honor the recorded failure instead of
+        // persisting the compaction as completed.
+        const failedToolDetail = ctx.compactionFailedToolDetail;
+        if (failedToolDetail !== undefined) {
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.completed",
+            status: "failed",
+            title: "Context compaction failed",
+            detail: failedToolDetail,
+          });
+          return yield* Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail: failedToolDetail,
             }),
           );
         }

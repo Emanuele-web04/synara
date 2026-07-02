@@ -3057,6 +3057,57 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Compacting context");
   });
+
+  it("collapses a compaction progress row into its terminal row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compaction-progress-1",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "compaction-completed-1",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
+
+  it("does not merge a new compaction progress row into an earlier terminal row", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "compaction-completed-1",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "compaction-progress-2",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(2);
+    expect(entries[0]?.label).toBe("Context compacted");
+    expect(entries[1]?.label).toBe("Compacting conversation...");
+  });
 });
 
 describe("isLatestTurnSettled", () => {

@@ -1162,6 +1162,10 @@ function collapseDerivedWorkLogEntries(
       collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
       continue;
     }
+    if (previous && shouldCollapseContextCompactionEntries(previous, entry)) {
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      continue;
+    }
     const stableToolKey =
       entry.collapseKey?.startsWith("tool:") &&
       isRenderableToolLifecycleActivity(entry.activityKind)
@@ -1234,6 +1238,30 @@ function mergeRuntimeWarningEntries(
     detail: repeatPreview,
     preview: repeatPreview,
   };
+}
+
+// Ingestion emits compaction progress ("Compacting conversation...") and its
+// terminal row ("Context compacted" / "... failed" / "... manually") as separate
+// activities; fold the terminal row into the in-progress one so the work log
+// shows a single resolving compaction entry instead of a stale spinner row.
+const CONTEXT_COMPACTION_PROGRESS_LABEL = "Compacting conversation...";
+
+function shouldCollapseContextCompactionEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  if (
+    previous.activityKind !== "context-compaction" ||
+    next.activityKind !== "context-compaction"
+  ) {
+    return false;
+  }
+  if (previous.turnId !== next.turnId) {
+    return false;
+  }
+  // Only merge into a row that is still in progress; a terminal row belongs to
+  // an earlier compaction and must not swallow the next one's progress row.
+  return previous.label === CONTEXT_COMPACTION_PROGRESS_LABEL;
 }
 
 function shouldCollapseToolLifecycleEntries(
