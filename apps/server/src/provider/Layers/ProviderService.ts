@@ -903,9 +903,19 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               input.threadId,
               Effect.gen(function* () {
                 if (recentlyCompletedTurnByThread.get(input.threadId) === String(turn.turnId)) {
+                  // On the live-fallback path the terminal event can arrive
+                  // before any directory row exists (the runtime-event handler
+                  // skips threads without a binding), and upsert defaults a
+                  // NEW row's omitted status to "running" — so a settled turn
+                  // must write an explicit terminal status when it creates the
+                  // first row. Existing rows keep their handler-written status.
+                  const existingBinding = Option.getOrUndefined(
+                    yield* directory.getBinding(input.threadId),
+                  );
                   yield* directory.upsert({
                     threadId: input.threadId,
                     provider: routed.adapter.provider,
+                    ...(existingBinding === undefined ? { status: "stopped" as const } : {}),
                     ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
                     ...(input.modelSelection !== undefined
                       ? { runtimePayload: { modelSelection: input.modelSelection } }

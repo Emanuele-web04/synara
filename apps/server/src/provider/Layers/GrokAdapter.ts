@@ -294,6 +294,19 @@ interface GrokSessionContext {
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
+  // Provider tool-call ids seen during the most recent turn, mapped to that
+  // turn. A backlogged consumer can process a queued ToolCallUpdated after the
+  // prompt response cleared activeTurnId; this keeps the event attributed to
+  // its originating turn instead of the between-turn auto-compaction
+  // heuristic. Cleared when the next turn dispatches.
+  readonly turnToolCallIds: Map<string, TurnId>;
+  // Pending until startSession has applied the requested model/mode config.
+  // The session is registered in `sessions` before the config RPCs run (so
+  // replay keeps draining), which means sendTurn/compactThread can route to it
+  // mid-startup; they await this gate so the first prompt never runs with
+  // provider defaults. Resolved by stopSessionInternal too, like
+  // resumeReplayReady, so a failed startup never strands waiters.
+  sessionConfigReady: Deferred.Deferred<void> | undefined;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
   // True while sendTurn is between its compaction check and settling the turn;
@@ -848,6 +861,10 @@ export function makeGrokAdapter(
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
+          ctx.sessionConfigReady = undefined;
+        }
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.succeed(ctx.resumeReplayReady, undefined);
           ctx.resumeReplayReady = undefined;
@@ -1200,6 +1217,7 @@ export function makeGrokAdapter(
 
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
+          const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -1233,6 +1251,8 @@ export function makeGrokAdapter(
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
+            turnToolCallIds: new Map(),
+            sessionConfigReady,
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             turnStarting: false,
@@ -1318,6 +1338,16 @@ export function makeGrokAdapter(
                       ) {
                         return;
                       }
+                      // A queued update for a tool call the just-settled turn
+                      // already rendered belongs to that turn, even if its
+                      // title mentions "compact"/"summarize" — a backlogged
+                      // consumer must not reclassify it as auto-compaction.
+                      const lateTurnId =
+                        ctx.resumeReplayReady === undefined &&
+                        ctx.activeTurnId === undefined &&
+                        !ctx.compactingThread
+                          ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
+                          : undefined;
                       // The title heuristic only applies between turns (grok-initiated
                       // auto-compaction); a live turn's tool call may legitimately
                       // mention "compact"/"summarize" and must render normally, and
@@ -1326,6 +1356,7 @@ export function makeGrokAdapter(
                         ctx.compactingThread ||
                         (ctx.resumeReplayReady === undefined &&
                           ctx.activeTurnId === undefined &&
+                          lateTurnId === undefined &&
                           isGrokContextCompactionToolCall(event.toolCall));
                       if (treatAsCompaction) {
                         // During a manual /compact, compactThread emits the single
@@ -1362,10 +1393,28 @@ export function makeGrokAdapter(
                         });
                         return;
                       }
+                      if (lateTurnId !== undefined) {
+                        // Emit with the originating turn id so the existing tool
+                        // row resolves in place instead of being dropped as an
+                        // orphan (or worse, misfiled as thread compaction).
+                        yield* logNative(ctx.threadId, "session/update", event.rawPayload);
+                        yield* offerRuntimeEvent(
+                          makeAcpToolCallEvent({
+                            stamp: yield* makeEventStamp(),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            turnId: lateTurnId,
+                            toolCall: scopeGrokToolCallStateForTurn(lateTurnId, event.toolCall),
+                            rawPayload: event.rawPayload,
+                          }),
+                        );
+                        return;
+                      }
                       const activeTurnId = yield* activeTurnIdForGrokRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
+                      ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
                       if (failedToolDetail !== undefined) {
@@ -1456,6 +1505,10 @@ export function makeGrokAdapter(
               mapError: ({ cause, method }) =>
                 mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
             });
+            // The requested model/mode are applied; turns gated on this
+            // deferred can now prompt without inheriting provider defaults.
+            yield* Deferred.succeed(sessionConfigReady, undefined);
+            ctx.sessionConfigReady = undefined;
 
             if (resumeReplayReady !== undefined) {
               // Settle the replay in the background: suppression stays active until
@@ -1592,6 +1645,11 @@ export function makeGrokAdapter(
       input: Parameters<GrokAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
+        // Startup registers the session before its config RPCs settle; a turn
+        // routed in during that window must not prompt with provider defaults.
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.await(ctx.sessionConfigReady);
+        }
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
         }
@@ -1682,6 +1740,9 @@ export function makeGrokAdapter(
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
+        // Late-event attribution only matters between turns; once a new turn
+        // dispatches, stragglers from older turns are stale enough to drop.
+        ctx.turnToolCallIds.clear();
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
@@ -1959,6 +2020,9 @@ export function makeGrokAdapter(
         // what resolves the deferred early, so awaiting under the lock would
         // stall stop/restart until the replay quiets or the hard timeout fires.
         const preLockCtx = yield* requireSession(threadId);
+        if (preLockCtx.sessionConfigReady !== undefined) {
+          yield* Deferred.await(preLockCtx.sessionConfigReady);
+        }
         if (preLockCtx.resumeReplayReady !== undefined) {
           yield* Deferred.await(preLockCtx.resumeReplayReady);
         }
@@ -1966,7 +2030,7 @@ export function makeGrokAdapter(
         // (potentially long) /compact prompt outside it: stopSession/restart
         // take the same lock, and a hung compaction must never block
         // stopSessionInternal from cancelling or killing the child.
-        const ctx = yield* withThreadLock(threadId, claimGrokCompactionSlot(threadId));
+        const ctx = yield* withThreadLock(threadId, claimGrokCompactionSlot(threadId, preLockCtx));
         return yield* runGrokCompaction(ctx).pipe(
           // compactingThread stays set until this clears it: sendTurn only
           // rejects while the flag is true, so clearing before the
@@ -1980,9 +2044,20 @@ export function makeGrokAdapter(
         );
       });
 
-    const claimGrokCompactionSlot = (threadId: ThreadId) =>
+    const claimGrokCompactionSlot = (threadId: ThreadId, preLockCtx: GrokSessionContext) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        // The pre-lock replay wait resolves early when the session is stopped;
+        // if a restart won the lock first, this thread id now maps to a fresh
+        // session that the original compaction request never targeted.
+        if (ctx !== preLockCtx) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "compactThread",
+            issue:
+              "The Grok session was restarted while waiting to compact; retry once it settles.",
+          });
+        }
         if (ctx.resumeReplayReady !== undefined) {
           // The session was restarted while waiting above and its new replay
           // window is still settling; reject instead of blocking the lock.
