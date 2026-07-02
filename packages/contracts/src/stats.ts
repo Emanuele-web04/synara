@@ -2,6 +2,8 @@
 // Purpose: Schemas for the local profile-stats RPCs that power the Profile page and
 // the shareable activity card. All metrics are backed by Synara's local DB
 // projections; no provider archive or cloud data is part of this contract.
+// Metrics are lifetime totals: deleting a thread or project from the app never
+// subtracts the work it already contributed to the profile.
 // Layer: shared contracts (schema-only, no runtime logic)
 
 import { Schema } from "effect";

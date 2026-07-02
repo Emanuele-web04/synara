@@ -16,6 +16,11 @@ import type { OrchestrationEngineShape } from "./orchestration/Services/Orchestr
 import type { ProjectionSnapshotQueryShape } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 
+// Marks thread.delete commands issued by the retention sweep. Retention only
+// hides threads from the app; deletion flows use this prefix to tell retention
+// hides apart from explicit user deletes (which purge the thread's data).
+export const THREAD_RETENTION_COMMAND_ID_PREFIX = "thread-retention:";
+
 export const THREAD_RETENTION_UNUSED_MS = 7 * 24 * 60 * 60 * 1000;
 export const THREAD_RETENTION_INITIAL_SWEEP_DELAY_MS = 5 * 60 * 1000;
 export const THREAD_RETENTION_SWEEP_INTERVAL_MS = 24 * 60 * 60 * 1000;
@@ -154,7 +159,9 @@ export const runThreadRetentionSweep = Effect.fn("runThreadRetentionSweep")(func
           orchestrationEngine
             .dispatch({
               type: "thread.delete",
-              commandId: CommandId.makeUnsafe(`thread-retention:${randomUUID()}`),
+              commandId: CommandId.makeUnsafe(
+                `${THREAD_RETENTION_COMMAND_ID_PREFIX}${randomUUID()}`,
+              ),
               threadId,
             })
             .pipe(
