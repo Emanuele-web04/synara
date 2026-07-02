@@ -33,6 +33,7 @@ type ProviderModelOptionGroupListProps = {
   favoriteProvider: FavoriteModelProvider | null;
   favoriteModelSlugSet: ReadonlySet<string> | undefined;
   onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+  onSelectModel: (provider: ProviderKind, slug: string) => void;
   onAfterSelection?: () => void;
 };
 
@@ -43,6 +44,7 @@ function ProviderModelRadioItem(
     favoriteProvider: FavoriteModelProvider | null;
     isFavorite: boolean;
     onToggleFavorite: (provider: FavoriteModelProvider, slug: string) => void;
+    onSelectModel: (provider: ProviderKind, slug: string) => void;
     onAfterSelection?: () => void;
   }>,
 ) {
@@ -52,6 +54,7 @@ function ProviderModelRadioItem(
     favoriteProvider,
     isFavorite,
     onToggleFavorite,
+    onSelectModel,
     onAfterSelection,
   } = props;
   const supportsFavorites = favoriteProvider !== null;
@@ -93,6 +96,7 @@ function ProviderModelRadioItem(
         ) : null
       }
       onClick={() => {
+        onSelectModel(provider, modelOption.slug);
         onAfterSelection?.();
       }}
     >
@@ -161,6 +165,7 @@ export const ProviderModelOptionGroupList = memo(function ProviderModelOptionGro
             favoriteProvider={props.favoriteProvider}
             isFavorite={props.favoriteModelSlugSet?.has(modelOption.slug) ?? false}
             onToggleFavorite={props.onToggleFavorite}
+            onSelectModel={props.onSelectModel}
             {...(props.onAfterSelection ? { onAfterSelection: props.onAfterSelection } : {})}
           />
         ));

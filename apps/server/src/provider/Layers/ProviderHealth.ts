@@ -95,7 +95,6 @@ import {
   parseGenericCliVersion,
   resolveProviderMaintenanceCapabilitiesEffect,
   type PackageManagedProviderMaintenanceDefinition,
-  type ProviderMaintenanceCapabilities,
 } from "../providerMaintenance";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
@@ -105,12 +104,14 @@ export type { CommandResult } from "../providerCliOutput";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CLAUDE_HEALTH_TIMEOUT_MS = 20_000;
+const HERMES_HEALTH_TIMEOUT_MS = 45_000;
 const OPENCODE_HEALTH_TIMEOUT_MS = 20_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const GROK_PROVIDER = "grok" as const;
+const HERMES_PROVIDER = "hermes" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -123,6 +124,7 @@ const PROVIDERS = [
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
   GROK_PROVIDER,
+  HERMES_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -657,6 +659,15 @@ const runGeminiCommand = (args: ReadonlyArray<string>, executable = "gemini") =>
   );
 
 const runGrokCommand = (args: ReadonlyArray<string>, executable = "grok") =>
+  runProviderCommand(executable, args).pipe(
+    Effect.flatMap((result) =>
+      isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
+        ? Effect.fail(new Error(`spawn ${executable} ENOENT`))
+        : Effect.succeed(result),
+    ),
+  );
+
+const runHermesCommand = (args: ReadonlyArray<string>, executable = "hermes") =>
   runProviderCommand(executable, args).pipe(
     Effect.flatMap((result) =>
       isWindowsShellCommandMissingResult({ code: result.code, stderr: result.stderr })
@@ -1311,6 +1322,70 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
+export const makeCheckHermesProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = nonEmptyTrimmed(binaryPath) ?? "hermes";
+
+    const versionProbe = yield* runHermesCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(HERMES_HEALTH_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Hermes CLI (`hermes`) is not installed or not on PATH."
+          : `Failed to execute Hermes CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Hermes CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: HERMES_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Hermes CLI is installed but failed to run. ${detail}`
+          : "Hermes CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+
+    return {
+      provider: HERMES_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: "unknown" as const,
+      version: parsedVersion,
+      checkedAt,
+      message: "Hermes CLI is installed. Configure provider profiles inside Hermes as needed.",
+    } satisfies ServerProviderStatus;
+  });
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1812,6 +1887,29 @@ export function isProviderEnabledForSettings(
   return settings.providers[provider].enabled !== false;
 }
 
+function getProviderBinaryPath(provider: ProviderKind, settings: ServerSettings): string {
+  switch (provider) {
+    case "codex":
+      return settings.providers.codex.binaryPath;
+    case "claudeAgent":
+      return settings.providers.claudeAgent.binaryPath;
+    case "cursor":
+      return settings.providers.cursor.binaryPath;
+    case "gemini":
+      return settings.providers.gemini.binaryPath;
+    case "grok":
+      return settings.providers.grok.binaryPath;
+    case "hermes":
+      return settings.providers.hermes.binaryPath;
+    case "kilo":
+      return settings.providers.kilo.binaryPath;
+    case "opencode":
+      return settings.providers.opencode.binaryPath;
+    case "pi":
+      return settings.providers.pi.binaryPath;
+  }
+}
+
 export function makeDisabledProviderStatus(
   provider: ProviderKind,
   checkedAt = new Date().toISOString(),
@@ -1919,7 +2017,7 @@ export const ProviderHealthLive = Layer.effect(
     const refreshScope = yield* Scope.make("sequential");
     yield* Effect.addFinalizer(() => Scope.close(refreshScope, Exit.void));
 
-    const cachePathByProvider = new Map(
+    const cachePathByProvider: ReadonlyMap<ProviderKind, string> = new Map(
       PROVIDERS.map(
         (provider) =>
           [
@@ -1976,27 +2074,6 @@ export const ProviderHealthLive = Layer.effect(
       Effect.map((probe) => probe?.subscriptionType),
     );
 
-    const getProviderBinaryPath = (provider: ProviderKind, settings: ServerSettings) => {
-      switch (provider) {
-        case "codex":
-          return settings.providers.codex.binaryPath;
-        case "claudeAgent":
-          return settings.providers.claudeAgent.binaryPath;
-        case "cursor":
-          return settings.providers.cursor.binaryPath;
-        case "gemini":
-          return settings.providers.gemini.binaryPath;
-        case "grok":
-          return settings.providers.grok.binaryPath;
-        case "kilo":
-          return settings.providers.kilo.binaryPath;
-        case "opencode":
-          return settings.providers.opencode.binaryPath;
-        case "pi":
-          return settings.providers.pi.binaryPath;
-      }
-    };
-
     const getProviderMaintenanceCapabilities = Effect.fn("getProviderMaintenanceCapabilities")(
       function* (provider: ProviderKind) {
         const settings = yield* serverSettings.getSettings;
@@ -2033,7 +2110,7 @@ export const ProviderHealthLive = Layer.effect(
           });
         }
         return yield* resolveProviderMaintenanceCapabilitiesEffect(definition, {
-          binaryPath: getProviderBinaryPath(provider, settings),
+          binaryPath: getProviderBinaryPath(provider, settings) ?? null,
           env: process.env,
           platform: process.platform,
         }).pipe(Effect.provideService(FileSystem.FileSystem, fileSystem));
@@ -2183,6 +2260,11 @@ export const ProviderHealthLive = Layer.effect(
                 settings,
                 GROK_PROVIDER,
                 makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                HERMES_PROVIDER,
+                makeCheckHermesProviderStatus(settings.providers.hermes.binaryPath),
               ),
               checkProviderWhenEnabled(
                 settings,

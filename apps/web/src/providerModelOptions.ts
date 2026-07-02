@@ -15,6 +15,8 @@ import type {
   GeminiModelSelection,
   GrokModelOptions,
   GrokModelSelection,
+  HermesModelOptions,
+  HermesModelSelection,
   KiloModelSelection,
   ModelSelection,
   OpenCodeModelOptions,
@@ -286,6 +288,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as GrokModelOptions;
   }
+  if (provider === "hermes") {
+    return {
+      ...(modelOptions as HermesModelOptions | undefined),
+      ...patch,
+    } as HermesModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -338,6 +346,11 @@ export function buildModelSelection(
   model: string,
   options?: GrokModelOptions | null | undefined,
 ): GrokModelSelection;
+export function buildModelSelection(
+  provider: "hermes",
+  model: string,
+  options?: HermesModelOptions | null | undefined,
+): HermesModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -402,6 +415,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GrokModelOptions,
+          }
+        : { provider, model };
+    case "hermes":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as HermesModelOptions,
           }
         : { provider, model };
     case "kilo":

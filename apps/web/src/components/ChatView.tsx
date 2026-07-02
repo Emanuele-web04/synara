@@ -687,6 +687,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
+    case "hermes":
+      return normalizeCustomBinaryPath(providerOptions?.hermes?.binaryPath);
     case "kilo":
       return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
@@ -1767,6 +1769,7 @@ export default function ChatView({
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       grok: resolveHint("grok"),
+      hermes: resolveHint("hermes"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
@@ -1925,6 +1928,11 @@ export default function ChatView({
         customModelsByProvider.grok,
         composerModelHintByProvider.grok,
       ),
+      hermes: getAppModelOptions(
+        "hermes",
+        customModelsByProvider.hermes,
+        composerModelHintByProvider.hermes,
+      ),
       kilo: getAppModelOptions(
         "kilo",
         customModelsByProvider.kilo,
@@ -1951,6 +1959,7 @@ export default function ChatView({
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      hermes: undefined,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -2005,6 +2014,7 @@ export default function ChatView({
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      hermes: [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -2026,6 +2036,7 @@ export default function ChatView({
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
     grok: grokDynamicModelsQuery,
+    hermes: undefined,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,

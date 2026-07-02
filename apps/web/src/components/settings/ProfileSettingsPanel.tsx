@@ -332,6 +332,8 @@ function formatProviderLabel(provider: ProviderKind): string {
       return "Gemini";
     case "grok":
       return "Grok";
+    case "hermes":
+      return "Hermes";
     case "kilo":
       return "Kilo";
     case "opencode":

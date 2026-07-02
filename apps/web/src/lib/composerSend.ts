@@ -193,6 +193,8 @@ export function resolvePromptEffortFromModelSelection(
       );
     case "grok":
       return modelSelection.options?.reasoningEffort ?? null;
+    case "hermes":
+      return null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;
     case "kilo":

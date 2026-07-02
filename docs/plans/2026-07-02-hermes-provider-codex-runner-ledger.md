@@ -1,0 +1,22 @@
+# Hermes Provider Codex Runner Ledger
+
+- cwd: `/Users/joongjae/dev/synara`
+- command: `codex-coder3 -m gpt-5.5 -a never --sandbox workspace-write exec -C /Users/joongjae/dev/synara - < /Users/joongjae/dev/synara/docs/plans/2026-07-02-hermes-provider-codex-runner-prompt.md`
+- session: `proc_ddb67494b875`
+- pid: `36238`
+- stdout: Hermes terminal process output for `proc_ddb67494b875`; use `process(action="poll", session_id="proc_ddb67494b875")`
+- prompt: `docs/plans/2026-07-02-hermes-provider-codex-runner-prompt.md`
+- phase plan: `docs/plans/2026-07-02-hermes-provider-runner-phases.md`
+- relevant env/config:
+  - Codex wrapper: `/Users/joongjae/.local/bin/codex-coder3`
+  - Codex CLI version: `codex-cli 0.138.0`
+  - sandbox: `workspace-write`
+  - approvals: `never`
+- artifacts expected:
+  - code changes under Hermes provider/health/test files
+  - test output in Codex stdout
+- current stage: runner started; first poll should check whether Codex accepted prompt and began Phase 1.
+- supervisor baseline verification before runner:
+  - `bun run --filter=t3 typecheck` passed
+  - `bun run test --filter=t3 -- ProviderHealth HermesAdapter ProviderAdapterRegistry` passed
+  - dev server `proc_371e9c826abe` running at `http://localhost:8891/`

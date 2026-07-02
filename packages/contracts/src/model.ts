@@ -129,12 +129,16 @@ export const GrokModelOptions = Schema.Struct({
 });
 export type GrokModelOptions = typeof GrokModelOptions.Type;
 
+export const HermesModelOptions = Schema.Struct({});
+export type HermesModelOptions = typeof HermesModelOptions.Type;
+
 export const ProviderModelOptions = Schema.Struct({
   codex: Schema.optional(CodexModelOptions),
   claudeAgent: Schema.optional(ClaudeModelOptions),
   cursor: Schema.optional(CursorModelOptions),
   gemini: Schema.optional(GeminiModelOptions),
   grok: Schema.optional(GrokModelOptions),
+  hermes: Schema.optional(HermesModelOptions),
   kilo: Schema.optional(OpenCodeModelOptions),
   opencode: Schema.optional(OpenCodeModelOptions),
   pi: Schema.optional(PiModelOptions),
@@ -504,6 +508,30 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: GROK_BUILD_CAPABILITIES,
     },
   ],
+  hermes: [
+    {
+      slug: "default",
+      name: "Hermes Default",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+    {
+      slug: "coder3",
+      name: "Hermes coder3",
+      capabilities: {
+        reasoningEffortLevels: [],
+        supportsFastMode: false,
+        supportsThinkingToggle: false,
+        promptInjectedEffortLevels: [],
+        contextWindowOptions: [],
+      },
+    },
+  ],
   opencode: [
     {
       slug: "openai/gpt-5",
@@ -601,6 +629,7 @@ export const DEFAULT_MODEL_BY_PROVIDER: Record<ProviderWithDefaultModel, ModelSl
   cursor: "auto",
   gemini: "auto-gemini-3",
   grok: "grok-build",
+  hermes: "default",
   kilo: "kilo/kilo-auto/free",
   opencode: "openai/gpt-5",
 };
@@ -684,6 +713,10 @@ export const MODEL_SLUG_ALIASES_BY_PROVIDER: Record<ProviderKind, Record<string,
     "grok-code-fast-1-0825": "grok-build-0.1",
     "code-fast": "grok-build-0.1",
   },
+  hermes: {
+    default: "default",
+    coder3: "coder3",
+  },
   kilo: {},
   opencode: {},
   pi: {},
@@ -719,6 +752,7 @@ export const PROVIDER_DISPLAY_NAMES: Record<ProviderKind, string> = {
   cursor: "Cursor",
   gemini: "Gemini",
   grok: "Grok",
+  hermes: "Hermes",
   kilo: "Kilo",
   opencode: "OpenCode",
   pi: "Pi",

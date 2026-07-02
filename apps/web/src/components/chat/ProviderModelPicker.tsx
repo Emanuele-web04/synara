@@ -365,7 +365,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
             favoriteProvider={favoriteProvider}
             favoriteModelSlugSet={favoriteModelSlugSet}
             onToggleFavorite={toggleFavoriteModel}
-            {...(onAfterSelection ? { onAfterSelection } : {})}
+            onSelectModel={handleModelChange}
           />
         </MenuRadioGroup>
       ) : (

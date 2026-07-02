@@ -297,6 +297,7 @@ describe("wsNativeApi", () => {
           cursor: { enabled: false, binaryPath: "agent", apiEndpoint: "", customModels: [] },
           gemini: { enabled: true, binaryPath: "gemini", customModels: [] },
           grok: { enabled: true, binaryPath: "grok", customModels: [] },
+          hermes: { enabled: true, binaryPath: "hermes", customModels: [] },
           kilo: {
             enabled: true,
             binaryPath: "kilo",

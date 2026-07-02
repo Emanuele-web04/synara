@@ -647,24 +647,10 @@ const make = Effect.gen(function* () {
     }
 
     const desiredRuntimeMode = options?.runtimeMode ?? thread.runtimeMode;
-    const currentProvider: ProviderKind | undefined = Schema.is(ProviderKind)(
-      thread.session?.providerName,
-    )
-      ? thread.session.providerName
-      : undefined;
     const requestedModelSelection = options?.modelSelection;
-    const threadProvider: ProviderKind = currentProvider ?? thread.modelSelection.provider;
-    if (
-      requestedModelSelection !== undefined &&
-      requestedModelSelection.provider !== threadProvider
-    ) {
-      return yield* new ProviderAdapterRequestError({
-        provider: threadProvider,
-        method: "thread.turn.start",
-        detail: `Thread '${threadId}' is bound to provider '${threadProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
-      });
-    }
-    const preferredProvider: ProviderKind = currentProvider ?? threadProvider;
+    const threadProvider: ProviderKind =
+      requestedModelSelection?.provider ?? thread.modelSelection.provider;
+    const preferredProvider: ProviderKind = threadProvider;
     const desiredModelSelection = requestedModelSelection ?? thread.modelSelection;
     const effectiveCwd = yield* resolveProjectedThreadWorkspaceCwd(thread);
     const workspaceState = resolveThreadWorkspaceState({
@@ -718,6 +704,18 @@ const make = Effect.gen(function* () {
 
     // Only reuse projected session state when the runtime still has a live session to attach to.
     const activeSession = yield* resolveActiveSession(threadId);
+    const currentProvider: ProviderKind | undefined = activeSession?.provider;
+    if (
+      requestedModelSelection !== undefined &&
+      currentProvider !== undefined &&
+      requestedModelSelection.provider !== currentProvider
+    ) {
+      return yield* new ProviderAdapterRequestError({
+        provider: currentProvider,
+        method: "thread.turn.start",
+        detail: `Thread '${threadId}' is bound to provider '${currentProvider}' and cannot switch to '${requestedModelSelection.provider}'.`,
+      });
+    }
     const existingSessionThreadId =
       thread.session && thread.session.status !== "stopped" && activeSession ? thread.id : null;
     if (existingSessionThreadId) {

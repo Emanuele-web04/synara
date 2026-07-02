@@ -160,6 +160,37 @@ it.effect("preserves Pi model selections through the JSON codec", () =>
   }),
 );
 
+it.effect("preserves Hermes model selections when decoding model selections", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeModelSelection({
+      provider: "hermes",
+      model: "coder3",
+    });
+
+    assert.deepStrictEqual(parsed, {
+      provider: "hermes",
+      model: "coder3",
+    });
+  }),
+);
+
+it.effect("preserves Hermes model selections through the JSON codec", () =>
+  Effect.gen(function* () {
+    const codec = Schema.fromJsonString(ModelSelection);
+    const parsed = yield* Schema.decodeUnknownEffect(codec)(
+      JSON.stringify({
+        provider: "hermes",
+        model: "default",
+      }),
+    );
+
+    assert.deepStrictEqual(parsed, {
+      provider: "hermes",
+      model: "default",
+    });
+  }),
+);
+
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeTurnDiffInput({

@@ -270,6 +270,11 @@ const composerProviderRegistry: Record<ProviderKind, ProviderRegistryEntry> = {
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("grok", input),
     renderTraitsPicker: (input) => renderTraitsPickerForProvider("grok", input),
   },
+  hermes: {
+    getState: (input) => getProviderStateFromCapabilities(input),
+    renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("hermes", input),
+    renderTraitsPicker: (input) => renderTraitsPickerForProvider("hermes", input),
+  },
   kilo: {
     getState: (input) => getProviderStateFromCapabilities(input),
     renderTraitsMenuContent: (input) => renderTraitsMenuContentForProvider("kilo", input),

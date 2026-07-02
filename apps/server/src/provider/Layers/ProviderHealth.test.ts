@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@t3tools/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -28,6 +28,7 @@ import {
   makeCheckCodexProviderStatus,
   makeCheckCursorProviderStatus,
   makeCheckGrokProviderStatus,
+  makeCheckHermesProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
   parseAuthStatusFromOutput,
@@ -105,6 +106,7 @@ const allProvidersDisabledSettings = {
     cursor: { enabled: false },
     gemini: { enabled: false },
     grok: { enabled: false },
+    hermes: { enabled: false },
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
@@ -119,6 +121,7 @@ const allProvidersDisabledServerSettings = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    hermes: { ...DEFAULT_SERVER_SETTINGS.providers.hermes, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
@@ -218,7 +221,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(statuses.length, 9);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -270,7 +273,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         });
 
         const layer = ProviderHealthLive.pipe(
-          Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
+          Layer.provideMerge(
+            ServerSettingsService.layerTest({
+              ...allProvidersDisabledSettings,
+              enableProviderUpdateChecks: false,
+            }),
+          ),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
         );
         const statuses = yield* Effect.gen(function* () {
@@ -286,7 +294,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
 
-    it.effect("publishes ready status when a disabled provider is re-enabled", () =>
+    it.effect("returns ready status when a disabled provider is re-enabled", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -306,15 +314,18 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
-            mockSpawnerLayer((args) => {
+            mockSpawnerLayer((args, command) => {
               const joined = args.join(" ");
-              if (joined === "--version") {
+              if (command === "codex" && joined === "--version") {
                 return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              }
+              if (command === "hermes" && joined === "--version") {
+                return { stdout: "hermes 1.0.0\n", stderr: "", code: 0 };
               }
               if (joined === "login status" || joined === "login status --json") {
                 return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
               }
-              throw new Error(`Unexpected args: ${joined}`);
+              throw new Error(`Unexpected ${command} args: ${joined}`);
             }),
           ),
         );
@@ -328,17 +339,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(disabledCodex?.available, false);
           assert.strictEqual(disabledCodex?.message, "Provider is disabled in Synara settings.");
 
-          const enabledCodexFiber = yield* providerHealth.streamChanges.pipe(
-            Stream.map((statuses) => statuses.find((status) => status.provider === "codex")),
-            Stream.filter(
-              (status): status is ServerProviderStatus =>
-                status !== undefined &&
-                status.available === true &&
-                status.authStatus === "authenticated",
-            ),
-            Stream.runHead,
-            Effect.forkChild,
-          );
           yield* serverSettings.updateSettings({
             providers: {
               codex: {
@@ -346,20 +346,16 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               },
             },
           });
-
-          const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
-            Effect.timeoutOption(2_000),
-          );
-          assert.strictEqual(streamedCodex._tag, "Some");
-          if (streamedCodex._tag !== "Some") {
+          const refreshed = yield* providerHealth.refresh.pipe(Effect.timeoutOption(2_000));
+          assert.strictEqual(refreshed._tag, "Some");
+          if (refreshed._tag !== "Some") {
             return;
           }
-          assert.strictEqual(streamedCodex.value._tag, "Some");
-          if (streamedCodex.value._tag !== "Some") {
-            return;
-          }
+          const refreshedCodex = refreshed.value.find((status) => status.provider === "codex");
+          assert.strictEqual(refreshedCodex?.available, true);
+          assert.strictEqual(refreshedCodex?.authStatus, "authenticated");
           assert.notStrictEqual(
-            streamedCodex.value.value.message,
+            refreshedCodex?.message,
             "Provider is disabled in Synara settings.",
           );
 
@@ -377,7 +373,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 8);
+        assert.strictEqual(statuses.length, 9);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");
@@ -1712,6 +1708,62 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.authStatus, "unknown");
         assert.strictEqual(status.message, "Grok CLI (`grok`) is not installed or not on PATH.");
       }).pipe(Effect.provide(failingSpawnerLayer("spawn grok ENOENT"))),
+    );
+  });
+
+  describe("checkHermesProviderStatus", () => {
+    it.effect("returns ready when Hermes version probe succeeds", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckHermesProviderStatus();
+        assert.strictEqual(status.provider, "hermes");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(status.version, "1.2.3");
+        assert.strictEqual(
+          status.message,
+          "Hermes CLI is installed. Configure provider profiles inside Hermes as needed.",
+        );
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "hermes");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "hermes 1.2.3\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("uses configured Hermes binary for version probe", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckHermesProviderStatus("/custom/bin/hermes");
+        assert.strictEqual(status.status, "ready");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args, command) => {
+            assert.strictEqual(command, "/custom/bin/hermes");
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "hermes 1.2.3\n", stderr: "", code: 0 };
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
+    it.effect("returns unavailable when Hermes binary is missing", () =>
+      Effect.gen(function* () {
+        const status = yield* makeCheckHermesProviderStatus();
+        assert.strictEqual(status.provider, "hermes");
+        assert.strictEqual(status.status, "error");
+        assert.strictEqual(status.available, false);
+        assert.strictEqual(status.authStatus, "unknown");
+        assert.strictEqual(
+          status.message,
+          "Hermes CLI (`hermes`) is not installed or not on PATH.",
+        );
+      }).pipe(Effect.provide(failingSpawnerLayer("spawn hermes ENOENT"))),
     );
   });
 

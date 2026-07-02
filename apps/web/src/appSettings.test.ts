@@ -163,6 +163,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -182,6 +183,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -201,6 +203,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -220,6 +223,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -239,6 +243,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          hermes: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -394,6 +399,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
         grokBinaryPath: "/usr/local/bin/grok",
+        hermesBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -434,6 +440,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "",
         geminiBinaryPath: "",
         grokBinaryPath: "",
+        hermesBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -457,6 +464,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "cursor-agent",
         geminiBinaryPath: "gemini",
         grokBinaryPath: "grok",
+        hermesBinaryPath: "hermes",
         kiloBinaryPath: "kilo",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -478,6 +486,7 @@ describe("provider-indexed custom model settings", () => {
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
     customGrokModels: ["grok/custom-fast"],
+    customHermesModels: ["hermes/custom-profile"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -490,6 +499,7 @@ describe("provider-indexed custom model settings", () => {
       "cursor",
       "gemini",
       "grok",
+      "hermes",
       "kilo",
       "opencode",
       "pi",
@@ -502,6 +512,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
+    expect(getCustomModelsForProvider(settings, "hermes")).toEqual(["hermes/custom-profile"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -514,6 +525,7 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
       customGrokModels: ["grok/default-fast"],
+      customHermesModels: ["hermes/default-profile"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -526,6 +538,9 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "hermes")).toEqual([
+      "hermes/default-profile",
+    ]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -552,6 +567,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for grok", () => {
     expect(patchCustomModels("grok", ["grok/custom-fast"])).toEqual({
       customGrokModels: ["grok/custom-fast"],
+    });
+  });
+
+  it("patches custom models for hermes", () => {
+    expect(patchCustomModels("hermes", ["hermes/custom-profile"])).toEqual({
+      customHermesModels: ["hermes/custom-profile"],
     });
   });
 
@@ -586,6 +607,7 @@ describe("provider-indexed custom model settings", () => {
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
       grok: ["grok/custom-fast"],
+      hermes: ["hermes/custom-profile"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -611,6 +633,9 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(
+      modelOptionsByProvider.hermes.some((option) => option.slug === "hermes/custom-profile"),
+    ).toBe(true);
+    expect(
       modelOptionsByProvider.kilo.some((option) => option.slug === "kilo/kilo-auto/free"),
     ).toBe(true);
     expect(
@@ -628,6 +653,7 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
+      customHermesModels: [" default ", "hermes/custom-profile", "hermes/custom-profile"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -667,6 +693,10 @@ describe("provider-indexed custom model settings", () => {
       true,
     );
     expect(modelOptionsByProvider.grok.some((option) => option.slug === "grok-build")).toBe(true);
+    expect(
+      modelOptionsByProvider.hermes.filter((option) => option.slug === "hermes/custom-profile"),
+    ).toHaveLength(1);
+    expect(modelOptionsByProvider.hermes.some((option) => option.slug === "default")).toBe(true);
     expect(
       modelOptionsByProvider.kilo.filter((option) => option.slug === "kilo/kilo-auto/free"),
     ).toHaveLength(1);
@@ -710,6 +740,7 @@ describe("AppSettingsSchema", () => {
       customCursorModels: [],
       customGeminiModels: [],
       customGrokModels: [],
+      customHermesModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],

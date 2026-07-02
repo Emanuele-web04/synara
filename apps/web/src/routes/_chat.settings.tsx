@@ -219,6 +219,7 @@ const PROVIDER_SELECT_OPTIONS = [
   "cursor",
   "gemini",
   "grok",
+  "hermes",
   "opencode",
   "kilo",
   "pi",
@@ -247,6 +248,7 @@ type InstallBinarySettingsKey =
   | "cursorBinaryPath"
   | "geminiBinaryPath"
   | "grokBinaryPath"
+  | "hermesBinaryPath"
   | "kiloBinaryPath"
   | "openCodeBinaryPath"
   | "piBinaryPath";
@@ -285,6 +287,7 @@ const PROVIDER_VISIBILITY_OPTIONS: ReadonlyArray<{ provider: ProviderKind; title
   { provider: "cursor", title: PROVIDER_DISPLAY_NAMES.cursor },
   { provider: "gemini", title: PROVIDER_DISPLAY_NAMES.gemini },
   { provider: "grok", title: PROVIDER_DISPLAY_NAMES.grok },
+  { provider: "hermes", title: PROVIDER_DISPLAY_NAMES.hermes },
   { provider: "kilo", title: PROVIDER_DISPLAY_NAMES.kilo },
   { provider: "opencode", title: PROVIDER_DISPLAY_NAMES.opencode },
   { provider: "pi", title: PROVIDER_DISPLAY_NAMES.pi },
@@ -441,6 +444,22 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     binaryDescription: (
       <>
         Leave blank to use <code>grok</code> from your PATH.
+      </>
+    ),
+  },
+  {
+    provider: "hermes",
+    title: "Hermes",
+    docs: [
+      { label: "Install", href: "https://hermes-agent.nousresearch.com/docs" },
+      { label: "Update", href: "https://hermes-agent.nousresearch.com/docs" },
+      { label: "Config", href: "https://hermes-agent.nousresearch.com/docs" },
+    ],
+    binaryPathKey: "hermesBinaryPath",
+    binaryPlaceholder: "Hermes binary path",
+    binaryDescription: (
+      <>
+        Leave blank to use <code>hermes</code> from your PATH.
       </>
     ),
   },
@@ -674,6 +693,7 @@ function SettingsRouteView() {
     cursor: Boolean(settings.cursorBinaryPath || settings.cursorApiEndpoint),
     gemini: Boolean(settings.geminiBinaryPath),
     grok: Boolean(settings.grokBinaryPath),
+    hermes: Boolean(settings.hermesBinaryPath),
     kilo: Boolean(settings.kiloBinaryPath || settings.kiloServerUrl || settings.kiloServerPassword),
     opencode: Boolean(
       settings.openCodeBinaryPath ||
@@ -696,6 +716,7 @@ function SettingsRouteView() {
     cursor: "",
     gemini: "",
     grok: "",
+    hermes: "",
     kilo: "",
     opencode: "",
     pi: "",
@@ -1177,6 +1198,7 @@ function SettingsRouteView() {
       cursor: false,
       gemini: false,
       grok: false,
+      hermes: false,
       kilo: false,
       opencode: false,
       pi: false,
@@ -1188,6 +1210,7 @@ function SettingsRouteView() {
       cursor: "",
       gemini: "",
       grok: "",
+      hermes: "",
       kilo: "",
       opencode: "",
       pi: "",
@@ -2712,6 +2735,7 @@ function SettingsRouteView() {
                     cursorApiEndpoint: defaults.cursorApiEndpoint,
                     geminiBinaryPath: defaults.geminiBinaryPath,
                     grokBinaryPath: defaults.grokBinaryPath,
+                    hermesBinaryPath: defaults.hermesBinaryPath,
                     kiloBinaryPath: defaults.kiloBinaryPath,
                     kiloServerUrl: defaults.kiloServerUrl,
                     kiloServerPassword: defaults.kiloServerPassword,
@@ -2728,6 +2752,7 @@ function SettingsRouteView() {
                     cursor: false,
                     gemini: false,
                     grok: false,
+                    hermes: false,
                     kilo: false,
                     opencode: false,
                     pi: false,

@@ -398,6 +398,7 @@ export function PluginLibrary() {
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
+  const hermesCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("hermes"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -424,6 +425,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
       },
+      hermes: {
+        plugins: supportsPluginDiscovery(hermesCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(hermesCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -443,6 +448,7 @@ export function PluginLibrary() {
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
+      hermesCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,

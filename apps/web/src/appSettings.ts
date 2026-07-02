@@ -94,6 +94,7 @@ type CustomModelSettingsKey =
   | "customCursorModels"
   | "customGeminiModels"
   | "customGrokModels"
+  | "customHermesModels"
   | "customKiloModels"
   | "customOpenCodeModels"
   | "customPiModels";
@@ -113,6 +114,7 @@ const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>
   cursor: new Set(getModelOptions("cursor").map((option) => option.slug)),
   gemini: new Set(getModelOptions("gemini").map((option) => option.slug)),
   grok: new Set(getModelOptions("grok").map((option) => option.slug)),
+  hermes: new Set(getModelOptions("hermes").map((option) => option.slug)),
   kilo: new Set(getModelOptions("kilo").map((option) => option.slug)),
   opencode: new Set(getModelOptions("opencode").map((option) => option.slug)),
   pi: new Set(getModelOptions("pi").map((option) => option.slug)),
@@ -146,6 +148,7 @@ export const AppSettingsSchema = Schema.Struct({
   cursorApiEndpoint: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   geminiBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   grokBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  hermesBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerUrl: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   kiloServerPassword: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
@@ -198,6 +201,7 @@ export const AppSettingsSchema = Schema.Struct({
   customCursorModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGeminiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customGrokModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
+  customHermesModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customKiloModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customOpenCodeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
@@ -279,6 +283,16 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     description: "Save additional Grok model slugs for the picker and `/model` command.",
     placeholder: "your-grok-model-slug",
     example: "grok-build-0.1",
+  },
+  hermes: {
+    provider: "hermes",
+    settingsKey: "customHermesModels",
+    defaultSettingsKey: "customHermesModels",
+    title: "Hermes",
+    description:
+      "Save additional Hermes profile or model slugs for the picker and provider runtime.",
+    placeholder: "profile-or-model-slug",
+    example: "coder3",
   },
   kilo: {
     provider: "kilo",
@@ -412,6 +426,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
     cursorBinaryPath: normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath),
     geminiBinaryPath: normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath),
     grokBinaryPath: normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath),
+    hermesBinaryPath: normalizeProviderBinaryPathOverride("hermes", settings.hermesBinaryPath),
     kiloBinaryPath: normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath),
     openCodeBinaryPath: normalizeProviderBinaryPathOverride(
       "opencode",
@@ -448,6 +463,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
+    hermesBinaryPath: settings.providers.hermes.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
     kiloServerPassword: settings.providers.kilo.serverPassword,
     kiloServerUrl: settings.providers.kilo.serverUrl,
@@ -494,6 +510,7 @@ function touchesProviderDiscoverySettings(patch: Partial<AppSettings>): boolean 
     hasOwn(patch, "openCodeExperimentalWebSockets") ||
     hasOwn(patch, "openCodeServerPassword") ||
     hasOwn(patch, "openCodeServerUrl") ||
+    hasOwn(patch, "hermesBinaryPath") ||
     hasOwn(patch, "piAgentDir")
   );
 }
@@ -570,6 +587,14 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
     providers.grok = {
       ...(hasOwn(patch, "grokBinaryPath") ? { binaryPath: patch.grokBinaryPath ?? "" } : {}),
       ...(hasOwn(patch, "customGrokModels") ? { customModels: patch.customGrokModels ?? [] } : {}),
+    };
+  }
+  if (hasOwn(patch, "hermesBinaryPath") || hasOwn(patch, "customHermesModels")) {
+    providers.hermes = {
+      ...(hasOwn(patch, "hermesBinaryPath") ? { binaryPath: patch.hermesBinaryPath ?? "" } : {}),
+      ...(hasOwn(patch, "customHermesModels")
+        ? { customModels: patch.customHermesModels ?? [] }
+        : {}),
     };
   }
   if (
@@ -691,14 +716,14 @@ export function getCustomModelsForProvider(
   settings: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey];
+  return settings[PROVIDER_CUSTOM_MODEL_CONFIG[provider].settingsKey] ?? [];
 }
 
 export function getDefaultCustomModelsForProvider(
   defaults: Pick<AppSettings, CustomModelSettingsKey>,
   provider: ProviderKind,
 ): readonly string[] {
-  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey];
+  return defaults[PROVIDER_CUSTOM_MODEL_CONFIG[provider].defaultSettingsKey] ?? [];
 }
 
 export function patchCustomModels(
@@ -719,6 +744,7 @@ export function getCustomModelsByProvider(
     cursor: getCustomModelsForProvider(settings, "cursor"),
     gemini: getCustomModelsForProvider(settings, "gemini"),
     grok: getCustomModelsForProvider(settings, "grok"),
+    hermes: getCustomModelsForProvider(settings, "hermes"),
     kilo: getCustomModelsForProvider(settings, "kilo"),
     opencode: getCustomModelsForProvider(settings, "opencode"),
     pi: getCustomModelsForProvider(settings, "pi"),
@@ -838,6 +864,7 @@ export function getCustomModelOptionsByProvider(
     cursor: getAppModelOptions("cursor", customModelsByProvider.cursor),
     gemini: getAppModelOptions("gemini", customModelsByProvider.gemini),
     grok: getAppModelOptions("grok", customModelsByProvider.grok),
+    hermes: getAppModelOptions("hermes", customModelsByProvider.hermes),
     kilo: getAppModelOptions("kilo", customModelsByProvider.kilo),
     opencode: getAppModelOptions("opencode", customModelsByProvider.opencode),
     pi: getAppModelOptions("pi", customModelsByProvider.pi),
@@ -854,6 +881,7 @@ export function getProviderStartOptions(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "hermesBinaryPath"
     | "kiloBinaryPath"
     | "kiloServerPassword"
     | "kiloServerUrl"
@@ -873,6 +901,7 @@ export function getProviderStartOptions(
   const cursorBinaryPath = normalizeProviderBinaryPathOverride("cursor", settings.cursorBinaryPath);
   const geminiBinaryPath = normalizeProviderBinaryPathOverride("gemini", settings.geminiBinaryPath);
   const grokBinaryPath = normalizeProviderBinaryPathOverride("grok", settings.grokBinaryPath);
+  const hermesBinaryPath = normalizeProviderBinaryPathOverride("hermes", settings.hermesBinaryPath);
   const kiloBinaryPath = normalizeProviderBinaryPathOverride("kilo", settings.kiloBinaryPath);
   const openCodeBinaryPath = normalizeProviderBinaryPathOverride(
     "opencode",
@@ -920,6 +949,13 @@ export function getProviderStartOptions(
       ? {
           grok: {
             binaryPath: grokBinaryPath,
+          },
+        }
+      : {}),
+    ...(hermesBinaryPath
+      ? {
+          hermes: {
+            binaryPath: hermesBinaryPath,
           },
         }
       : {}),
@@ -975,6 +1011,7 @@ export function getCustomBinaryPathForProvider(
     | "cursorBinaryPath"
     | "geminiBinaryPath"
     | "grokBinaryPath"
+    | "hermesBinaryPath"
     | "kiloBinaryPath"
     | "openCodeBinaryPath"
     | "piBinaryPath"
@@ -992,6 +1029,8 @@ export function getCustomBinaryPathForProvider(
       return normalizeProviderBinaryPathOverride(provider, settings.geminiBinaryPath);
     case "grok":
       return normalizeProviderBinaryPathOverride(provider, settings.grokBinaryPath);
+    case "hermes":
+      return normalizeProviderBinaryPathOverride(provider, settings.hermesBinaryPath);
     case "kilo":
       return normalizeProviderBinaryPathOverride(provider, settings.kiloBinaryPath);
     case "opencode":
