@@ -192,6 +192,7 @@ export function resolvePromptEffortFromModelSelection(
           : null)
       );
     case "grok":
+    case "droid":
       return modelSelection.options?.reasoningEffort ?? null;
     case "pi":
       return modelSelection.options?.thinkingLevel ?? null;

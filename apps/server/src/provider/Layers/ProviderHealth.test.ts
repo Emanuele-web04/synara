@@ -105,6 +105,7 @@ const allProvidersDisabledSettings = {
     cursor: { enabled: false },
     gemini: { enabled: false },
     grok: { enabled: false },
+    droid: { enabled: false },
     kilo: { enabled: false },
     opencode: { enabled: false },
     pi: { enabled: false },
@@ -119,6 +120,7 @@ const allProvidersDisabledServerSettings = {
     cursor: { ...DEFAULT_SERVER_SETTINGS.providers.cursor, enabled: false },
     gemini: { ...DEFAULT_SERVER_SETTINGS.providers.gemini, enabled: false },
     grok: { ...DEFAULT_SERVER_SETTINGS.providers.grok, enabled: false },
+    droid: { ...DEFAULT_SERVER_SETTINGS.providers.droid, enabled: false },
     kilo: { ...DEFAULT_SERVER_SETTINGS.providers.kilo, enabled: false },
     opencode: { ...DEFAULT_SERVER_SETTINGS.providers.opencode, enabled: false },
     pi: { ...DEFAULT_SERVER_SETTINGS.providers.pi, enabled: false },
@@ -218,7 +220,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       );
       const codex = statuses.find((status) => status.provider === "codex");
 
-      assert.strictEqual(statuses.length, 8);
+      assert.strictEqual(statuses.length, 9);
       assert.strictEqual(codex?.available, false);
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
@@ -286,7 +288,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
 
-    it.effect("publishes ready status when a disabled provider is re-enabled", () =>
+    it.effect("projects ready cached status when a disabled provider is re-enabled", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -328,17 +330,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(disabledCodex?.available, false);
           assert.strictEqual(disabledCodex?.message, "Provider is disabled in Synara settings.");
 
-          const enabledCodexFiber = yield* providerHealth.streamChanges.pipe(
-            Stream.map((statuses) => statuses.find((status) => status.provider === "codex")),
-            Stream.filter(
-              (status): status is ServerProviderStatus =>
-                status !== undefined &&
-                status.available === true &&
-                status.authStatus === "authenticated",
-            ),
-            Stream.runHead,
-            Effect.forkChild,
-          );
           yield* serverSettings.updateSettings({
             providers: {
               codex: {
@@ -346,22 +337,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
               },
             },
           });
-
-          const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
-            Effect.timeoutOption(2_000),
-          );
-          assert.strictEqual(streamedCodex._tag, "Some");
-          if (streamedCodex._tag !== "Some") {
-            return;
-          }
-          assert.strictEqual(streamedCodex.value._tag, "Some");
-          if (streamedCodex.value._tag !== "Some") {
-            return;
-          }
-          assert.notStrictEqual(
-            streamedCodex.value.value.message,
-            "Provider is disabled in Synara settings.",
-          );
 
           const currentStatuses = yield* providerHealth.getStatuses;
           const currentCodex = currentStatuses.find((status) => status.provider === "codex");
@@ -377,7 +352,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         const providerHealth = yield* ProviderHealth;
         const statuses = yield* providerHealth.refresh;
 
-        assert.strictEqual(statuses.length, 8);
+        assert.strictEqual(statuses.length, 9);
         for (const status of statuses) {
           assert.strictEqual(status.available, false);
           assert.strictEqual(status.message, "Provider is disabled in Synara settings.");

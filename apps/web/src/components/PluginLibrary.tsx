@@ -91,6 +91,7 @@ const PROVIDER_DISCOVERY_ORDER: ReadonlyArray<ProviderKind> = [
   "cursor",
   "gemini",
   "grok",
+  "droid",
   "kilo",
   "opencode",
   "pi",
@@ -398,6 +399,7 @@ export function PluginLibrary() {
   const cursorCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("cursor"));
   const geminiCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("gemini"));
   const grokCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("grok"));
+  const droidCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("droid"));
   const kiloCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("kilo"));
   const openCodeCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("opencode"));
   const piCapabilitiesQuery = useQuery(providerComposerCapabilitiesQueryOptions("pi"));
@@ -424,6 +426,10 @@ export function PluginLibrary() {
         plugins: supportsPluginDiscovery(grokCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(grokCapabilitiesQuery.data),
       },
+      droid: {
+        plugins: supportsPluginDiscovery(droidCapabilitiesQuery.data),
+        skills: supportsSkillDiscovery(droidCapabilitiesQuery.data),
+      },
       kilo: {
         plugins: supportsPluginDiscovery(kiloCapabilitiesQuery.data),
         skills: supportsSkillDiscovery(kiloCapabilitiesQuery.data),
@@ -443,6 +449,7 @@ export function PluginLibrary() {
       cursorCapabilitiesQuery.data,
       geminiCapabilitiesQuery.data,
       grokCapabilitiesQuery.data,
+      droidCapabilitiesQuery.data,
       kiloCapabilitiesQuery.data,
       openCodeCapabilitiesQuery.data,
       piCapabilitiesQuery.data,

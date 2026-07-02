@@ -163,6 +163,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          droid: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -182,6 +183,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          droid: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -201,6 +203,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          droid: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -220,6 +223,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          droid: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -239,6 +243,7 @@ describe("resolveAppModelSelection", () => {
           cursor: [],
           gemini: [],
           grok: [],
+          droid: [],
           kilo: [],
           opencode: [],
           pi: [],
@@ -354,6 +359,7 @@ describe("normalizeStoredAppSettings", () => {
         cursorBinaryPath: "cursor-agent",
         geminiBinaryPath: "gemini",
         grokBinaryPath: "grok",
+        droidBinaryPath: "droid",
         kiloBinaryPath: "kilo",
         openCodeBinaryPath: "opencode",
         piBinaryPath: "pi",
@@ -367,6 +373,7 @@ describe("normalizeStoredAppSettings", () => {
       cursorBinaryPath: "",
       geminiBinaryPath: "",
       grokBinaryPath: "",
+      droidBinaryPath: "",
       kiloBinaryPath: "",
       openCodeBinaryPath: "",
       piBinaryPath: "",
@@ -394,6 +401,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "/usr/local/bin/agent",
         geminiBinaryPath: "/usr/local/bin/gemini",
         grokBinaryPath: "/usr/local/bin/grok",
+        droidBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -434,6 +442,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "",
         geminiBinaryPath: "",
         grokBinaryPath: "",
+        droidBinaryPath: "",
         kiloBinaryPath: "",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -457,6 +466,7 @@ describe("getProviderStartOptions", () => {
         cursorBinaryPath: "cursor-agent",
         geminiBinaryPath: "gemini",
         grokBinaryPath: "grok",
+        droidBinaryPath: "droid",
         kiloBinaryPath: "kilo",
         kiloServerPassword: "",
         kiloServerUrl: "",
@@ -478,6 +488,7 @@ describe("provider-indexed custom model settings", () => {
     customCursorModels: ["cursor/custom-model"],
     customGeminiModels: ["gemini/custom-flash"],
     customGrokModels: ["grok/custom-fast"],
+    customDroidModels: ["claude-opus-4-8-custom"],
     customKiloModels: ["kilo/kilo-auto/free"],
     customOpenCodeModels: ["openrouter/gpt-oss-120b"],
     customPiModels: ["anthropic/custom-pi"],
@@ -490,6 +501,7 @@ describe("provider-indexed custom model settings", () => {
       "cursor",
       "gemini",
       "grok",
+      "droid",
       "kilo",
       "opencode",
       "pi",
@@ -502,6 +514,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getCustomModelsForProvider(settings, "cursor")).toEqual(["cursor/custom-model"]);
     expect(getCustomModelsForProvider(settings, "gemini")).toEqual(["gemini/custom-flash"]);
     expect(getCustomModelsForProvider(settings, "grok")).toEqual(["grok/custom-fast"]);
+    expect(getCustomModelsForProvider(settings, "droid")).toEqual(["claude-opus-4-8-custom"]);
     expect(getCustomModelsForProvider(settings, "kilo")).toEqual(["kilo/kilo-auto/free"]);
     expect(getCustomModelsForProvider(settings, "opencode")).toEqual(["openrouter/gpt-oss-120b"]);
     expect(getCustomModelsForProvider(settings, "pi")).toEqual(["anthropic/custom-pi"]);
@@ -514,6 +527,7 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: ["cursor/default-model"],
       customGeminiModels: ["gemini/default-flash"],
       customGrokModels: ["grok/default-fast"],
+      customDroidModels: ["droid/default-model"],
       customKiloModels: ["kilo/default-auto"],
       customOpenCodeModels: ["openai/gpt-5"],
       customPiModels: ["anthropic/default-pi"],
@@ -526,6 +540,7 @@ describe("provider-indexed custom model settings", () => {
     expect(getDefaultCustomModelsForProvider(defaults, "cursor")).toEqual(["cursor/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "gemini")).toEqual(["gemini/default-flash"]);
     expect(getDefaultCustomModelsForProvider(defaults, "grok")).toEqual(["grok/default-fast"]);
+    expect(getDefaultCustomModelsForProvider(defaults, "droid")).toEqual(["droid/default-model"]);
     expect(getDefaultCustomModelsForProvider(defaults, "kilo")).toEqual(["kilo/default-auto"]);
     expect(getDefaultCustomModelsForProvider(defaults, "opencode")).toEqual(["openai/gpt-5"]);
     expect(getDefaultCustomModelsForProvider(defaults, "pi")).toEqual(["anthropic/default-pi"]);
@@ -552,6 +567,12 @@ describe("provider-indexed custom model settings", () => {
   it("patches custom models for grok", () => {
     expect(patchCustomModels("grok", ["grok/custom-fast"])).toEqual({
       customGrokModels: ["grok/custom-fast"],
+    });
+  });
+
+  it("patches custom models for droid", () => {
+    expect(patchCustomModels("droid", ["droid/custom-model"])).toEqual({
+      customDroidModels: ["droid/custom-model"],
     });
   });
 
@@ -586,6 +607,7 @@ describe("provider-indexed custom model settings", () => {
       cursor: ["cursor/custom-model"],
       gemini: ["gemini/custom-flash"],
       grok: ["grok/custom-fast"],
+      droid: ["claude-opus-4-8-custom"],
       kilo: ["kilo/kilo-auto/free"],
       opencode: ["openrouter/gpt-oss-120b"],
       pi: ["anthropic/custom-pi"],
@@ -628,6 +650,7 @@ describe("provider-indexed custom model settings", () => {
       customCursorModels: [" composer-2 ", "cursor/custom-model", "cursor/custom-model"],
       customGeminiModels: [" auto-gemini-3 ", "gemini/custom-flash", "gemini/custom-flash"],
       customGrokModels: [" grok-build ", "grok/custom-fast", "grok/custom-fast"],
+      customDroidModels: [" opus ", "droid/custom-model", "droid/custom-model"],
       customKiloModels: [" kilo/kilo-auto/free ", "kilo/kilo-auto/free"],
       customOpenCodeModels: [
         " openai/gpt-5 ",
@@ -653,6 +676,9 @@ describe("provider-indexed custom model settings", () => {
     ).toBe(true);
     expect(
       modelOptionsByProvider.gemini.filter((option) => option.slug === "gemini/custom-flash"),
+    ).toHaveLength(1);
+    expect(
+      modelOptionsByProvider.droid.filter((option) => option.slug === "droid/custom-model"),
     ).toHaveLength(1);
     expect(
       modelOptionsByProvider.cursor.filter((option) => option.slug === "cursor/custom-model"),
@@ -710,6 +736,7 @@ describe("AppSettingsSchema", () => {
       customCursorModels: [],
       customGeminiModels: [],
       customGrokModels: [],
+      customDroidModels: [],
       customKiloModels: [],
       customOpenCodeModels: [],
       customPiModels: [],

@@ -52,6 +52,7 @@ export const PROVIDER_OPTIONS: Array<{
   { value: "cursor", label: "Cursor", available: true },
   { value: "gemini", label: "Gemini", available: true },
   { value: "grok", label: "Grok", available: true },
+  { value: "droid", label: "Droid", available: true },
   { value: "kilo", label: "Kilo", available: true },
   { value: "opencode", label: "OpenCode", available: true },
   { value: "pi", label: "Pi", available: true },
