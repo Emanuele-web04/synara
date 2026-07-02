@@ -5,7 +5,9 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import {
+  copyFileSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -99,7 +101,7 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
   return output.join("\n");
 }
 
-function ensureCodexOverlaySymlink(input: {
+function ensureCodexOverlayMirror(input: {
   readonly entryName: string;
   readonly sourcePath: string;
   readonly targetPath: string;
@@ -130,7 +132,22 @@ function ensureCodexOverlaySymlink(input: {
     }
   }
 
-  symlinkSync(input.sourcePath, input.targetPath, input.type);
+  try {
+    symlinkSync(input.sourcePath, input.targetPath, input.type);
+  } catch (symlinkError) {
+    if (input.type !== "file") {
+      throw symlinkError;
+    }
+
+    try {
+      linkSync(input.sourcePath, input.targetPath);
+    } catch {
+      if (!CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
+        throw symlinkError;
+      }
+      copyFileSync(input.sourcePath, input.targetPath);
+    }
+  }
 }
 
 function prepareDpCodeCodexHomeOverlay(input: {
@@ -145,24 +162,33 @@ function prepareDpCodeCodexHomeOverlay(input: {
 
   mkdirSync(overlayHomePath, { recursive: true });
 
-  try {
-    for (const entry of readdirSync(sourceHomePath)) {
-      if (entry === "config.toml") {
-        continue;
-      }
-      const sourcePath = path.join(sourceHomePath, entry);
-      const targetPath = path.join(overlayHomePath, entry);
+  const sourceEntries = (() => {
+    try {
+      return readdirSync(sourceHomePath);
+    } catch {
+      return [];
+    }
+  })();
+
+  for (const entry of sourceEntries) {
+    if (entry === "config.toml") {
+      continue;
+    }
+    const sourcePath = path.join(sourceHomePath, entry);
+    const targetPath = path.join(overlayHomePath, entry);
+    try {
       const stat = lstatSync(sourcePath);
-      ensureCodexOverlaySymlink({
+      ensureCodexOverlayMirror({
         entryName: entry,
         sourcePath,
         targetPath,
         type: stat.isDirectory() ? "dir" : "file",
       });
+    } catch {
+      // Keep preparing the overlay if one mirrored entry cannot be linked.
+      // Codex can lazily recreate non-shared state, while shared auth has a
+      // hard-link/copy fallback above for Windows hosts without symlink rights.
     }
-  } catch {
-    // If the source home is partially missing, Codex can still start with the
-    // overlay config and create any required state lazily.
   }
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
