@@ -174,8 +174,12 @@ const makeAcpSessionRuntime = (
     const configOptionsRef = yield* Ref.make(sessionConfigOptionsFromSetup(undefined));
     const startStateRef = yield* Ref.make<AcpStartState>({ _tag: "NotStarted" });
     // session/load can replay a large history before the consumer attaches; drop
-    // those notifications so they never accumulate in the unbounded queue.
-    const acceptingSessionUpdatesRef = yield* Ref.make(false);
+    // those notifications so they never accumulate in the unbounded queue. For
+    // resumed sessions the gate stays closed past start() and only opens once the
+    // adapter attaches a consumer via getEvents(), because the agent may keep
+    // replaying after replying to session/load. Plain mutable state (not a Ref)
+    // so getEvents() can open the gate synchronously at attach time.
+    let acceptingSessionUpdates = false;
 
     const logRequest = (event: AcpSessionRequestLogEvent) =>
       options.requestLogger ? options.requestLogger(event) : Effect.void;
@@ -247,18 +251,16 @@ const makeAcpSessionRuntime = (
     const acp = ServiceMap.getUnsafe(acpContext, EffectAcpClient.AcpClient);
 
     yield* acp.handleSessionUpdate((notification) =>
-      Ref.get(acceptingSessionUpdatesRef).pipe(
-        Effect.flatMap((accepting) =>
-          accepting
-            ? handleSessionUpdate({
-                queue: eventQueue,
-                modeStateRef,
-                toolCallsRef,
-                assistantSegmentRef,
-                params: notification,
-              })
-            : Effect.void,
-        ),
+      Effect.suspend(() =>
+        acceptingSessionUpdates
+          ? handleSessionUpdate({
+              queue: eventQueue,
+              modeStateRef,
+              toolCallsRef,
+              assistantSegmentRef,
+              params: notification,
+            })
+          : Effect.void,
       ),
     );
 
@@ -428,6 +430,7 @@ const makeAcpSessionRuntime = (
         | EffectAcpSchema.LoadSessionResponse
         | EffectAcpSchema.NewSessionResponse
         | EffectAcpSchema.ResumeSessionResponse;
+      let resumedExistingSession = false;
       if (options.resumeSessionId) {
         const loadPayload = {
           sessionId: options.resumeSessionId,
@@ -442,6 +445,7 @@ const makeAcpSessionRuntime = (
         if (Exit.isSuccess(resumed)) {
           sessionId = options.resumeSessionId;
           sessionSetupResult = resumed.value;
+          resumedExistingSession = true;
         } else {
           const createPayload = {
             cwd: options.cwd,
@@ -473,7 +477,13 @@ const makeAcpSessionRuntime = (
       yield* Ref.set(configOptionsRef, sessionConfigOptionsFromSetup(sessionSetupResult));
       yield* Ref.set(toolCallsRef, new Map());
       yield* Ref.set(assistantSegmentRef, { nextSegmentIndex: 0 });
-      yield* Ref.set(acceptingSessionUpdatesRef, true);
+      // A resumed session may keep replaying history after session/load returns;
+      // keep dropping until getEvents() attaches a consumer so the replay cannot
+      // pile up in the unbounded queue. Fresh sessions have no replay, so events
+      // may buffer from here until the consumer attaches.
+      if (!resumedExistingSession) {
+        acceptingSessionUpdates = true;
+      }
 
       const nextState = {
         sessionId,
@@ -533,7 +543,13 @@ const makeAcpSessionRuntime = (
       handleExtRequest: acp.handleExtRequest,
       handleExtNotification: acp.handleExtNotification,
       start: () => start,
-      getEvents: () => Stream.fromQueue(eventQueue),
+      getEvents: () => {
+        // Attaching a consumer opens the session/update gate: from here on the
+        // queue is drained, so accepting notifications can no longer grow it
+        // without bound (see acceptingSessionUpdates above).
+        acceptingSessionUpdates = true;
+        return Stream.fromQueue(eventQueue);
+      },
       getModeState: Ref.get(modeStateRef),
       getConfigOptions: Ref.get(configOptionsRef),
       prompt: (payload) =>

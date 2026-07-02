@@ -1104,6 +1104,29 @@ function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      // Providers (Grok auto-compaction, Pi compaction_end) close their
+      // compaction rows via item.completed; without this branch the earlier
+      // "Compacting conversation..." activity never resolves.
+      if (event.payload.itemType === "context_compaction") {
+        const failed = event.payload.status === "failed";
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: failed ? "error" : "info",
+            kind: "context-compaction",
+            summary: failed ? "Context compaction failed" : "Context compacted",
+            payload: toActivityPayload({
+              itemType: event.payload.itemType,
+              status: event.payload.status,
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...activityDataField(event.payload.data),
+            }),
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
