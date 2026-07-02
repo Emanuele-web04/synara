@@ -338,6 +338,22 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("reports the full matching count when the limit truncates the thread list", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_list_threads",
+        args: { limit: 1 },
+      });
+      const payload = toolResultJson(response.result);
+      const threads = payload.threads as Array<Record<string, unknown>>;
+      assert.equal(threads.length, 1);
+      assert.equal(payload.totalMatching, 2);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("creates a standalone cross-provider thread and dispatches the initial turn", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {

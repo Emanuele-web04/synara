@@ -24,6 +24,16 @@ const AGENT_GATEWAY_SECRET_BYTES = 32;
 
 export const AGENT_GATEWAY_MCP_PATH = "/mcp";
 
+// Providers run as local child processes, so they must target a host the HTTP
+// server actually listens on. Wildcard binds cover loopback; an explicit host
+// (e.g. `::1` or a LAN address) does not, so reuse it verbatim.
+export function resolveAgentGatewayEndpointHost(configHost: string | undefined): string {
+  if (configHost === undefined || configHost === "0.0.0.0" || configHost === "::") {
+    return "127.0.0.1";
+  }
+  return configHost.includes(":") ? `[${configHost}]` : configHost;
+}
+
 export const makeAgentGatewayCredentials = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const secretStore = yield* ServerSecretStore;
@@ -32,9 +42,8 @@ export const makeAgentGatewayCredentials = Effect.gen(function* () {
     AGENT_GATEWAY_SECRET_BYTES,
   );
 
-  // Providers run as local child processes, so the loopback address is always
-  // reachable regardless of which interface the server binds publicly.
-  const mcpEndpointUrl = `http://127.0.0.1:${config.port}${AGENT_GATEWAY_MCP_PATH}`;
+  const endpointHost = resolveAgentGatewayEndpointHost(config.host);
+  const mcpEndpointUrl = `http://${endpointHost}:${config.port}${AGENT_GATEWAY_MCP_PATH}`;
   const stdioProxyScriptPath = yield* ensureAgentGatewayStdioProxyScript(config.stateDir);
 
   const issueSessionToken: AgentGatewayCredentialsShape["issueSessionToken"] = (threadId) =>

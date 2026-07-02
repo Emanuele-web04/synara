@@ -255,14 +255,15 @@ export const makeAgentGateway = Effect.gen(function* () {
         const snapshot = yield* snapshotQuery
           .getShellSnapshot()
           .pipe(Effect.mapError((error) => new ToolInputError(errorText(error))));
-        const threads = snapshot.threads
+        const matching = snapshot.threads
           .filter((thread) => (projectId ? thread.projectId === projectId : true))
           .filter((thread) => (parentThreadId ? thread.parentThreadId === parentThreadId : true))
           .filter((thread) => (includeArchived ? true : (thread.archivedAt ?? null) === null))
-          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+          .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+        const threads = matching
           .slice(0, limit)
           .map((thread) => summarizeThreadShell(thread, context.callerThreadId));
-        return mcpToolResultJson({ threads, totalMatching: threads.length });
+        return mcpToolResultJson({ threads, totalMatching: matching.length });
       }).pipe(Effect.catch((error) => Effect.succeed(mcpToolResultError(errorText(error))))),
   };
 

@@ -587,6 +587,24 @@ describe("pin helpers", () => {
     ).toEqual([threads[0]]);
   });
 
+  it("filters descendants of pinned threads so they cannot leak as project roots", () => {
+    const threads = [
+      makeThread("thread-1"),
+      // Child listed before its own child to exercise the multi-pass walk.
+      {
+        ...makeThread("grandchild-1"),
+        parentThreadId: "child-1" as ThreadId,
+      },
+      {
+        ...makeThread("child-1"),
+        parentThreadId: "thread-1" as ThreadId,
+      },
+      makeThread("thread-2"),
+    ];
+
+    expect(getUnpinnedThreadsForSidebar(threads, ["thread-1" as ThreadId])).toEqual([threads[3]]);
+  });
+
   it("lets an optimistic unpin override server and persisted pinned state", () => {
     const threads = [
       {
