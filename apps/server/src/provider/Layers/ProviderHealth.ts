@@ -3042,7 +3042,17 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
       }
 
       yield* serverSettings.streamChanges.pipe(
-        Stream.runForEach(() => ensureRefreshFiber().pipe(Effect.flatMap(Fiber.join), Effect.asVoid)),
+        Stream.runForEach(() =>
+          Effect.gen(function* () {
+            // If this settings change lands during a CLI probe, make the shared
+            // refresh fiber run (or schedule) one more pass after the current
+            // snapshot so the change cannot be hidden by the in-flight result.
+            if (yield* Ref.get(refreshFiberRef)) {
+              yield* Ref.set(refreshNeedsFollowUpRef, true);
+            }
+            yield* ensureRefreshFiber().pipe(Effect.flatMap(Fiber.join), Effect.asVoid);
+          }),
+        ),
         Effect.forkIn(refreshScope),
       );
 

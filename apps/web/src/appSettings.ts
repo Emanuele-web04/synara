@@ -15,6 +15,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   DEFAULT_SERVER_SETTINGS_VIEW,
   GIT_TEXT_GENERATION_PROVIDERS,
+  type ProviderInstanceConfig,
   ProviderInstanceConfigMap,
   type ProviderDriverKind,
   ProviderInstanceId,
@@ -1411,13 +1412,55 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
   return appSettingsPatchToServerSettingsPatch(patch);
 }
 
+// Browser storage must never hold plaintext secrets: the server materializes
+// sensitive values from the update patch and returns them redacted, so the
+// locally persisted copy keeps only the redaction markers.
+export function redactProviderInstanceSecretsForClient(
+  providerInstances: ProviderInstanceConfigMap,
+): ProviderInstanceConfigMap {
+  let didChange = false;
+  const redacted: Record<string, ProviderInstanceConfig> = {};
+  for (const [instanceId, instance] of Object.entries(providerInstances)) {
+    let nextInstance = instance;
+    if (instance.environment?.some((entry) => entry.sensitive && entry.value)) {
+      nextInstance = {
+        ...nextInstance,
+        environment: instance.environment.map((entry) =>
+          entry.sensitive && entry.value
+            ? { name: entry.name, value: "", sensitive: true, valueRedacted: true }
+            : entry,
+        ),
+      };
+    }
+    const config = isRecord(nextInstance.config) ? nextInstance.config : undefined;
+    if (config && typeof config.serverPassword === "string" && config.serverPassword) {
+      nextInstance = {
+        ...nextInstance,
+        config: { ...config, serverPassword: "", serverPasswordRedacted: true },
+      };
+    }
+    if (nextInstance !== instance) {
+      didChange = true;
+    }
+    redacted[instanceId] = nextInstance;
+  }
+  return didChange ? (redacted as ProviderInstanceConfigMap) : providerInstances;
+}
+
+function redactAppSettingsSecretsForClient(settings: AppSettings): AppSettings {
+  const redactedInstances = redactProviderInstanceSecretsForClient(settings.providerInstances);
+  return redactedInstances === settings.providerInstances
+    ? settings
+    : { ...settings, providerInstances: redactedInstances };
+}
+
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
-  return {
+  return redactAppSettingsSecretsForClient({
     ...normalizeAppSettings(settings),
     // Provider enablement belongs to the connected server. Scrub legacy values
     // so a browser profile cannot project one server's shutdown state onto another.
     disabledProviders: [],
-  };
+  });
 }
 
 export function applyLocalAppSettingsPatch(

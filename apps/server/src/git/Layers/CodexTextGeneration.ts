@@ -13,6 +13,10 @@ import { resolveCodexHome } from "@synara/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@synara/shared/git";
 
 import { resolveProviderAttachmentPath } from "../../provider/providerAttachmentPaths.ts";
+import {
+  resolveCodexHomeOverlayAccountSegment,
+  resolveSynaraCodexHomeOverlayPath,
+} from "../../codexHomePaths.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
 import { formatMissingCodexWorkingDirectoryError } from "../../codexWorkingDirectory.ts";
 import { ServerConfig } from "../../config.ts";
@@ -184,11 +188,28 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(process.env);
       const sourceAuthHome = authHomePath?.trim();
       // Accounts read auth from their shadow home or their own dedicated home;
-      // only accounts routed at the shared env-derived home must stay isolated
-      // from the default account's credentials.
+      // accounts routed at the shared env-derived home keep their login inside
+      // Synara's account overlay, so copy from there instead of the default
+      // account's credentials.
       const hasDedicatedAccountHome = Boolean(sourceHomePath?.trim());
+      const trimmedAccountId = accountId?.trim();
+      const accountOverlayAuthHome = (() => {
+        if (!trimmedAccountId || sourceAuthHome || hasDedicatedAccountHome) {
+          return undefined;
+        }
+        const accountSegment = resolveCodexHomeOverlayAccountSegment({
+          homePath: sourceCodexHome,
+          accountId: trimmedAccountId,
+        });
+        return accountSegment
+          ? resolveSynaraCodexHomeOverlayPath(process.env, sourceCodexHome, accountSegment)
+          : undefined;
+      })();
       const shouldCopyAuth =
-        !accountId?.trim() || Boolean(sourceAuthHome) || hasDedicatedAccountHome;
+        !trimmedAccountId ||
+        Boolean(sourceAuthHome) ||
+        hasDedicatedAccountHome ||
+        Boolean(accountOverlayAuthHome);
       const isolatedHomePath = path.join(
         tempDir,
         `synara-codex-home-${process.pid}-${randomUUID()}`,
@@ -228,7 +249,9 @@ const makeCodexTextGeneration = Effect.gen(function* () {
 
       if (shouldCopyAuth) {
         const sourceAuth = yield* fileSystem
-          .readFileString(path.join(sourceAuthHome || sourceCodexHome, "auth.json"))
+          .readFileString(
+            path.join(sourceAuthHome || accountOverlayAuthHome || sourceCodexHome, "auth.json"),
+          )
           .pipe(Effect.catch(() => Effect.succeed(null)));
         if (sourceAuth !== null) {
           yield* fileSystem
