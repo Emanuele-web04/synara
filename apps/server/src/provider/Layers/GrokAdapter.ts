@@ -1591,7 +1591,16 @@ export function makeGrokAdapter(
           payload: { ...(model ? { model } : {}) },
         });
 
-        const runPrompt = ctx.acp.prompt({ prompt: promptParts }).pipe(
+        const runPrompt = Effect.suspend(() =>
+          // interruptTurn can land between the pre-dispatch check above and this
+          // fiber being registered as ctx.activePromptFiber (turn.started publish,
+          // fork scheduling); honor the flag and a concurrent stop here so a
+          // cancelled turn is never prompted — self-interrupting routes through
+          // the onInterrupt branch below, which completes the turn as cancelled.
+          ctx.pendingTurnInterrupted || ctx.stopped
+            ? Effect.interrupt
+            : ctx.acp.prompt({ prompt: promptParts }),
+        ).pipe(
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
           ),
@@ -1841,125 +1850,134 @@ export function makeGrokAdapter(
         if (preLockCtx.resumeReplayReady !== undefined) {
           yield* Deferred.await(preLockCtx.resumeReplayReady);
         }
-        return yield* compactThreadLocked(threadId);
-      });
-
-    const compactThreadLocked = (threadId: ThreadId) =>
-      withThreadLock(
-        threadId,
-        Effect.gen(function* () {
-          const ctx = yield* requireSession(threadId);
-          if (ctx.resumeReplayReady !== undefined) {
-            // The session was restarted while waiting above and its new replay
-            // window is still settling; reject instead of blocking the lock.
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "compactThread",
-              issue: "Cannot compact while the resumed Grok thread is still replaying history.",
-            });
-          }
-          // turnStarting covers a sendTurn that is past its compaction check but
-          // has not assigned ctx.activeTurnId yet; the check and the flag write
-          // below stay in one synchronous block so the two paths cannot interleave.
-          if (ctx.activeTurnId !== undefined || ctx.turnStarting) {
-            return yield* new ProviderAdapterValidationError({
-              provider: PROVIDER,
-              operation: "compactThread",
-              issue: "Cannot compact while a Grok turn is still active.",
-            });
-          }
-
-          ctx.compactingThread = true;
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.updated",
-            status: "inProgress",
-            title: "Compacting context",
-          });
-
-          const compactResult = yield* ctx.acp
-            .prompt({
-              prompt: [{ type: "text", text: GROK_COMPACT_PROMPT }],
-            })
-            .pipe(
-              Effect.mapError((error) =>
-                mapAcpToAdapterError(PROVIDER, threadId, "session/prompt", error),
-              ),
-              Effect.exit,
-            );
-
-          // compactingThread stays set until the ensuring block below clears it:
-          // sendTurn only rejects while the flag is true, so clearing before the
-          // completion/thread-state events publish would let a new turn start and
-          // then be trailed by stale compaction bookkeeping.
-
-          if (Exit.isFailure(compactResult)) {
-            // Interruption (session stopping) is not a compaction failure; let it unwind.
-            if (Cause.hasInterruptsOnly(compactResult.cause)) {
-              return yield* Effect.failCause(compactResult.cause);
-            }
-            const squashed = Cause.squash(compactResult.cause);
-            const detail = squashed instanceof Error ? squashed.message : String(squashed);
-            yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-              lifecycle: "item.completed",
-              status: "failed",
-              title: "Context compaction failed",
-              detail,
-            });
-            return yield* Effect.fail(
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail,
-              }),
-            );
-          }
-
-          // ACP can answer a /compact prompt successfully with stopReason
-          // "cancelled" (user interrupt via session/cancel); that is not a
-          // completed compaction and must not be persisted as one.
-          if (compactResult.value.stopReason === "cancelled") {
-            const detail = "Grok context compaction was cancelled before it completed.";
-            yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-              lifecycle: "item.completed",
-              status: "failed",
-              title: "Context compaction cancelled",
-              detail,
-            });
-            return yield* Effect.fail(
-              new ProviderAdapterRequestError({
-                provider: PROVIDER,
-                method: "session/prompt",
-                detail,
-              }),
-            );
-          }
-
-          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
-            lifecycle: "item.completed",
-            status: "completed",
-            title: "Context compacted",
-          });
-          yield* offerRuntimeEvent({
-            type: "thread.state.changed",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: ctx.threadId,
-            payload: {
-              state: "compacted",
-              detail: { reason: "provider.compactThread" },
-            },
-          });
-        }).pipe(
+        // Claim the compaction slot under the thread lock, but run the
+        // (potentially long) /compact prompt outside it: stopSession/restart
+        // take the same lock, and a hung compaction must never block
+        // stopSessionInternal from cancelling or killing the child.
+        const ctx = yield* withThreadLock(threadId, claimGrokCompactionSlot(threadId));
+        return yield* runGrokCompaction(ctx).pipe(
+          // compactingThread stays set until this clears it: sendTurn only
+          // rejects while the flag is true, so clearing before the
+          // completion/thread-state events publish would let a new turn start
+          // and then be trailed by stale compaction bookkeeping.
           Effect.ensuring(
             Effect.sync(() => {
-              const ctx = sessions.get(threadId);
-              if (ctx) {
-                ctx.compactingThread = false;
-              }
+              ctx.compactingThread = false;
             }),
           ),
-        ),
-      );
+        );
+      });
+
+    const claimGrokCompactionSlot = (threadId: ThreadId) =>
+      Effect.gen(function* () {
+        const ctx = yield* requireSession(threadId);
+        if (ctx.resumeReplayReady !== undefined) {
+          // The session was restarted while waiting above and its new replay
+          // window is still settling; reject instead of blocking the lock.
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "compactThread",
+            issue: "Cannot compact while the resumed Grok thread is still replaying history.",
+          });
+        }
+        // The prompt runs outside the thread lock, so a concurrent /compact can
+        // reach this point while one is already in flight; reject it here.
+        if (ctx.compactingThread) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "compactThread",
+            issue: "A Grok context compaction is already in progress.",
+          });
+        }
+        // turnStarting covers a sendTurn that is past its compaction check but
+        // has not assigned ctx.activeTurnId yet; the check and the flag write
+        // below stay in one synchronous block so the two paths cannot interleave.
+        if (ctx.activeTurnId !== undefined || ctx.turnStarting) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "compactThread",
+            issue: "Cannot compact while a Grok turn is still active.",
+          });
+        }
+        ctx.compactingThread = true;
+        return ctx;
+      });
+
+    const runGrokCompaction = (ctx: GrokSessionContext) =>
+      Effect.gen(function* () {
+        yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+          lifecycle: "item.updated",
+          status: "inProgress",
+          title: "Compacting context",
+        });
+
+        const compactResult = yield* ctx.acp
+          .prompt({
+            prompt: [{ type: "text", text: GROK_COMPACT_PROMPT }],
+          })
+          .pipe(
+            Effect.mapError((error) =>
+              mapAcpToAdapterError(PROVIDER, ctx.threadId, "session/prompt", error),
+            ),
+            Effect.exit,
+          );
+
+        if (Exit.isFailure(compactResult)) {
+          // Interruption (session stopping) is not a compaction failure; let it unwind.
+          if (Cause.hasInterruptsOnly(compactResult.cause)) {
+            return yield* Effect.failCause(compactResult.cause);
+          }
+          const squashed = Cause.squash(compactResult.cause);
+          const detail = squashed instanceof Error ? squashed.message : String(squashed);
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.completed",
+            status: "failed",
+            title: "Context compaction failed",
+            detail,
+          });
+          return yield* Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail,
+            }),
+          );
+        }
+
+        // ACP can answer a /compact prompt successfully with stopReason
+        // "cancelled" (user interrupt via session/cancel); that is not a
+        // completed compaction and must not be persisted as one.
+        if (compactResult.value.stopReason === "cancelled") {
+          const detail = "Grok context compaction was cancelled before it completed.";
+          yield* emitGrokContextCompactionRuntimeEvent(ctx, {
+            lifecycle: "item.completed",
+            status: "failed",
+            title: "Context compaction cancelled",
+            detail,
+          });
+          return yield* Effect.fail(
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "session/prompt",
+              detail,
+            }),
+          );
+        }
+
+        // Success: thread.state.changed is the single terminal signal —
+        // ingestion projects it into the "Context compacted manually" row, so
+        // emitting an item.completed row here too would duplicate it.
+        yield* offerRuntimeEvent({
+          type: "thread.state.changed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          payload: {
+            state: "compacted",
+            detail: { reason: "provider.compactThread" },
+          },
+        });
+      });
 
     const listModels: NonNullable<GrokAdapterShape["listModels"]> = (input) => {
       const binaryPath = input.binaryPath?.trim() || grokSettings.binaryPath || "grok";
