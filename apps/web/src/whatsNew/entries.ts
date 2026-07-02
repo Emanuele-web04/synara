@@ -22,6 +22,22 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    // Next release: 0.3.7 already shipped, so features landing now go here — a
+    // late addition to a released version would never re-open the dialog.
+    version: "0.3.8",
+    date: "Jul 2",
+    features: [
+      {
+        id: "automation-sent-label",
+        title: "⏱ Automation messages are labeled",
+        description:
+          "Prompts sent by an automation now carry a lightweight 'Sent via Automation' label above the bubble, so you can tell at a glance which turns you typed and which a scheduled or heartbeat run kicked off.",
+        details:
+          "User turns dispatched by the automation engine now persist a `dispatchOrigin` on the message end to end (command → event → projection → snapshot), and the transcript renders a clock-marked chip that mirrors the existing steering label.",
+      },
+    ],
+  },
+  {
     version: "0.3.7",
     date: "Jul 2",
     features: [

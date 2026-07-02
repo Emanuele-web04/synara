@@ -238,7 +238,11 @@ export function ActivityHeatmap({
               }
               return (
                 <Tooltip key={slot.cell.day}>
-                  <TooltipTrigger render={<div className={cellClassName} style={cellStyle} />} />
+                  {/* delay={0}: heatmap tooltips open instantly on hover (no Base UI 600ms default). */}
+                  <TooltipTrigger
+                    delay={0}
+                    render={<div className={cellClassName} style={cellStyle} />}
+                  />
                   <TooltipPopup side="top" sideOffset={6}>
                     {heatmapTooltipText(slot.cell, tooltipUnit)}
                   </TooltipPopup>

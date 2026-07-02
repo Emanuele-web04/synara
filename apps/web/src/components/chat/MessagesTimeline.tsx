@@ -44,6 +44,7 @@ import {
   ChangesIcon,
   CircleAlertIcon,
   CircleQuestionIcon,
+  ClockIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
@@ -79,6 +80,11 @@ import { AssistantSelectionsSummaryChip } from "./AssistantSelectionsSummaryChip
 import { FileAttachmentChip } from "./FileAttachmentChip";
 import { FileCommentsSummaryChip } from "./FileCommentsSummaryChip";
 import { UserMessagePastedTextCard } from "./PastedTextChip";
+import {
+  hasLeadingUserMedia,
+  resolveUserTurnMarker,
+  type UserTurnMarkerKind,
+} from "./userTurnMarker";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
@@ -201,18 +207,32 @@ export interface MessagesTimelineController {
 // target agent-task rows specifically; both render the shared central robot glyph.
 const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 
-// Keeps the steer marker visually attached to the whole sent-message stack.
+// Keeps the origin/steer marker visually attached to the whole sent-message stack.
+// Which marker (if any) applies comes from the shared resolveUserTurnMarker predicate,
+// which the timelineHeight estimator also uses — keep presentation-only concerns here.
+const USER_TURN_MARKER_PRESENTATION: Record<
+  UserTurnMarkerKind,
+  { readonly Icon: LucideIcon; readonly label: string }
+> = {
+  automation: { Icon: ClockIcon, label: "Sent via Automation" },
+  steer: { Icon: SteerIcon, label: "Steering conversation" },
+};
+
 function UserDispatchModeChip({
   dispatchMode,
+  dispatchOrigin,
   hasLeadingMedia,
 }: {
   dispatchMode: TimelineMessage["dispatchMode"];
+  dispatchOrigin: TimelineMessage["dispatchOrigin"];
   hasLeadingMedia: boolean;
 }) {
-  if (dispatchMode !== "steer") {
+  const markerKind = resolveUserTurnMarker({ dispatchMode, dispatchOrigin });
+  if (!markerKind) {
     return null;
   }
 
+  const { Icon, label } = USER_TURN_MARKER_PRESENTATION[markerKind];
   return (
     <div
       className={cn(
@@ -220,8 +240,8 @@ function UserDispatchModeChip({
         hasLeadingMedia ? "mb-3" : "mb-1.5",
       )}
     >
-      <SteerIcon className="size-3 shrink-0 text-muted-foreground/75" />
-      <span>Steering conversation</span>
+      <Icon className="size-3 shrink-0 text-muted-foreground/75" />
+      <span>{label}</span>
     </div>
   );
 }
@@ -961,11 +981,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             Boolean(onEditUserMessage) &&
             row.message.id === latestEditableUserMessageId &&
             displayedUserMessage.copyText.trim().length > 0;
-          const hasLeadingMedia =
-            renderedAssistantSelections.length > 0 ||
-            renderedFileComments.length > 0 ||
-            renderedPastedTexts.length > 0 ||
-            userImages.length > 0;
+          const hasLeadingMedia = hasLeadingUserMedia({
+            imageCount: userImages.length,
+            fileCount: userFiles.length,
+            assistantSelectionCount: renderedAssistantSelections.length,
+            fileCommentCount: renderedFileComments.length,
+            pastedTextCount: renderedPastedTexts.length,
+          });
           const isTailContentRow = row.id === tailContentRowId;
           return (
             <div className="flex w-full justify-end">
@@ -978,6 +1000,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                 {/* Keep user-message chrome outside the bubble so the message reads as one simple block. */}
                 <UserDispatchModeChip
                   dispatchMode={row.message.dispatchMode}
+                  dispatchOrigin={row.message.dispatchOrigin}
                   hasLeadingMedia={hasLeadingMedia}
                 />
                 {renderedAssistantSelections.length > 0 && (
@@ -2587,7 +2610,9 @@ function isGitHubMcpToolCall(workEntry: TimelineWorkEntry): boolean {
   return Boolean(toolName?.startsWith("mcp__codex_apps__github"));
 }
 
-// Render command, agent-task, and file-change rows at the tighter compact density.
+// Render command, agent-task, file-change, and file-read rows at the tighter
+// compact density so every tool-call line shares one height regardless of whether
+// it carries a disclosure chevron.
 function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
   // Commands stay compact even when surfaced with a non-terminal icon (read-only
   // inspections like `cat` now use the file-read search icon).
@@ -2600,7 +2625,10 @@ function prefersCompactWorkEntryRow(workEntry: TimelineWorkEntry): boolean {
     EntryIcon === HammerIcon ||
     EntryIcon === AgentTaskIcon ||
     EntryIcon === PencilIcon ||
-    EntryIcon === SkillCubeIcon
+    EntryIcon === SkillCubeIcon ||
+    // File-read / inspect rows (e.g. `Read …`) surface the search icon and have no
+    // disclosure chevron; keep them at the same compact height as command rows.
+    EntryIcon === SearchIcon
   );
 }
 
