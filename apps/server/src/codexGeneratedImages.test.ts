@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
 
-import type { ProviderRuntimeEvent } from "@synara/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@synara/contracts";
 
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
+  codexConfiguredHomePathsFromSettings,
   generatedImagePathFromRuntimeEvent,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
@@ -120,5 +121,33 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
       path.join("/codex-test/.codex", "generated_images"),
       path.join("/synara-test/runtime", "codex-home-overlay", "generated_images"),
     ]);
+  });
+});
+
+describe("codexConfiguredHomePathsFromSettings", () => {
+  it("includes the env-scoped write home for instances relocating the overlay root", () => {
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_env: {
+          driver: "codex" as const,
+          enabled: true,
+          environment: [{ name: "SYNARA_HOME", value: "/instance-env/runtime", sensitive: false }],
+        },
+      },
+    };
+
+    const homes = codexConfiguredHomePathsFromSettings(settings);
+
+    const expectedPrefix = path.join(
+      "/instance-env/runtime",
+      "codex-home-overlay",
+      "accounts",
+      "codex_env-",
+    );
+    assert.ok(
+      homes.some((home) => home.startsWith(expectedPrefix)),
+      `expected env-scoped account overlay home, got ${JSON.stringify(homes)}`,
+    );
   });
 });
