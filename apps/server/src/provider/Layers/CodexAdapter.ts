@@ -65,6 +65,7 @@ import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import { resolveProviderAttachmentPath } from "../providerAttachmentPaths.ts";
 import {
   codexGeneratedImageArtifact,
+  type CodexGeneratedImageHomeContext,
   extractCodexGeneratedImageReference,
   firstStringValue,
   isCodexGeneratedImageItemType,
@@ -708,11 +709,16 @@ function codexGeneratedImageThreadId(
   );
 }
 
-function sanitizeGeneratedImagePayload(event: ProviderEvent, canonicalThreadId: ThreadId): unknown {
+function sanitizeGeneratedImagePayload(
+  event: ProviderEvent,
+  canonicalThreadId: ThreadId,
+  codexHome?: CodexGeneratedImageHomeContext,
+): unknown {
   const payload = asObject(event.payload);
   return sanitizeNestedCodexGeneratedImagePayloads({
     value: event.payload ?? {},
     threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+    ...(codexHome ? { codexHome } : {}),
   });
 }
 
@@ -720,13 +726,14 @@ function withSanitizedGeneratedImageRaw(
   base: Omit<ProviderRuntimeEvent, "type" | "payload">,
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
+  codexHome?: CodexGeneratedImageHomeContext,
 ): Omit<ProviderRuntimeEvent, "type" | "payload"> {
   return {
     ...base,
     raw: {
       source: eventRawSource(event),
       method: event.method,
-      payload: sanitizeGeneratedImagePayload(event, canonicalThreadId),
+      payload: sanitizeGeneratedImagePayload(event, canonicalThreadId, codexHome),
     },
   };
 }
@@ -763,6 +770,7 @@ function generatedImageEventCandidate(event: ProviderEvent): Record<string, unkn
 function mapGeneratedImageEndEvent(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
+  codexHome?: CodexGeneratedImageHomeContext,
 ): ProviderRuntimeEvent | undefined {
   if (
     event.method !== "codex/event/image_generation_end" &&
@@ -775,6 +783,7 @@ function mapGeneratedImageEndEvent(
   const reference = extractCodexGeneratedImageReference({
     value: candidate,
     threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+    ...(codexHome ? { codexHome } : {}),
   });
   if (!reference) {
     return undefined;
@@ -807,6 +816,7 @@ function mapGeneratedImageEndEvent(
     },
     event,
     canonicalThreadId,
+    codexHome,
   );
 
   return {
@@ -900,6 +910,7 @@ function mapItemLifecycle(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
   lifecycle: "item.started" | "item.updated" | "item.completed",
+  codexHome?: CodexGeneratedImageHomeContext,
 ): ProviderRuntimeEvent | undefined {
   const payload = asObject(event.payload);
   const item = asObject(payload?.item);
@@ -917,6 +928,7 @@ function mapItemLifecycle(
       ? extractCodexGeneratedImageReference({
           value: source,
           threadId: codexGeneratedImageThreadId(event, payload) ?? canonicalThreadId,
+          ...(codexHome ? { codexHome } : {}),
         })
       : undefined;
   if (
@@ -956,6 +968,7 @@ function mapItemLifecycle(
           runtimeEventBase(event, canonicalThreadId),
           event,
           canonicalThreadId,
+          codexHome,
         )
       : runtimeEventBase(event, canonicalThreadId)),
     type: lifecycle,
@@ -1120,10 +1133,11 @@ function mapUnmappedCodexEvent(
 function mapToRuntimeEvents(
   event: ProviderEvent,
   canonicalThreadId: ThreadId,
+  codexHome?: CodexGeneratedImageHomeContext,
 ): ReadonlyArray<ProviderRuntimeEvent> {
   const payload = asObject(event.payload);
   const turn = asObject(payload?.turn);
-  const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId);
+  const generatedImageEndEvent = mapGeneratedImageEndEvent(event, canonicalThreadId, codexHome);
   if (generatedImageEndEvent) {
     return [generatedImageEndEvent];
   }
@@ -1462,7 +1476,7 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "item/started") {
-    const started = mapItemLifecycle(event, canonicalThreadId, "item.started");
+    const started = mapItemLifecycle(event, canonicalThreadId, "item.started", codexHome);
     return started ? [started] : [];
   }
 
@@ -1489,7 +1503,7 @@ function mapToRuntimeEvents(
         },
       ];
     }
-    const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed");
+    const completed = mapItemLifecycle(event, canonicalThreadId, "item.completed", codexHome);
     return completed ? [completed] : [];
   }
 
@@ -1497,7 +1511,7 @@ function mapToRuntimeEvents(
     event.method === "item/reasoning/summaryPartAdded" ||
     event.method === "item/commandExecution/terminalInteraction"
   ) {
-    const updated = mapItemLifecycle(event, canonicalThreadId, "item.updated");
+    const updated = mapItemLifecycle(event, canonicalThreadId, "item.updated", codexHome);
     return updated ? [updated] : [];
   }
 
@@ -2525,7 +2539,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         const listener = (event: ProviderEvent) => {
           const stampedEvent = stampEventWithLiveSession(event);
           const mappedRuntimeEvents = assignDerivedProviderRuntimeEventIds(
-            mapToRuntimeEvents(stampedEvent, stampedEvent.threadId),
+            mapToRuntimeEvents(
+              stampedEvent,
+              stampedEvent.threadId,
+              manager.getSessionCodexOptions(stampedEvent.threadId),
+            ),
           );
           const hasUnmappedEvent = mappedRuntimeEvents.some(
             (runtimeEvent) => runtimeEvent.type === "event.unmapped",
