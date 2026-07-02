@@ -250,6 +250,15 @@ const makeAcpSessionRuntime = (
 
     const acp = ServiceMap.getUnsafe(acpContext, EffectAcpClient.AcpClient);
 
+    // The protocol layer offers every incoming notification into an unbounded
+    // raw queue (acp.raw.notifications) in addition to invoking the
+    // handleSessionUpdate callback. Nothing consumes that stream in this
+    // runtime, so a resumed session's replay would accumulate there without
+    // bound regardless of the accepting gate below — drain it for the
+    // runtime's lifetime. (handleSessionUpdate delivery is unaffected: it is
+    // driven by the callback path, not this queue.)
+    yield* Stream.runDrain(acp.raw.notifications).pipe(Effect.forkIn(runtimeScope));
+
     yield* acp.handleSessionUpdate((notification) =>
       Effect.suspend(() =>
         acceptingSessionUpdates

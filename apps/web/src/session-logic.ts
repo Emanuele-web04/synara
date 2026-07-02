@@ -2113,7 +2113,22 @@ function compareActivitiesByOrder(
     return lifecycleRankComparison;
   }
 
+  // Compaction progress and terminal rows can share a millisecond; keep the
+  // progress row first so the work-log collapse can fold the pair (event ids
+  // are random and would otherwise order them arbitrarily).
+  if (left.kind === "context-compaction" && right.kind === "context-compaction") {
+    const compactionRankComparison =
+      contextCompactionOrderRank(left.summary) - contextCompactionOrderRank(right.summary);
+    if (compactionRankComparison !== 0) {
+      return compactionRankComparison;
+    }
+  }
+
   return left.id.localeCompare(right.id);
+}
+
+function contextCompactionOrderRank(summary: string): number {
+  return summary === CONTEXT_COMPACTION_PROGRESS_LABEL ? 0 : 1;
 }
 
 function compareActivityLifecycleRank(kind: string): number {

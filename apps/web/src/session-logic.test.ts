@@ -3083,6 +3083,31 @@ describe("deriveWorkLogEntries context window handling", () => {
     expect(entries[0]?.label).toBe("Context compacted");
   });
 
+  it("collapses same-timestamp compaction rows regardless of event id order", () => {
+    const entries = deriveWorkLogEntries(
+      [
+        makeActivity({
+          id: "a-compaction-completed",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Context compacted",
+          tone: "info",
+        }),
+        makeActivity({
+          id: "b-compaction-progress",
+          createdAt: "2026-02-23T00:00:00.000Z",
+          kind: "context-compaction",
+          summary: "Compacting conversation...",
+          tone: "info",
+        }),
+      ],
+      TurnId.makeUnsafe("turn-1"),
+    );
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.label).toBe("Context compacted");
+  });
+
   it("does not merge a new compaction progress row into an earlier terminal row", () => {
     const entries = deriveWorkLogEntries(
       [

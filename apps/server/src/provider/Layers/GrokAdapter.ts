@@ -126,6 +126,16 @@ const GROK_COMPACT_TIMEOUT_MS = GROK_TURN_IDLE_TIMEOUT_MS;
 // drop compaction-shaped tool updates) for this long so those events cannot
 // be attributed to the next active turn.
 const GROK_COMPACT_ABANDON_QUIET_MS = 5_000;
+// Bounded wait for the forked post-timeout cancel to be written before the
+// next prompt is dispatched. stdio delivers in order, so once the cancel is
+// on the wire it cannot cancel a prompt written after it; a fully wedged
+// child never confirms, hence the cap.
+const GROK_COMPACT_CANCEL_WAIT_MS = 10_000;
+// The compaction outcome (failed tool detail) is recorded by the notification
+// consumer, which can lag the /compact response; wait for inbound activity to
+// go quiet (bounded) before deciding success.
+const GROK_COMPACT_OUTCOME_QUIET_MS = 200;
+const GROK_COMPACT_OUTCOME_MAX_WAIT_MS = 2_000;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -304,6 +314,10 @@ interface GrokSessionContext {
   // stale updates; new turns wait it out and compaction-shaped tool updates
   // are dropped so they cannot pollute the next turn.
   compactionQuietUntil: number | undefined;
+  // Forked best-effort cancel from a timed-out /compact. The next prompt
+  // waits (bounded) for it so the cancel is on the wire first — stdio
+  // ordering then guarantees it cannot cancel the new turn.
+  compactionCancelFiber: Fiber.Fiber<void> | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
 }
@@ -914,6 +928,51 @@ export function makeGrokAdapter(
         });
       });
 
+    // Waits until the notification consumer has been quiet briefly so state it
+    // records from queued events (e.g. compactionFailedToolDetail) is visible
+    // before the compaction outcome is decided. Bounded — a chatty session
+    // cannot hold the /compact RPC open past the cap.
+    const settleGrokCompactionOutcome = (ctx: GrokSessionContext) =>
+      Effect.gen(function* () {
+        const startedAt = Date.now();
+        while (true) {
+          const now = Date.now();
+          const lastActivityAt = ctx.lastTurnActivityAt ?? 0;
+          if (
+            now - lastActivityAt >= GROK_COMPACT_OUTCOME_QUIET_MS ||
+            now - startedAt >= GROK_COMPACT_OUTCOME_MAX_WAIT_MS
+          ) {
+            return;
+          }
+          yield* Effect.sleep(50);
+        }
+      });
+
+    // After a timed-out /compact, hold new prompts until the forked cancel is
+    // on the wire (bounded — a fully wedged child never confirms) and the
+    // stale update stream has had its quiet window. stdio ordering then
+    // guarantees the cancel cannot cancel the new prompt, and stragglers
+    // cannot be attributed to the new turn.
+    const waitForAbandonedGrokCompaction = (ctx: GrokSessionContext) =>
+      Effect.gen(function* () {
+        const cancelFiber = ctx.compactionCancelFiber;
+        if (cancelFiber !== undefined) {
+          yield* Fiber.join(cancelFiber).pipe(
+            Effect.ignoreCause(),
+            Effect.timeoutOption(GROK_COMPACT_CANCEL_WAIT_MS),
+          );
+          ctx.compactionCancelFiber = undefined;
+        }
+        const compactionQuietUntil = ctx.compactionQuietUntil;
+        if (compactionQuietUntil !== undefined) {
+          const waitMs = compactionQuietUntil - Date.now();
+          if (waitMs > 0) {
+            yield* Effect.sleep(waitMs);
+          }
+          ctx.compactionQuietUntil = undefined;
+        }
+      });
+
     // On session/load, Grok can replay old ACP updates after the session is "ready".
     // Keep suppression active until that stream actually goes quiet — clearing it
     // on a fixed timeout lets late historical deltas leak into the first turn as
@@ -1177,6 +1236,7 @@ export function makeGrokAdapter(
             compactingThread: false,
             compactionFailedToolDetail: undefined,
             compactionQuietUntil: undefined,
+            compactionCancelFiber: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
           };
@@ -1531,17 +1591,7 @@ export function makeGrokAdapter(
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
         }
-        // An abandoned (timed-out) /compact may still stream stale updates
-        // until the child processes the cancel; wait out the quiet window so
-        // none of them can be attributed to this turn.
-        const compactionQuietUntil = ctx.compactionQuietUntil;
-        if (compactionQuietUntil !== undefined) {
-          const waitMs = compactionQuietUntil - Date.now();
-          if (waitMs > 0) {
-            yield* Effect.sleep(waitMs);
-          }
-          ctx.compactionQuietUntil = undefined;
-        }
+        yield* waitForAbandonedGrokCompaction(ctx);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
@@ -1964,6 +2014,9 @@ export function makeGrokAdapter(
 
     const runGrokCompaction = (ctx: GrokSessionContext) =>
       Effect.gen(function* () {
+        // A previous timed-out /compact may still be cancelling; same ordering
+        // requirement as new turns.
+        yield* waitForAbandonedGrokCompaction(ctx);
         yield* emitGrokContextCompactionRuntimeEvent(ctx, {
           lifecycle: "item.updated",
           status: "inProgress",
@@ -2013,7 +2066,9 @@ export function makeGrokAdapter(
           // forked, not awaited: the child just proved it can go silent, and a
           // hung session/cancel would keep compactingThread set forever.
           ctx.compactionQuietUntil = Date.now() + GROK_COMPACT_ABANDON_QUIET_MS;
-          yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
+          ctx.compactionCancelFiber = yield* Effect.ignore(ctx.acp.cancel).pipe(
+            Effect.forkIn(ctx.scope),
+          );
           const detail = `Grok did not finish context compaction within ${Math.round(GROK_COMPACT_TIMEOUT_MS / 1000)}s; the compaction was abandoned.`;
           yield* Effect.logWarning("grok.acp.compact_timeout", {
             threadId: ctx.threadId,
@@ -2033,6 +2088,12 @@ export function makeGrokAdapter(
             }),
           );
         }
+
+        // The failed-tool detail below is recorded by the notification
+        // consumer, which can lag the prompt response (the update may still
+        // sit in the event queue); wait for inbound activity to go quiet
+        // before deciding the outcome.
+        yield* settleGrokCompactionOutcome(ctx);
 
         // ACP can answer a /compact prompt successfully with stopReason
         // "cancelled" (user interrupt via session/cancel); that is not a
