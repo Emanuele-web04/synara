@@ -139,7 +139,10 @@ function scheduleFontSettleRefit(entry: TerminalRuntimeEntry): void {
   const fontSize = Number(entry.terminal.options.fontSize ?? 12);
   void waitForTerminalFontReady({ fontFamily, fontSize }).then(() => {
     if (entry.disposed) return;
-    runTerminalResize(entry, { refresh: true });
+    // Rebuild the WebGL glyph atlas: the immediate refit may have cached glyphs in
+    // the fallback font while the requested font was still loading, and a plain
+    // refresh would keep redrawing those stale glyphs.
+    runTerminalResize(entry, { clearTextureAtlas: true, refresh: true });
   });
 }
 

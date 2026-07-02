@@ -19,7 +19,12 @@ import {
   type AcpSessionRuntimeShape,
   type AcpSpawnInput,
 } from "./AcpSessionRuntime.ts";
-import { resolveCursorAgentBinaryPath } from "./CursorAcpCommand.ts";
+import {
+  CURSOR_AGENT_BROWSERLESS_ENV,
+  buildCursorAgentCommand,
+  type CursorAgentCommand,
+  type CursorAgentCommandOptions,
+} from "./CursorAcpCommand.ts";
 
 export interface CursorAcpRuntimeCursorSettings {
   readonly apiEndpoint?: string;
@@ -63,15 +68,34 @@ interface CursorAcpSelectOption {
 export function buildCursorAcpSpawnInput(
   cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
   cwd: string,
+  commandOptions?: CursorAgentCommandOptions,
 ): AcpSpawnInput {
+  const command = buildCursorAgentCommand(
+    cursorSettings?.binaryPath,
+    [...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []), "acp"],
+    commandOptions,
+  );
   return {
-    command: resolveCursorAgentBinaryPath(cursorSettings?.binaryPath),
-    args: [
-      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
-      "acp",
-    ],
+    command: command.command,
+    args: command.args,
     cwd,
+    // Keep ACP startup browserless without forcing CI/noninteractive flags onto user turns.
+    env: CURSOR_AGENT_BROWSERLESS_ENV,
   };
+}
+
+export function buildCursorCliModelListCommand(
+  cursorSettings: CursorAcpRuntimeCursorSettings | null | undefined,
+  commandOptions?: CursorAgentCommandOptions,
+): CursorAgentCommand {
+  return buildCursorAgentCommand(
+    cursorSettings?.binaryPath,
+    [
+      ...(cursorSettings?.apiEndpoint ? (["-e", cursorSettings.apiEndpoint] as const) : []),
+      "models",
+    ],
+    commandOptions,
+  );
 }
 
 export const makeCursorAcpRuntime = (
@@ -83,6 +107,7 @@ export const makeCursorAcpRuntime = (
         ...input,
         spawn: buildCursorAcpSpawnInput(input.cursorSettings, input.cwd),
         authMethodId: "cursor_login",
+        authenticateMeta: { headless: true },
         clientCapabilities: CURSOR_PARAMETERIZED_MODEL_PICKER_CAPABILITIES,
       }).pipe(
         Layer.provide(

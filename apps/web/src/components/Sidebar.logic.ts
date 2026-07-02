@@ -26,6 +26,7 @@ import {
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
@@ -33,6 +34,7 @@ import {
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -55,6 +57,61 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
+
+function nonEmptyDisplayValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function differentDisplayValue(
+  value: string | null | undefined,
+  existing: string | null,
+): string | null {
+  const normalized = nonEmptyDisplayValue(value);
+  if (!normalized) {
+    return null;
+  }
+  return existing !== null && normalized === existing ? null : normalized;
+}
+
+export type SidebarThreadHoverMetadata = {
+  projectName: string | null;
+  projectCwd: string | null;
+  sourceProjectName: string | null;
+  branch: string | null;
+  worktreeName: string | null;
+};
+
+export function resolveThreadHoverCardMetadata(input: {
+  thread: Pick<
+    SidebarThreadSummary,
+    "envMode" | "branch" | "worktreePath" | "associatedWorktreePath" | "associatedWorktreeBranch"
+  >;
+  project: Pick<Project, "name" | "folderName" | "cwd"> | null;
+}): SidebarThreadHoverMetadata {
+  const projectName =
+    nonEmptyDisplayValue(input.project?.name) ?? nonEmptyDisplayValue(input.project?.folderName);
+  const activeWorktreePath = nonEmptyDisplayValue(input.thread.worktreePath);
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: input.thread.envMode,
+      worktreePath: activeWorktreePath,
+    }) === "worktree";
+  const associatedWorktreePath = nonEmptyDisplayValue(input.thread.associatedWorktreePath);
+  const worktreePath = isWorktree ? (associatedWorktreePath ?? activeWorktreePath) : null;
+
+  return {
+    projectName,
+    projectCwd: input.project?.cwd ?? null,
+    sourceProjectName: isWorktree
+      ? differentDisplayValue(input.project?.folderName, projectName)
+      : null,
+    branch:
+      nonEmptyDisplayValue(input.thread.associatedWorktreeBranch) ??
+      nonEmptyDisplayValue(input.thread.branch),
+    worktreeName: worktreePath ? formatWorktreePathForDisplay(worktreePath) : null,
+  };
+}
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -85,12 +142,24 @@ export type SidebarProjectEntry = {
   isExpanded: boolean;
 };
 
+export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project";
+
+export function createSidebarThreadHoverAnchorId(input: {
+  scope: SidebarThreadHoverAnchorScope;
+  threadId: ThreadId;
+}): string {
+  return `${input.scope}:${input.threadId}`;
+}
+
 export type SidebarDerivedProjectData = {
+  allProjectThreadCount: number;
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
-  hasHiddenThreads: boolean;
-  isThreadListExpanded: boolean;
+  /** Extra "Show more" pages currently applied, clamped to the real row count. */
+  threadListExtraPages: number;
+  canShowMoreThreads: boolean;
+  canShowLessThreads: boolean;
   activeEntryId: ThreadId | null;
   projectStatus: ReturnType<typeof resolveProjectStatusIndicator>;
 };
@@ -248,15 +317,15 @@ export function resolveSettingsBackTarget(input: {
   return { kind: "home" };
 }
 
-// Drops remembered "show more" state for projects that are currently collapsed.
-export function pruneExpandedProjectThreadListsForCollapsedProjects<
+// Drops remembered "show more" paging for projects that are currently collapsed.
+export function pruneProjectThreadListPagingForCollapsedProjects<
   T extends Pick<Project, "cwd" | "expanded">,
 >(input: {
-  expandedProjectThreadListCwds: ReadonlySet<string>;
+  threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   projects: readonly T[];
   normalizeProjectCwd: (cwd: string) => string;
-}): ReadonlySet<string> {
-  const { expandedProjectThreadListCwds, normalizeProjectCwd, projects } = input;
+}): ReadonlyMap<string, number> {
+  const { normalizeProjectCwd, projects, threadListExtraPagesByProjectCwd } = input;
   const collapsedProjectCwds = new Set(
     projects
       .filter((project) => !project.expanded)
@@ -265,46 +334,58 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
   );
 
   if (collapsedProjectCwds.size === 0) {
-    return expandedProjectThreadListCwds;
+    return threadListExtraPagesByProjectCwd;
   }
 
   let changed = false;
-  const nextExpandedProjectThreadListCwds = new Set<string>();
-  for (const cwd of expandedProjectThreadListCwds) {
+  const nextThreadListExtraPagesByProjectCwd = new Map<string, number>();
+  for (const [cwd, extraPages] of threadListExtraPagesByProjectCwd) {
     if (collapsedProjectCwds.has(cwd)) {
       changed = true;
       continue;
     }
-    nextExpandedProjectThreadListCwds.add(cwd);
+    nextThreadListExtraPagesByProjectCwd.set(cwd, extraPages);
   }
 
-  return changed ? nextExpandedProjectThreadListCwds : expandedProjectThreadListCwds;
+  return changed ? nextThreadListExtraPagesByProjectCwd : threadListExtraPagesByProjectCwd;
 }
 
 /**
  * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster. Split into two reserves so the title is only truncated by
- * content that is actually on screen:
+ * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
+ * far right as the on-screen content allows:
  *
- * - Idle rows reserve just enough for the timestamp/status glyph plus any
- *   fork/worktree/handoff meta chips. A row with no badges therefore runs the
- *   title nearly to the timestamp instead of truncating against permanently
- *   reserved empty space.
- * - The wider reserve that clears the hover pin/archive actions is only applied
+ * - The relative time now lives in the row hover card, so an idle row with no
+ *   status/jump glyph and no meta chips reserves almost nothing — the title runs
+ *   to the row edge instead of truncating against permanently reserved space.
+ * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
+ *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
+ *   badges that are present.
+ * - The wider reserve that clears the hover pin/archive actions is applied only
  *   on hover/focus (mirroring the project header row), so the title gives up that
  *   width exactly when those actions appear and not a moment sooner.
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
-export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + timestamp fade
-  // out at the same time, so this reserve is a constant regardless of chip count.
+export function resolveThreadRowTrailingReserveClass(input: {
+  metaChipCount: number;
+  hasTrailingGlyph: boolean;
+}): string {
+  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
+  // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
     "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  if (metaChipCount <= 0) return cn("pr-[2.25rem]", hoverReserve);
-  if (metaChipCount === 1) return cn("pr-[3.5rem]", hoverReserve);
-  if (metaChipCount === 2) return cn("pr-[4rem]", hoverReserve);
-  return cn("pr-[4.5rem]", hoverReserve);
+  const { metaChipCount, hasTrailingGlyph } = input;
+  if (metaChipCount <= 0) {
+    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
+  }
+  if (metaChipCount === 1) {
+    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
+  }
+  if (metaChipCount === 2) {
+    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
+  }
+  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
@@ -537,19 +618,53 @@ export function describeAddProjectError(message: string): string | null {
   return null;
 }
 
+// One "Show more" click reveals one extra page of rows; "Show less" hides one page again.
+// The requested page count is clamped to what the list can actually use, so stale persisted
+// values (or shrinking thread lists) self-heal instead of requiring dead "Show less" clicks.
+export type SidebarThreadListPaging = {
+  /** Requested pages clamped to what `totalCount` can actually consume. */
+  effectiveExtraPages: number;
+  /** Row cap to render: `baseLimit + effectiveExtraPages * pageSize`. */
+  previewLimit: number;
+  canShowMore: boolean;
+  canShowLess: boolean;
+};
+
+export function resolveSidebarThreadListPaging(input: {
+  totalCount: number;
+  baseLimit: number;
+  pageSize: number;
+  requestedExtraPages: number;
+}): SidebarThreadListPaging {
+  const { baseLimit, pageSize, totalCount } = input;
+  const hiddenBeyondBase = Math.max(0, totalCount - baseLimit);
+  const maxExtraPages = pageSize > 0 ? Math.ceil(hiddenBeyondBase / pageSize) : 0;
+  const requestedExtraPages = Number.isFinite(input.requestedExtraPages)
+    ? Math.floor(input.requestedExtraPages)
+    : 0;
+  const effectiveExtraPages = Math.min(Math.max(0, requestedExtraPages), maxExtraPages);
+  const previewLimit = baseLimit + effectiveExtraPages * pageSize;
+
+  return {
+    effectiveExtraPages,
+    previewLimit,
+    canShowMore: totalCount > previewLimit,
+    canShowLess: effectiveExtraPages > 0,
+  };
+}
+
 export function getVisibleThreadsForProject<T extends Pick<SidebarThreadSummary, "id">>(input: {
   threads: readonly T[];
   activeThreadId: Thread["id"] | undefined;
-  isThreadListExpanded: boolean;
   previewLimit: number;
 }): {
   hasHiddenThreads: boolean;
   visibleThreads: T[];
 } {
-  const { activeThreadId, isThreadListExpanded, previewLimit, threads } = input;
+  const { activeThreadId, previewLimit, threads } = input;
   const hasHiddenThreads = threads.length > previewLimit;
 
-  if (!hasHiddenThreads || isThreadListExpanded) {
+  if (!hasHiddenThreads) {
     return {
       hasHiddenThreads,
       visibleThreads: [...threads],
@@ -673,16 +788,15 @@ export function getVisibleSidebarEntriesForPreview<
 >(input: {
   entries: readonly T[];
   activeEntryId: Thread["id"] | undefined;
-  isExpanded: boolean;
   previewLimit: number;
 }): {
   hasHiddenEntries: boolean;
   visibleEntries: T[];
 } {
-  const { activeEntryId, entries, isExpanded, previewLimit } = input;
+  const { activeEntryId, entries, previewLimit } = input;
   const hasHiddenEntries = entries.length > previewLimit;
 
-  if (!hasHiddenEntries || isExpanded) {
+  if (!hasHiddenEntries) {
     return {
       hasHiddenEntries,
       visibleEntries: [...entries],
@@ -836,13 +950,12 @@ export function getRenderedThreadsForSidebarProject<
   project: Pick<Project, "expanded">;
   threads: readonly T[];
   activeThreadId: Thread["id"] | undefined;
-  isThreadListExpanded: boolean;
   previewLimit: number;
 }): {
   hasHiddenThreads: boolean;
   renderedThreads: T[];
 } {
-  const { activeThreadId, isThreadListExpanded, previewLimit, project, threads } = input;
+  const { activeThreadId, previewLimit, project, threads } = input;
   const pinnedCollapsedThread =
     !project.expanded && activeThreadId
       ? (threads.find((thread) => thread.id === activeThreadId) ?? null)
@@ -850,7 +963,6 @@ export function getRenderedThreadsForSidebarProject<
   const { hasHiddenThreads, visibleThreads } = getVisibleThreadsForProject({
     threads,
     activeThreadId,
-    isThreadListExpanded,
     previewLimit,
   });
 
@@ -866,30 +978,48 @@ export function getVisibleSidebarThreadIds(input: {
   threads: readonly (Pick<SidebarThreadSummary, "id" | "projectId" | "parentThreadId"> &
     SidebarThreadSortInput)[];
   activeThreadId: Thread["id"] | undefined;
-  expandedThreadListsByProject: ReadonlySet<Project["id"]>;
+  threadListExtraPagesByProjectId: ReadonlyMap<Project["id"], number>;
   expandedSubagentParentIds?: ReadonlySet<Thread["id"]>;
   previewLimit: number;
+  previewPageSize: number;
   threadSortOrder: SidebarThreadSortOrder;
 }): Thread["id"][] {
   const {
     activeThreadId,
     expandedSubagentParentIds,
-    expandedThreadListsByProject,
     previewLimit,
+    previewPageSize,
     projects,
+    threadListExtraPagesByProjectId,
     threadSortOrder,
     threads,
   } = input;
   const visibleThreadIds: Thread["id"][] = [];
+  const threadsByProjectId = new Map<ProjectId, (typeof threads)[number][]>();
+
+  for (const thread of threads) {
+    const projectThreads = threadsByProjectId.get(thread.projectId);
+    if (projectThreads) {
+      projectThreads.push(thread);
+    } else {
+      threadsByProjectId.set(thread.projectId, [thread]);
+    }
+  }
 
   for (const project of projects) {
     const projectThreads = sortThreadsForSidebar(
-      threads.filter((thread) => thread.projectId === project.id),
+      threadsByProjectId.get(project.id) ?? [],
       threadSortOrder,
     );
     const projectThreadTree = buildProjectThreadTree({
       threads: projectThreads,
       expandedParentThreadIds: expandedSubagentParentIds,
+    });
+    const paging = resolveSidebarThreadListPaging({
+      totalCount: projectThreadTree.length,
+      baseLimit: previewLimit,
+      pageSize: previewPageSize,
+      requestedExtraPages: threadListExtraPagesByProjectId.get(project.id) ?? 0,
     });
     const { visibleEntries } = getVisibleSidebarEntriesForPreview({
       entries: projectThreadTree.map((row) => ({
@@ -898,8 +1028,7 @@ export function getVisibleSidebarThreadIds(input: {
         threadId: row.thread.id,
       })),
       activeEntryId: activeThreadId,
-      isExpanded: expandedThreadListsByProject.has(project.id),
-      previewLimit,
+      previewLimit: paging.previewLimit,
     });
     const pinnedCollapsedThread =
       !project.expanded && activeThreadId
@@ -1190,10 +1319,11 @@ export function deriveSidebarProjectData(input: {
   sortedSidebarThreadsByProjectId: ReadonlyMap<ProjectId, SidebarThreadSummary[]>;
   pinnedThreadIds: readonly ThreadId[];
   expandedParentThreadIds: ReadonlySet<ThreadId>;
-  expandedThreadListProjectCwds: ReadonlySet<string>;
+  threadListExtraPagesByProjectCwd: ReadonlyMap<string, number>;
   normalizeProjectCwd: (cwd: string) => string;
   activeSidebarThreadId: ThreadId | undefined;
   previewLimit: number;
+  previewPageSize: number;
   resolveThreadStatus?: (
     thread: SidebarThreadSummary,
   ) => ReturnType<typeof resolveThreadStatusPill>;
@@ -1214,9 +1344,8 @@ export function deriveSidebarProjectData(input: {
             }),
       ),
     );
-    const isThreadListExpanded = input.expandedThreadListProjectCwds.has(
-      input.normalizeProjectCwd(project.cwd),
-    );
+    const requestedExtraPages =
+      input.threadListExtraPagesByProjectCwd.get(input.normalizeProjectCwd(project.cwd)) ?? 0;
     const orderedProjectThreadIds = projectThreads.map((thread) => thread.id);
 
     // Collapsed folders should not build or render their full tree; large projects can
@@ -1246,11 +1375,14 @@ export function deriveSidebarProjectData(input: {
             ];
 
       byProjectId.set(project.id, {
+        allProjectThreadCount: allProjectThreads.length,
         projectThreads,
         orderedProjectThreadIds,
         visibleEntries,
-        hasHiddenThreads: projectThreads.length > visibleEntries.length,
-        isThreadListExpanded,
+        // The thread list is hidden while the folder is closed, so paging affordances are moot.
+        threadListExtraPages: 0,
+        canShowMoreThreads: false,
+        canShowLessThreads: false,
         activeEntryId: activeThread?.id ?? null,
         projectStatus,
       });
@@ -1277,19 +1409,28 @@ export function deriveSidebarProjectData(input: {
       input.activeSidebarThreadId === undefined
         ? null
         : (orderedEntries.find((entry) => entry.rowId === input.activeSidebarThreadId) ?? null);
+    const paging = resolveSidebarThreadListPaging({
+      totalCount: orderedEntries.length,
+      baseLimit: input.previewLimit,
+      pageSize: input.previewPageSize,
+      requestedExtraPages,
+    });
     const { visibleEntries: renderedEntries } = getVisibleSidebarEntriesForPreview({
       entries: orderedEntries,
       activeEntryId: activeEntry?.rowId,
-      isExpanded: isThreadListExpanded,
-      previewLimit: input.previewLimit,
+      previewLimit: paging.previewLimit,
     });
 
     byProjectId.set(project.id, {
+      allProjectThreadCount: allProjectThreads.length,
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
-      hasHiddenThreads: renderedEntries.length < orderedEntries.length,
-      isThreadListExpanded,
+      threadListExtraPages: paging.effectiveExtraPages,
+      // The active-thread reveal can force rows beyond the page cap; only offer "Show more"
+      // while rows are genuinely hidden.
+      canShowMoreThreads: paging.canShowMore && renderedEntries.length < orderedEntries.length,
+      canShowLessThreads: paging.canShowLess,
       activeEntryId: activeEntry?.rowId ?? null,
       projectStatus,
     });
@@ -1325,7 +1466,7 @@ export function resolvePrStatePresentation(
   }
   return {
     label: "PR merged",
-    colorClass: "text-violet-500 dark:text-violet-400",
+    colorClass: "text-indigo-500 dark:text-indigo-400",
     iconKind: "merged-simple",
   };
 }

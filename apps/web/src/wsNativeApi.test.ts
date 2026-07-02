@@ -287,6 +287,7 @@ describe("wsNativeApi", () => {
     const payload = {
       settings: {
         enableAssistantStreaming: true,
+        enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",
         addProjectBaseDirectory: "",
         textGenerationModelSelection: { provider: "codex", model: "gpt-5.4-mini" },
@@ -543,6 +544,23 @@ describe("wsNativeApi", () => {
     expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsReadFile, {
       cwd: "/tmp/project",
       relativePath: "src/app.ts",
+    });
+  });
+
+  it("forwards local preview grant creation to the websocket project method", async () => {
+    requestMock.mockResolvedValue({
+      grant: "grant-token",
+      expiresAt: "2026-01-01T00:00:00.000Z",
+    });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.projects.createLocalFilePreviewGrant({
+      path: "/Users/tester/Downloads/shot.png",
+    });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.projectsCreateLocalFilePreviewGrant, {
+      path: "/Users/tester/Downloads/shot.png",
     });
   });
 

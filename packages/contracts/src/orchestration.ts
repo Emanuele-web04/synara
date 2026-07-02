@@ -213,6 +213,10 @@ export type AssistantDeliveryMode = typeof AssistantDeliveryMode.Type;
 export const TurnDispatchMode = Schema.Literals(["queue", "steer"]);
 export type TurnDispatchMode = typeof TurnDispatchMode.Type;
 export const DEFAULT_TURN_DISPATCH_MODE: TurnDispatchMode = "queue";
+// Marks who dispatched a user turn: a person typing, or an automation run.
+// Absent is treated as "user"; only automation-dispatched turns carry the flag.
+export const MessageDispatchOrigin = Schema.Literals(["user", "automation"]);
+export type MessageDispatchOrigin = typeof MessageDispatchOrigin.Type;
 export const ProviderReviewTarget = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("uncommittedChanges"),
@@ -335,12 +339,18 @@ export const ChatAttachment = Schema.Union([
   ChatAssistantSelectionAttachment,
 ]);
 export type ChatAttachment = typeof ChatAttachment.Type;
+const ChatAttachmentList = Schema.Array(ChatAttachment).check(
+  Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+);
 const UploadChatAttachment = Schema.Union([
   UploadChatImageAttachment,
   UploadChatFileAttachment,
   UploadChatAssistantSelectionAttachment,
 ]);
 export type UploadChatAttachment = typeof UploadChatAttachment.Type;
+const UploadChatAttachmentList = Schema.Array(UploadChatAttachment).check(
+  Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS),
+);
 
 export const ProjectScriptIcon = Schema.Literals([
   "play",
@@ -399,6 +409,7 @@ export const OrchestrationMessage = Schema.Struct({
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),
@@ -1029,7 +1040,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(ChatAttachment),
+    attachments: ChatAttachmentList,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   }),
@@ -1040,6 +1051,9 @@ export const ThreadTurnStartCommand = Schema.Struct({
   dispatchMode: Schema.optional(TurnDispatchMode).pipe(
     Schema.withDecodingDefault(() => DEFAULT_TURN_DISPATCH_MODE),
   ),
+  // Set by the automation engine when it dispatches a turn. Clients cannot set it:
+  // ClientThreadTurnStartCommand omits the field, so decoding strips any spoofed value.
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
@@ -1056,7 +1070,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     messageId: MessageId,
     role: Schema.Literal("user"),
     text: Schema.String,
-    attachments: Schema.Array(UploadChatAttachment),
+    attachments: UploadChatAttachmentList,
     skills: Schema.optional(Schema.Array(ProviderSkillReference)),
     mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   }),
@@ -1566,6 +1580,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   skills: Schema.optional(Schema.Array(ProviderSkillReference)),
   mentions: Schema.optional(Schema.Array(ProviderMentionReference)),
   dispatchMode: Schema.optional(TurnDispatchMode),
+  dispatchOrigin: Schema.optional(MessageDispatchOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   source: OrchestrationMessageSource.pipe(Schema.withDecodingDefault(() => "native")),

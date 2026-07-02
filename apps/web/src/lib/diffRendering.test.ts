@@ -7,8 +7,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildFileDiffRenderKey,
   buildPatchCacheKey,
+  fileDiffStatsByPath,
   getRenderablePatch,
   resolveDiffCopyText,
+  resolveFileDiffStatByChangedPath,
   resolveFileDiffPath,
   sortFileDiffsByPath,
   splitRepoRelativePath,
@@ -221,5 +223,74 @@ describe("summarizePatchTotals", () => {
 
   it("returns null when the patch has no file diffs", () => {
     expect(summarizePatchTotals(undefined)).toBeNull();
+  });
+});
+
+describe("fileDiffStatsByPath", () => {
+  it("builds per-file stats from a parsed patch", () => {
+    const patch = [
+      "diff --git a/src/one.ts b/src/one.ts",
+      "index 1111111..2222222 100644",
+      "--- a/src/one.ts",
+      "+++ b/src/one.ts",
+      "@@ -1,2 +1,2 @@",
+      "-const one = 1;",
+      "+const one = 2;",
+      " const stable = true;",
+      "diff --git a/src/two.ts b/src/two.ts",
+      "index 3333333..4444444 100644",
+      "--- a/src/two.ts",
+      "+++ b/src/two.ts",
+      "@@ -0,0 +1,2 @@",
+      "+const two = 2;",
+      "+export { two };",
+      "",
+    ].join("\n");
+
+    expect(fileDiffStatsByPath(patch)).toEqual(
+      new Map([
+        ["src/one.ts", { additions: 1, deletions: 1 }],
+        ["src/two.ts", { additions: 2, deletions: 0 }],
+      ]),
+    );
+  });
+});
+
+describe("resolveFileDiffStatByChangedPath", () => {
+  it("matches absolute changed-file paths to repo-relative patch stats", () => {
+    const stat = { additions: 2, deletions: 1 };
+    const statsByPath = new Map([["apps/web/src/App.tsx", stat]]);
+
+    expect(
+      resolveFileDiffStatByChangedPath(
+        statsByPath,
+        "/Users/example/project/apps/web/src/App.tsx",
+        2,
+      ),
+    ).toBe(stat);
+  });
+
+  it("does not reuse a sole parsed stat across unrelated files in a multi-file row", () => {
+    const statsByPath = new Map([["src/only-patched.ts", { additions: 3, deletions: 0 }]]);
+
+    expect(resolveFileDiffStatByChangedPath(statsByPath, "src/unrelated.ts", 2)).toBeUndefined();
+  });
+
+  it("keeps the single-file fallback when the visible row also has one changed file", () => {
+    const stat = { additions: 1, deletions: 4 };
+    const statsByPath = new Map([["src/generated-name.ts", stat]]);
+
+    expect(resolveFileDiffStatByChangedPath(statsByPath, "provider-reported-name.ts", 1)).toBe(
+      stat,
+    );
+  });
+
+  it("avoids ambiguous basename matches", () => {
+    const statsByPath = new Map([
+      ["src/a/index.ts", { additions: 1, deletions: 0 }],
+      ["src/b/index.ts", { additions: 0, deletions: 1 }],
+    ]);
+
+    expect(resolveFileDiffStatByChangedPath(statsByPath, "index.ts", 2)).toBeUndefined();
   });
 });

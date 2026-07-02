@@ -50,10 +50,9 @@ export const OpenInPicker = memo(function OpenInPicker({
   // Optional project "Add action" entry rendered at the bottom of the editor menu.
   onAddAction?: () => void;
   // "responsive" (default) hides the "Open" label until the `header-actions`
-  // container is wide enough; "always" keeps it visible regardless. Surfaces
-  // without that container (e.g. the file-preview header) pass "always" so the
-  // label shows without needing an inline-size container that would collapse
-  // the control's own width.
+  // inline-size container (declared on an ancestor — the chat header and the
+  // file-preview header both do) is wide enough; "always" keeps it visible
+  // regardless, for surfaces that don't establish that container.
   labelMode?: "responsive" | "always";
   // Pins the primary "Open" action to a specific editor for this surface without
   // mutating the shared preferred-editor setting. The PDF viewer uses this to default

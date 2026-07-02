@@ -5,7 +5,10 @@
 // Layer: web profile feature.
 
 import { toBlob } from "html-to-image";
+import { copyPngBlobToDesktopClipboard } from "~/lib/desktopClipboard";
 import { readNativeApi } from "~/nativeApi";
+
+export { downloadBlob } from "~/lib/browserDownload";
 
 const SHARE_BRAND_HANDLE = "@trySynara";
 export const SHARE_TWEET_TEXT = `Just checking my ${SHARE_BRAND_HANDLE} dev stats. Absolute masterpiece of an IDE.`;
@@ -33,6 +36,10 @@ export async function renderNodeToPngBlob(
 }
 
 export async function copyImageToClipboard(blob: Blob): Promise<boolean> {
+  if (await copyPngBlobToDesktopClipboard(blob)) {
+    return true;
+  }
+
   try {
     if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
       return false;
@@ -41,20 +48,6 @@ export async function copyImageToClipboard(blob: Blob): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-export function downloadBlob(blob: Blob, filename: string): void {
-  const url = URL.createObjectURL(blob);
-  try {
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-  } finally {
-    URL.revokeObjectURL(url);
   }
 }
 

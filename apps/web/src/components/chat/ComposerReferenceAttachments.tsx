@@ -78,7 +78,7 @@ export function ComposerReferenceAttachments({
         />
       ))}
       {files.map((file) => (
-        <FileAttachmentChip key={file.id} file={file} nonPersisted onRemove={onRemoveFile} />
+        <FileAttachmentChip key={file.id} file={file} variant="card" onRemove={onRemoveFile} />
       ))}
       {images.map((image) => (
         <ComposerImageAttachmentChip

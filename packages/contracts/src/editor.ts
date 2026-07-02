@@ -19,7 +19,17 @@ type EditorDefinition = {
   readonly label: string;
   readonly commands: readonly [string, ...string[]] | null;
   readonly macApplications?: readonly [string, ...string[]];
+  readonly windowsUriScheme?: string;
+  readonly windowsStorePackages?: readonly [
+    WindowsStorePackageDefinition,
+    ...WindowsStorePackageDefinition[],
+  ];
   readonly launchStyle: EditorLaunchStyle;
+};
+
+type WindowsStorePackageDefinition = {
+  readonly packageName: string;
+  readonly publisherId: string;
 };
 
 export const EDITORS = [
@@ -42,6 +52,10 @@ export const EDITORS = [
     label: "VS Code",
     commands: ["code"],
     macApplications: ["Visual Studio Code"],
+    windowsUriScheme: "vscode",
+    windowsStorePackages: [
+      { packageName: "Microsoft.VisualStudioCode", publisherId: "8wekyb3d8bbwe" },
+    ],
     launchStyle: "goto",
   },
   {
@@ -49,6 +63,7 @@ export const EDITORS = [
     label: "VS Code Insiders",
     commands: ["code-insiders"],
     macApplications: ["Visual Studio Code - Insiders"],
+    windowsUriScheme: "vscode-insiders",
     launchStyle: "goto",
   },
   {
@@ -91,6 +106,13 @@ export const EDITORS = [
     label: "Ghostty",
     commands: ["ghostty"],
     macApplications: ["Ghostty"],
+    launchStyle: "terminal-working-directory",
+  },
+  {
+    id: "muxy",
+    label: "Muxy",
+    commands: ["muxy"],
+    macApplications: ["Muxy"],
     launchStyle: "terminal-working-directory",
   },
   {

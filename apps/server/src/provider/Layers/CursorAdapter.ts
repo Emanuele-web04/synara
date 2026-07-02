@@ -22,6 +22,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -80,13 +81,17 @@ import {
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
   fetchCursorAcpModelDescriptors,
   makeCursorAcpRuntime,
   parseCursorCliModelList,
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
-import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
+import {
+  buildCursorAgentHeadlessEnv,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -1476,15 +1481,19 @@ export function makeCursorAdapter(
       );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
+        const command = buildCursorCliModelListCommand({
+          binaryPath: effectiveBinaryPath,
+          ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        });
+        const env = buildCursorAgentHeadlessEnv();
+        const prepared = prepareWindowsSafeProcess(command.command, command.args, {
+          env,
+        });
         const child = yield* childProcessSpawner.spawn(
-          ChildProcess.make(
-            effectiveBinaryPath,
-            [...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []), "models"],
-            {
-              shell: process.platform === "win32",
-              env: process.env,
-            },
-          ),
+          ChildProcess.make(prepared.command, prepared.args, {
+            shell: prepared.shell,
+            env,
+          }),
         );
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
@@ -1500,7 +1509,7 @@ export function makeCursorAdapter(
             method: "model/list",
             detail:
               stderr.trim() ||
-              `Cursor model discovery failed because '${effectiveBinaryPath} models' exited with code ${exitCode}.`,
+              `Cursor model discovery failed because '${[command.command, ...command.args].join(" ")}' exited with code ${exitCode}.`,
           });
         }
         const models = parseCursorCliModelList(stdout);

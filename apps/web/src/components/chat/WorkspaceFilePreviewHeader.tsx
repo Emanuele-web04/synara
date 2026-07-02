@@ -2,8 +2,11 @@
 // Purpose: Editor-style header for the shared workspace file preview — a path
 //          breadcrumb (project › …dirs › file) on the left, and an overflow
 //          menu + "Open in editor" split button on the right. Shared by the
-//          right-dock file pane and the editor center pane so both surfaces
-//          read identically.
+//          right-dock file/explorer panes and the editor center pane so every
+//          surface reads identically. The header is a `header-actions` inline-size
+//          query container, so the breadcrumb collapses dir-first then truncates
+//          the filename, and the controls (markdown toggle, "Open") shed their
+//          text labels for icons as the pane narrows — no overlap at any width.
 // Layer: Chat/editor file-preview UI
 // Exports: WorkspaceFilePreviewHeader
 
@@ -98,7 +101,7 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
   return (
     <div
       className={cn(
-        "flex h-10 shrink-0 items-center gap-2 px-3",
+        "@container/header-actions flex h-10 w-full shrink-0 items-center gap-2 px-3",
         CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
       )}
     >
@@ -106,7 +109,12 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
         aria-label="File path"
         className="flex min-w-0 flex-1 items-center text-[12px] leading-none"
       >
-        <span className="flex min-w-0 items-center overflow-hidden">
+        {/* Dir prefix shrinks far faster than the filename (shrink-[9999]), so under
+            width pressure it collapses to nothing before the filename gives up any
+            room; only once the prefix is gone does the filename itself truncate.
+            This keeps the filename pinned-yet-bounded so it never overflows into the
+            controls on its right. */}
+        <span className="flex min-w-0 shrink-[9999] items-center overflow-hidden">
           {prefixSegments.map((segment) => (
             <Fragment key={segment.key}>
               <span className="truncate text-muted-foreground/80">{segment.name}</span>
@@ -117,13 +125,15 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
             </Fragment>
           ))}
         </span>
-        <span className="shrink-0 truncate font-medium text-foreground" title={filePath}>
+        <span className="min-w-0 shrink truncate font-medium text-foreground" title={filePath}>
           {fileSegment}
         </span>
       </nav>
 
       {props.truncated ? (
-        <span className="shrink-0 text-[10px] text-muted-foreground/70">Shown partially</span>
+        <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
+          Shown partially
+        </span>
       ) : null}
 
       <div className="flex shrink-0 items-center gap-1.5">
@@ -151,7 +161,9 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
                   onClick={() => props.onMarkdownPreviewChange(segment.rendered)}
                 >
                   <segment.Icon aria-hidden="true" className="size-3.5 shrink-0" />
-                  {segment.label}
+                  {/* Label collapses to icon-only on a narrow pane; the title +
+                      sr-only text keep both modes labelled for a11y/tooltips. */}
+                  <span className="sr-only @sm/header-actions:not-sr-only">{segment.label}</span>
                 </button>
               );
             })}
@@ -174,13 +186,15 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
           </Menu>
         ) : null}
 
+        {/* Responsive (default) mode: the "Open" label rides the same
+            `header-actions` container declared on this header, so it shows on a
+            wide pane and collapses to the editor icon when the pane is narrow. */}
         <OpenInPicker
           openInTarget={
             fileIsOutsideWorkspace || !workspaceRoot
               ? filePath
               : joinWorkspaceRelativePath(workspaceRoot, filePath)
           }
-          labelMode="always"
         />
       </div>
     </div>

@@ -43,7 +43,7 @@ import {
   type ThreadWorkspacePatch,
 } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
-import { hasLiveTurnTailWork } from "./session-logic";
+import { hasLiveTurnTailWork, isSessionRunningTurn } from "./session-logic";
 import { deriveThreadSummaryMetadata } from "@t3tools/shared/threadSummary";
 import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
 import { toAttachmentPreviewUrl } from "./lib/wsHttpUrl";
@@ -68,6 +68,7 @@ export interface AppState {
   proposedPlanByThreadId?: Record<ThreadId, Record<string, Thread["proposedPlans"][number]>>;
   turnDiffIdsByThreadId?: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId?: Record<ThreadId, Record<TurnId, Thread["turnDiffSummaries"][number]>>;
+  deletedThreadIdsById?: Record<ThreadId, true>;
 }
 
 type ReadModelProject = OrchestrationReadModel["projects"][number];
@@ -155,6 +156,7 @@ const initialState: AppState = {
   proposedPlanByThreadId: {},
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
+  deletedThreadIdsById: {},
 };
 const persistedExpandedProjectCwds = new Set<string>();
 const persistedProjectOrderCwds: string[] = [];
@@ -878,6 +880,7 @@ function normalizeChatMessage(
     previous.role === incoming.role &&
     previous.text === incoming.text &&
     previous.dispatchMode === incoming.dispatchMode &&
+    previous.dispatchOrigin === incoming.dispatchOrigin &&
     previous.turnId === incoming.turnId &&
     previous.createdAt === incoming.createdAt &&
     previous.streaming === incoming.streaming &&
@@ -895,6 +898,7 @@ function normalizeChatMessage(
     role: incoming.role,
     text: incoming.text,
     ...(incoming.dispatchMode ? { dispatchMode: incoming.dispatchMode } : {}),
+    ...(incoming.dispatchOrigin ? { dispatchOrigin: incoming.dispatchOrigin } : {}),
     turnId: incoming.turnId,
     createdAt: incoming.createdAt,
     streaming: incoming.streaming,
@@ -956,6 +960,7 @@ function readModelMessageFromChatMessage(
     role: message.role,
     text: message.text,
     ...(message.dispatchMode ? { dispatchMode: message.dispatchMode } : {}),
+    ...(message.dispatchOrigin ? { dispatchOrigin: message.dispatchOrigin } : {}),
     turnId: message.turnId ?? null,
     streaming: message.streaming,
     source: message.source ?? "native",
@@ -1041,6 +1046,7 @@ function mergeReadModelMessagesWithLiveHotPath(
       ...incomingMessage,
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
+      dispatchOrigin: previousMessage.dispatchOrigin ?? incomingMessage.dispatchOrigin,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
@@ -2139,6 +2145,9 @@ function sidebarThreadSummariesEqual(
     left.envMode === right.envMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
+    (left.associatedWorktreePath ?? null) === (right.associatedWorktreePath ?? null) &&
+    (left.associatedWorktreeBranch ?? null) === (right.associatedWorktreeBranch ?? null) &&
+    (left.associatedWorktreeRef ?? null) === (right.associatedWorktreeRef ?? null) &&
     left.session === right.session &&
     left.createdAt === right.createdAt &&
     (left.archivedAt ?? null) === (right.archivedAt ?? null) &&
@@ -2178,6 +2187,9 @@ function buildSidebarThreadSummary(
     envMode: thread.envMode,
     branch: thread.branch,
     worktreePath: thread.worktreePath,
+    associatedWorktreePath: thread.associatedWorktreePath ?? null,
+    associatedWorktreeBranch: thread.associatedWorktreeBranch ?? null,
+    associatedWorktreeRef: thread.associatedWorktreeRef ?? null,
     session: thread.session,
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt ?? null,
@@ -2449,7 +2461,20 @@ function removeThreadState(state: AppState, threadId: ThreadId): AppState {
 
 // Removes a successfully deleted thread from every client-side projection immediately.
 export function removeDeletedThreadFromClientState(state: AppState, threadId: ThreadId): AppState {
-  return removeThreadState(state, threadId);
+  const deletedThreadIdsById =
+    state.deletedThreadIdsById?.[threadId] === true
+      ? state.deletedThreadIdsById
+      : {
+          ...(state.deletedThreadIdsById ?? {}),
+          [threadId]: true,
+        };
+  const nextState = removeThreadState(state, threadId);
+  return nextState.deletedThreadIdsById === deletedThreadIdsById
+    ? nextState
+    : {
+        ...nextState,
+        deletedThreadIdsById,
+      };
 }
 
 // Drop a project and any thread-scoped state that still points at it.
@@ -2615,7 +2640,7 @@ function reconcileLatestTurnFromSession(
   session: NonNullable<ReadModelThread["session"]>,
   error: string | null,
 ): Thread["latestTurn"] {
-  if (session.status === "running" && session.activeTurnId !== null) {
+  if (isSessionRunningTurn(session)) {
     return buildLatestTurn({
       previous: thread.latestTurn,
       turnId: session.activeTurnId,
@@ -2961,6 +2986,10 @@ function mergeStreamingMessage(
     incomingMessage.dispatchMode !== undefined
       ? incomingMessage.dispatchMode
       : existingMessage.dispatchMode;
+  const nextDispatchOrigin =
+    incomingMessage.dispatchOrigin !== undefined
+      ? incomingMessage.dispatchOrigin
+      : existingMessage.dispatchOrigin;
   const nextSource = incomingMessage.source ?? existingMessage.source;
 
   if (
@@ -2972,6 +3001,7 @@ function mergeStreamingMessage(
     existingMessage.completedAt === nextCompletedAt &&
     existingMessage.turnId === nextTurnId &&
     existingMessage.dispatchMode === nextDispatchMode &&
+    existingMessage.dispatchOrigin === nextDispatchOrigin &&
     existingMessage.source === nextSource
   ) {
     return null;
@@ -2986,6 +3016,7 @@ function mergeStreamingMessage(
     ...(nextMentions && nextMentions.length > 0 ? { mentions: [...nextMentions] } : {}),
     ...(nextTurnId !== undefined ? { turnId: nextTurnId } : {}),
     ...(nextDispatchMode !== undefined ? { dispatchMode: nextDispatchMode } : {}),
+    ...(nextDispatchOrigin !== undefined ? { dispatchOrigin: nextDispatchOrigin } : {}),
     ...(nextSource !== undefined ? { source: nextSource } : {}),
     ...(nextCompletedAt !== undefined ? { completedAt: nextCompletedAt } : {}),
   };
@@ -2999,6 +3030,7 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       role: payload.role,
       text: payload.text,
       dispatchMode: payload.dispatchMode,
+      dispatchOrigin: payload.dispatchOrigin,
       turnId: payload.turnId,
       attachments: payload.attachments ?? [],
       ...(payload.skills !== undefined ? { skills: payload.skills } : {}),
@@ -3144,7 +3176,7 @@ function applyOrchestrationEvent(
 
     case "thread.deleted":
       // Deletion is terminal for both active sidebar rows and archived settings rows.
-      return removeThreadState(state, event.payload.threadId);
+      return removeDeletedThreadFromClientState(state, event.payload.threadId);
 
     case "thread.meta-updated":
       return applyThreadUpdate(
@@ -3947,8 +3979,12 @@ export function syncServerShellSnapshot(
 ): AppState {
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
+  const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
+  const snapshotThreads = snapshot.threads.filter(
+    (thread) => deletedThreadIdsById[thread.id] !== true,
+  );
   const projects = mapProjectsFromShellSnapshot(snapshot.projects, state.projects);
-  const nextThreadIds = new Set(snapshot.threads.map((thread) => thread.id));
+  const nextThreadIds = new Set(snapshotThreads.map((thread) => thread.id));
 
   let normalizedState: AppState = {
     ...state,
@@ -3972,7 +4008,7 @@ export function syncServerShellSnapshot(
     ),
   };
 
-  for (const thread of snapshot.threads) {
+  for (const thread of snapshotThreads) {
     const previousThread = getThreadFromState(state, thread.id);
     normalizedState = writeThreadShellProjection(
       normalizedState,
@@ -4034,10 +4070,16 @@ function syncServerThreadDetailWithOptions(
 }
 
 export function syncServerThreadDetail(state: AppState, thread: ReadModelThread): AppState {
+  if (state.deletedThreadIdsById?.[thread.id] === true) {
+    return removeThreadState(state, thread.id);
+  }
   return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: true });
 }
 
 export function syncServerThreadDetailHotPath(state: AppState, thread: ReadModelThread): AppState {
+  if (state.deletedThreadIdsById?.[thread.id] === true) {
+    return removeThreadState(state, thread.id);
+  }
   return syncServerThreadDetailWithOptions(state, thread, { updateThreadArray: false });
 }
 
@@ -4048,6 +4090,9 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
     case "project-removed":
       return removeProjectState(state, event.projectId);
     case "thread-upserted": {
+      if (state.deletedThreadIdsById?.[event.thread.id] === true) {
+        return removeThreadState(state, event.thread.id);
+      }
       const nextState = writeThreadShellProjection(
         state,
         normalizeThreadShellSnapshot(event.thread, getThreadFromState(state, event.thread.id)),
@@ -4055,6 +4100,7 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
       return commitThreadProjection(nextState, event.thread.id);
     }
     case "thread-removed":
+      // Shell removals can be retryable draft rollbacks; explicit delete reconciliation owns tombstones.
       return removeThreadState(state, event.threadId);
   }
 }
@@ -4062,13 +4108,14 @@ export function applyShellEvent(state: AppState, event: OrchestrationShellStream
 export function syncServerReadModel(state: AppState, readModel: OrchestrationReadModel): AppState {
   rememberProjectUiState(state.projects);
   rememberProjectLocalNames(state.projects);
+  const deletedThreadIdsById = state.deletedThreadIdsById ?? {};
   const projects = mapProjectsFromReadModel(
     readModel.projects.filter((project) => project.deletedAt === null),
     state.projects,
   );
   const existingThreadById = new Map(state.threads.map((thread) => [thread.id, thread] as const));
   const nextThreads = readModel.threads
-    .filter((thread) => thread.deletedAt === null)
+    .filter((thread) => thread.deletedAt === null && deletedThreadIdsById[thread.id] !== true)
     .map((thread) => {
       const existing = existingThreadById.get(thread.id);
       return normalizeThreadFromReadModel(thread, existing);

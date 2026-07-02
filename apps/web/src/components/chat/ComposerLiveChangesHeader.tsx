@@ -24,7 +24,9 @@ interface ComposerLiveChangesHeaderProps {
   fileCount: number | null;
   additions: number;
   deletions: number;
-  onReview: () => void;
+  // Explicit `| undefined` (not just `?`) so callers can pass a conditionally-absent
+  // handler under exactOptionalPropertyTypes; the Review button is hidden when omitted.
+  onReview?: (() => void) | undefined;
   attachedToPrevious?: boolean;
 }
 
@@ -53,7 +55,7 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
             </span>
           ) : null}
         </ComposerStackedPanelRowMain>
-        <ReviewChangesButton onClick={onReview} />
+        {onReview ? <ReviewChangesButton onClick={onReview} /> : null}
       </ComposerStackedPanelRow>
     </ComposerStackedPanel>
   );

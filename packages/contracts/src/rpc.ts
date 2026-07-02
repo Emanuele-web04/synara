@@ -91,6 +91,8 @@ import {
   ProviderReadPluginResult,
 } from "./providerDiscovery";
 import {
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
@@ -294,6 +296,15 @@ export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   success: ProjectReadFileResult,
   error: WsRpcError,
 });
+
+export const WsProjectsCreateLocalFilePreviewGrantRpc = Rpc.make(
+  WS_METHODS.projectsCreateLocalFilePreviewGrant,
+  {
+    payload: ProjectCreateLocalFilePreviewGrantInput,
+    success: ProjectCreateLocalFilePreviewGrantResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
@@ -805,6 +816,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
   WsProjectsReadFileRpc,
+  WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
   WsProjectsRunDevServerRpc,
   WsProjectsStopDevServerRpc,

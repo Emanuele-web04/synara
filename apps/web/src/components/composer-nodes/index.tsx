@@ -21,7 +21,6 @@ import {
 } from "lexical";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RiRobot3Line } from "react-icons/ri";
 
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -42,7 +41,7 @@ import {
   formatComposerSkillChipLabel,
   resolveAgentChipColor,
 } from "../composerInlineChip";
-import { ClockIcon } from "~/lib/icons";
+import { AGENT_ROBOT_ICON_NAME, ClockIcon } from "~/lib/icons";
 import type { ComposerSlashCommand } from "~/composerSlashCommands";
 import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
@@ -173,10 +172,6 @@ function renderSlashCommandChipDom(container: HTMLElement, command: ComposerSlas
   container.append(icon, label);
 }
 
-const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
-  <RiRobot3Line aria-hidden="true" className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />,
-);
-
 function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
   resetInlineChipContainer(container);
 
@@ -184,16 +179,20 @@ function renderAgentMentionChipDom(container: HTMLElement, alias: string, color:
   container.style.backgroundColor = colorStyles.bg;
   container.style.color = colorStyles.text;
 
-  const icon = document.createElement("span");
-  icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME;
-  icon.innerHTML = AGENT_ROBOT_ICON_SVG;
+  const icon = createCentralIconElement(
+    AGENT_ROBOT_ICON_NAME,
+    COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
+  );
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
   label.textContent = `@${alias}`;
 
-  container.append(icon, label);
+  if (icon) {
+    container.append(icon, label);
+  } else {
+    container.append(label);
+  }
 }
 
 function ComposerLinkDecorator(props: { url: string }) {

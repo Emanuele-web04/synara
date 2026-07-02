@@ -7,9 +7,8 @@
 import { type ButtonHTMLAttributes, type ReactNode, useState } from "react";
 
 import { ChevronRightIcon, FileIcon } from "~/lib/icons";
-import { cn } from "~/lib/utils";
 import { formatPastedTextCountLabel, pastedTextTitle } from "~/lib/composerPastedText";
-import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
+import { AttachmentCard } from "./AttachmentCard";
 
 interface PastedTextCardMetrics {
   lineCount: number;
@@ -44,30 +43,15 @@ function PastedTextCardShell({
   className?: string;
 }) {
   return (
-    <div
-      className={cn(
-        "group relative inline-flex max-w-[16rem] items-center gap-2 rounded-lg border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] py-1 pl-1",
-        onRemove ? "pr-5" : "pr-2",
-        className,
-      )}
-    >
-      <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-[var(--color-background-elevated-secondary)] text-muted-foreground">
-        <FileIcon className="size-3" />
-      </span>
-      <span className="flex min-w-0 flex-col leading-tight">
-        <span className="truncate text-xs font-medium text-foreground">
-          {pastedTextTitle(text)}
-        </span>
-        {action}
-      </span>
-      {onRemove ? (
-        <AttachmentRemoveButton
-          size="sm"
-          label={`Remove pasted text (${formatPastedTextCountLabel(metrics)})`}
-          onRemove={onRemove}
-        />
-      ) : null}
-    </div>
+    <AttachmentCard
+      size="sm"
+      className={className}
+      icon={<FileIcon className="size-3" />}
+      title={pastedTextTitle(text)}
+      subtitle={action}
+      onRemove={onRemove}
+      removeLabel={`Remove pasted text (${formatPastedTextCountLabel(metrics)})`}
+    />
   );
 }
 

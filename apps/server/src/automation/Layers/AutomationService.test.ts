@@ -1,21 +1,31 @@
 import { assert, it } from "@effect/vitest";
 import {
   AutomationId,
+  type AutomationListResult,
   AutomationRunId,
   CommandId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   MessageId,
   ProjectId,
   ThreadId,
   TurnId,
   type AutomationCreateInput,
+  type AutomationRun,
   type GitCreateWorktreeInput,
+  type GitRemoveWorktreeInput,
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
 } from "@t3tools/contracts";
-import { Effect, Layer, Option, Stream } from "effect";
+import { Duration, Effect, Layer, Option, Stream } from "effect";
+import { TestClock } from "effect/testing";
 
-import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
+import {
+  GitCore,
+  type GitCoreShape,
+  type GitDeleteBranchInput,
+} from "../../git/Services/GitCore.ts";
+import { TextGeneration, type TextGenerationShape } from "../../git/Services/TextGeneration.ts";
 import { OrchestrationCommandInternalError } from "../../orchestration/Errors.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import type { OrchestrationEngineShape } from "../../orchestration/Services/OrchestrationEngine.ts";
@@ -26,7 +36,8 @@ import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/Projectio
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
-import { AutomationService } from "../Services/AutomationService.ts";
+import { ServerSettingsService } from "../../serverSettings.ts";
+import { AutomationService, type AutomationServiceShape } from "../Services/AutomationService.ts";
 import { AutomationServiceLive } from "./AutomationService.ts";
 
 const now = "2026-06-16T10:00:00.000Z";
@@ -48,11 +59,33 @@ const project: OrchestrationProjectShell = {
 
 const dispatchedCommands: OrchestrationCommand[] = [];
 const createdWorktrees: GitCreateWorktreeInput[] = [];
+const removedWorktrees: GitRemoveWorktreeInput[] = [];
+const deletedBranches: GitDeleteBranchInput[] = [];
+type CompletionEvaluationInputForTest = Parameters<
+  TextGenerationShape["evaluateAutomationCompletion"]
+>[0];
 let gitMode: "nonRepo" | "worktree" = "nonRepo";
 let gitStatusHook: ((cwd: string) => Effect.Effect<void>) | null = null;
+let createWorktreeHook: ((input: GitCreateWorktreeInput) => Effect.Effect<void>) | null = null;
 // Configurable thread shell returned by the ProjectionSnapshotQuery mock; reconcile
 // tests set it to drive the run's latest-turn outcome.
 let threadShell: Option.Option<OrchestrationThreadShell> = Option.none();
+let threadDetail: Option.Option<unknown> = Option.none();
+let completionEvaluation: {
+  readonly stopMatched: boolean;
+  readonly confidence: number;
+  readonly reason: string;
+} = {
+  stopMatched: false,
+  confidence: 0.2,
+  reason: "Stop condition was not met.",
+};
+let completionEvaluationFailure: Error | null = null;
+let completionEvaluationInputs: CompletionEvaluationInputForTest[] = [];
+let completionEvaluationGate: {
+  readonly started: () => void;
+  readonly wait: Promise<void>;
+} | null = null;
 // When set, the orchestration dispatch mock fails on the matching command type so we
 // can exercise the failed-run / advance-after-dispatch paths.
 let failDispatchType: OrchestrationCommand["type"] | null = null;
@@ -63,9 +96,21 @@ let dispatchHook:
 function resetHarness() {
   dispatchedCommands.length = 0;
   createdWorktrees.length = 0;
+  removedWorktrees.length = 0;
+  deletedBranches.length = 0;
   gitMode = "nonRepo";
   gitStatusHook = null;
+  createWorktreeHook = null;
   threadShell = Option.none();
+  threadDetail = Option.none();
+  completionEvaluation = {
+    stopMatched: false,
+    confidence: 0.2,
+    reason: "Stop condition was not met.",
+  };
+  completionEvaluationFailure = null;
+  completionEvaluationInputs = [];
+  completionEvaluationGate = null;
   failDispatchType = null;
   dispatchHook = null;
 }
@@ -101,6 +146,184 @@ function makeLatestTurn(
     completedAt: state === "completed" ? now : null,
     assistantMessageId: null,
   } as unknown as OrchestrationThreadShell["latestTurn"];
+}
+
+function makeThreadDetailForRun(input: {
+  readonly runId: AutomationRunId;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly messageId: MessageId;
+  readonly userText: string;
+  readonly assistantText: string | null;
+  readonly extraMessages?:
+    | ReadonlyArray<{
+        readonly id: MessageId;
+        readonly role: string;
+        readonly text: string;
+        readonly turnId: TurnId | null;
+        readonly streaming: boolean;
+        readonly source: string;
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      }>
+    | undefined;
+}) {
+  return {
+    ...makeThreadShell({
+      id: input.threadId,
+      latestTurn: makeLatestTurn("completed", input.turnId),
+    }),
+    messages: [
+      {
+        id: input.messageId,
+        role: "user",
+        text: input.userText,
+        turnId: input.turnId,
+        streaming: false,
+        source: "native",
+        createdAt: now,
+        updatedAt: now,
+      },
+      ...(input.assistantText === null
+        ? []
+        : [
+            {
+              id: MessageId.makeUnsafe(`assistant-${input.runId}`),
+              role: "assistant",
+              text: input.assistantText,
+              turnId: input.turnId,
+              streaming: false,
+              source: "native",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ]),
+      ...(input.extraMessages ?? []),
+    ],
+  };
+}
+
+function heartbeatCompletionPolicy(stopWhen: string) {
+  return {
+    type: "ai-evaluated" as const,
+    stopWhen,
+    confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  };
+}
+
+// Completes a heartbeat turn and exposes the transcript used by AI stop-condition checks.
+function completeHeartbeatRun(input: {
+  readonly run: AutomationRun;
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+  readonly userText?: string;
+  readonly assistantText?: string | null;
+  readonly extraMessages?: Parameters<typeof makeThreadDetailForRun>[0]["extraMessages"];
+}) {
+  return Effect.gen(function* () {
+    const projectionTurns = yield* ProjectionTurnRepository;
+    const messageId = input.run.messageId;
+    if (messageId === null) {
+      throw new Error("Expected heartbeat run to have a pending message id.");
+    }
+    yield* projectionTurns.upsertByTurnId({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      pendingMessageId: messageId,
+      sourceProposedPlanThreadId: null,
+      sourceProposedPlanId: null,
+      assistantMessageId: null,
+      state: "completed",
+      requestedAt: now,
+      startedAt: now,
+      completedAt: now,
+      checkpointTurnCount: null,
+      checkpointRef: null,
+      checkpointStatus: null,
+      checkpointFiles: [],
+    });
+    threadShell = Option.some(
+      makeThreadShell({
+        id: input.threadId,
+        latestTurn: makeLatestTurn("completed", input.turnId),
+      }),
+    );
+    threadDetail = Option.some(
+      makeThreadDetailForRun({
+        runId: input.run.id,
+        threadId: input.threadId,
+        turnId: input.turnId,
+        messageId,
+        userText: input.userText ?? "Check whether the PR is ready.",
+        assistantText: input.assistantText === undefined ? "The PR is ready." : input.assistantText,
+        extraMessages: input.extraMessages,
+      }),
+    );
+  });
+}
+
+function holdCompletionEvaluation() {
+  let releaseEvaluation: () => void = () => undefined;
+  const started = new Promise<void>((resolve) => {
+    completionEvaluationGate = {
+      started: resolve,
+      wait: new Promise<void>((release) => {
+        releaseEvaluation = release;
+      }),
+    };
+  });
+  return {
+    started,
+    release: () => releaseEvaluation(),
+  };
+}
+
+function realDelay(ms: number) {
+  return Effect.promise(() => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+}
+
+function waitForPromise(input: {
+  readonly promise: Promise<void>;
+  readonly timeoutMs: number;
+  readonly description: string;
+}) {
+  return Effect.promise(
+    () =>
+      new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(
+          () => reject(new Error(`Timed out waiting for ${input.description}.`)),
+          input.timeoutMs,
+        );
+        input.promise.then(
+          () => {
+            clearTimeout(timer);
+            resolve();
+          },
+          (error) => {
+            clearTimeout(timer);
+            reject(error);
+          },
+        );
+      }),
+  );
+}
+
+// Polls the automation list until a background stop-check write becomes visible.
+function waitForAutomationList(input: {
+  readonly service: AutomationServiceShape;
+  readonly description: string;
+  readonly predicate: (listed: AutomationListResult) => boolean;
+}) {
+  return Effect.gen(function* () {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const listed = yield* input.service.list({ projectId });
+      if (input.predicate(listed)) {
+        return listed;
+      }
+      yield* realDelay(10);
+    }
+    throw new Error(`Timed out waiting for ${input.description}.`);
+  });
 }
 
 const createInput = (
@@ -184,9 +407,33 @@ const projectionSnapshotQuery = {
   getFullThreadDiffContext: () => Effect.succeed(Option.none()),
   getThreadShellById: () => Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
-  getThreadDetailById: () => Effect.succeed(Option.none()),
+  getThreadDetailById: () => Effect.succeed(threadDetail as never),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
 } as unknown as ProjectionSnapshotQueryShape;
+
+const textGeneration = {
+  generateCommitMessage: () => Effect.die("unused"),
+  generatePrContent: () => Effect.die("unused"),
+  generateDiffSummary: () => Effect.die("unused"),
+  generateBranchName: () => Effect.die("unused"),
+  generateThreadTitle: () => Effect.die("unused"),
+  generateThreadRecap: () => Effect.die("unused"),
+  generateAutomationIntent: () => Effect.die("unused"),
+  evaluateAutomationCompletion: (input: CompletionEvaluationInputForTest) => {
+    completionEvaluationInputs.push(input);
+    if (completionEvaluationFailure) {
+      return Effect.fail(completionEvaluationFailure);
+    }
+    const gate = completionEvaluationGate;
+    return gate
+      ? Effect.promise(async () => {
+          gate.started();
+          await gate.wait;
+          return completionEvaluation;
+        })
+      : Effect.succeed(completionEvaluation);
+  },
+} as unknown as TextGenerationShape;
 
 const gitCore = {
   statusDetails: (cwd: string) =>
@@ -210,14 +457,25 @@ const gitCore = {
       };
     }),
   createWorktree: (input: GitCreateWorktreeInput) =>
-    Effect.sync(() => {
+    Effect.gen(function* () {
       createdWorktrees.push(input);
+      if (createWorktreeHook) {
+        yield* createWorktreeHook(input);
+      }
       return {
         worktree: {
           path: "/tmp/automation-worktree",
           branch: input.newBranch ?? input.branch,
         },
       };
+    }),
+  removeWorktree: (input: GitRemoveWorktreeInput) =>
+    Effect.sync(() => {
+      removedWorktrees.push(input);
+    }),
+  deleteBranch: (input: GitDeleteBranchInput) =>
+    Effect.sync(() => {
+      deletedBranches.push(input);
     }),
 } as unknown as GitCoreShape;
 
@@ -228,6 +486,8 @@ const layer = it.layer(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(Layer.succeed(OrchestrationEngineService, orchestrationEngine)),
     Layer.provideMerge(Layer.succeed(ProjectionSnapshotQuery, projectionSnapshotQuery)),
+    Layer.provideMerge(Layer.succeed(TextGeneration, textGeneration)),
+    Layer.provideMerge(ServerSettingsService.layerTest()),
     Layer.provideMerge(Layer.succeed(GitCore, gitCore)),
   ),
 );
@@ -308,14 +568,149 @@ layer("AutomationService", (it) => {
       const threadCreate = dispatchedCommands[0];
 
       assert.strictEqual(createdWorktrees.length, 1);
-      assert.match(createdWorktrees[0]?.newBranch ?? "", /^automation\/nightly-maintenance\//);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
+      assert.match(createdWorktreeBranch, /^automation\/nightly-maintenance\//);
       assert.strictEqual(threadCreate?.type, "thread.create");
       if (threadCreate?.type !== "thread.create") {
         assert.fail("Expected thread.create command.");
       }
       assert.strictEqual(threadCreate.envMode, "worktree");
       assert.strictEqual(threadCreate.worktreePath, "/tmp/automation-worktree");
-      assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktrees[0]?.newBranch);
+      assert.strictEqual(threadCreate.associatedWorktreeBranch, createdWorktreeBranch);
+    }),
+  );
+
+  it.effect("cleans up a new worktree when standalone thread creation fails", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      failDispatchType = "thread.create";
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /Failed to create automation thread/);
+      assert.strictEqual(createdWorktrees.length, 1);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
+      assert.deepStrictEqual(removedWorktrees, [
+        {
+          cwd: project.workspaceRoot,
+          path: "/tmp/automation-worktree",
+          force: true,
+        },
+      ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktreeBranch,
+          force: true,
+        },
+      ]);
+
+      const reloaded = yield* service.list({ projectId });
+      const run = reloaded.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(run?.status, "failed");
+    }),
+  );
+
+  it.effect("cleans up a new worktree when cancellation wins before thread creation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-cancel-after-worktree");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 300 },
+          stopOnError: true,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      createWorktreeHook = () =>
+        Effect.gen(function* () {
+          const runs = yield* repository
+            .listActiveRunsForDefinition({ automationId })
+            .pipe(Effect.orDie);
+          const run = runs.find((entry) => entry.automationId === automationId);
+          if (run) {
+            yield* repository
+              .cancelRun({
+                runId: run.id,
+                now: "2026-06-16T10:00:30.000Z",
+              })
+              .pipe(Effect.orDie);
+          }
+        });
+
+      const results = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(createdWorktrees.length, 1);
+      const createdWorktree = createdWorktrees[0];
+      assert.ok(createdWorktree);
+      const createdWorktreeBranch = createdWorktree.newBranch;
+      if (!createdWorktreeBranch) {
+        assert.fail("Expected automation worktree branch.");
+      }
+      assert.deepStrictEqual(removedWorktrees, [
+        {
+          cwd: project.workspaceRoot,
+          path: "/tmp/automation-worktree",
+          force: true,
+        },
+      ]);
+      assert.deepStrictEqual(deletedBranches, [
+        {
+          cwd: project.workspaceRoot,
+          branch: createdWorktreeBranch,
+          force: true,
+        },
+      ]);
+      assert.strictEqual(
+        results.find((entry) => entry.run.automationId === automationId)?.run.status,
+        "cancelled",
+      );
+      assert.strictEqual(
+        dispatchedCommands.some((command) => command.type === "thread.create"),
+        false,
+      );
+    }),
+  );
+
+  it.effect("keeps a worktree once standalone thread creation succeeds", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      gitMode = "worktree";
+      failDispatchType = "thread.turn.start";
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("worktree"));
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /Failed to start automation turn/);
+      assert.strictEqual(createdWorktrees.length, 1);
+      assert.strictEqual(removedWorktrees.length, 0);
+      assert.strictEqual(deletedBranches.length, 0);
+      assert.strictEqual(dispatchedCommands[0]?.type, "thread.create");
     }),
   );
 
@@ -409,6 +804,185 @@ layer("AutomationService", (it) => {
         assert.fail("Expected thread.create command.");
       }
       assert.strictEqual(threadCreate.envMode, "local");
+    }),
+  );
+
+  it.effect("blocks an unacknowledged full-access run at dispatch and records a failed run", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fullaccess-runnow");
+      // Inserted directly (e.g. via the API/DB), bypassing create-time validation.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: { ...createInput("worktree"), runtimeMode: "full-access", acknowledgedRisks: [] },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /full-access/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("blocks an unacknowledged full-access automation on the scheduler", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fullaccess-scheduled");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          runtimeMode: "full-access",
+          acknowledgedRisks: [],
+          schedule: { type: "interval", everySeconds: 300 },
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+      const listed = yield* service.list({ projectId });
+      assert.strictEqual(
+        listed.runs.find((run) => run.automationId === automationId)?.status,
+        "failed",
+      );
+    }),
+  );
+
+  it.effect("dispatches an acknowledged full-access automation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("auto"),
+        runtimeMode: "full-access",
+        acknowledgedRisks: ["full-access", "local-checkout"],
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      assert.isTrue(dispatchedCommands.some((command) => command.type === "thread.create"));
+    }),
+  );
+
+  it.effect("blocks an unacknowledged standalone local checkout at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-local-dispatch");
+      yield* repository.createDefinition({
+        id: automationId,
+        input: { ...createInput("worktree"), worktreeMode: "local", acknowledgedRisks: [] },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("requires local-checkout acknowledgement for a local heartbeat", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("local-heartbeat-ack-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      // A heartbeat reuses its target thread, but that thread can itself be on the local
+      // checkout, so `worktreeMode: "local"` must still require the acknowledgement.
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          acknowledgedRisks: [],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /local checkout/);
+    }),
+  );
+
+  it.effect("blocks an unacknowledged fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-dispatch");
+      // Sub-minute schedule inserted directly, bypassing validateSchedulePolicy.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          acknowledgedRisks: [],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /at least \d+ seconds apart/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
+    }),
+  );
+
+  it.effect("blocks an acknowledged but uncapped fast interval run at dispatch", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-fast-interval-uncapped");
+      // Acknowledged sub-minute schedule with the iteration cap removed, inserted around the
+      // create/update policy that enforces the ack + cap as a pair.
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("worktree"),
+          schedule: { type: "interval", everySeconds: 15 },
+          maxIterations: null,
+          acknowledgedRisks: ["fast-interval"],
+        },
+        now,
+      });
+
+      const error = yield* service.runNow({ automationId }).pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations/);
+      assert.strictEqual(
+        dispatchedCommands.filter((command) => command.type === "thread.create").length,
+        0,
+      );
     }),
   );
 
@@ -555,6 +1129,46 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("keeps exhausted one-shot automations disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-once-manual-rerun");
+      const runAt = "2026-06-16T10:00:15.000Z";
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "once", runAt },
+          maxIterations: 1,
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+
+      const scheduled = yield* service.runDueOnce({
+        now: runAt,
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const manual = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(scheduled.length, 1);
+      assert.strictEqual(manual.run.status, "running");
+      assert.strictEqual(manual.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(
+        listed.runs.filter((entry) => entry.automationId === automationId).length,
+        2,
+      );
+    }),
+  );
+
   it.effect("reconciles a completed turn into a succeeded run", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -690,6 +1304,72 @@ layer("AutomationService", (it) => {
       const reconciled = reloaded.runs.find((entry) => entry.id === run.id);
       assert.strictEqual(reconciled?.status, "running");
       assert.strictEqual(reconciled?.result, null);
+    }),
+  );
+
+  it.effect("does not resume a waiting-for-approval run from an unrelated newer turn", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const projectionTurns = yield* ProjectionTurnRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-approval-ownership");
+      const automationTurnId = TurnId.makeUnsafe("turn-approval-owned");
+      const unrelatedTurnId = TurnId.makeUnsafe("turn-approval-unrelated");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      assert.isNotNull(run.messageId);
+
+      // The run's own turn is registered and running.
+      yield* projectionTurns.upsertByTurnId({
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        pendingMessageId: run.messageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "running",
+        requestedAt: now,
+        startedAt: now,
+        completedAt: null,
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      });
+      // Pending approval on the run's own turn -> waiting-for-approval.
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("running", automationTurnId),
+          hasPendingApprovals: true,
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "waiting-for-approval",
+      );
+
+      // An unrelated newer turn becomes the thread's latest and approvals clear. The run
+      // no longer owns the latest turn, so it must NOT be resumed back to running.
+      threadShell = Option.some(
+        makeThreadShell({
+          id: targetThreadId,
+          latestTurn: makeLatestTurn("running", unrelatedTurnId),
+        }),
+      );
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      assert.strictEqual(
+        (yield* service.list({ projectId })).runs.find((entry) => entry.id === run.id)?.status,
+        "waiting-for-approval",
+      );
     }),
   );
 
@@ -941,6 +1621,905 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("disables a heartbeat automation when the AI stop condition matches", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-thread");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-matched");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.92,
+        reason: "The assistant says the PR is ready to merge.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready to merge"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready to merge and has no actionable issues.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "matched stop evaluation",
+        predicate: (listed) =>
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled === false &&
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === true,
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedDefinition?.enabled, false);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
+      assert.include(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("records a timed-out stop check and keeps the heartbeat alive", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-timeout");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-timeout");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.99,
+        reason: "Should never be read because the evaluation hangs.",
+      };
+      // Hold the AI evaluation open so the only way out is the timeout.
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "Still working through the review.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "hung stop evaluation to start",
+      });
+
+      // Fire the 30s evaluation timeout via virtual time.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "timed-out stop evaluation",
+        predicate: (current) => {
+          const evaluatedRun = current.runs.find((entry) => entry.id === run.id);
+          return (
+            (evaluatedRun?.result?.completionEvaluation?.reason ?? "")
+              .toLowerCase()
+              .includes("timed out") &&
+            evaluatedRun?.result?.completionEvaluation?.stopMatched === false
+          );
+        },
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      // The hung check times out without retrying, the failure is visible, and the
+      // heartbeat stays enabled rather than being silently stopped.
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.include((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
+
+      evaluationGate.release();
+    }),
+  );
+
+  it.effect("records a stale stop check when the policy changes during a hung evaluation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-timeout-stale");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-timeout-stale");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.99,
+        reason: "Should never be read because the evaluation hangs.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "Still working through the review.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "hung stop evaluation to start",
+      });
+
+      // The user clears the completion policy while the provider call is still hung.
+      yield* service.update({ id: created.id, completionPolicy: { type: "none" } });
+      // When the 30s timeout fires it must record the stale-check result, not a live
+      // "timed out" warning for a policy the user already removed.
+      yield* TestClock.adjust(Duration.seconds(31));
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale timed-out stop evaluation",
+        predicate: (current) =>
+          current.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude((updatedRun?.result?.summary ?? "").toLowerCase(), "timed out");
+
+      evaluationGate.release();
+    }),
+  );
+
+  it.effect("does not block reconciliation while AI stop evaluation is pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-nonblocking");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-nonblocking");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      const reconciled = yield* Effect.race(
+        service
+          .reconcileThread({ threadId: targetThreadId })
+          .pipe(Effect.as("reconciled" as const)),
+        realDelay(50).pipe(Effect.as("timeout" as const)),
+      );
+      assert.strictEqual(reconciled, "reconciled");
+
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "background stop evaluation to start",
+      });
+      const beforeRelease = yield* service.list({ projectId });
+      const pendingRun = beforeRelease.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(pendingRun?.status, "succeeded");
+      assert.isUndefined(pendingRun?.result?.completionEvaluation);
+
+      evaluationGate.release();
+      yield* waitForAutomationList({
+        service,
+        description: "nonblocking stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === false,
+      });
+    }),
+  );
+
+  it.effect("skips AI stop evaluation when a heartbeat run reaches its iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-max-iterations");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-max-iterations");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "This should not run because the iteration cap already stopped the loop.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        maxIterations: 1,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      const started = yield* Effect.race(
+        Effect.promise(() => evaluationGate.started).pipe(Effect.as("started" as const)),
+        realDelay(100).pipe(Effect.as("not-started" as const)),
+      );
+
+      const listed = yield* service.list({ projectId });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(started, "not-started");
+      assert.strictEqual(updatedDefinition?.enabled, false);
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+    }),
+  );
+
+  it.effect("reconciles succeeded heartbeat runs that still need stop evaluation", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-recovered");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-recovered");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.96,
+        reason: "The recovered run says the PR is ready.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+      const afterDispatch = yield* service.list({ projectId });
+      const definitionUpdatedAt = afterDispatch.definitions.find(
+        (entry) => entry.id === created.id,
+      )?.updatedAt;
+      assert.isDefined(definitionUpdatedAt);
+      yield* repository.markRunSucceeded({
+        id: run.id,
+        turnId: automationTurnId,
+        result: {
+          outcome: "unknown",
+          summary: null,
+          unread: true,
+          archivedAt: null,
+        },
+        finishedAt: definitionUpdatedAt!,
+      });
+
+      yield* service.reconcileActiveRuns();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "recovered stop evaluation",
+        predicate: (listed) =>
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled === false &&
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === true,
+      });
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        false,
+      );
+    }),
+  );
+
+  it.effect("ignores a matched stop evaluation when the policy changes while pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-stale-policy");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-stale-policy");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "The old stop policy matched.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "stale-policy stop evaluation to start",
+      });
+      yield* service.update({ id: created.id, completionPolicy: { type: "none" } });
+      evaluationGate.release();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale-policy stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.deepStrictEqual(updatedDefinition?.completionPolicy, { type: "none" });
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("ignores a matched stop evaluation when the automation changes while pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-stale-definition");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-stale-definition");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "The old automation definition matched.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "stale-definition stop evaluation to start",
+      });
+      const beforeEdit = yield* service.list({ projectId });
+      const queuedDefinition = beforeEdit.definitions.find((entry) => entry.id === created.id);
+      yield* realDelay(5);
+      let edited = yield* service.update({
+        id: created.id,
+        name: "Retitled heartbeat monitor",
+      });
+      if (edited.updatedAt === queuedDefinition?.updatedAt) {
+        yield* realDelay(5);
+        edited = yield* service.update({
+          id: created.id,
+          name: "Retitled heartbeat monitor again",
+        });
+      }
+      evaluationGate.release();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "stale-definition stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check ignored because the automation changed before evaluation finished.",
+      });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.notStrictEqual(edited.updatedAt, queuedDefinition?.updatedAt);
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.strictEqual(updatedDefinition?.name, edited.name);
+      assert.deepStrictEqual(
+        updatedDefinition?.completionPolicy,
+        heartbeatCompletionPolicy("the PR is ready"),
+      );
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.notInclude(updatedRun?.result?.summary ?? "", "Stopped:");
+    }),
+  );
+
+  it.effect("does not use unrelated assistant messages for stop evaluation evidence", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-no-linked-assistant");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-no-linked-assistant");
+      const unrelatedTurnId = TurnId.makeUnsafe("turn-unrelated-assistant");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.2,
+        reason: "No linked assistant output was available.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: null,
+        extraMessages: [
+          {
+            id: MessageId.makeUnsafe("assistant-unrelated-stop-evidence"),
+            role: "assistant",
+            text: "Unrelated earlier answer: the PR is ready.",
+            turnId: unrelatedTurnId,
+            streaming: false,
+            source: "native",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForAutomationList({
+        service,
+        description: "no-linked-assistant stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+          undefined,
+      });
+
+      assert.strictEqual(
+        completionEvaluationInputs.at(-1)?.runAssistantText,
+        "(no assistant output)",
+      );
+      assert.notInclude(
+        completionEvaluationInputs.at(-1)?.threadContext ?? "",
+        "Unrelated earlier answer",
+      );
+      assert.include(
+        completionEvaluationInputs.at(-1)?.threadContext ?? "",
+        "user: Check whether the PR is ready.",
+      );
+    }),
+  );
+
+  it.effect("marks missing-thread stop checks as evaluated", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-missing-thread");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-missing-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+      threadDetail = Option.none();
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "missing-thread stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.reason ===
+          "Stop check skipped because the target thread could not be found.",
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+    }),
+  );
+
+  it.effect("uses the configured text-generation model for unsupported heartbeat providers", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-provider-fallback");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-provider-fallback");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        textGenerationModelSelection: {
+          provider: "cursor",
+          model: "composer-2",
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          provider: "claudeAgent",
+          model: "claude-opus-4-8",
+        },
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForAutomationList({
+        service,
+        description: "provider-fallback stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+          undefined,
+      });
+
+      assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+        provider: "cursor",
+        model: "composer-2",
+      });
+    }),
+  );
+
+  it.effect("keeps a heartbeat automation active when the AI stop condition is unmatched", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-unmatched");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-unmatched");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "unmatched stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.stopMatched === false,
+      });
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation?.stopMatched,
+        false,
+      );
+      assert.strictEqual(
+        listed.runs.find((entry) => entry.id === run.id)?.result?.summary,
+        "The assistant found actionable issues.",
+      );
+    }),
+  );
+
+  it.effect("does not apply newly edited stop policies to in-flight heartbeat runs", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-policy-edited-in-flight");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-policy-edited-in-flight");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.98,
+        reason: "The newly added stop policy would match.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: { type: "none" },
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* service.update({
+        id: created.id,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "The PR is ready.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* realDelay(20);
+
+      const listed = yield* service.list({ projectId });
+      const updatedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(updatedDefinition?.enabled, true);
+      assert.deepStrictEqual(
+        updatedDefinition?.completionPolicy,
+        heartbeatCompletionPolicy("the PR is ready"),
+      );
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
+      assert.strictEqual(completionEvaluationInputs.length, 0);
+    }),
+  );
+
+  it.effect("preserves run triage state while recording unmatched stop evaluations", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-triage-preserved");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-triage-preserved");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.88,
+        reason: "The assistant found actionable issues.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "triage stop evaluation to start",
+      });
+      yield* service.markRunRead({ runId: run.id, unread: false });
+      const archived = yield* service.archiveRun({ runId: run.id, archived: true });
+      yield* realDelay(5);
+      evaluationGate.release();
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "triage-preserving stop evaluation",
+        predicate: (listed) => {
+          const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+          return (
+            updatedRun?.result?.completionEvaluation?.stopMatched === false &&
+            updatedRun.result.unread === false &&
+            updatedRun.result.archivedAt === archived.run.result?.archivedAt
+          );
+        },
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+      assert.strictEqual(updatedRun?.result?.unread, false);
+      assert.strictEqual(updatedRun?.result?.archivedAt, archived.run.result?.archivedAt);
+      assert.isAtLeast(Date.parse(updatedRun?.updatedAt ?? ""), Date.parse(archived.run.updatedAt));
+    }),
+  );
+
+  it.effect("keeps a heartbeat automation active when the stop match is low confidence", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-ambiguous");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-ambiguous");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 0.52,
+        reason: "The assistant was uncertain whether the PR is ready.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "It may be ready, but one signal is unclear.",
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* waitForAutomationList({
+        service,
+        description: "low-confidence stop evaluation",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+            ?.confidence === 0.52,
+      });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, true);
+      assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0.52);
+      assert.strictEqual(
+        updatedRun?.result?.summary,
+        "The assistant was uncertain whether the PR is ready.",
+      );
+    }),
+  );
+
+  it.effect(
+    "keeps a heartbeat automation active and records history when stop evaluation fails",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-evaluator-failure");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-evaluator-failure");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        completionEvaluationFailure = new Error("provider unavailable");
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+
+        const listed = yield* waitForAutomationList({
+          service,
+          description: "failed stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation
+              ?.confidence === 0,
+        });
+        const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+        assert.strictEqual(
+          listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+          true,
+        );
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.stopMatched, false);
+        assert.strictEqual(updatedRun?.result?.completionEvaluation?.confidence, 0);
+        assert.include(updatedRun?.result?.summary ?? "", "Stop check failed:");
+        assert.include(
+          updatedRun?.result?.completionEvaluation?.reason ?? "",
+          "Stop check failed:",
+        );
+      }),
+  );
+
+  it.effect("does not auto-stop a heartbeat automation without a completion policy", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-no-stop-policy");
+      const automationTurnId = TurnId.makeUnsafe("turn-no-stop-policy");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: true,
+        confidence: 1,
+        reason: "This would stop if a policy existed.",
+      };
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+      });
+      const { run } = yield* service.runNow({ automationId: created.id });
+      yield* completeHeartbeatRun({
+        run,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+      });
+
+      yield* service.reconcileThread({ threadId: targetThreadId });
+
+      const listed = yield* service.list({ projectId });
+      const updatedRun = listed.runs.find((entry) => entry.id === run.id);
+      assert.strictEqual(
+        listed.definitions.find((entry) => entry.id === created.id)?.enabled,
+        true,
+      );
+      assert.isUndefined(updatedRun?.result?.completionEvaluation);
+    }),
+  );
+
   it.effect("rejects creating a heartbeat automation without a target thread", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -969,6 +2548,36 @@ layer("AutomationService", (it) => {
         .create({ ...createInput("local"), mode: "heartbeat", targetThreadId })
         .pipe(Effect.exit);
       assert.isTrue(exit._tag === "Failure");
+    }),
+  );
+
+  it.effect("rejects creating a standalone automation for an unknown project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          projectId: ProjectId.makeUnsafe("missing-project"),
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /project was not found/);
+    }),
+  );
+
+  it.effect("rejects moving a standalone automation to an unknown project", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      const error = yield* service
+        .update({ id: created.id, projectId: ProjectId.makeUnsafe("missing-project") })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /project was not found/);
     }),
   );
 
@@ -1003,7 +2612,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("clears heartbeat max iterations when switching back to standalone", () =>
+  it.effect("preserves max iterations when switching back to standalone", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -1023,7 +2632,13 @@ layer("AutomationService", (it) => {
       });
 
       assert.strictEqual(updated.mode, "standalone");
-      assert.strictEqual(updated.maxIterations, null);
+      assert.strictEqual(updated.maxIterations, 3);
+
+      const cleared = yield* service.update({
+        id: created.id,
+        maxIterations: null,
+      });
+      assert.strictEqual(cleared.maxIterations, null);
     }),
   );
 
@@ -1052,11 +2667,114 @@ layer("AutomationService", (it) => {
       const created = yield* service.create({
         ...createInput("local"),
         schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 10,
         acknowledgedRisks: ["fast-interval", "local-checkout"],
       });
 
       assert.strictEqual(created.schedule.type, "interval");
+      assert.strictEqual(created.maxIterations, 10);
       assert.deepStrictEqual(created.acknowledgedRisks, ["fast-interval", "local-checkout"]);
+    }),
+  );
+
+  it.effect("rejects acknowledged fast recurring intervals without a hard iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 15 },
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("rejects acknowledged fast recurring intervals above the hard iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 15 },
+          maxIterations: 25,
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("does not treat heartbeat stop policies as a hard fast-interval bound", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("fast-stop-policy-thread");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const error = yield* service
+        .create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          schedule: { type: "interval", everySeconds: 15 },
+          completionPolicy: heartbeatCompletionPolicy("the condition is met"),
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("rejects updates that remove the hard cap from fast recurring intervals", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 3,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+
+      const error = yield* service
+        .update({ id: created.id, maxIterations: null })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /max iterations.*10 runs or fewer/);
+    }),
+  );
+
+  it.effect("allows pausing legacy acknowledged fast intervals without an iteration cap", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 3,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+      yield* repository.saveDefinition({ ...created, maxIterations: null });
+
+      const paused = yield* service.update({ id: created.id, enabled: false });
+
+      assert.strictEqual(paused.enabled, false);
+      assert.strictEqual(paused.maxIterations, null);
+
+      const reenableError = yield* service
+        .update({ id: created.id, enabled: true })
+        .pipe(Effect.flip);
+      assert.match(reenableError.message, /max iterations.*10 runs or fewer/);
     }),
   );
 
@@ -1157,6 +2875,23 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("rejects retry policies on update until retry attempts are modeled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const created = yield* service.create(createInput("local"));
+
+      const error = yield* service
+        .update({
+          id: created.id,
+          retryPolicy: { type: "fixed", maxAttempts: 3, delaySeconds: 30 },
+        })
+        .pipe(Effect.flip);
+
+      assert.match(error.message, /retry policies are not supported/);
+    }),
+  );
+
   it.effect("disables a scheduled automation that has reached its iteration cap", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -1195,6 +2930,104 @@ layer("AutomationService", (it) => {
         reloaded.runs.filter((entry) => entry.automationId === automationId).length,
         0,
       );
+    }),
+  );
+
+  it.effect("restarts an exhausted bounded loop when run manually", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-manual-restart-max-iters");
+      const targetThreadId = ThreadId.makeUnsafe("thread-manual-restart-max-iters");
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          name: "Say hi",
+          prompt: "say hi",
+          schedule: { type: "interval", everySeconds: 15 },
+          mode: "heartbeat",
+          targetThreadId,
+          maxIterations: 3,
+          acknowledgedRisks: ["fast-interval", "local-checkout"],
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      yield* Effect.forEach(
+        [0, 1, 2],
+        () =>
+          repository.incrementDefinitionIterationCount({
+            id: automationId,
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const result = yield* service.runNow({ automationId });
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(result.run.trigger.type, "manual");
+      assert.strictEqual(turnStart?.type, "thread.turn.start");
+      if (turnStart?.type !== "thread.turn.start") {
+        assert.fail("Expected thread.turn.start command.");
+      }
+      assert.strictEqual(turnStart.threadId, targetThreadId);
+      assert.strictEqual(turnStart.message.text, "say hi");
+
+      const reloaded = yield* service.list({ projectId });
+      const definition = reloaded.definitions.find((entry) => entry.id === automationId);
+      assert.strictEqual(definition?.enabled, true);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.maxIterations, 3);
+      assert.isNotNull(definition?.nextRunAt ?? null);
+    }),
+  );
+
+  it.effect("keeps legacy fast loops over the hard cap disabled after a manual rerun", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        schedule: { type: "interval", everySeconds: 15 },
+        maxIterations: 10,
+        acknowledgedRisks: ["fast-interval", "local-checkout"],
+      });
+      const automationId = created.id;
+      yield* repository.saveDefinition({ ...created, maxIterations: 25 });
+      yield* Effect.forEach(
+        Array.from({ length: 25 }),
+        () =>
+          repository.incrementDefinitionIterationCount({
+            id: automationId,
+            now: "2026-06-16T10:00:00.000Z",
+          }),
+        { discard: true },
+      );
+      yield* repository.disableDefinition({
+        id: automationId,
+        now: "2026-06-16T10:01:00.000Z",
+      });
+
+      const result = yield* service.runNow({ automationId });
+      const listed = yield* service.list({ projectId });
+      const definition = listed.definitions.find((entry) => entry.id === automationId);
+
+      assert.strictEqual(result.run.status, "running");
+      assert.strictEqual(result.run.trigger.type, "manual");
+      assert.strictEqual(definition?.enabled, false);
+      assert.strictEqual(definition?.nextRunAt, null);
+      assert.strictEqual(definition?.iterationCount, 1);
+      assert.strictEqual(definition?.maxIterations, 25);
     }),
   );
 
@@ -1332,6 +3165,95 @@ layer("AutomationService", (it) => {
         yield* repository.countActiveRunsForThread({ threadId: targetThreadId }),
         0,
       );
+    }),
+  );
+
+  it.effect("pauses a due heartbeat run while stop evaluation is pending", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const repository = yield* AutomationRepository;
+      const automationId = AutomationId.makeUnsafe("automation-stop-check-pending");
+      const targetThreadId = ThreadId.makeUnsafe("thread-stop-check-pending");
+      const automationTurnId = TurnId.makeUnsafe("turn-stop-check-pending");
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      completionEvaluation = {
+        stopMatched: false,
+        confidence: 0.91,
+        reason: "The assistant still found actionable work.",
+      };
+      const evaluationGate = holdCompletionEvaluation();
+
+      yield* repository.createDefinition({
+        id: automationId,
+        input: {
+          ...createInput("local"),
+          schedule: { type: "interval", everySeconds: 300 },
+          mode: "heartbeat",
+          targetThreadId,
+          completionPolicy: heartbeatCompletionPolicy("there are no actionable issues"),
+        },
+        now: "2026-06-16T10:00:00.000Z",
+      });
+      const first = yield* service.runDueOnce({
+        now: "2026-06-16T10:00:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+      const firstRun = first.find((entry) => entry.run.automationId === automationId)?.run;
+      assert.isDefined(firstRun);
+      const dispatchedBefore = dispatchedCommands.filter(
+        (command) => command.type === "thread.turn.start" && command.threadId === targetThreadId,
+      ).length;
+      assert.strictEqual(dispatchedBefore, 1);
+
+      yield* completeHeartbeatRun({
+        run: firstRun!,
+        threadId: targetThreadId,
+        turnId: automationTurnId,
+        assistantText: "There are still actionable review comments.",
+      });
+      yield* service.reconcileThread({ threadId: targetThreadId });
+      yield* waitForPromise({
+        promise: evaluationGate.started,
+        timeoutMs: 1_000,
+        description: "pending scheduler stop evaluation to start",
+      });
+      assert.strictEqual(
+        yield* repository.countPendingCompletionEvaluationsForThread({ threadId: targetThreadId }),
+        1,
+      );
+
+      const second = yield* service.runDueOnce({
+        now: "2026-06-16T10:05:00.000Z",
+        limit: 10,
+        leaseOwnerId: "test-scheduler",
+      });
+
+      assert.strictEqual(
+        second.filter((entry) => entry.run.automationId === automationId).length,
+        0,
+      );
+      assert.strictEqual(
+        dispatchedCommands.filter(
+          (command) => command.type === "thread.turn.start" && command.threadId === targetThreadId,
+        ).length,
+        dispatchedBefore,
+      );
+      const paused = yield* service.list({ projectId });
+      const pausedDefinition = paused.definitions.find((entry) => entry.id === automationId);
+      const pausedRuns = paused.runs.filter((entry) => entry.automationId === automationId);
+      assert.strictEqual(pausedDefinition?.nextRunAt, "2026-06-16T10:05:00.000Z");
+      assert.strictEqual(pausedRuns.length, 1);
+
+      evaluationGate.release();
+      yield* waitForAutomationList({
+        service,
+        description: "pending scheduler stop evaluation to finish",
+        predicate: (listed) =>
+          listed.runs.find((entry) => entry.id === firstRun!.id)?.result?.completionEvaluation !==
+          undefined,
+      });
     }),
   );
 

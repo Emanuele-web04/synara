@@ -39,9 +39,9 @@ The provider you choose still receives the prompts, file snippets, diffs, termin
 
 Synara is still very early. Expect bugs, rough edges, and fast-moving internals.
 
-We are not accepting contributions yet.
+Focused issues and PRs are welcome, especially bug fixes, reliability fixes, and small maintenance improvements.
 
-## If you REALLY want to contribute still.... read this first
+## Contributing
 
 Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening an issue or PR.
 

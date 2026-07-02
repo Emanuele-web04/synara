@@ -19,6 +19,7 @@ import {
 } from "../Services/TextGeneration.ts";
 import {
   buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
@@ -407,6 +408,27 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     });
   });
 
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] =
+    Effect.fn("CursorTextGeneration.evaluateAutomationCompletion")(function* (input) {
+      const modelSelection = resolveCursorModelSelection(input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "evaluateAutomationCompletion",
+          detail: "Invalid Cursor model selection.",
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+      return yield* runCursorJson({
+        operation: "evaluateAutomationCompletion",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -415,6 +437,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateThreadTitle,
     generateThreadRecap,
     generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

@@ -61,6 +61,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
 type OpenCodeCompatibleProvider = Extract<ProviderKind, "opencode" | "kilo">;
@@ -130,6 +131,8 @@ interface OpenCodeSessionContext {
   readonly directory: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
+  /** Permission request ids auto-approved server-side in full-access mode (never surfaced to the UI). */
+  readonly autoApprovedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -689,6 +692,11 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
   context.relatedSessionIds.clear();
+  // Deliberately NOT cleared here: a permission auto-approved at the tail of a turn can
+  // have its permission.replied echo arrive after turn teardown, and dropping the id first
+  // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
+  // UI). Ids are unique per request so stale entries are inert; the set is freed with the
+  // session context when the session is removed.
 }
 
 function markOpenCodeTurnProviderActivity(
@@ -800,6 +808,19 @@ function extractResumeSessionId(resumeCursor: unknown): string | undefined {
     resumeCursor.openCodeSessionId.trim().length > 0
   ) {
     return resumeCursor.openCodeSessionId.trim();
+  }
+  return undefined;
+}
+
+function extractResumeCwd(resumeCursor: unknown): string | undefined {
+  if (
+    resumeCursor &&
+    typeof resumeCursor === "object" &&
+    "cwd" in resumeCursor &&
+    typeof resumeCursor.cwd === "string" &&
+    resumeCursor.cwd.trim().length > 0
+  ) {
+    return resumeCursor.cwd.trim();
   }
   return undefined;
 }
@@ -1613,6 +1634,16 @@ function mergeOpenCodeCliModelDescriptors(input: {
   }
 
   return [...mergedBySlug.values()].toSorted(compareOpenCodeModelDescriptors);
+}
+
+function emptyOpenCodeModelInventory(): OpenCodeModelInventory {
+  return {
+    providerList: {
+      connected: [],
+      all: [],
+    },
+    consoleState: null,
+  };
 }
 
 function flattenOpenCodeAgents(agents: ReadonlyArray<Agent>): ProviderListAgentsResult["agents"] {
@@ -2720,6 +2751,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.asked": {
+            // Full access: auto-approve instead of surfacing an approval, mirroring the
+            // Claude/Cursor/Grok adapters. Covers asks the declarative session ruleset cannot
+            // (resumed/forked sessions on older servers, subagent child sessions, user config).
+            if (context.session.runtimeMode === "full-access") {
+              context.autoApprovedPermissionIds.add(event.properties.id);
+              const replyExit = yield* Effect.exit(
+                runOpenCodeSdk("permission.reply", () =>
+                  context.client.permission.reply({
+                    requestID: event.properties.id,
+                    reply: "always",
+                  }),
+                ),
+              );
+              if (Exit.isSuccess(replyExit)) {
+                break;
+              }
+              // Fall back to a visible approval so the turn cannot hang on a failed reply.
+              context.autoApprovedPermissionIds.delete(event.properties.id);
+              yield* Effect.logWarning(
+                `${adapterConfig.displayName} full-access auto-approve failed; surfacing approval`,
+                Cause.squash(replyExit.cause),
+              );
+            }
             context.pendingPermissions.set(event.properties.id, event.properties);
             yield* emit({
               ...buildEventBase({
@@ -2742,6 +2796,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.replied": {
+            if (context.autoApprovedPermissionIds.delete(event.properties.requestID)) {
+              // Auto-approved in full access; nothing was surfaced to the UI.
+              break;
+            }
             context.pendingPermissions.delete(event.properties.requestID);
             yield* emit({
               ...buildEventBase({
@@ -3580,7 +3638,8 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             adapterConfig.providerOptionsKey === "opencode"
               ? input.providerOptions?.opencode?.experimentalWebSockets
               : undefined;
-          const directory = input.cwd ?? serverConfig.cwd;
+          const resumeDirectory = extractResumeCwd(input.resumeCursor);
+          const directory = input.cwd ?? resumeDirectory ?? serverConfig.cwd;
           const initialParsedModel =
             input.modelSelection?.provider === adapterConfig.provider
               ? parseOpenCodeModelSlug(input.modelSelection.model)
@@ -3608,6 +3667,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 const server = yield* openCodeRuntime.connectToOpenCodeServer({
                   binaryPath,
                   cliSpec: adapterConfig.cliSpec,
+                  cwd: directory,
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(provider === "opencode" && experimentalWebSockets
                     ? { experimentalWebSockets: true }
@@ -3620,7 +3680,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
                 const createSessionId = resumedSessionId
-                  ? Effect.succeed(resumedSessionId)
+                  ? // Resumed sessions skip session.create, so re-apply the runtime-mode
+                    // permission ruleset explicitly. Non-fatal: older servers may reject the
+                    // field, and full-access asks are still auto-approved in the event pump.
+                    runOpenCodeSdk("session.update", () =>
+                      client.session.update({
+                        sessionID: resumedSessionId,
+                        permission: buildOpenCodePermissionRules(input.runtimeMode),
+                      }),
+                    ).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning(
+                          `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
+                          Cause.squash(cause),
+                        ),
+                      ),
+                      Effect.as(resumedSessionId),
+                    )
                   : runOpenCodeSdk("session.create", () => {
                       const sessionCreateInput = {
                         ...(initialParsedModel
@@ -3692,7 +3768,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             cwd: directory,
             ...(input.modelSelection ? { model: input.modelSelection.model } : {}),
             threadId: input.threadId,
-            resumeCursor: { openCodeSessionId: started.openCodeSessionId },
+            resumeCursor: { openCodeSessionId: started.openCodeSessionId, cwd: directory },
             createdAt,
             updatedAt: createdAt,
           };
@@ -3704,6 +3780,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             directory,
             openCodeSessionId: started.openCodeSessionId,
             pendingPermissions: new Map(),
+            autoApprovedPermissionIds: new Set(),
             pendingQuestions: new Map(),
             pendingTextDeltasByPartId: new Map(),
             partById: new Map(),
@@ -3771,10 +3848,17 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           });
         }
 
-        const text = withProviderPlanModePrompt({
+        const baseText = withProviderPlanModePrompt({
           text: input.input?.trim() ?? "",
           interactionMode: input.interactionMode,
         }).trim();
+        const text =
+          appendFileAttachmentsPromptBlock({
+            text: baseText,
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            include: "all-files",
+          })?.trim() ?? "";
         const fileParts = toOpenCodeFileParts({
           attachments: input.attachments,
           resolveAttachmentPath: (attachment) =>
@@ -3886,7 +3970,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
         return {
           threadId: input.threadId,
           turnId,
-          resumeCursor: { openCodeSessionId: context.openCodeSessionId },
+          resumeCursor: { openCodeSessionId: context.openCodeSessionId, cwd: context.directory },
         };
       });
 
@@ -4014,6 +4098,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               .connectToOpenCodeServer({
                 binaryPath: adapterConfig.defaultBinaryPath,
                 cliSpec: adapterConfig.cliSpec,
+                cwd: directory,
               })
               .pipe(Effect.mapError(toAdapterRequestError));
             const client = openCodeRuntime.createOpenCodeSdkClient({
@@ -4115,7 +4200,19 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const binaryPath = providerOptions?.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
           const serverUrl = providerOptions?.serverUrl?.trim();
           const serverPassword = providerOptions?.serverPassword?.trim();
-          const directory = input.cwd ?? sourceContext?.directory ?? serverConfig.cwd;
+          const persistedSourceDirectory =
+            sourceContext?.directory ??
+            input.sourceCwd ??
+            extractResumeCwd(input.sourceResumeCursor);
+          const targetDirectory = input.cwd ?? persistedSourceDirectory ?? serverConfig.cwd;
+          const sourceDirectory = persistedSourceDirectory ?? targetDirectory;
+          if (sourceDirectory !== targetDirectory) {
+            return yield* new ProviderAdapterValidationError({
+              provider,
+              operation: "forkThread",
+              issue: `${adapterConfig.displayName} native fork cannot cross cwd boundaries.`,
+            });
+          }
 
           let client: OpencodeClient;
           if (sourceContext) {
@@ -4127,12 +4224,13 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   .connectToOpenCodeServer({
                     binaryPath,
                     cliSpec: adapterConfig.cliSpec,
+                    cwd: sourceDirectory,
                     ...(serverUrl ? { serverUrl } : {}),
                   })
                   .pipe(Effect.mapError(toAdapterRequestError));
                 return openCodeRuntime.createOpenCodeSdkClient({
                   baseUrl: server.url,
-                  directory,
+                  directory: sourceDirectory,
                   cliSpec: adapterConfig.cliSpec,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
@@ -4158,10 +4256,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           const session = yield* startSession({
             threadId: input.threadId,
             provider,
-            cwd: directory,
+            cwd: targetDirectory,
             ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
             ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-            resumeCursor: { openCodeSessionId: forkedSessionId },
+            resumeCursor: { openCodeSessionId: forkedSessionId, cwd: targetDirectory },
             runtimeMode: input.runtimeMode,
           });
 
@@ -4213,6 +4311,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                 .connectToOpenCodeServer({
                   binaryPath: input.binaryPath?.trim() || adapterConfig.defaultBinaryPath,
                   cliSpec: adapterConfig.cliSpec,
+                  cwd: input.cwd?.trim() || serverConfig.cwd,
                   ...(serverUrl ? { serverUrl } : {}),
                   ...(provider === "opencode" && input.experimentalWebSockets
                     ? { experimentalWebSockets: true }
@@ -4273,8 +4372,35 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
       const listModels: NonNullable<OpenCodeAdapterShape["listModels"]> = (input) => {
         const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
         const freeOnlyProviderID = adapterConfig.provider === "kilo" ? "kilo" : undefined;
-        return withDiscoveryInventory({ binaryPath }, ({ inventory, credentialProviderIDs }) =>
-          Effect.gen(function* () {
+        return Effect.gen(function* () {
+          const cliModelsEffect = openCodeRuntime
+            .listOpenCodeCliModels({
+              binaryPath,
+              cliSpec: adapterConfig.cliSpec,
+              ...(input.cwd ? { cwd: input.cwd } : {}),
+            })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logDebug(`${adapterConfig.displayName} CLI model discovery failed`, {
+                  binaryPath,
+                  detail: openCodeRuntimeErrorDetail(error),
+                }).pipe(Effect.as([] as ReadonlyArray<OpenCodeCliModelDescriptor>)),
+              ),
+            );
+          const inventoryEffect = withDiscoveryInventory(
+            { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+            ({ inventory, credentialProviderIDs }) =>
+              Effect.succeed({
+                inventory,
+                credentialProviderIDs,
+              }),
+          ).pipe(Effect.exit);
+          const [cliModels, inventoryExit] = yield* Effect.all([cliModelsEffect, inventoryEffect], {
+            concurrency: "unbounded",
+          });
+
+          if (Exit.isSuccess(inventoryExit)) {
+            const { inventory, credentialProviderIDs } = inventoryExit.value;
             const preferredProviderIDs = new Set(
               resolvePreferredOpenCodeModelProviders({
                 inventory,
@@ -4286,9 +4412,6 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
               credentialProviderIDs,
               ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
             });
-            const cliModels = yield* openCodeRuntime
-              .listOpenCodeCliModels({ binaryPath, cliSpec: adapterConfig.cliSpec })
-              .pipe(Effect.catch(() => Effect.succeed([])));
             const preferredCliModels = cliModels.filter((model) =>
               preferredProviderIDs.has(model.providerID),
             );
@@ -4314,30 +4437,55 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   : adapterConfig.fallbackModelSource,
               cached: false,
             };
-          }).pipe(
-            Effect.catch(() =>
-              Effect.succeed({
-                models: flattenOpenCodeModels({
-                  inventory,
-                  credentialProviderIDs,
-                  ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
-                }),
-                source: adapterConfig.fallbackModelSource,
-                cached: false,
-              }),
-            ),
-          ),
-        );
+          }
+
+          // Keep OpenCode's authoritative CLI list usable even if the local server
+          // cannot start; otherwise the web picker falls back to one static model.
+          if (cliModels.length > 0) {
+            const models = mergeOpenCodeCliModelDescriptors({
+              inventory: emptyOpenCodeModelInventory(),
+              models: [],
+              cliModels,
+              ...(freeOnlyProviderID ? { freeOnlyProviderID } : {}),
+            });
+            yield* Effect.logDebug(
+              `${adapterConfig.displayName} model discovery resolved from CLI only`,
+              {
+                binaryPath,
+                cliModelCount: cliModels.length,
+                modelCount: models.length,
+                sampleModels: models.slice(0, 12).map((model) => model.slug),
+              },
+            );
+            return {
+              models,
+              source: adapterConfig.cliModelSource,
+              cached: false,
+            };
+          }
+
+          const inventoryFailure = Cause.squash(inventoryExit.cause);
+          return yield* new ProviderAdapterRequestError({
+            provider,
+            method: "listModels",
+            detail: openCodeRuntimeErrorDetail(inventoryFailure),
+            cause: inventoryFailure,
+          });
+        });
       };
 
-      const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = () =>
-        withDiscoveryInventory({}, ({ inventory }) =>
-          Effect.succeed({
-            agents: flattenOpenCodeAgents(inventory.agents),
-            source: adapterConfig.fallbackModelSource,
-            cached: false,
-          }),
+      const listAgents: NonNullable<OpenCodeAdapterShape["listAgents"]> = (input) => {
+        const binaryPath = input.binaryPath?.trim() || adapterConfig.defaultBinaryPath;
+        return withDiscoveryInventory(
+          { binaryPath, ...(input.cwd ? { cwd: input.cwd } : {}) },
+          ({ inventory }) =>
+            Effect.succeed({
+              agents: flattenOpenCodeAgents(inventory.agents),
+              source: adapterConfig.fallbackModelSource,
+              cached: false,
+            }),
         );
+      };
 
       const listCommands: NonNullable<OpenCodeAdapterShape["listCommands"]> = (input) => {
         const discoveryInput = {

@@ -32,6 +32,22 @@ export const DISCLOSURE_CHEVRON_MOTION_CLASS =
 export const DISCLOSURE_COLLAPSIBLE_PANEL_CLASS =
   "h-(--collapsible-panel-height) overflow-hidden transition-[height] duration-220 ease-out motion-reduce:transition-none data-ending-style:h-0 data-starting-style:h-0 data-open:data-ending-style:[height:var(--collapsible-panel-height)]";
 
+/**
+ * Inline-axis (width) reveal for side panels that open/close along the
+ * horizontal axis. Same timing curve as the vertical disclosures so every
+ * toggle in the app stays consistent. Pair `open ? openWidthClassName : "w-0"`.
+ */
+export const DISCLOSURE_WIDTH_MOTION_CLASS =
+  "overflow-hidden transition-[width] duration-220 ease-out motion-reduce:transition-none";
+
+export function disclosureWidthClassName(
+  open: boolean,
+  openWidthClassName: string,
+  className?: string,
+) {
+  return cn(DISCLOSURE_WIDTH_MOTION_CLASS, open ? openWidthClassName : "w-0", className);
+}
+
 export function disclosureShellClassName(open: boolean, className?: string) {
   return cn(
     DISCLOSURE_SHELL_MOTION_CLASS,

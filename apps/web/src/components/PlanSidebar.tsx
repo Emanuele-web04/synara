@@ -69,7 +69,7 @@ const PlanSidebar = memo(function PlanSidebar({
         <div className="flex items-center gap-2">
           <Badge
             variant="secondary"
-            className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-[10px] font-semibold tracking-wide text-[var(--color-accent-blue)] uppercase"
+            className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-[10px] font-semibold text-[var(--color-accent-blue)]"
           >
             Plan
           </Badge>
@@ -113,9 +113,7 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
-                Steps
-              </p>
+              <p className="mb-2 text-[10px] font-semibold text-muted-foreground/40">Steps</p>
               {activeTaskList.tasks.map((task) => (
                 <div
                   key={`${task.status}:${task.task}`}
@@ -158,7 +156,7 @@ const PlanSidebar = memo(function PlanSidebar({
                 ) : (
                   <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
                 )}
-                <span className="text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase group-hover:text-muted-foreground/60">
+                <span className="text-[10px] font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
                   {planTitle ?? "Full Plan"}
                 </span>
               </button>

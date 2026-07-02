@@ -1,9 +1,11 @@
 import { Effect, Schema } from "effect";
 import {
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   ServerGenerateAutomationIntentResult,
   type AutomationMode,
   type ChatAttachment,
 } from "@t3tools/contracts";
+import { MAX_CHAT_THREAD_TITLE_WORDS } from "@t3tools/shared/chatThreads";
 
 import { TextGenerationError } from "./Errors.ts";
 
@@ -396,12 +398,35 @@ export function buildAutomationIntentPrompt(input: {
       "- confidence: number from 0 to 1.",
       "- language: detected user language, or null.",
       "- name: short automation name, <= 160 chars, or null.",
-      "- taskPrompt: the actual recurring instruction to save, without /automation, @automation, or schedule scaffolding.",
+      "- taskPrompt: the detailed, self-contained recurring instruction to save, without /automation, @automation, schedule, stop, or run-count scaffolding.",
+      "- Expand terse tasks into a clear saved automation prompt only using facts the user provided.",
+      "- Preserve concrete user-provided workspace paths, commands, files, commit/push rules, verification steps, URLs, accounts, and constraints.",
+      "- Do not invent repo-specific files, commands, services, tests, tickets, product context, credentials, or success criteria.",
+      "- If the user only gave a tiny task, keep taskPrompt clear and short instead of padding it with fake details.",
       "- schedule: automation cadence, or null when missing/ambiguous.",
       "- mode: heartbeat or standalone.",
+      "- maxIterations: positive integer only when the user explicitly says for N times/runs/iterations/volte; otherwise null.",
+      `- completionPolicy: use {"type":"ai-evaluated","stopWhen":"...","confidenceThreshold":${DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD}} only when the user explicitly says until/stop when/if X stop/fino a quando/finche. Otherwise use {"type":"none"}.`,
       "- missingFields: include schedule, taskPrompt, name, or mode when that field is null or too unclear.",
       "- needsConfirmation: true when schedule/task/mode is missing, ambiguous, or confidence < 0.75.",
       "- reason: short explanation when isAutomation=false or needsConfirmation=true; otherwise null.",
+      "",
+      "Task prompt quality checklist:",
+      "- Objective: state the concrete recurring task.",
+      "- Source of truth: keep any user-provided URLs, accounts, APIs, commands, files, or public-source constraints.",
+      "- Scope: name files, directories, branches, or repositories only when the user provided them.",
+      "- Procedure: preserve user-provided commands and ordered steps.",
+      "- Decision gates: include what to do when there is no change, ambiguity, failure, or conflicting evidence if the user specified it.",
+      "- Verification: preserve explicit build/lint/test checks and whether they are conditional.",
+      "- Publish rules: preserve explicit commit, push, branch, PR, or no-commit rules.",
+      "- Non-goals: preserve constraints like do not use APIs, do not change architecture, and do not stage unrelated files.",
+      "- Reporting: include concise output expectations when the user asked for them.",
+      "",
+      "Task prompt examples:",
+      '- User: "every day update my follower count without using the API, only the static file, build, commit and push if changed"',
+      '- taskPrompt: "Update the manually maintained follower count from a user-visible public source only. Do not use API credentials or existing runtime data code. Update only the specified static file when the count changes, run the requested build check, and commit/push only if there is an actual count change. Preserve unrelated working tree changes."',
+      '- User: "every 6h check this product URL until the black variant is available"',
+      '- taskPrompt: "Check the provided product URL and report whether the black variant is purchasable or pre-orderable. Treat conflicting page/session evidence as ambiguous instead of stopping early."',
       "",
       "Schedule rules:",
       '- For \'in N seconds/minutes/hours/days\', \'tra N secondi/minuti/ore/giorni\', or \'fra ...\', use {"type":"once","runAt":"<ISO timestamp>"} calculated from the current timestamp.',
@@ -416,11 +441,60 @@ export function buildAutomationIntentPrompt(input: {
       "- heartbeat means continue/report in the current thread on each run.",
       "- standalone means create independent scheduled runs.",
       "- Use the default unless the user clearly asks for the other behavior.",
+      '- Stop clauses are currently supported only for heartbeat automations; if mode is standalone, use completionPolicy {"type":"none"}.',
       "",
       "User message:",
       limitSection(input.message, 16_000),
     ].join("\n"),
     outputSchemaJson: ServerGenerateAutomationIntentResult,
+  };
+}
+
+// Evaluates a heartbeat stop clause from the completed run output, separate from the
+// automation agent so the agent cannot self-disable the loop.
+export function buildAutomationCompletionEvaluationPrompt(input: {
+  readonly automationName: string;
+  readonly automationPrompt: string;
+  readonly stopWhen: string;
+  readonly runUserMessage: string;
+  readonly runAssistantText: string;
+  readonly threadContext?: string | undefined;
+}) {
+  return {
+    prompt: [
+      "You evaluate whether a completed Synara heartbeat automation should stop.",
+      "Return a JSON object with keys: stopMatched, confidence, reason.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "",
+      "Decision rules:",
+      "- stopMatched=true only if the completed run clearly satisfies the stop condition.",
+      "- If the evidence is missing, indirect, ambiguous, or only says work continues, set stopMatched=false.",
+      "- confidence must be a number from 0 to 1.",
+      "- reason must be one concise sentence grounded in the run output.",
+      "- Do not infer from the automation prompt alone; use the completed run output as evidence.",
+      "",
+      `Automation: ${input.automationName}`,
+      "",
+      "Saved automation prompt:",
+      limitSection(input.automationPrompt, 4_000),
+      "",
+      "Stop condition:",
+      limitSection(input.stopWhen, 2_000),
+      "",
+      "Run user message:",
+      limitSection(input.runUserMessage, 4_000),
+      "",
+      "Run assistant output:",
+      limitSection(input.runAssistantText, 12_000),
+      "",
+      "Recent thread context:",
+      limitSection(input.threadContext?.trim() || "(none)", 6_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      stopMatched: Schema.Boolean,
+      confidence: Schema.Number,
+      reason: Schema.String,
+    }),
   };
 }
 
@@ -469,8 +543,10 @@ export function buildThreadTitlePrompt(input: {
     "Return a JSON object with key: title.",
     "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
-    "- Summarize the user's request in 2-4 words.",
-    "- Never exceed 4 words.",
+    `- Summarize the user's request in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    `- Never exceed ${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    "- Be specific: include distinguishing identifiers from the message when present (PR/issue numbers, branch names, file or feature names, error codes).",
+    "- Two different requests should never produce the same title if the message contains anything that tells them apart.",
     "- Use a short noun or verb phrase, not a full sentence.",
     "- Avoid quotes, markdown, emoji, and trailing punctuation.",
     "- If images are attached, use them as primary context for the title.",
@@ -491,6 +567,11 @@ export function buildThreadTitlePrompt(input: {
     outputSchemaJson: Schema.Struct({
       title: Schema.String,
     }),
-    rawTextFallback: { key: "title", maxWords: 8 } satisfies RawTextFallback,
+    // Looser than the final cap: raw (non-JSON) output is only rejected as "not a
+    // title" past this size; sanitizeGeneratedThreadTitle still trims to the cap.
+    rawTextFallback: {
+      key: "title",
+      maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
+    } satisfies RawTextFallback,
   };
 }

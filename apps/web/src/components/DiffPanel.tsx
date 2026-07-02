@@ -35,6 +35,7 @@ import {
   buildWhyChangedPrompt,
 } from "../lib/chatReferences";
 import { resolveDiffEnvironmentState } from "../lib/threadEnvironment";
+import { disclosureWidthClassName } from "../lib/disclosureMotion";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { type RepoDiffScope, useRepoDiffScopeStore } from "../repoDiffScopeStore";
 import { useStore } from "../store";
@@ -63,6 +64,7 @@ import {
 } from "./DiffPanel.logic";
 import { DiffPanelPatchViewport } from "./DiffPanelPatchViewport";
 import { DiffPanelToolbar } from "./DiffPanelToolbar";
+import { ReviewFileTreePanel } from "./ReviewFileTreePanel";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { closestThroughShadow } from "./chat/chatSelectionActions";
 import { TranscriptSelectionAction } from "./chat/TranscriptSelectionAction";
@@ -385,6 +387,19 @@ export default function DiffPanel({
   const repoDiffScope = useRepoDiffScopeStore((store) => store.scope);
   const setRepoDiffScope = useRepoDiffScopeStore((store) => store.setScope);
   const [collapsedFiles, setCollapsedFiles] = useState<Set<string>>(() => new Set());
+  const [fileTreeOpen, setFileTreeOpen] = useState(false);
+  // Lazy-mount the review file tree on first open so a closed diff panel never
+  // pays to filter/build/render the side tree (the common case). Keep it mounted
+  // afterward so the open/close animation plays and the filter + expand state
+  // persist across toggles.
+  const [fileTreeMounted, setFileTreeMounted] = useState(false);
+  const toggleFileTree = useCallback(() => {
+    setFileTreeOpen((previous) => !previous);
+    setFileTreeMounted(true);
+  }, []);
+  const closeFileTree = useCallback(() => {
+    setFileTreeOpen(false);
+  }, []);
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
   const routeThreadId = useParams({
@@ -1024,6 +1039,7 @@ export default function DiffPanel({
           timestampFormat={settings.timestampFormat}
           renderableFiles={renderableFiles}
           selectedFilePath={selectedFilePath}
+          fileTreeOpen={fileTreeOpen}
           resolvedTheme={resolvedTheme}
           diffRenderMode={diffRenderMode}
           diffWordWrap={diffWordWrap}
@@ -1036,6 +1052,7 @@ export default function DiffPanel({
           onSelectLastTurn={selectLastTurn}
           onSelectTurn={selectTurn}
           onSelectFile={selectFile}
+          onToggleFileTree={toggleFileTree}
           onDiffRenderModeChange={setDiffRenderMode}
           onDiffWordWrapChange={setDiffWordWrap}
           onDiffIgnoreWhitespaceChange={setDiffIgnoreWhitespace}
@@ -1071,6 +1088,7 @@ export default function DiffPanel({
       diffIgnoreWhitespace,
       diffRenderMode,
       diffWordWrap,
+      fileTreeOpen,
       hideHeader,
       inferredCheckpointTurnCountByTurnId,
       isDiffCopied,
@@ -1091,6 +1109,7 @@ export default function DiffPanel({
       settings.timestampFormat,
       showDiffToolbar,
       toggleCollapseAll,
+      toggleFileTree,
       turnScopeIntent,
       viewSource,
     ],
@@ -1118,47 +1137,70 @@ export default function DiffPanel({
           is ready.
         </PanelStateMessage>
       ) : (
-        <div
-          ref={patchViewportRef}
-          className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
-          onMouseUp={diffSelectionAction.onContainerMouseUp}
-        >
-          <DiffPanelPatchViewport
-            renderablePatch={renderablePatch}
-            renderableFiles={renderableFiles}
-            resolvedTheme={resolvedTheme}
-            diffRenderMode={diffRenderMode}
-            diffWordWrap={diffWordWrap}
-            workspaceRoot={activeCwd ?? null}
-            collapsedFiles={collapsedFiles}
-            onToggleFileCollapsed={toggleFileCollapsed}
-            chatActions={diffFileChatActions}
-            isLoading={activeReviewIsLoading}
-            hasNoChanges={activeReviewHasNoChanges}
-            error={activeReviewError}
-            viewKind={diffViewKind}
-            loadingLabel={
-              diffViewKind === "repo"
-                ? `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
-                : "Loading checkpoint diff..."
-            }
-            emptyLabel={
-              diffViewKind === "repo"
-                ? "No changes in the selected diff source."
-                : orderedTurnDiffSummaries.length === 0
-                  ? "No turn diffs are available yet."
-                  : "No net changes in this selection."
-            }
-            unavailableLabel="No repo diff is available right now."
-          />
-          {diffSelectionAction.pendingAction ? (
-            <TranscriptSelectionAction
-              left={diffSelectionAction.pendingAction.left}
-              top={diffSelectionAction.pendingAction.top}
-              placement={diffSelectionAction.pendingAction.placement}
-              onAddToChat={diffSelectionAction.commit}
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <div
+            ref={patchViewportRef}
+            className="diff-panel-viewport flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden"
+            onMouseUp={diffSelectionAction.onContainerMouseUp}
+          >
+            <DiffPanelPatchViewport
+              renderablePatch={renderablePatch}
+              renderableFiles={renderableFiles}
+              resolvedTheme={resolvedTheme}
+              diffRenderMode={diffRenderMode}
+              diffWordWrap={diffWordWrap}
+              workspaceRoot={activeCwd ?? null}
+              collapsedFiles={collapsedFiles}
+              onToggleFileCollapsed={toggleFileCollapsed}
+              chatActions={diffFileChatActions}
+              isLoading={activeReviewIsLoading}
+              hasNoChanges={activeReviewHasNoChanges}
+              error={activeReviewError}
+              viewKind={diffViewKind}
+              loadingLabel={
+                diffViewKind === "repo"
+                  ? `Loading ${REPO_DIFF_SCOPE_LABELS[repoDiffScope].toLowerCase()} diff...`
+                  : "Loading checkpoint diff..."
+              }
+              emptyLabel={
+                diffViewKind === "repo"
+                  ? "No changes in the selected diff source."
+                  : orderedTurnDiffSummaries.length === 0
+                    ? "No turn diffs are available yet."
+                    : "No net changes in this selection."
+              }
+              unavailableLabel="No repo diff is available right now."
             />
-          ) : null}
+            {diffSelectionAction.pendingAction ? (
+              <TranscriptSelectionAction
+                left={diffSelectionAction.pendingAction.left}
+                top={diffSelectionAction.pendingAction.top}
+                placement={diffSelectionAction.pendingAction.placement}
+                onAddToChat={diffSelectionAction.commit}
+              />
+            ) : null}
+          </div>
+          {hideHeader ? null : (
+            <div
+              className={disclosureWidthClassName(fileTreeOpen, "w-[min(42%,28rem)]", "shrink-0")}
+              aria-hidden={!fileTreeOpen}
+              inert={!fileTreeOpen}
+            >
+              {/* Empty until first open: the wrapper stays mounted (free) so the
+                  width reveal animates, but the tree only filters/builds once the
+                  user actually opens it. */}
+              {fileTreeMounted ? (
+                <ReviewFileTreePanel
+                  files={renderableFiles}
+                  selectedFilePath={selectedFilePath}
+                  resolvedTheme={resolvedTheme}
+                  isLoading={activeReviewIsLoading}
+                  onSelectFile={selectFile}
+                  onClose={closeFileTree}
+                />
+              ) : null}
+            </div>
+          )}
         </div>
       )}
     </DiffPanelShell>

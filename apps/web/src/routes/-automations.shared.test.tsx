@@ -10,8 +10,10 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
   type AutomationDefinition,
   type AutomationRun,
+  type ProviderStartOptions,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
@@ -20,14 +22,19 @@ import {
   allVisibleTriageRuns,
   applyAutomationEvent,
   automationAttentionCount,
+  automationFastIntervalLimitMessage,
   canCancelAutomationRun,
+  createInputFromForm,
   datetimeLocalFromIso,
   formatCadence,
   formatSchedule,
   formFromDefinition,
   isoFromDatetimeLocal,
   isFormSubmittable,
+  maxIterationOptions,
   modelSelectionForProjectChange,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
   runResultSummary,
   scheduleKindFromSchedule,
   scheduleFromForm,
@@ -97,6 +104,9 @@ const baseDefinition: AutomationDefinition = {
   targetThreadId: null,
   maxIterations: null,
   stopOnError: true,
+  completionPolicy: { type: "none" },
+  completionPolicyVersion: 1,
+  completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
   minimumIntervalSeconds: 60,
   maxRuntimeSeconds: 3600,
   retryPolicy: { type: "none" },
@@ -225,6 +235,30 @@ describe("automation shared route helpers", () => {
     expect(formatCadence(schedule)).toBe("Every 90s");
   });
 
+  it("requires a hard iteration cap for sub-minute interval forms", () => {
+    const form = {
+      ...applyScheduleToForm(formFromDefinition(null, "project-1"), {
+        type: "interval",
+        everySeconds: 15,
+      }),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+    const cappedForm = { ...form, maxIterations: "10" };
+
+    expect(automationFastIntervalLimitMessage(form)).toBe(
+      "Intervals under one minute need max iterations set to 10 runs or fewer.",
+    );
+    expect(isFormSubmittable(form)).toBe(false);
+    expect(automationFastIntervalLimitMessage(cappedForm)).toBeNull();
+    expect(isFormSubmittable(cappedForm)).toBe(true);
+  });
+
+  it("keeps custom max-iteration caps visible in picker options", () => {
+    expect(maxIterationOptions("3")[0]).toEqual({ value: "3", label: "3 runs" });
+    expect(maxIterationOptions(10)[0]).toEqual({ value: "", label: "Unlimited" });
+  });
+
   it("refreshes the default model when the current model came from the old project", () => {
     const projects = [
       {
@@ -315,6 +349,138 @@ describe("automation shared route helpers", () => {
     expect(isFormSubmittable({ ...form, timezone: "UTC" })).toBe(true);
   });
 
+  it("serializes heartbeat stop clauses as completion policies", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Watch PR",
+      prompt: "Check the PR.",
+      mode: "heartbeat" as const,
+      targetThreadId: "thread-1",
+      stopWhen: "the PR is ready to merge",
+    };
+
+    expect(createInputFromForm(form).completionPolicy).toEqual({
+      type: "ai-evaluated",
+      stopWhen: "the PR is ready to merge",
+      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+    });
+  });
+
+  it("serializes standalone max iterations when chat parsing supplies a run limit", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+      mode: "standalone" as const,
+      maxIterations: "3",
+    };
+
+    expect(createInputFromForm(form)).toMatchObject({
+      mode: "standalone",
+      maxIterations: 3,
+      completionPolicy: { type: "none" },
+    });
+  });
+
+  it("serializes composer source thread provenance on create inputs", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+
+    expect(
+      createInputFromForm(form, undefined, undefined, threadId("thread-source")),
+    ).toMatchObject({
+      sourceThreadId: "thread-source",
+    });
+  });
+
+  it("preserves saved provider options when editing without changing models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/new/opencode", serverUrl: "http://new.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const form = formFromDefinition(definition, "project-1");
+
+    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
+      savedProviderOptions,
+    );
+  });
+
+  it("uses current provider options when an automation edit changes models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      cursor: { binaryPath: "/current/cursor", apiEndpoint: "http://cursor.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const nextModelSelection = { provider: "cursor" as const, model: "composer-2" };
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        nextModelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(currentProviderOptions);
+  });
+
+  it("preserves saved provider options when only model capability options change", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/old/codex", homePath: "/old/home" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/new/codex", homePath: "/new/home" },
+    };
+    const definition = definitionWith({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+        options: { reasoningEffort: "medium" },
+      },
+      providerOptions: savedProviderOptions,
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          options: { reasoningEffort: "high" },
+        },
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
+  });
+
+  it("clears stale provider options when an automation edit changes models without current options", () => {
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: {
+        opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+      },
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(definition, {
+        provider: "cursor",
+        model: "composer-2",
+      }),
+    ).toEqual({});
+  });
+
   it("keeps a newer run update when an older automation snapshot arrives later", () => {
     const staleRun = runWith({
       id: runId("run-cache-race"),
@@ -340,6 +506,116 @@ describe("automation shared route helpers", () => {
     expect(afterLateSnapshot.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
       false,
     );
+  });
+
+  it("keeps a newer run update when an older live event arrives later", () => {
+    const staleRun = runWith({
+      id: runId("run-live-cache-race"),
+      result: { ...baseRun.result!, unread: true },
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerRun = runWith({
+      ...staleRun,
+      result: { ...baseRun.result!, unread: false },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [newerRun] },
+      { type: "run-upserted", run: staleRun },
+    );
+
+    expect(afterLateLiveEvent.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
+      false,
+    );
+  });
+
+  it("applies equal-timestamp live run updates", () => {
+    const firstRun = runWith({
+      id: runId("run-live-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const followUpRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "run-upserted", run: followUpRun },
+    );
+
+    expect(afterLiveEvent.runs.find((run) => run.id === followUpRun.id)?.result).toMatchObject({
+      unread: false,
+      archivedAt: "2026-06-19T10:02:00.000Z",
+    });
+  });
+
+  it("keeps cached run state when an equal-timestamp snapshot arrives later", () => {
+    const firstRun = runWith({
+      id: runId("run-snapshot-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "snapshot", definitions: [baseDefinition], runs: [snapshotRun] },
+    );
+
+    expect(afterSnapshot.runs.find((run) => run.id === snapshotRun.id)?.result).toMatchObject({
+      unread: true,
+      archivedAt: null,
+    });
+  });
+
+  it("keeps a newer definition update when an older live event arrives later", () => {
+    const staleDefinition = definitionWith({
+      id: automationId("automation-live-cache-race"),
+      name: "Old name",
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerDefinition = definitionWith({
+      ...staleDefinition,
+      name: "New name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [newerDefinition], runs: [] },
+      { type: "definition-upserted", definition: staleDefinition },
+    );
+
+    expect(
+      afterLateLiveEvent.definitions.find((definition) => definition.id === newerDefinition.id)
+        ?.name,
+    ).toBe("New name");
+  });
+
+  it("keeps cached definition state when an equal-timestamp snapshot arrives later", () => {
+    const cachedDefinition = definitionWith({
+      id: automationId("automation-snapshot-cache-equal"),
+      name: "Updated name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotDefinition = definitionWith({
+      ...cachedDefinition,
+      name: "Older snapshot name",
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [cachedDefinition], runs: [] },
+      { type: "snapshot", definitions: [snapshotDefinition], runs: [] },
+    );
+
+    expect(
+      afterSnapshot.definitions.find((definition) => definition.id === cachedDefinition.id)?.name,
+    ).toBe("Updated name");
   });
 
   it("does not resurrect a deleted automation from a late snapshot", () => {

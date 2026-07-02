@@ -21,6 +21,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -1677,9 +1678,10 @@ export function makeGrokAdapter(
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
+          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: process.env });
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(binaryPath, ["models"], {
-              shell: process.platform === "win32",
+            ChildProcess.make(prepared.command, prepared.args, {
+              shell: prepared.shell,
               env: process.env,
             }),
           );

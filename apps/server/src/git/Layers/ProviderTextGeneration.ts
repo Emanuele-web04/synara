@@ -43,6 +43,8 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     generateThreadRecap: (input) => resolveImplementation(input).generateThreadRecap(input),
     generateAutomationIntent: (input) =>
       resolveImplementation(input).generateAutomationIntent(input),
+    evaluateAutomationCompletion: (input) =>
+      resolveImplementation(input).evaluateAutomationCompletion(input),
   } satisfies TextGenerationShape;
 });
 

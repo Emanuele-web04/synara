@@ -9,7 +9,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import { EditorWorkspaceView, WorkspaceSearchSidebar } from "./EditorWorkspaceView";
+import { EditorWorkspaceView } from "./EditorWorkspaceView";
+import { WorkspaceSearchSidebar } from "./chat/workspaceExplorer";
 import { projectQueryKeys } from "../lib/projectReactQuery";
 import { SidebarProvider } from "./ui/sidebar";
 
@@ -306,6 +307,35 @@ describe("EditorWorkspaceView", () => {
     expect(markup).toContain(
       "/api/local-image?path=%2Ftmp%2Fsynara-codex-workspaces%2Fthread-1%2Fshot.png",
     );
+    expect(markup).not.toContain("No workspace is attached");
+    expect(markup).not.toContain("cwd=");
+  });
+
+  it("renders absolute local image previews without an attached workspace", () => {
+    const queryClient = new QueryClient();
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <EditorWorkspaceView
+          workspaceRoot={null}
+          projectName="project"
+          selectedFilePath="/Users/tester/Downloads/shot.png"
+          expandedDirectories={new Set()}
+          centerMode="file"
+          diffFiles={[]}
+          selectedDiffFilePath={null}
+          diffPanel={<div>Diff panel</div>}
+          chatPanel={<div>Chat panel</div>}
+          onSelectFile={vi.fn()}
+          onSelectDiffFile={vi.fn()}
+          onToggleDirectory={vi.fn()}
+          onCenterModeChange={vi.fn()}
+          onExitEditorView={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain('aria-label="Loading file..."');
+    expect(markup).not.toContain("/api/local-image?path=%2FUsers%2Ftester%2FDownloads%2Fshot.png");
     expect(markup).not.toContain("No workspace is attached");
     expect(markup).not.toContain("cwd=");
   });

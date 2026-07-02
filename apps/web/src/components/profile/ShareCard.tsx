@@ -5,12 +5,14 @@
 // trailing whitespace, regardless of how dense the heatmap data is.
 // Layer: web profile feature.
 
-import { forwardRef } from "react";
+import { forwardRef, type ReactNode } from "react";
 import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
+import { ProviderIcon } from "~/components/ProviderIcon";
 import { SynaraLogo } from "~/components/SynaraLogo";
 import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { formatCompact, formatDays } from "./profileFormatting";
+import { selectProfileHeatmap, selectProfileTopProvider } from "./profileSelectors";
 
 export const SHARE_CARD_WIDTH = 860;
 export const SHARE_CARD_HEIGHT = 440;
@@ -18,6 +20,10 @@ export const SHARE_CARD_HEIGHT = 440;
 // The in-app panel shows a longer window; the share card trims to the most recent ~6 months
 // so the grid stays large and legible inside the fixed card width.
 const CARD_HEATMAP_DAYS = 183;
+
+// Shared styling for the large stat value, reused so the provider tile's icon + percent
+// line up with the text-only tiles.
+const VALUE_CLASS = "text-2xl font-normal leading-none tracking-tight";
 
 interface ShareCardProps {
   readonly stats: ProfileStats;
@@ -29,7 +35,8 @@ interface ShareCardProps {
 }
 
 interface Tile {
-  readonly value: string;
+  readonly key: string;
+  readonly value: ReactNode;
   readonly label: string;
 }
 
@@ -37,14 +44,58 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
   { stats, tokenStats, displayName, handle, avatarColor, avatarImage },
   ref,
 ) {
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
+
   const tiles: Tile[] = [
-    { value: formatCompact(tokenStats?.lifetimeTotalTokens ?? null), label: "lifetime tokens" },
-    { value: formatCompact(tokenStats?.peakDayTokens ?? null), label: "peak day" },
-    { value: formatDays(stats.activity.currentStreakDays), label: "current streak" },
-    { value: formatDays(stats.activity.longestStreakDays), label: "longest streak" },
+    {
+      key: "lifetime",
+      value: (
+        <span className={VALUE_CLASS}>
+          {formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
+        </span>
+      ),
+      label: "lifetime tokens",
+    },
+    {
+      key: "peak",
+      value: (
+        <span className={VALUE_CLASS}>{formatCompact(tokenStats?.peakDayTokens ?? null)}</span>
+      ),
+      label: "peak day",
+    },
+    {
+      key: "current",
+      value: <span className={VALUE_CLASS}>{formatDays(stats.activity.currentStreakDays)}</span>,
+      label: "current streak",
+    },
+    {
+      key: "longest",
+      value: <span className={VALUE_CLASS}>{formatDays(stats.activity.longestStreakDays)}</span>,
+      label: "longest streak",
+    },
+    {
+      key: "provider",
+      // Most-used provider: token telemetry when available, otherwise turn count. An explicit
+      // slate color keeps currentColor glyphs visible on the white card in every theme.
+      value: topProvider.provider ? (
+        <span className="flex items-center gap-2">
+          <ProviderIcon
+            provider={topProvider.provider}
+            className="size-6 shrink-0 text-slate-700"
+          />
+          {topProvider.percent !== null ? (
+            <span className={VALUE_CLASS}>{`${Math.round(topProvider.percent)}%`}</span>
+          ) : null}
+        </span>
+      ) : (
+        <span className={VALUE_CLASS}>—</span>
+      ),
+      label: "top provider",
+    },
   ];
 
-  const heatmapCells = stats.activity.heatmap.slice(-CARD_HEATMAP_DAYS);
+  // Same tokens-first series as the profile page so the exported card matches the app.
+  const heatmapCells = selectProfileHeatmap(stats, tokenStats).cells.slice(-CARD_HEATMAP_DAYS);
 
   return (
     <div
@@ -87,8 +138,8 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
       {/* Stat tiles — left-aligned columns, no dividers (reference style) */}
       <div className="flex items-stretch">
         {tiles.map((tile) => (
-          <div key={tile.label} className="flex flex-1 flex-col items-start gap-1">
-            <span className="text-2xl font-normal leading-none tracking-tight">{tile.value}</span>
+          <div key={tile.key} className="flex flex-1 flex-col items-start gap-1">
+            {tile.value}
             <span className="text-sm font-normal text-slate-400">{tile.label}</span>
           </div>
         ))}

@@ -9,12 +9,20 @@
 import { spawn } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
 import { dirname, extname, join } from "node:path";
+import pathWin32 from "node:path/win32";
 
 import { EDITORS, type EditorId } from "@t3tools/contracts";
+import {
+  prepareWindowsSafeProcess,
+  resolveWindowsSystemRoot,
+} from "@t3tools/shared/windowsProcess";
 import { ServiceMap, Schema, Effect, Layer } from "effect";
 import {
   getEditorMacApplications,
+  getEditorWindowsStorePackages,
+  getEditorWindowsUriScheme,
   resolveAvailableMacApplication,
+  resolveWindowsStorePackageInstallLocation,
   type EditorDefinition,
 } from "./editorAppDiscovery";
 
@@ -32,7 +40,7 @@ export interface OpenInEditorInput {
   readonly editor: EditorId;
 }
 
-interface EditorLaunch {
+export interface EditorLaunch {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
 }
@@ -185,6 +193,8 @@ const TERMINAL_ARGS_BY_COMMAND: Readonly<Record<string, TerminalArgsBuilder>> = 
   kitty: (workingDirectory) => ["--directory", workingDirectory],
   wezterm: (workingDirectory) => ["start", "--cwd", workingDirectory],
   ghostty: DEFAULT_TERMINAL_ARGS,
+  // Muxy's CLI opens a project from a bare path, matching its `muxy .` flow.
+  muxy: (workingDirectory) => [workingDirectory],
   warp: DEFAULT_TERMINAL_ARGS,
 };
 
@@ -215,6 +225,46 @@ function resolveFallbackEditorCommand(
   }
 
   return editor.commands?.[0] ?? null;
+}
+
+function encodeWindowsEditorUriPath(targetPath: string): string {
+  return targetPath
+    .replaceAll("\\", "/")
+    .split("/")
+    .map((segment) => encodeURIComponent(segment).replaceAll("%3A", ":"))
+    .join("/");
+}
+
+function resolveWindowsEditorUri(scheme: string, target: string): string {
+  const parsedTarget = parseTargetPathAndPosition(target);
+  const targetPath = parsedTarget?.path ?? target;
+  const encodedPath = encodeWindowsEditorUriPath(targetPath);
+  // UNC paths normalize to //server/share; adding another slash changes the network path.
+  const filePathSeparator = encodedPath.startsWith("//") ? "" : "/";
+  const directorySuffix =
+    !parsedTarget && statSync(targetPath, { throwIfNoEntry: false })?.isDirectory() === true
+      ? "/"
+      : "";
+  const positionSuffix = parsedTarget?.line
+    ? `:${parsedTarget.line}${parsedTarget.column ? `:${parsedTarget.column}` : ""}`
+    : "";
+
+  return `${scheme}://file${filePathSeparator}${encodedPath}${directorySuffix}${positionSuffix}`;
+}
+
+export function resolveWindowsEditorUriLaunch(
+  editor: EditorDefinition,
+  target: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): EditorLaunch | null {
+  const scheme = getEditorWindowsUriScheme(editor);
+  if (platform !== "win32" || !scheme) return null;
+
+  return {
+    command: pathWin32.join(resolveWindowsSystemRoot(env), "explorer.exe"),
+    args: [resolveWindowsEditorUri(scheme, target)],
+  };
 }
 
 function stripWrappingQuotes(value: string): string {
@@ -341,6 +391,17 @@ export function resolveAvailableEditors(
       continue;
     }
 
+    if (
+      resolveWindowsStorePackageInstallLocation(
+        getEditorWindowsStorePackages(editor),
+        platform,
+        env,
+      ) !== null
+    ) {
+      available.push(editor.id);
+      continue;
+    }
+
     if (editor.id === "file-manager") {
       const command = fileManagerCommandForPlatform(platform);
       if (isCommandAvailable(command, { platform, env })) {
@@ -411,6 +472,11 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
     }
   }
 
+  const windowsUriLaunch = resolveWindowsEditorUriLaunch(editorDef, input.cwd, platform, env);
+  if (windowsUriLaunch) {
+    return windowsUriLaunch;
+  }
+
   const macApplication =
     resolveAvailableMacApplication(getEditorMacApplications(editorDef), platform, env) ??
     (platform === "darwin" ? (getEditorMacApplications(editorDef)?.[0] ?? null) : null);
@@ -439,6 +505,28 @@ export const resolveEditorLaunch = Effect.fnUntraced(function* (
   return { command: fileManagerCommandForPlatform(platform), args: [input.cwd] };
 });
 
+function editorLaunchesEqual(left: EditorLaunch, right: EditorLaunch): boolean {
+  return left.command === right.command && left.args.join("\0") === right.args.join("\0");
+}
+
+function launchDetachedWithEditorFallback(
+  input: OpenInEditorInput,
+  launch: EditorLaunch,
+): Effect.Effect<void, OpenError> {
+  return launchDetached(launch).pipe(
+    Effect.catch((primaryError) => {
+      const editorDef = EDITORS.find((editor) => editor.id === input.editor);
+      const fallbackLaunch = editorDef ? resolveWindowsEditorUriLaunch(editorDef, input.cwd) : null;
+
+      if (!fallbackLaunch || editorLaunchesEqual(launch, fallbackLaunch)) {
+        return Effect.fail(primaryError);
+      }
+
+      return launchDetached(fallbackLaunch);
+    }),
+  );
+}
+
 export const launchDetached = (launch: EditorLaunch) =>
   Effect.gen(function* () {
     if (!isCommandAvailable(launch.command)) {
@@ -448,10 +536,12 @@ export const launchDetached = (launch: EditorLaunch) =>
     yield* Effect.callback<void, OpenError>((resume) => {
       let child;
       try {
-        child = spawn(launch.command, [...launch.args], {
+        const prepared = prepareWindowsSafeProcess(launch.command, launch.args);
+        child = spawn(prepared.command, prepared.args, {
           detached: true,
           stdio: "ignore",
-          shell: process.platform === "win32",
+          shell: prepared.shell,
+          windowsHide: prepared.windowsHide,
         });
       } catch (error) {
         return resume(
@@ -493,7 +583,9 @@ const make = Effect.gen(function* () {
             try: () => open.default(input.cwd),
             catch: (cause) => new OpenError({ message: "Failed to open with default app", cause }),
           })
-        : Effect.flatMap(resolveEditorLaunch(input), launchDetached),
+        : Effect.flatMap(resolveEditorLaunch(input), (launch) =>
+            launchDetachedWithEditorFallback(input, launch),
+          ),
   } satisfies OpenShape;
 });
 

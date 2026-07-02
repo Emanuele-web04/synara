@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
 import { Kbd, KbdGroup } from "~/components/ui/kbd";
-import { SidebarInset } from "~/components/ui/sidebar";
+import { RouteInsetSurface } from "../RouteInsetSurface";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import {
   useDesktopTopBarTrafficLightGutterClassName,
@@ -47,11 +47,7 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "../chat/chatHeaderControls";
-import {
-  CHAT_BACKGROUND_CLASS_NAME,
-  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
-} from "../chat/composerPickerStyles";
+import { CHAT_BACKGROUND_CLASS_NAME } from "../chat/composerPickerStyles";
 import { KanbanNewTaskDialog } from "./KanbanNewTaskDialog";
 import { KanbanOverview } from "./KanbanOverview";
 import { KanbanProjectBoardView } from "./KanbanProjectBoardView";
@@ -165,10 +161,7 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
   }, [navigate]);
 
   return (
-    <SidebarInset
-      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-      surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
-    >
+    <RouteInsetSurface>
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -269,6 +262,6 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
         />
       ) : null}
       {renameDialog}
-    </SidebarInset>
+    </RouteInsetSurface>
   );
 }

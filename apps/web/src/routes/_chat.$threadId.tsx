@@ -92,6 +92,7 @@ import {
   RIGHT_DOCK_ADD_MENU_KINDS,
   getRightDockPaneMeta,
 } from "../components/chat/rightDockPaneMeta";
+import { DockExplorerPane } from "../components/chat/DockExplorerPane";
 import { DockFilePane } from "../components/chat/DockFilePane";
 import { readEditorViewState, storeEditorViewState } from "../editorViewState";
 import { basenameOfPath } from "../file-icons";
@@ -128,6 +129,7 @@ import {
   createSidebarThreadSummariesSelector,
   createThreadExistsSelector,
   createThreadProjectIdSelector,
+  createThreadWorkspaceMetadataSelector,
 } from "../storeSelectors";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
@@ -141,6 +143,7 @@ import {
   DialogTitle,
 } from "../components/ui/dialog";
 import {
+  resolveFilePreviewWorkspaceRoot,
   resolveRoutePanelBootstrap,
   resolveSplitPaneCloseDecision,
   resolveSplitPaneMaximizeDecision,
@@ -152,9 +155,9 @@ import {
   CHAT_BACKGROUND_CLASS_NAME,
   CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import { cn } from "~/lib/utils";
+import { RouteInsetSurface } from "~/components/RouteInsetSurface";
 import { SidebarInset } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
@@ -1424,7 +1427,19 @@ function SingleChatSurface(props: {
   const activeProject = useStore(
     useMemo(() => createProjectSelector(props.projectId), [props.projectId]),
   );
-  const workspaceRoot = activeProject?.cwd ?? null;
+  const threadWorkspaceMetadata = useStore(
+    useMemo(() => createThreadWorkspaceMetadataSelector(props.threadId), [props.threadId]),
+  );
+  const draftThread = useComposerDraftStore(
+    (store) => store.draftThreadsByThreadId[props.threadId] ?? null,
+  );
+  // File preview must follow the same runtime cwd as chat markdown, diffs, and git:
+  // worktree-backed threads resolve links against their materialized worktree.
+  const workspaceRoot = resolveFilePreviewWorkspaceRoot({
+    projectCwd: activeProject?.cwd ?? null,
+    threadEnvMode: threadWorkspaceMetadata.envMode ?? draftThread?.envMode ?? null,
+    threadWorktreePath: threadWorkspaceMetadata.worktreePath ?? draftThread?.worktreePath ?? null,
+  });
   const projects = useStore((store) => store.projects);
   const { settings: appSettings } = useAppSettings();
   const { handleNewThread } = useHandleNewThread();
@@ -2003,6 +2018,15 @@ function SingleChatSurface(props: {
               onClose={() => closePane(props.threadId, pane.id)}
             />
           );
+        case "explorer":
+          return (
+            <DockExplorerPane
+              workspaceRoot={workspaceRoot}
+              onReferenceInChat={handleReferenceInChat}
+              onAskWhyInChat={handleAskWhyInChat}
+              onCommentInChat={handleCommentInChat}
+            />
+          );
         case "file":
           return (
             <DockFilePane
@@ -2197,10 +2221,7 @@ function SingleChatSurface(props: {
           onDrop={handleDropThread}
           className="flex h-full min-h-0 min-w-0 flex-1"
         >
-          <SidebarInset
-            className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-            surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}
-          >
+          <RouteInsetSurface surfaceClassName={CHAT_BACKGROUND_CLASS_NAME}>
             <DeferredChatView
               threadId={props.threadId}
               paneScopeId="single"
@@ -2219,7 +2240,7 @@ function SingleChatSurface(props: {
                 onClick: handleOpenEditorView,
               }}
             />
-          </SidebarInset>
+          </RouteInsetSurface>
         </ChatPaneDropOverlay>
         <RightDock
           state={dockState}

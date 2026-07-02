@@ -39,6 +39,7 @@ import {
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -783,13 +784,20 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     env?: NodeJS.ProcessEnv,
   ) {
     return yield* Effect.try({
-      try: () =>
-        spawn(binaryPath, ["--acp"], {
+      try: () => {
+        const childEnv = env ?? process.env;
+        const prepared = prepareWindowsSafeProcess(binaryPath, ["--acp"], {
           cwd,
-          env: env ?? process.env,
+          env: childEnv,
+        });
+        return spawn(prepared.command, prepared.args, {
+          cwd,
+          env: childEnv,
           stdio: ["pipe", "pipe", "pipe"],
-          shell: process.platform === "win32",
-        }),
+          shell: prepared.shell,
+          windowsHide: prepared.windowsHide,
+        });
+      },
       catch: (cause) =>
         new ProviderAdapterProcessError({
           provider: PROVIDER,

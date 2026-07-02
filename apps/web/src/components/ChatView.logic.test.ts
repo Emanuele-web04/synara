@@ -15,9 +15,12 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
+  resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
@@ -257,16 +260,18 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(true);
   });
 
-  it("keeps empty landing and terminal-primary surfaces closed by default", () => {
+  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
     expect(
       resolveDefaultEnvironmentPanelOpen({
         environmentEnabled: true,
         isCenteredEmptyLanding: true,
         isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
       }),
     ).toBe(false);
     expect(
@@ -274,6 +279,63 @@ describe("environment panel visibility", () => {
         environmentEnabled: true,
         isCenteredEmptyLanding: false,
         isTerminalPrimarySurface: true,
+        isConstrainedChatLayout: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets a manual preference override the default while switching chats", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: false,
+        userPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats action dismissals as transient closes instead of stored preferences", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: true,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: true,
+        userPreferenceOpen: true,
       }),
     ).toBe(false);
   });
@@ -356,6 +418,36 @@ describe("resolveActiveTurnLiveDiffState", () => {
     });
   });
 
+  it("treats an empty active turn diff summary as authoritative over tool-log file hints", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [],
+          },
+        ],
+        workLogEntries: [
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts"],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    });
+  });
+
   it("falls back to in-turn file-edit work before the diff summary lands", () => {
     const activeTurnId = TurnId.makeUnsafe("turn-active");
 
@@ -376,7 +468,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
         ],
       }),
     ).toEqual({
-      turnId: activeTurnId,
+      turnId: null,
       fileCount: 2,
       additions: 0,
       deletions: 0,
@@ -394,7 +486,7 @@ describe("resolveActiveTurnLiveDiffState", () => {
         workLogEntries: [{ turnId: activeTurnId, itemType: "file_change" }],
       }),
     ).toEqual({
-      turnId: activeTurnId,
+      turnId: null,
       fileCount: null,
       additions: 0,
       deletions: 0,
@@ -991,5 +1083,91 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
   it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
+  });
+});
+
+describe("resolveQueuedSteerGateTransition", () => {
+  const armedGate = { sawInterruptGap: false, gapStartedAt: null };
+  const now = 1_000_000;
+
+  it("holds without expiry while the original turn is still running", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: armedGate,
+      phase: "running",
+      sessionErrored: false,
+      now,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: false, gapStartedAt: null },
+      expiresInMs: null,
+    });
+  });
+
+  it("starts the gap timer when the interrupt lands and the phase leaves running", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: armedGate,
+      phase: "ready",
+      sessionErrored: false,
+      now,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS,
+    });
+  });
+
+  it("keeps counting down from the original gap start on re-evaluation", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "ready",
+      sessionErrored: false,
+      now: now + 5_000,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS - 5_000,
+    });
+  });
+
+  it("clears once the steered turn starts running after the gap", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "running",
+      sessionErrored: false,
+      now: now + 1_000,
+    });
+    expect(transition).toEqual({ kind: "clear" });
+  });
+
+  it("fails open when the steered turn never starts within the timeout", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "ready",
+      sessionErrored: false,
+      now: now + QUEUED_STEER_GATE_TIMEOUT_MS,
+    });
+    expect(transition).toEqual({ kind: "clear" });
+  });
+
+  it("clears on session error or disconnect so the queue cannot stall", () => {
+    expect(
+      resolveQueuedSteerGateTransition({
+        gate: armedGate,
+        phase: "ready",
+        sessionErrored: true,
+        now,
+      }),
+    ).toEqual({ kind: "clear" });
+    expect(
+      resolveQueuedSteerGateTransition({
+        gate: { sawInterruptGap: true, gapStartedAt: now },
+        phase: "disconnected",
+        sessionErrored: false,
+        now,
+      }),
+    ).toEqual({ kind: "clear" });
   });
 });

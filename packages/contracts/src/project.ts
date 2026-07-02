@@ -10,6 +10,7 @@ import {
 const PROJECT_SEARCH_ENTRIES_MAX_LIMIT = 200;
 const PROJECT_SEARCH_LOCAL_ENTRIES_MAX_LIMIT = 100;
 const PROJECT_FILE_PATH_MAX_LENGTH = 512;
+const PROJECT_READ_FILE_PATH_MAX_LENGTH = 2048;
 const PROJECT_READ_FILE_MAX_BYTES = 1_000_000;
 const PROJECT_DIRECTORY_LIST_MAX_DEPTH = 32;
 const PROJECT_SCRIPT_DISCOVERY_MAX_DEPTH = 3;
@@ -137,7 +138,8 @@ export type ProjectWriteFileResult = typeof ProjectWriteFileResult.Type;
 
 export const ProjectReadFileInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
-  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_FILE_PATH_MAX_LENGTH)),
+  relativePath: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+  previewGrant: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(256))),
   maxBytes: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(PROJECT_READ_FILE_MAX_BYTES)),
   ),
@@ -150,6 +152,19 @@ export const ProjectReadFileResult = Schema.Struct({
   truncated: Schema.Boolean,
 });
 export type ProjectReadFileResult = typeof ProjectReadFileResult.Type;
+
+export const ProjectCreateLocalFilePreviewGrantInput = Schema.Struct({
+  path: TrimmedNonEmptyString.check(Schema.isMaxLength(PROJECT_READ_FILE_PATH_MAX_LENGTH)),
+});
+export type ProjectCreateLocalFilePreviewGrantInput =
+  typeof ProjectCreateLocalFilePreviewGrantInput.Type;
+
+export const ProjectCreateLocalFilePreviewGrantResult = Schema.Struct({
+  grant: TrimmedNonEmptyString,
+  expiresAt: TrimmedNonEmptyString,
+});
+export type ProjectCreateLocalFilePreviewGrantResult =
+  typeof ProjectCreateLocalFilePreviewGrantResult.Type;
 // ── Dev Server Process Manager ───────────────────────────────────────
 //
 // Dev servers are first-class background processes owned by the server and

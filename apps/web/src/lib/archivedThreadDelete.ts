@@ -1,17 +1,17 @@
 // FILE: archivedThreadDelete.ts
-// Purpose: Coordinates archived-thread deletion with immediate local removal and shell refresh.
+// Purpose: Coordinates archived-thread deletion with immediate local removal.
 // Layer: Web orchestration helper
 // Exports: deleteArchivedThreadFromClient, deleteArchivedThreadsFromClient
 
-import type { NativeApi, OrchestrationShellSnapshot, ThreadId } from "@t3tools/contracts";
+import type { NativeApi, ThreadId } from "@t3tools/contracts";
 
+import { reconcileDeletedThreadsFromClient } from "./deletedThreadClientReconciliation";
 import { newCommandId } from "./utils";
 
 interface DeleteArchivedThreadFromClientInput {
-  api: Pick<NativeApi["orchestration"], "dispatchCommand" | "getShellSnapshot">;
+  api: Pick<NativeApi["orchestration"], "dispatchCommand">;
   threadId: ThreadId;
   removeDeletedThreadFromClientState: (threadId: ThreadId) => void;
-  syncServerShellSnapshot: (snapshot: OrchestrationShellSnapshot) => void;
 }
 
 interface DeleteArchivedThreadsFromClientInput extends Omit<
@@ -21,7 +21,7 @@ interface DeleteArchivedThreadsFromClientInput extends Omit<
   threadIds: ReadonlyArray<ThreadId>;
 }
 
-// Deletes the archived thread on the server, removes it locally, then reconciles from shell state.
+// Deletes the archived thread on the server, then removes it from local projections.
 export async function deleteArchivedThreadFromClient(
   input: DeleteArchivedThreadFromClientInput,
 ): Promise<void> {
@@ -29,11 +29,10 @@ export async function deleteArchivedThreadFromClient(
     api: input.api,
     threadIds: [input.threadId],
     removeDeletedThreadFromClientState: input.removeDeletedThreadFromClientState,
-    syncServerShellSnapshot: input.syncServerShellSnapshot,
   });
 }
 
-// Deletes a group of archived threads while doing only one shell refresh at the end.
+// Deletes a group of archived threads and reconciles successful ids once at the end.
 export async function deleteArchivedThreadsFromClient(
   input: DeleteArchivedThreadsFromClientInput,
 ): Promise<void> {
@@ -42,20 +41,20 @@ export async function deleteArchivedThreadsFromClient(
     return;
   }
 
-  for (const threadId of threadIds) {
-    await input.api.dispatchCommand({
-      type: "thread.delete",
-      commandId: newCommandId(),
-      threadId,
-    });
-    input.removeDeletedThreadFromClientState(threadId);
-  }
-
-  const snapshot = await input.api.getShellSnapshot().catch(() => null);
-  if (snapshot) {
-    input.syncServerShellSnapshot(snapshot);
+  const deletedThreadIds: ThreadId[] = [];
+  try {
     for (const threadId of threadIds) {
-      input.removeDeletedThreadFromClientState(threadId);
+      await input.api.dispatchCommand({
+        type: "thread.delete",
+        commandId: newCommandId(),
+        threadId,
+      });
+      deletedThreadIds.push(threadId);
     }
+  } finally {
+    await reconcileDeletedThreadsFromClient({
+      threadIds: deletedThreadIds,
+      removeDeletedThreadFromClientState: input.removeDeletedThreadFromClientState,
+    });
   }
 }

@@ -17,6 +17,7 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
   THREAD_MARKER_LABEL_MAX_CHARS,
@@ -450,6 +451,32 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   }),
 );
 
+it.effect("strips client-sent dispatchOrigin from thread.turn.start commands", () =>
+  Effect.gen(function* () {
+    // dispatchOrigin is server-assigned (automation engine only). The client command
+    // schema deliberately omits it, so a spoofed value must not survive decoding —
+    // otherwise any WS client could fake the "Sent via Automation" label.
+    const command = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-start-origin",
+      threadId: "thread-1",
+      message: {
+        messageId: "message-1",
+        role: "user",
+        text: "hello",
+        attachments: [],
+      },
+      dispatchMode: "queue",
+      dispatchOrigin: "automation",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.turn.start");
+    assert.strictEqual("dispatchOrigin" in command, false);
+  }),
+);
+
 it.effect("decodes pinned-message commands and events", () =>
   Effect.gen(function* () {
     const command = yield* decodeClientOrchestrationCommand({
@@ -625,6 +652,66 @@ it.effect("accepts a source proposed plan reference in thread.turn.start", () =>
       threadId: "thread-1",
       planId: "plan-1",
     });
+  }),
+);
+
+it.effect("rejects normalized thread.turn.start commands with too many attachments", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-turn-too-many-attachments",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-too-many-attachments",
+        role: "user",
+        text: "hello",
+        attachments: Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS + 1 }, (_, index) => ({
+          type: "image",
+          id: `attachment-${index}`,
+          name: `image-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 1,
+        })),
+      },
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
+  }),
+);
+
+it.effect("rejects client thread.turn.start commands with too many upload attachments", () =>
+  Effect.gen(function* () {
+    const failed = yield* decodeClientOrchestrationCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-client-turn-too-many-attachments",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-client-too-many-attachments",
+        role: "user",
+        text: "hello",
+        attachments: Array.from({ length: PROVIDER_SEND_TURN_MAX_ATTACHMENTS + 1 }, (_, index) => ({
+          type: "image",
+          name: `image-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 1,
+          dataUrl: "data:image/png;base64,AQ==",
+        })),
+      },
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    }).pipe(
+      Effect.match({
+        onFailure: () => true,
+        onSuccess: () => false,
+      }),
+    );
+    assert.strictEqual(failed, true);
   }),
 );
 

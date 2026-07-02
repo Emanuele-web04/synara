@@ -9,6 +9,7 @@ import type { LucideIcon } from "~/lib/icons";
 import {
   DiffIcon,
   FileIcon,
+  FoldersIcon,
   GitCommitIcon,
   GlobeIcon,
   InfoIcon,
@@ -31,6 +32,7 @@ export interface RightDockPaneMeta {
 export const RIGHT_DOCK_PANE_META: Record<RightDockPaneKind, RightDockPaneMeta> = {
   browser: { label: "Browser", Icon: GlobeIcon },
   diff: { label: "Diff", Icon: DiffIcon },
+  explorer: { label: "Explorer", Icon: FoldersIcon },
   file: { label: "File", Icon: FileIcon },
   terminal: { label: "Terminal", Icon: TerminalIcon },
   sidechat: { label: "Side", Icon: MessageCircleIcon },
@@ -52,8 +54,13 @@ export function getRightDockPaneMeta(kind: RightDockPaneKind): RightDockPaneMeta
 }
 
 // Add-menu / quick triggers follow the canonical kind order from the single
-// source of truth, so they stay in sync as kinds are added or removed.
-export const RIGHT_DOCK_ADD_MENU_KINDS: readonly RightDockPaneKind[] = RIGHT_DOCK_PANE_KINDS;
+// source of truth, so they stay in sync as kinds are added or removed. The
+// "file" kind is intentionally excluded: single-file preview tabs are opened by
+// clicking a file reference in chat, while the add menu offers the richer
+// "explorer" pane (file tree + search + viewer) in its place.
+export const RIGHT_DOCK_ADD_MENU_KINDS: readonly RightDockPaneKind[] = RIGHT_DOCK_PANE_KINDS.filter(
+  (kind) => kind !== "file",
+);
 
 // Resolves a tab label, preferring caller-provided per-pane overrides (e.g. the
 // embedded sidechat thread title) before falling back to the kind label.

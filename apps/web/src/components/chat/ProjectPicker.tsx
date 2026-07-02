@@ -4,7 +4,7 @@
 // Layer: Chat / empty-state entrypoint
 
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { type ProjectDirectoryEntry } from "@t3tools/contracts";
+import { type ProjectDirectoryEntry, type ProjectId } from "@t3tools/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";
@@ -29,13 +29,20 @@ import { useWorkspaceStore } from "../../workspaceStore";
 interface ProjectPickerProps {
   align?: "start" | "center" | "end";
   side?: "top" | "bottom";
+  selectionMode?: "workspace-root" | "project";
   showResetToHome?: boolean;
+  selectedProjectId?: ProjectId | null;
   selectedWorkspaceRoot?: string | null;
+  onSelectProject?: ((projectId: ProjectId) => void | Promise<void>) | undefined;
   onSelectWorkspaceRoot?: ((workspaceRoot: string) => void) | undefined;
-  onResetToHome?: (() => void) | undefined;
+  onCreateProjectFromPath?: ((workspaceRoot: string) => void | Promise<void>) | undefined;
+  onResetToHome?: (() => void | Promise<void>) | undefined;
+  /** Class override for the trigger button (e.g. tighter height in the composer tray). */
+  triggerClassName?: string;
 }
 
 interface ActiveFolderOption {
+  projectId: ProjectId | null;
   cwd: string;
   primaryLabel: string;
   secondaryLabel: string | null;
@@ -64,10 +71,15 @@ function joinDirectoryPath(rootPath: string, relativePath: string): string {
 export const ProjectPicker = memo(function ProjectPicker({
   align = "start",
   side = "bottom",
+  selectionMode = "workspace-root",
   showResetToHome = false,
+  selectedProjectId = null,
   selectedWorkspaceRoot = null,
+  onSelectProject,
   onSelectWorkspaceRoot,
+  onCreateProjectFromPath,
   onResetToHome,
+  triggerClassName,
 }: ProjectPickerProps) {
   const projects = useStore((state) => state.projects);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
@@ -79,6 +91,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   const [isLoadingDirectories, setIsLoadingDirectories] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [directoryEntries, setDirectoryEntries] = useState<readonly ProjectDirectoryEntry[]>([]);
+  const isProjectSelectionMode = selectionMode === "project";
 
   const activeFolderOptions = useMemo(() => {
     const seen = new Set<string>();
@@ -93,31 +106,41 @@ export const ProjectPicker = memo(function ProjectPicker({
       const primaryLabel = project.localName?.trim() || folderName;
       const secondaryLabel =
         project.localName?.trim() && project.localName.trim() !== folderName ? folderName : null;
-      nextOptions.push({ cwd: project.cwd, primaryLabel, secondaryLabel });
+      nextOptions.push({ projectId: project.id, cwd: project.cwd, primaryLabel, secondaryLabel });
     }
 
-    for (const thread of sidebarThreads) {
-      const workspaceRoot = thread.worktreePath ?? null;
-      const folderName = basenameOfPath(workspaceRoot);
-      if (!workspaceRoot || !folderName || folderName.startsWith(".") || seen.has(workspaceRoot)) {
-        continue;
+    if (!isProjectSelectionMode) {
+      for (const thread of sidebarThreads) {
+        const workspaceRoot = thread.worktreePath ?? null;
+        const folderName = basenameOfPath(workspaceRoot);
+        if (
+          !workspaceRoot ||
+          !folderName ||
+          folderName.startsWith(".") ||
+          seen.has(workspaceRoot)
+        ) {
+          continue;
+        }
+        seen.add(workspaceRoot);
+        nextOptions.push({
+          projectId: null,
+          cwd: workspaceRoot,
+          primaryLabel: folderName,
+          secondaryLabel: null,
+        });
       }
-      seen.add(workspaceRoot);
-      nextOptions.push({
-        cwd: workspaceRoot,
-        primaryLabel: folderName,
-        secondaryLabel: null,
-      });
     }
 
     const selectedFolderName = basenameOfPath(selectedWorkspaceRoot);
     if (
+      !isProjectSelectionMode &&
       selectedWorkspaceRoot &&
       selectedFolderName &&
       !selectedFolderName.startsWith(".") &&
       !seen.has(selectedWorkspaceRoot)
     ) {
       nextOptions.unshift({
+        projectId: null,
         cwd: selectedWorkspaceRoot,
         primaryLabel: selectedFolderName,
         secondaryLabel: null,
@@ -125,22 +148,21 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
 
     return nextOptions;
-  }, [projects, selectedWorkspaceRoot, sidebarThreads]);
+  }, [isProjectSelectionMode, projects, selectedWorkspaceRoot, sidebarThreads]);
   const activeFolderPathSet = useMemo(
     () => new Set(activeFolderOptions.map((entry) => entry.cwd)),
     [activeFolderOptions],
   );
-  const macFolderOptions = useMemo(
-    () =>
-      directoryEntries
-        .filter((entry) => !entry.name.startsWith("."))
-        .map((entry) => ({
-          absolutePath: homeDir ? joinDirectoryPath(homeDir, entry.path) : entry.path,
-          entry,
-        }))
-        .filter((entry) => !activeFolderPathSet.has(entry.absolutePath)),
-    [activeFolderPathSet, directoryEntries, homeDir],
-  );
+  const macFolderOptions = useMemo(() => {
+    if (isProjectSelectionMode) return [];
+    return directoryEntries
+      .filter((entry) => !entry.name.startsWith("."))
+      .map((entry) => ({
+        absolutePath: homeDir ? joinDirectoryPath(homeDir, entry.path) : entry.path,
+        entry,
+      }))
+      .filter((entry) => !activeFolderPathSet.has(entry.absolutePath));
+  }, [activeFolderPathSet, directoryEntries, homeDir, isProjectSelectionMode]);
 
   const normalizedQuery = deferredQuery.trim().toLowerCase();
   const filteredActiveFolderOptions = useMemo(() => {
@@ -175,6 +197,10 @@ export const ProjectPicker = memo(function ProjectPicker({
     [filteredActiveFolderOptions, filteredMacFolderOptions],
   );
   const selectedFolderOption = useMemo(() => {
+    if (isProjectSelectionMode) {
+      if (!selectedProjectId) return null;
+      return activeFolderOptions.find((entry) => entry.projectId === selectedProjectId) ?? null;
+    }
     if (!selectedWorkspaceRoot) return null;
     return (
       activeFolderOptions.find((entry) => entry.cwd === selectedWorkspaceRoot) ??
@@ -187,10 +213,18 @@ export const ProjectPicker = memo(function ProjectPicker({
         }))[0] ??
       null
     );
-  }, [activeFolderOptions, macFolderOptions, selectedWorkspaceRoot]);
+  }, [
+    activeFolderOptions,
+    isProjectSelectionMode,
+    macFolderOptions,
+    selectedProjectId,
+    selectedWorkspaceRoot,
+  ]);
   const triggerLabel = selectedFolderOption ? (
     <span className="flex min-w-0 items-baseline gap-1.5">
-      <span className="min-w-0 truncate">{selectedFolderOption.primaryLabel}</span>
+      <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+        {selectedFolderOption.primaryLabel}
+      </span>
       {selectedFolderOption.secondaryLabel ? (
         <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
           {selectedFolderOption.secondaryLabel}
@@ -210,7 +244,13 @@ export const ProjectPicker = memo(function ProjectPicker({
   }, []);
 
   useEffect(() => {
-    if (!open || !homeDir || directoryEntries.length > 0 || isLoadingDirectories) {
+    if (
+      isProjectSelectionMode ||
+      !open ||
+      !homeDir ||
+      directoryEntries.length > 0 ||
+      isLoadingDirectories
+    ) {
       return;
     }
     const api = readNativeApi();
@@ -245,7 +285,31 @@ export const ProjectPicker = memo(function ProjectPicker({
       .finally(() => {
         setIsLoadingDirectories(false);
       });
-  }, [directoryEntries.length, homeDir, isLoadingDirectories, open]);
+  }, [directoryEntries.length, homeDir, isLoadingDirectories, isProjectSelectionMode, open]);
+
+  const handleSelectActiveFolder = useCallback(
+    (folder: ActiveFolderOption) => {
+      try {
+        // Existing projects should switch the draft into that project; raw paths stay workspace roots.
+        const selection =
+          folder.projectId && onSelectProject
+            ? onSelectProject(folder.projectId)
+            : isProjectSelectionMode
+              ? undefined
+              : onSelectWorkspaceRoot?.(folder.cwd);
+        void Promise.resolve(selection)
+          .then(() => {
+            setOpen(false);
+          })
+          .catch((error) => {
+            setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+          });
+      } catch (error) {
+        setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+      }
+    },
+    [isProjectSelectionMode, onSelectProject, onSelectWorkspaceRoot],
+  );
 
   const handleAddNewProject = useCallback(async () => {
     if (isPicking) return;
@@ -259,17 +323,77 @@ export const ProjectPicker = memo(function ProjectPicker({
     setErrorMessage(null);
     try {
       const pickedPath = await api.dialogs.pickFolder();
-      setIsPicking(false);
       if (!pickedPath) {
+        setIsPicking(false);
         return;
       }
-      onSelectWorkspaceRoot?.(pickedPath);
+      if (onCreateProjectFromPath) {
+        await onCreateProjectFromPath(pickedPath);
+      } else {
+        onSelectWorkspaceRoot?.(pickedPath);
+      }
+      setIsPicking(false);
       setOpen(false);
     } catch (error) {
       setIsPicking(false);
       setErrorMessage(error instanceof Error ? error.message : "Unable to open the folder picker.");
     }
-  }, [isPicking, onSelectWorkspaceRoot]);
+  }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
+
+  const handleResetToHome = useCallback(() => {
+    try {
+      void Promise.resolve(onResetToHome?.())
+        .then(() => {
+          setOpen(false);
+        })
+        .catch((error) => {
+          setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+        });
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+    }
+  }, [onResetToHome]);
+
+  const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
+  const addProjectLabel = isProjectSelectionMode ? "New project" : "Add new project";
+  const loadingAddProjectLabel = isProjectSelectionMode
+    ? "Adding project..."
+    : "Opening folder picker...";
+
+  const renderActiveFolderOption = (folder: ActiveFolderOption, index: number) => {
+    const selected = isProjectSelectionMode
+      ? folder.projectId === selectedProjectId
+      : folder.cwd === selectedWorkspaceRoot;
+    return (
+      <ComboboxItem
+        hideIndicator={!selected}
+        key={folder.cwd}
+        index={index}
+        value={folder.cwd}
+        onClick={() => {
+          handleSelectActiveFolder(folder);
+        }}
+        className={cn(
+          selected &&
+            "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
+        )}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 items-baseline gap-1.5">
+              <span className="min-w-0 truncate">{folder.primaryLabel}</span>
+              {folder.secondaryLabel ? (
+                <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
+                  {folder.secondaryLabel}
+                </span>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </ComboboxItem>
+    );
+  };
 
   return (
     <Combobox
@@ -281,7 +405,15 @@ export const ProjectPicker = memo(function ProjectPicker({
     >
       <ComboboxTrigger
         render={
-          <PickerTriggerButton icon={<FolderClosed className="size-3.5" />} label={triggerLabel} />
+          <PickerTriggerButton
+            data-testid={
+              isProjectSelectionMode ? "project-picker-trigger" : "workspace-picker-trigger"
+            }
+            icon={<FolderClosed className="size-3.5" />}
+            label={triggerLabel}
+            hideChevron
+            {...(triggerClassName ? { className: triggerClassName } : {})}
+          />
         }
       />
       <ComboboxPopup align={align} side={side} className="p-0">
@@ -299,17 +431,14 @@ export const ProjectPicker = memo(function ProjectPicker({
               >
                 <PlusIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                 <span className="truncate">
-                  {isPicking ? "Opening folder picker…" : "Add new project"}
+                  {isPicking ? loadingAddProjectLabel : addProjectLabel}
                 </span>
               </button>
-              {showResetToHome ? (
+              {shouldShowResetToHome ? (
                 <button
                   type="button"
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)]"
-                  onClick={() => {
-                    onResetToHome?.();
-                    setOpen(false);
-                  }}
+                  onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
                   <span className="truncate">Don&apos;t work in a project</span>
@@ -329,39 +458,17 @@ export const ProjectPicker = memo(function ProjectPicker({
                 : "No matches"}
           </ComboboxEmpty>
           <ComboboxList className="max-h-64">
-            {filteredActiveFolderOptions.length > 0 ? (
+            {isProjectSelectionMode && filteredActiveFolderOptions.length > 0
+              ? filteredActiveFolderOptions.map((folder, index) =>
+                  renderActiveFolderOption(folder, index),
+                )
+              : null}
+            {!isProjectSelectionMode && filteredActiveFolderOptions.length > 0 ? (
               <ComboboxGroup>
                 <ComboboxGroupLabel>Active folders</ComboboxGroupLabel>
-                {filteredActiveFolderOptions.map((folder, index) => (
-                  <ComboboxItem
-                    hideIndicator={folder.cwd !== selectedWorkspaceRoot}
-                    key={folder.cwd}
-                    index={index}
-                    value={folder.cwd}
-                    onClick={() => {
-                      onSelectWorkspaceRoot?.(folder.cwd);
-                      setOpen(false);
-                    }}
-                    className={cn(
-                      folder.cwd === selectedWorkspaceRoot &&
-                        "bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]",
-                    )}
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <FolderClosed className="size-3.5 shrink-0 text-muted-foreground/70" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex min-w-0 items-baseline gap-1.5">
-                          <span className="min-w-0 truncate">{folder.primaryLabel}</span>
-                          {folder.secondaryLabel ? (
-                            <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
-                              {folder.secondaryLabel}
-                            </span>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  </ComboboxItem>
-                ))}
+                {filteredActiveFolderOptions.map((folder, index) =>
+                  renderActiveFolderOption(folder, index),
+                )}
               </ComboboxGroup>
             ) : null}
             {filteredActiveFolderOptions.length > 0 && filteredMacFolderOptions.length > 0 ? (

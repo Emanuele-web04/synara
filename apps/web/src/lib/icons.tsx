@@ -3,9 +3,8 @@ import { PiSquareSplitHorizontal, PiSquareSplitVertical } from "react-icons/pi";
 import { RiApps2Line } from "react-icons/ri";
 import { SiGithub } from "react-icons/si";
 import { VscMcp } from "react-icons/vsc";
-import { LuMessageSquareDashed } from "react-icons/lu";
 import { cn } from "./utils";
-import { CentralIcon } from "./central-icons";
+import { CentralIcon, type CentralIconVariant } from "./central-icons";
 import {
   IconAdjustments,
   IconAlertCircle,
@@ -26,7 +25,6 @@ import {
   IconChartBar,
   IconCheck,
   IconChevronDown,
-  IconClock,
   IconChevronLeft,
   IconChevronRight,
   IconChevronUp,
@@ -43,7 +41,6 @@ import {
   IconHash,
   IconFolder,
   IconFolderOpen,
-  IconEdit,
   IconHistory,
   IconInfoCircle,
   IconLayoutDistributeHorizontal,
@@ -66,7 +63,6 @@ import {
   IconPlus,
   IconRefresh,
   IconRocket,
-  IconRobot,
   IconRotate2,
   IconSelector,
   IconSettings,
@@ -76,7 +72,6 @@ import {
   IconStarFilled,
   IconSun,
   IconTextWrap,
-  IconTool,
   IconTrash,
   IconTrophy,
   IconWorld,
@@ -96,13 +91,14 @@ function adaptIcon(Component: TablerIcon): LucideIcon {
 // Wraps a Central icon asset behind the LucideIcon API. Rendering via CSS mask
 // avoids stroke-on-stroke alpha summation that gave hand-drawn SVGs a
 // "stamped twice" look on shared vertices (the previous PinIcon bug).
-function centralIconWrapper(name: string): LucideIcon {
+function centralIconWrapper(name: string, variant?: CentralIconVariant): LucideIcon {
   return function CentralIconWrapper({ className, style, ...rest }) {
     const ariaLabelRaw = (rest as { ["aria-label"]?: unknown })["aria-label"];
     const label = typeof ariaLabelRaw === "string" ? ariaLabelRaw : undefined;
     return (
       <CentralIcon
         name={name}
+        variant={variant}
         className={typeof className === "string" ? className : undefined}
         style={style as CSSProperties | undefined}
         label={label}
@@ -128,7 +124,13 @@ export const ArrowDownIcon = adaptIcon(IconArrowDown);
 export const ArrowUpIcon = adaptIcon(IconArrowUp);
 export const ArrowUpRightIcon = adaptIcon(IconArrowUpRight);
 export const ArrowUpDownIcon = adaptIcon(IconArrowsUpDown);
-export const BotIcon = adaptIcon(IconRobot);
+// Single source for the robot/agent glyph. Sourced from the Central icon set so
+// every robot affordance (reasoning rows, agent-task rows, agent mention chips,
+// subagent menus, agent-activity headers) renders one identical icon. Use
+// BotIcon in React; AGENT_ROBOT_ICON_NAME for imperative DOM via
+// createCentralIconElement.
+export const AGENT_ROBOT_ICON_NAME = "robot";
+export const BotIcon: LucideIcon = centralIconWrapper(AGENT_ROBOT_ICON_NAME);
 export const BugIcon = adaptIcon(IconBug);
 export const CameraIcon = adaptIcon(IconCamera);
 export const CheckIcon = adaptIcon(IconCheck);
@@ -139,6 +141,15 @@ export const ChevronUpIcon = adaptIcon(IconChevronUp);
 export const ChevronsUpDownIcon = adaptIcon(IconSelector);
 export const CircleAlertIcon = adaptIcon(IconAlertCircle);
 export const CircleCheckIcon = adaptIcon(IconCircleCheck);
+// Completed/success status glyph sourced from the Central set so it sits in the
+// same visual language as the other trailing thread-row icons (worktree, fork,
+// pull-request) instead of the react-icons outline check it replaced.
+export const CheckCircle2Icon: LucideIcon = centralIconWrapper("check-circle-2");
+// User-input rows: a question-mark circle while the agent waits for an answer,
+// and an up-arrow circle once the answer is submitted. Sourced from the Central
+// set so they sit visually beside the other timeline glyphs (robot, search, …).
+export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questionmark");
+export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudUploadIcon = centralIconWrapper("cloud-upload");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
 export const Columns2Icon = adaptIcon(IconColumns2);
@@ -149,7 +160,10 @@ export const DiffIcon = centralIconWrapper("difference-modified");
 export const DownloadIcon = adaptIcon(IconDownload);
 export const FlameIcon = adaptIcon(IconFlame);
 export const TrophyIcon = adaptIcon(IconTrophy);
-export const ClockIcon = adaptIcon(IconClock);
+// The clock doubles as the automation glyph everywhere it appears (meta chip,
+// Automations nav, slash command, created card, environment section), so it is
+// sourced from the Central icon set rather than the Tabler stroke icon.
+export const ClockIcon = centralIconWrapper("clock");
 export const ChartBarIcon = adaptIcon(IconChartBar);
 export const ShareIcon = adaptIcon(IconShare3);
 export const SparklesIcon = adaptIcon(IconSparkles);
@@ -168,6 +182,10 @@ export const FlaskConicalIcon = adaptIcon(IconFlask2);
 export const FolderClosedIcon = adaptIcon(IconFolder);
 export const FolderIcon = adaptIcon(IconFolder);
 export const FolderOpenIcon = adaptIcon(IconFolderOpen);
+// Stacked "folders" glyph used as the single representation of a file tree /
+// explorer surface (right-dock explorer, editor Files activity, diff file-tree
+// toggle). Central "reversed" outline asset so it matches the rest of the chrome.
+export const FoldersIcon: LucideIcon = centralIconWrapper("folders");
 export const GitCommitIcon: LucideIcon = centralIconWrapper("commits");
 export const GitBranchIcon: LucideIcon = centralIconWrapper("branch");
 export const GitForkIcon = centralIconWrapper("fork");
@@ -179,11 +197,15 @@ export const GitHubIcon: LucideIcon = (props) => (
 );
 export const GitPullRequestIcon = centralIconWrapper("pull-request");
 export const GlobeIcon = adaptIcon(IconWorld);
+export const WebSearchIcon: LucideIcon = centralIconWrapper("globe");
 export const McpIcon: LucideIcon = (props) => (
   <VscMcp className={props.className} style={props.style} />
 );
 export const PluginIcon: LucideIcon = centralIconWrapper("puzzle");
-export const HammerIcon = adaptIcon(IconTool);
+// Single hammer/build glyph (tool-call rows, codex provider, "build" scripts).
+// Sourced from the Central set so it matches the other work-row icons (pencil,
+// terminal, skill cube) it sits beside, instead of the Tabler wrench it used to be.
+export const HammerIcon: LucideIcon = centralIconWrapper("hammer");
 export const HistoryIcon = adaptIcon(IconHistory);
 export const InfoIcon = adaptIcon(IconInfoCircle);
 export const KanbanIcon = centralIconWrapper("columns-3-wide");
@@ -209,6 +231,9 @@ export const WindowIcon: LucideIcon = centralIconWrapper("window");
 export const LayoutSidebarIcon: LucideIcon = centralIconWrapper("layout-sidebar");
 export const PencilIcon: LucideIcon = centralIconWrapper("pencil");
 export const PinIcon: LucideIcon = centralIconWrapper("pin");
+// Solid pin from the fill set — used wherever a pin reflects "pinned" status
+// (project + thread rows and their hover cards) rather than a neutral action.
+export const PinFilledIcon: LucideIcon = centralIconWrapper("pin", "fill");
 export const PlayIcon = adaptIcon(IconPlayerPlay);
 export const Plus = adaptIcon(IconPlus);
 export const PlusIcon = adaptIcon(IconPlus);
@@ -225,17 +250,17 @@ export const MoonIcon = adaptIcon(IconMoon);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
 export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);
-export const SquarePenIcon = adaptIcon(IconEdit);
 export const SquareSplitHorizontal: LucideIcon = (props) => (
   <PiSquareSplitHorizontal className={props.className} style={props.style} />
 );
 export const SquareSplitVertical: LucideIcon = (props) => (
   <PiSquareSplitVertical className={props.className} style={props.style} />
 );
-// react-icons/lu glyphs occupy more of the 24×24 viewBox than Tabler/Central icons at
-// the same Tailwind size — use `chromeLu` in sidebarGlyphs beside `chrome` controls.
-export const DisposableThreadIcon: LucideIcon = (props) => (
-  <LuMessageSquareDashed className={cn("size-3 shrink-0", props.className)} style={props.style} />
+const TemporaryThreadGlyph = centralIconWrapper("bubble-annotation-5");
+// Dotted "annotation" chat bubble — the temporary thread marker shown on the
+// composer toggle and beside temporary threads in the sidebar.
+export const TemporaryThreadIcon: LucideIcon = ({ className, ...props }) => (
+  <TemporaryThreadGlyph className={cn("size-3.5 shrink-0", className)} {...props} />
 );
 export const TerminalIcon = centralIconWrapper("console");
 export const TerminalSquare = centralIconWrapper("console");
@@ -244,7 +269,10 @@ export const TextWrapIcon = adaptIcon(IconTextWrap);
 export const Trash2 = adaptIcon(IconTrash);
 export const TriangleAlertIcon = adaptIcon(IconAlertTriangle);
 export const Undo2Icon = adaptIcon(IconArrowBackUp);
-export const WrenchIcon = adaptIcon(IconTool);
 export const WorktreeIcon = centralIconWrapper("arrow-split-right");
 export const XIcon = adaptIcon(IconX);
 export const ZapIcon = adaptIcon(IconBolt);
+// Single source for the fast-mode glyph. Every fast-mode affordance (composer
+// trait badges, the Speed submenu, the /fast command) renders this one solid
+// lightning bolt from the Central fill set instead of mixing Tabler/Ionicons bolts.
+export const FastModeIcon: LucideIcon = centralIconWrapper("zap", "fill");

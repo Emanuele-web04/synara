@@ -26,6 +26,14 @@ export const SIDEBAR_ROW_ACTIVE_CLASS_NAME =
 
 export const SIDEBAR_ROW_IDLE_TEXT_CLASS_NAME = "text-foreground/89";
 
+/**
+ * Resting foreground for primary sidebar item labels and their accompanying
+ * leading/pin icons (inactive thread name, project/folder name, folder + pin
+ * glyphs). Sits just below the full-foreground active row so resting items read
+ * clearly without competing with the selected thread.
+ */
+export const SIDEBAR_ROW_LABEL_TEXT_CLASS_NAME = "text-foreground/95";
+
 /** Dimmer idle label color shared by project header rows, thread rows, and settings nav rows. */
 export const SIDEBAR_ROW_MUTED_TEXT_CLASS_NAME = "text-muted-foreground/79";
 
@@ -57,6 +65,38 @@ export const SIDEBAR_THREAD_ROW_BASE_CLASS_NAME = [
 export const SIDEBAR_NESTED_LIST_GAP_CLASS_NAME = "gap-0.5";
 
 export const SIDEBAR_NESTED_LIST_OFFSET_CLASS_NAME = "pt-0.5";
+
+/** Sidebar row groups whose resting status fades to yield its slot to a hover toolbar. */
+export type SidebarHoverRevealGroup = "project-header" | "thread-row";
+
+/**
+ * The single rule for "fade a resting glyph out the moment its row reveals the hover
+ * action toolbar, so the actions replace it instead of stacking on top." A project
+ * header (folder icon + run-status dot) and a thread row (meta chips, timestamp/status
+ * slot, jump hint) both follow it — the faded element also drops pointer events so it
+ * never intercepts clicks meant for the revealed toolbar.
+ *
+ * Tailwind only emits utilities it can read as complete literals, so each group's classes
+ * are spelled out in full rather than interpolating the `group/<row>` token. The variants
+ * differ only by that token and by which focus signal the row's toolbar reveals on
+ * (project headers reveal on keyboard `focus-visible`; thread rows reveal on any
+ * `focus-within`) — keep each in lockstep with its row's toolbar. Requires an ancestor
+ * carrying the matching `group/<row>` marker.
+ *
+ * Apply this to a *static* element. If the element you want to hide animates its own
+ * `opacity` (e.g. `animate-pulse`), the running animation overrides this `opacity-0`;
+ * put the class on a wrapper instead so the parent's collapsed opacity hides the subtree.
+ */
+const SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME: Record<SidebarHoverRevealGroup, string> = {
+  "project-header":
+    "transition-opacity group-hover/project-header:pointer-events-none group-hover/project-header:opacity-0 group-has-[:focus-visible]/project-header:pointer-events-none group-has-[:focus-visible]/project-header:opacity-0",
+  "thread-row":
+    "transition-opacity group-hover/thread-row:pointer-events-none group-hover/thread-row:opacity-0 group-focus-within/thread-row:pointer-events-none group-focus-within/thread-row:opacity-0",
+};
+
+export function sidebarHoverRevealHideClassName(group: SidebarHoverRevealGroup): string {
+  return SIDEBAR_HOVER_REVEAL_HIDE_CLASS_NAME[group];
+}
 
 export const SIDEBAR_HEADER_ICON_CLASS_NAME = "size-4 shrink-0 text-inherit";
 

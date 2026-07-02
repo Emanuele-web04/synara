@@ -68,6 +68,8 @@ import type {
   GitUnstageFilesResult,
 } from "./git";
 import type {
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
   ProjectDevServerEvent,
   ProjectDiscoverScriptsInput,
   ProjectDiscoverScriptsResult,
@@ -343,6 +345,9 @@ export interface DesktopBridge {
   shell?: {
     showInFolder: (path: string) => Promise<void>;
   };
+  clipboard?: {
+    writeImagePngDataUrl: (dataUrl: string) => Promise<boolean>;
+  };
   windowControls?: {
     minimize: () => Promise<void>;
     toggleMaximize: () => Promise<DesktopWindowState>;
@@ -422,6 +427,9 @@ export interface NativeApi {
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
     readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    createLocalFilePreviewGrant: (
+      input: ProjectCreateLocalFilePreviewGrantInput,
+    ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     runDevServer: (input: ProjectRunDevServerInput) => Promise<ProjectRunDevServerResult>;
     stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;

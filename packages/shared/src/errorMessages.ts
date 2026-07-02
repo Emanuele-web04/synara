@@ -1,7 +1,13 @@
 // FILE: errorMessages.ts
 // Purpose: Normalizes nested Error-like values into readable messages.
 // Layer: Shared utility
-// Exports: collectErrorMessages, describeErrorMessage
+// Exports: collectErrorMessages, describeErrorMessage, THREAD_NOT_ARCHIVED_INVARIANT_MARKER
+
+// Stable phrase embedded in the server's "thread is not archived" orchestration
+// invariant message. Shared so the server (which builds the message) and the
+// client (which detects an Undo that raced another restore) reference one source
+// of truth and cannot silently drift apart when the wording is edited.
+export const THREAD_NOT_ARCHIVED_INVARIANT_MARKER = "is not archived for command";
 
 export function collectErrorMessages(
   error: unknown,

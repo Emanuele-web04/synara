@@ -1,4 +1,5 @@
 import type {
+  ProjectCreateLocalFilePreviewGrantResult,
   ProjectEntry,
   ProjectListDirectoriesResult,
   ProjectReadFileResult,
@@ -6,6 +7,7 @@ import type {
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesResult,
 } from "@t3tools/contracts";
+import { isLocalAbsolutePath } from "@t3tools/shared/path";
 import { queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 
@@ -15,6 +17,7 @@ export const projectQueryKeys = {
     ["projects", "list-directories", cwd, relativePath, includeFiles] as const,
   readFile: (cwd: string | null, relativePath: string | null) =>
     ["projects", "read-file", cwd, relativePath] as const,
+  localPreviewGrant: (path: string | null) => ["projects", "local-preview-grant", path] as const,
   discoverScripts: (cwd: string | null, depth: number) =>
     ["projects", "discover-scripts", cwd, depth] as const,
   searchEntries: (
@@ -51,6 +54,9 @@ const DEFAULT_DISCOVER_SCRIPTS_STALE_TIME = 30_000;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_LIMIT = 50;
 const DEFAULT_SEARCH_LOCAL_ENTRIES_STALE_TIME = 10_000;
 const DEFAULT_READ_FILE_STALE_TIME = 5_000;
+const LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS = 15_000;
+const LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS = 1_000;
+export const LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS = 30_000;
 const EMPTY_SEARCH_ENTRIES_RESULT: ProjectSearchEntriesResult = {
   entries: [],
   truncated: false,
@@ -62,6 +68,38 @@ const EMPTY_SEARCH_LOCAL_ENTRIES_RESULT: ProjectSearchLocalEntriesResult = {
   entries: [],
   truncated: false,
 };
+const ABSOLUTE_LOCAL_READ_CWD = "/";
+
+export function isLocalPreviewGrantUsable(
+  grant: Pick<ProjectCreateLocalFilePreviewGrantResult, "expiresAt"> | null | undefined,
+  nowMs = Date.now(),
+): boolean {
+  const expiresAtMs = Date.parse(grant?.expiresAt ?? "");
+  return (
+    Number.isFinite(expiresAtMs) &&
+    expiresAtMs > nowMs + LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS
+  );
+}
+
+// Refresh short-lived preview grants while a file pane is open, with a cap so
+// backend restarts recover quickly instead of waiting for the full token TTL.
+export function localPreviewGrantRefetchIntervalMs(
+  grant: Pick<ProjectCreateLocalFilePreviewGrantResult, "expiresAt"> | null | undefined,
+  nowMs = Date.now(),
+): number | false {
+  if (!grant) {
+    return false;
+  }
+  const expiresAtMs = Date.parse(grant.expiresAt);
+  if (!Number.isFinite(expiresAtMs)) {
+    return LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS;
+  }
+  const refreshInMs = expiresAtMs - nowMs - LOCAL_PREVIEW_GRANT_REFRESH_SAFETY_MS;
+  return Math.max(
+    LOCAL_PREVIEW_GRANT_MIN_REFETCH_INTERVAL_MS,
+    Math.min(LOCAL_PREVIEW_GRANT_MAX_REFETCH_INTERVAL_MS, refreshInMs),
+  );
+}
 
 export function projectListDirectoriesQueryOptions(input: {
   cwd: string | null;
@@ -94,23 +132,50 @@ export function projectListDirectoriesQueryOptions(input: {
 export function projectReadFileQueryOptions(input: {
   cwd: string | null;
   relativePath: string | null;
+  previewGrant?: string | null | undefined;
   enabled?: boolean;
   staleTime?: number;
 }) {
+  const effectiveCwd =
+    input.cwd ??
+    (input.relativePath !== null && isLocalAbsolutePath(input.relativePath)
+      ? ABSOLUTE_LOCAL_READ_CWD
+      : null);
   return queryOptions<ProjectReadFileResult>({
     queryKey: projectQueryKeys.readFile(input.cwd, input.relativePath),
     queryFn: async () => {
       const api = ensureNativeApi();
-      if (!input.cwd || !input.relativePath) {
+      if (!effectiveCwd || !input.relativePath) {
         throw new Error("Workspace file read is unavailable.");
       }
       return api.projects.readFile({
-        cwd: input.cwd,
+        cwd: effectiveCwd,
         relativePath: input.relativePath,
+        ...(input.previewGrant ? { previewGrant: input.previewGrant } : {}),
       });
     },
-    enabled: (input.enabled ?? true) && input.cwd !== null && input.relativePath !== null,
+    enabled: (input.enabled ?? true) && effectiveCwd !== null && input.relativePath !== null,
     staleTime: input.staleTime ?? DEFAULT_READ_FILE_STALE_TIME,
+  });
+}
+
+export function projectLocalPreviewGrantQueryOptions(input: {
+  path: string | null;
+  enabled?: boolean;
+  staleTime?: number;
+}) {
+  return queryOptions<ProjectCreateLocalFilePreviewGrantResult>({
+    queryKey: projectQueryKeys.localPreviewGrant(input.path),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.path) {
+        throw new Error("Local file preview grant is unavailable.");
+      }
+      return api.projects.createLocalFilePreviewGrant({ path: input.path });
+    },
+    enabled: (input.enabled ?? true) && input.path !== null,
+    staleTime: input.staleTime ?? 60_000,
+    refetchInterval: (query) => localPreviewGrantRefetchIntervalMs(query.state.data),
   });
 }
 

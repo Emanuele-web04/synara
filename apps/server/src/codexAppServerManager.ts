@@ -39,6 +39,7 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -527,11 +528,8 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
+// Windows `.cmd` shims still run under an explicit cmd.exe wrapper; taskkill
+// keeps cancellation from leaving the real provider process behind.
 function killChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
@@ -544,6 +542,24 @@ function killChildTree(child: ChildProcessWithoutNullStreams): void {
     }
   }
   child.kill();
+}
+
+function spawnCodexAppServer(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): ChildProcessWithoutNullStreams {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+  return spawn(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env: input.env,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: prepared.shell,
+    windowsHide: prepared.windowsHide,
+  });
 }
 
 export function normalizeCodexModelSlug(
@@ -773,13 +789,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1392,13 +1407,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1977,11 +1991,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawn("codex", ["app-server"], {
+    const child = spawnCodexAppServer({
+      binaryPath: "codex",
       cwd: normalizedCwd,
       env: buildCodexProcessEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -3344,16 +3357,22 @@ function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const env = buildCodexProcessEnv({
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+  });
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: buildCodexProcessEnv({
-      ...(input.homePath ? { homePath: input.homePath } : {}),
-    }),
+    env,
+  });
+  const result = spawnSync(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: prepared.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    windowsHide: prepared.windowsHide,
   });
 
   if (result.error) {

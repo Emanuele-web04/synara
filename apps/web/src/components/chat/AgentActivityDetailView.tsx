@@ -108,7 +108,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
                 <h2 className="truncate text-[18px] font-medium leading-6 text-foreground/92">
                   {detail.title}
                 </h2>
-                <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground/56">
+                <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/56">
                   {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
                 </span>
               </div>
@@ -183,9 +183,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
 function AgentActivitySection(props: { title: string; children: ReactNode }) {
   return (
     <section className="border-b border-border/45 py-4 last:border-b-0">
-      <h3 className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/48">
-        {props.title}
-      </h3>
+      <h3 className="mb-2 text-[11px] font-medium text-muted-foreground/48">{props.title}</h3>
       {props.children}
     </section>
   );
@@ -272,7 +270,7 @@ function SubagentDetailRow(props: {
       <button
         type="button"
         className={cn(
-          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium uppercase tracking-[0.12em] text-muted-foreground/62 transition-colors",
+          "shrink-0 rounded-full border border-border/45 px-2.5 py-1 text-[9px] font-medium text-muted-foreground/62 transition-colors",
           canOpenThread
             ? "hover:border-foreground/15 hover:text-foreground/84"
             : "cursor-default opacity-50",
