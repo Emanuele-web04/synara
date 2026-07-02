@@ -1,0 +1,45 @@
+// FILE: userTurnMarker.ts
+// Purpose: Single predicate for the marker chip above a sent user message
+// ("Sent via Automation" / "Steering conversation"). Shared by the transcript
+// renderer (MessagesTimeline) and the row-height estimator (timelineHeight) so
+// what gets rendered and what gets measured can never drift apart.
+// Layer: web chat feature (pure logic, no I/O).
+
+// Automation-dispatched turns take precedence over the steer marker; a turn is
+// never both (automations always dispatch with dispatchMode "queue").
+export type UserTurnMarkerKind = "automation" | "steer";
+
+export function resolveUserTurnMarker(message: {
+  readonly dispatchMode?: "queue" | "steer" | undefined;
+  readonly dispatchOrigin?: "user" | "automation" | undefined;
+}): UserTurnMarkerKind | null {
+  if (message.dispatchOrigin === "automation") {
+    return "automation";
+  }
+  if (message.dispatchMode === "steer") {
+    return "steer";
+  }
+  return null;
+}
+
+export interface UserTurnMediaCounts {
+  readonly imageCount: number;
+  readonly fileCount: number;
+  readonly assistantSelectionCount: number;
+  readonly fileCommentCount: number;
+  readonly pastedTextCount: number;
+}
+
+// The marker chip sits directly above any leading media row, and its bottom
+// margin is larger when media follows. Renderer and height estimator must agree
+// on which attachment kinds count as media, or estimated row heights drift from
+// what actually renders.
+export function hasLeadingUserMedia(counts: UserTurnMediaCounts): boolean {
+  return (
+    counts.imageCount > 0 ||
+    counts.fileCount > 0 ||
+    counts.assistantSelectionCount > 0 ||
+    counts.fileCommentCount > 0 ||
+    counts.pastedTextCount > 0
+  );
+}

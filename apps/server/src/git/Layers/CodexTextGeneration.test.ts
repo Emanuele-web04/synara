@@ -462,7 +462,7 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
         output: JSON.stringify({
           title: ' "Polish sidebar loading state." ',
         }),
-        stdinMustContain: "Never exceed 4 words.",
+        stdinMustContain: "Never exceed 6 words.",
         requireSkipGitRepoCheck: true,
         requireApprovalNever: true,
       },

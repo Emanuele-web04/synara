@@ -131,6 +131,8 @@ interface OpenCodeSessionContext {
   readonly directory: string;
   readonly openCodeSessionId: string;
   readonly pendingPermissions: Map<string, PermissionRequest>;
+  /** Permission request ids auto-approved server-side in full-access mode (never surfaced to the UI). */
+  readonly autoApprovedPermissionIds: Set<string>;
   readonly pendingQuestions: Map<string, QuestionRequest>;
   readonly pendingTextDeltasByPartId: Map<string, string>;
   readonly messageRoleById: Map<string, "user" | "assistant">;
@@ -690,6 +692,11 @@ function clearActiveTurnState(context: OpenCodeSessionContext): void {
   context.activeVariant = undefined;
   context.latestTurnCostUsd = undefined;
   context.relatedSessionIds.clear();
+  // Deliberately NOT cleared here: a permission auto-approved at the tail of a turn can
+  // have its permission.replied echo arrive after turn teardown, and dropping the id first
+  // would misclassify that echo as a real resolution (orphaned "Approval resolved" in the
+  // UI). Ids are unique per request so stale entries are inert; the set is freed with the
+  // session context when the session is removed.
 }
 
 function markOpenCodeTurnProviderActivity(
@@ -2744,6 +2751,29 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.asked": {
+            // Full access: auto-approve instead of surfacing an approval, mirroring the
+            // Claude/Cursor/Grok adapters. Covers asks the declarative session ruleset cannot
+            // (resumed/forked sessions on older servers, subagent child sessions, user config).
+            if (context.session.runtimeMode === "full-access") {
+              context.autoApprovedPermissionIds.add(event.properties.id);
+              const replyExit = yield* Effect.exit(
+                runOpenCodeSdk("permission.reply", () =>
+                  context.client.permission.reply({
+                    requestID: event.properties.id,
+                    reply: "always",
+                  }),
+                ),
+              );
+              if (Exit.isSuccess(replyExit)) {
+                break;
+              }
+              // Fall back to a visible approval so the turn cannot hang on a failed reply.
+              context.autoApprovedPermissionIds.delete(event.properties.id);
+              yield* Effect.logWarning(
+                `${adapterConfig.displayName} full-access auto-approve failed; surfacing approval`,
+                Cause.squash(replyExit.cause),
+              );
+            }
             context.pendingPermissions.set(event.properties.id, event.properties);
             yield* emit({
               ...buildEventBase({
@@ -2766,6 +2796,10 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
           }
 
           case "permission.replied": {
+            if (context.autoApprovedPermissionIds.delete(event.properties.requestID)) {
+              // Auto-approved in full access; nothing was surfaced to the UI.
+              break;
+            }
             context.pendingPermissions.delete(event.properties.requestID);
             yield* emit({
               ...buildEventBase({
@@ -3646,7 +3680,23 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
                 const createSessionId = resumedSessionId
-                  ? Effect.succeed(resumedSessionId)
+                  ? // Resumed sessions skip session.create, so re-apply the runtime-mode
+                    // permission ruleset explicitly. Non-fatal: older servers may reject the
+                    // field, and full-access asks are still auto-approved in the event pump.
+                    runOpenCodeSdk("session.update", () =>
+                      client.session.update({
+                        sessionID: resumedSessionId,
+                        permission: buildOpenCodePermissionRules(input.runtimeMode),
+                      }),
+                    ).pipe(
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning(
+                          `${adapterConfig.displayName} failed to apply permission ruleset on resume`,
+                          Cause.squash(cause),
+                        ),
+                      ),
+                      Effect.as(resumedSessionId),
+                    )
                   : runOpenCodeSdk("session.create", () => {
                       const sessionCreateInput = {
                         ...(initialParsedModel
@@ -3730,6 +3780,7 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
             directory,
             openCodeSessionId: started.openCodeSessionId,
             pendingPermissions: new Map(),
+            autoApprovedPermissionIds: new Set(),
             pendingQuestions: new Map(),
             pendingTextDeltasByPartId: new Map(),
             partById: new Map(),

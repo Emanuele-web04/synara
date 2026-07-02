@@ -279,8 +279,9 @@ import {
   groupSidebarThreadsByProjectId,
   isLatestPinnedProjectMutation,
   isLatestPinnedThreadMutation,
-  pruneExpandedProjectThreadListsForCollapsedProjects,
+  pruneProjectThreadListPagingForCollapsedProjects,
   recoverExistingAddProjectTarget,
+  resolveSidebarThreadListPaging,
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
@@ -359,6 +360,8 @@ import {
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 5;
+// Each "Show more" click reveals this many extra rows; "Show less" hides them again page by page.
+const THREAD_PREVIEW_PAGE_SIZE = 5;
 // How long the "Undo archive" toast lingers (visible time only — it pauses while
 // the tab is hidden) before auto-dismissing.
 const ARCHIVE_UNDO_TOAST_DURATION_MS = 8000;
@@ -1454,14 +1457,15 @@ export default function Sidebar() {
   const [renameProjectDialogId, setRenameProjectDialogId] = useState<ProjectId | null>(null);
   const [projectContextMenuState, setProjectContextMenuState] =
     useState<ProjectContextMenuState | null>(null);
-  const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
-    ReadonlySet<string>
-  >(() => new Set(readSidebarUiState().expandedProjectThreadListCwds));
+  // "Show more" paging state: extra pages of THREAD_PREVIEW_PAGE_SIZE rows per project cwd.
+  const [threadListExtraPagesByProjectCwd, setThreadListExtraPagesByProjectCwd] = useState<
+    ReadonlyMap<string, number>
+  >(() => new Map(Object.entries(readSidebarUiState().projectThreadListExtraPagesByCwd)));
   const [chatSectionExpanded, setChatSectionExpanded] = useState(
     () => readSidebarUiState().chatSectionExpanded,
   );
-  const [chatThreadListExpanded, setChatThreadListExpanded] = useState(
-    () => readSidebarUiState().chatThreadListExpanded,
+  const [chatThreadListExtraPages, setChatThreadListExtraPages] = useState(
+    () => readSidebarUiState().chatThreadListExtraPages,
   );
   const [dismissedThreadStatusKeyByThreadId, setDismissedThreadStatusKeyByThreadId] = useState<
     Record<string, string>
@@ -3594,17 +3598,17 @@ export default function Sidebar() {
       setLastThreadRoute(nextLastThreadRoute);
       persistSidebarUiState({
         chatSectionExpanded,
-        chatThreadListExpanded,
-        expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+        chatThreadListExtraPages,
+        projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
         dismissedThreadStatusKeyByThreadId,
         lastThreadRoute: nextLastThreadRoute,
       });
     },
     [
       chatSectionExpanded,
-      chatThreadListExpanded,
+      chatThreadListExtraPages,
       dismissedThreadStatusKeyByThreadId,
-      expandedThreadListsByProject,
+      threadListExtraPagesByProjectCwd,
     ],
   );
   const { activateThreadFromSidebarIntent } = useThreadActivationController({
@@ -4014,16 +4018,33 @@ export default function Sidebar() {
     activeSidebarThreadId === undefined
       ? null
       : (visibleChatPreviewEntries.find((entry) => entry.rowId === activeSidebarThreadId) ?? null);
-  const { hasHiddenEntries: hasHiddenChatThreads, visibleEntries: renderedChatEntries } = useMemo(
-    () =>
-      getVisibleSidebarEntriesForPreview({
-        entries: visibleChatPreviewEntries,
-        activeEntryId: activeChatPreviewEntry?.rowId,
-        isExpanded: chatThreadListExpanded,
-        previewLimit: THREAD_PREVIEW_LIMIT,
-      }),
-    [activeChatPreviewEntry?.rowId, chatThreadListExpanded, visibleChatPreviewEntries],
-  );
+  const {
+    canShowLessChatThreads,
+    canShowMoreChatThreads,
+    chatThreadListEffectiveExtraPages,
+    renderedChatEntries,
+  } = useMemo(() => {
+    const paging = resolveSidebarThreadListPaging({
+      totalCount: visibleChatPreviewEntries.length,
+      baseLimit: THREAD_PREVIEW_LIMIT,
+      pageSize: THREAD_PREVIEW_PAGE_SIZE,
+      requestedExtraPages: chatThreadListExtraPages,
+    });
+    const { visibleEntries } = getVisibleSidebarEntriesForPreview({
+      entries: visibleChatPreviewEntries,
+      activeEntryId: activeChatPreviewEntry?.rowId,
+      previewLimit: paging.previewLimit,
+    });
+    return {
+      // Mirror deriveSidebarProjectData: the active-chat reveal can force rows past the page
+      // cap, so only offer "Show more" while rows are genuinely hidden.
+      canShowMoreChatThreads:
+        paging.canShowMore && visibleEntries.length < visibleChatPreviewEntries.length,
+      canShowLessChatThreads: paging.canShowLess,
+      chatThreadListEffectiveExtraPages: paging.effectiveExtraPages,
+      renderedChatEntries: visibleEntries,
+    };
+  }, [activeChatPreviewEntry?.rowId, chatThreadListExtraPages, visibleChatPreviewEntries]);
   const standardProjectsBase = useMemo(
     () =>
       sortedProjects.filter(
@@ -4196,16 +4217,17 @@ export default function Sidebar() {
         sortedSidebarThreadsByProjectId,
         pinnedThreadIds,
         expandedParentThreadIds: expandedSubagentParentIds,
-        expandedThreadListProjectCwds: expandedThreadListsByProject,
+        threadListExtraPagesByProjectCwd,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
         activeSidebarThreadId: activeSidebarThreadId ?? undefined,
         previewLimit: THREAD_PREVIEW_LIMIT,
+        previewPageSize: THREAD_PREVIEW_PAGE_SIZE,
         resolveThreadStatus: resolveThreadStatusForSidebar,
       }),
     [
       activeSidebarThreadId,
       expandedSubagentParentIds,
-      expandedThreadListsByProject,
+      threadListExtraPagesByProjectCwd,
       pinnedThreadIds,
       sortedSidebarThreadsByProjectId,
       standardProjects,
@@ -4217,11 +4239,11 @@ export default function Sidebar() {
     [standardProjects],
   );
 
-  // Reset per-project preview expansion when a folder closes so reopening starts at five rows again.
+  // Reset per-project preview paging when a folder closes so reopening starts at five rows again.
   useEffect(() => {
-    setExpandedThreadListsByProject((current) =>
-      pruneExpandedProjectThreadListsForCollapsedProjects({
-        expandedProjectThreadListCwds: current,
+    setThreadListExtraPagesByProjectCwd((current) =>
+      pruneProjectThreadListPagingForCollapsedProjects({
+        threadListExtraPagesByProjectCwd: current,
         projects: standardProjects,
         normalizeProjectCwd: normalizeSidebarProjectThreadListCwd,
       }),
@@ -4290,16 +4312,16 @@ export default function Sidebar() {
   useEffect(() => {
     persistSidebarUiState({
       chatSectionExpanded,
-      chatThreadListExpanded,
-      expandedProjectThreadListCwds: [...expandedThreadListsByProject],
+      chatThreadListExtraPages,
+      projectThreadListExtraPagesByCwd: Object.fromEntries(threadListExtraPagesByProjectCwd),
       dismissedThreadStatusKeyByThreadId,
       lastThreadRoute,
     });
   }, [
     chatSectionExpanded,
-    chatThreadListExpanded,
+    chatThreadListExtraPages,
     dismissedThreadStatusKeyByThreadId,
-    expandedThreadListsByProject,
+    threadListExtraPagesByProjectCwd,
     lastThreadRoute,
   ]);
 
@@ -4807,6 +4829,11 @@ export default function Sidebar() {
     const threadJumpLabel = visibleThreadJumpLabelByThreadId.get(thread.id) ?? null;
     const threadJumpLabelParts =
       visibleThreadJumpLabelPartsByThreadId.get(thread.id) ?? EMPTY_SHORTCUT_PARTS;
+    // The trailing cluster (meta chips + status glyph) is absolutely positioned; it
+    // only grows past the reserve when a live glyph (spinner/check/dot or jump label)
+    // occupies the status slot. In that state the right-aligned project label needs a
+    // hair of clearance so it stops kissing the worktree chip — see the margin below.
+    const hasTrailingStatusGlyph = Boolean(threadStatus) || Boolean(threadJumpLabel);
     const showThreadProviderAvatar = !isGenericChatThreadTitle(thread.title);
     const hoverAnchorId = createSidebarThreadHoverAnchorId({
       scope: "pinned",
@@ -4844,7 +4871,7 @@ export default function Sidebar() {
               leadingPrStatus && "pl-8",
               resolveThreadRowTrailingReserveClass({
                 metaChipCount: rightMetaChips.length,
-                hasTrailingGlyph: Boolean(threadStatus) || Boolean(threadJumpLabel),
+                hasTrailingGlyph: hasTrailingStatusGlyph,
               }),
               isActive
                 ? SIDEBAR_ROW_ACTIVE_CLASS_NAME
@@ -4917,8 +4944,16 @@ export default function Sidebar() {
               // Right-aligned project context for the flattened pinned list. The title
               // (flex-1) pushes it to the content edge, so it shows in full when the row
               // has room and only truncates under real pressure, shifting left as the
-              // trailing reserve grows on hover/status.
-              <span className="max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38">
+              // trailing reserve grows on hover/status. When a live status glyph occupies
+              // the trailing slot (e.g. the running spinner), the absolute cluster reaches
+              // a few px past the reserve — a small margin keeps the folder name from
+              // touching the worktree chip. It costs no space when the row is idle.
+              <span
+                className={cn(
+                  "max-w-[40%] shrink-0 truncate text-right text-[length:var(--app-font-size-ui-meta,10px)] text-muted-foreground/38 transition-[margin] duration-150 ease-out",
+                  hasTrailingStatusGlyph && "mr-2",
+                )}
+              >
                 {projectLabel}
               </span>
             ) : null}
@@ -5265,8 +5300,9 @@ export default function Sidebar() {
       allProjectThreadCount,
       projectStatus,
       visibleEntries,
-      hasHiddenThreads,
-      isThreadListExpanded,
+      threadListExtraPages,
+      canShowMoreThreads,
+      canShowLessThreads,
     } = projectSidebarData;
     const projectFolderIconClassName = isProjectPinned
       ? "opacity-0"
@@ -5460,34 +5496,40 @@ export default function Sidebar() {
                 ),
               )}
 
-              {hasHiddenThreads && !isThreadListExpanded && (
+              {(canShowMoreThreads || canShowLessThreads) && (
                 <SidebarMenuSubItem className="w-full">
-                  <SidebarMenuSubButton
-                    render={<button type="button" />}
-                    data-thread-selection-safe
-                    size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                    onClick={() => {
-                      expandThreadListForProject(project.cwd);
-                    }}
-                  >
-                    <span>Show more</span>
-                  </SidebarMenuSubButton>
-                </SidebarMenuSubItem>
-              )}
-              {hasHiddenThreads && isThreadListExpanded && (
-                <SidebarMenuSubItem className="w-full">
-                  <SidebarMenuSubButton
-                    render={<button type="button" />}
-                    data-thread-selection-safe
-                    size="sm"
-                    className="h-7 w-full translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                    onClick={() => {
-                      collapseThreadListForProject(project.cwd);
-                    }}
-                  >
-                    <span>Show less</span>
-                  </SidebarMenuSubButton>
+                  <div className="flex w-full items-center gap-1">
+                    {canShowMoreThreads && (
+                      <SidebarMenuSubButton
+                        render={<button type="button" />}
+                        data-thread-selection-safe
+                        size="sm"
+                        className="h-7 flex-1 translate-x-0 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                        onClick={() => {
+                          showMoreThreadsForProject(project.cwd, threadListExtraPages);
+                        }}
+                      >
+                        <span>Show more</span>
+                      </SidebarMenuSubButton>
+                    )}
+                    {canShowLessThreads && (
+                      <SidebarMenuSubButton
+                        render={<button type="button" />}
+                        data-thread-selection-safe
+                        size="sm"
+                        className={cn(
+                          "h-7 translate-x-0 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]",
+                          // Keep the left indent when "Show less" is the only affordance left.
+                          canShowMoreThreads ? "w-auto flex-none px-2" : "flex-1 pr-2 pl-8",
+                        )}
+                        onClick={() => {
+                          showLessThreadsForProject(project.cwd, threadListExtraPages);
+                        }}
+                      >
+                        <span>Show less</span>
+                      </SidebarMenuSubButton>
+                    )}
+                  </div>
                 </SidebarMenuSubItem>
               )}
             </SidebarMenuSub>
@@ -6084,27 +6126,40 @@ export default function Sidebar() {
     surfaceDesktopUpdateError,
   ]);
 
-  const expandThreadListForProject = useCallback((projectCwd: string) => {
-    const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-    if (cwdKey.length === 0) return;
-    setExpandedThreadListsByProject((current) => {
-      if (current.has(cwdKey)) return current;
-      const next = new Set(current);
-      next.add(cwdKey);
-      return next;
-    });
-  }, []);
+  // Both handlers step from the *effective* (clamped) page count reported by the derived
+  // project data, so stale/oversized stored paging self-heals on the very next click.
+  const setThreadListExtraPagesForProject = useCallback(
+    (projectCwd: string, nextExtraPages: number) => {
+      const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
+      if (cwdKey.length === 0) return;
+      setThreadListExtraPagesByProjectCwd((current) => {
+        const clampedExtraPages = Math.max(0, nextExtraPages);
+        if ((current.get(cwdKey) ?? 0) === clampedExtraPages) return current;
+        const next = new Map(current);
+        if (clampedExtraPages === 0) {
+          next.delete(cwdKey);
+        } else {
+          next.set(cwdKey, clampedExtraPages);
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
-  const collapseThreadListForProject = useCallback((projectCwd: string) => {
-    const cwdKey = normalizeSidebarProjectThreadListCwd(projectCwd);
-    if (cwdKey.length === 0) return;
-    setExpandedThreadListsByProject((current) => {
-      if (!current.has(cwdKey)) return current;
-      const next = new Set(current);
-      next.delete(cwdKey);
-      return next;
-    });
-  }, []);
+  const showMoreThreadsForProject = useCallback(
+    (projectCwd: string, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectCwd, currentExtraPages + 1);
+    },
+    [setThreadListExtraPagesForProject],
+  );
+
+  const showLessThreadsForProject = useCallback(
+    (projectCwd: string, currentExtraPages: number) => {
+      setThreadListExtraPagesForProject(projectCwd, currentExtraPages - 1);
+    },
+    [setThreadListExtraPagesForProject],
+  );
 
   const handleToggleProjects = useCallback(() => {
     if (allProjectsExpanded) {
@@ -6666,26 +6721,40 @@ export default function Sidebar() {
                         No chats yet
                       </div>
                     )}
-                    {hasHiddenChatThreads && !chatThreadListExpanded ? (
+                    {canShowMoreChatThreads || canShowLessChatThreads ? (
                       <SidebarMenuItem className="w-full">
-                        <SidebarMenuButton
-                          size="sm"
-                          className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                          onClick={() => setChatThreadListExpanded(true)}
-                        >
-                          <span>Show more</span>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ) : null}
-                    {hasHiddenChatThreads && chatThreadListExpanded ? (
-                      <SidebarMenuItem className="w-full">
-                        <SidebarMenuButton
-                          size="sm"
-                          className="h-7 w-full justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
-                          onClick={() => setChatThreadListExpanded(false)}
-                        >
-                          <span>Show less</span>
-                        </SidebarMenuButton>
+                        <div className="flex w-full items-center gap-1">
+                          {canShowMoreChatThreads ? (
+                            <SidebarMenuButton
+                              size="sm"
+                              className="h-7 flex-1 justify-start rounded-lg pr-2 pl-8 text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]"
+                              onClick={() =>
+                                setChatThreadListExtraPages(chatThreadListEffectiveExtraPages + 1)
+                              }
+                            >
+                              <span>Show more</span>
+                            </SidebarMenuButton>
+                          ) : null}
+                          {canShowLessChatThreads ? (
+                            <SidebarMenuButton
+                              size="sm"
+                              className={cn(
+                                "h-7 justify-start rounded-lg text-left text-[length:var(--app-font-size-ui,12px)] font-normal text-muted-foreground/79 hover:bg-[var(--sidebar-accent)]",
+                                // Keep the left indent when "Show less" is the only affordance left.
+                                canShowMoreChatThreads
+                                  ? "w-auto flex-none px-2"
+                                  : "flex-1 pr-2 pl-8",
+                              )}
+                              onClick={() =>
+                                setChatThreadListExtraPages(
+                                  Math.max(0, chatThreadListEffectiveExtraPages - 1),
+                                )
+                              }
+                            >
+                              <span>Show less</span>
+                            </SidebarMenuButton>
+                          ) : null}
+                        </div>
                       </SidebarMenuItem>
                     ) : null}
                   </SidebarMenu>

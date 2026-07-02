@@ -395,6 +395,32 @@ function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
     : "unknown";
 }
 
+interface TokenActivityAggregate {
+  readonly tokensByDay: Map<string, number>;
+  readonly tokensByProvider: Map<ProviderKind, number>;
+  readonly lifetime: number;
+}
+
+function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivityAggregate {
+  const tokensByDay = new Map<string, number>();
+  const tokensByProvider = new Map<ProviderKind, number>();
+  let lifetime = 0;
+  for (const row of rows) {
+    const day = nonEmptyString(row.day);
+    const tokens = num(row.tokens);
+    if (!day || tokens <= 0) {
+      continue;
+    }
+    tokensByDay.set(day, (tokensByDay.get(day) ?? 0) + tokens);
+    lifetime += tokens;
+    const provider = normalizeProviderKind(row.provider);
+    if (provider !== "unknown") {
+      tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
+    }
+  }
+  return { tokensByDay, tokensByProvider, lifetime };
+}
+
 function computeStreaks(
   activeDaysAsc: ReadonlyArray<string>,
   todayKey: string,
@@ -932,7 +958,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       });
 
       const providerTurnCounts = new Map<ProviderKind, number>();
-      // "Most used provider" should reflect actual turns, not how many threads were created.
+      // Turn-based ranking: the token-based one lives on ProfileTokenStats so the
+      // heavy token query runs once, and clients prefer it when available.
       for (const row of providerModelRows) {
         const provider = normalizeProviderKind(row.provider);
         if (provider === "unknown") {
@@ -1021,23 +1048,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const tz = sqliteModifierFromUtcOffsetMinutes(input.utcOffsetMinutes);
       const todayKey = localToday(input.utcOffsetMinutes);
       const rows = yield* queryTokenActivity(tz);
-
-      const tokensByDay = new Map<string, number>();
-      const tokensByProvider = new Map<ProviderKind, number>();
-      let lifetime = 0;
-      for (const row of rows) {
-        const day = nonEmptyString(row.day);
-        const tokens = num(row.tokens);
-        if (!day || tokens <= 0) {
-          continue;
-        }
-        tokensByDay.set(day, (tokensByDay.get(day) ?? 0) + tokens);
-        lifetime += tokens;
-        const provider = normalizeProviderKind(row.provider);
-        if (provider !== "unknown") {
-          tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
-        }
-      }
+      const turnInsightRows = yield* queryTurnInsights();
+      const { tokensByDay, tokensByProvider, lifetime } = aggregateTokenActivity(rows);
 
       let peakDay: string | null = null;
       let peakDayTokens: number | null = null;
@@ -1054,13 +1066,41 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         .map(([provider]) => provider);
       const available = lifetime > 0;
 
+      // Providers the user actually ran turns with but whose adapters never emit
+      // token telemetry — they cannot participate in token-based rankings, and the
+      // UI uses this list to say so instead of silently under-reporting them.
+      const providersWithTurns = new Set<ProviderKind>();
+      for (const row of turnInsightRows) {
+        const provider = normalizeProviderKind(row.provider);
+        if (provider !== "unknown") {
+          providersWithTurns.add(provider);
+        }
+      }
+      const unavailableProviders = [...providersWithTurns]
+        .filter((provider) => !tokensByProvider.has(provider))
+        .toSorted();
+
+      // "Most used provider" by tokens processed: one heavy turn is more work than
+      // many tiny ones. Percent is the share among providers with token telemetry.
+      const totalProviderTokens = [...tokensByProvider.values()].reduce(
+        (sum, tokens) => sum + tokens,
+        0,
+      );
+      const topProvider = providers[0] ?? null;
+      const topProviderPercent =
+        topProvider && totalProviderTokens > 0
+          ? percent1(tokensByProvider.get(topProvider) ?? 0, totalProviderTokens)
+          : null;
+
       return {
         available,
         lifetimeTotalTokens: available ? lifetime : null,
         peakDayTokens,
         peakDay,
         providers,
-        unavailableProviders: [],
+        unavailableProviders,
+        topProvider,
+        topProviderPercent,
         heatmapMetric: "tokens",
         heatmap: buildHeatmap(tokensByDay, todayKey),
       } satisfies ProfileTokenStats;
