@@ -7,9 +7,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { Button } from "~/components/ui/button";
-import { SidebarInset } from "~/components/ui/sidebar";
+import { RouteInsetSurface } from "./RouteInsetSurface";
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
-import { useDesktopTopBarTrafficLightGutterClassName } from "~/hooks/useDesktopTopBarGutter";
+import {
+  useDesktopTopBarTrafficLightGutterClassName,
+  useDesktopTopBarWindowControlsGutterClassName,
+} from "~/hooks/useDesktopTopBarGutter";
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";
 import { cn } from "~/lib/utils";
 import { resolveTerminalNewAction } from "~/lib/terminalNewAction";
@@ -19,11 +22,7 @@ import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "./chat/chatHeaderControls";
-import {
-  CHAT_BACKGROUND_CLASS_NAME,
-  CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
-} from "./chat/composerPickerStyles";
+import { CHAT_BACKGROUND_CLASS_NAME } from "./chat/composerPickerStyles";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import WorkspaceSettingsSheet from "./WorkspaceSettingsSheet";
 import { onServerWelcome } from "~/wsNativeApi";
@@ -37,6 +36,8 @@ import { randomTerminalId } from "./terminal/terminalSession";
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
   const workspace = useWorkspaceStore((state) =>
     state.workspacePages.find((entry) => entry.id === workspaceId),
   );
@@ -44,7 +45,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const ensureWorkspacePage = useWorkspaceStore((state) => state.ensureWorkspacePage);
   const renameWorkspace = useWorkspaceStore((state) => state.renameWorkspace);
   const setWorkspaceLayoutPreset = useWorkspaceStore((state) => state.setWorkspaceLayoutPreset);
-  const setWorkspaceHomeDir = useWorkspaceStore((state) => state.setHomeDir);
+  const setServerWorkspacePaths = useWorkspaceStore((state) => state.setServerWorkspacePaths);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const threadId = useMemo(() => workspaceThreadId(workspaceId), [workspaceId]);
   const terminal = useTerminalSurfaceController(threadId);
@@ -79,16 +80,29 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   }, [ensureWorkspacePage, workspaceId]);
 
   useEffect(
-    () => onServerWelcome((payload) => setWorkspaceHomeDir(payload.homeDir)),
-    [setWorkspaceHomeDir],
+    () =>
+      onServerWelcome((payload) =>
+        setServerWorkspacePaths({
+          homeDir: payload.homeDir,
+          chatWorkspaceRoot: payload.chatWorkspaceRoot,
+        }),
+      ),
+    [setServerWorkspacePaths],
   );
 
   useEffect(() => {
     if (!serverConfigQuery.data?.homeDir) {
       return;
     }
-    setWorkspaceHomeDir(serverConfigQuery.data.homeDir);
-  }, [serverConfigQuery.data?.homeDir, setWorkspaceHomeDir]);
+    setServerWorkspacePaths({
+      homeDir: serverConfigQuery.data.homeDir,
+      chatWorkspaceRoot: serverConfigQuery.data.chatWorkspaceRoot,
+    });
+  }, [
+    serverConfigQuery.data?.chatWorkspaceRoot,
+    serverConfigQuery.data?.homeDir,
+    setServerWorkspacePaths,
+  ]);
 
   useEffect(() => {
     if (!workspace) {
@@ -293,10 +307,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   );
 
   return (
-    <SidebarInset
-      className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-      surfaceClassName={CHAT_MAIN_CONTENT_SURFACE_CLASS_NAME}
-    >
+    <RouteInsetSurface>
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden",
@@ -307,7 +318,9 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
           className={cn(
             CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME,
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
+            "drag-region",
             desktopTopBarTrafficLightGutterClassName,
+            desktopTopBarWindowControlsGutterClassName,
           )}
         >
           <div className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}>
@@ -408,6 +421,6 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
         onSelectPreset={applyWorkspacePresetSelection}
         workspaceTitle={workspace?.title ?? "Workspace"}
       />
-    </SidebarInset>
+    </RouteInsetSurface>
   );
 }

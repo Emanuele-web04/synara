@@ -9,11 +9,12 @@ import type {
 import { getAgentMentionAutocompleteAliases } from "@t3tools/contracts";
 import { useMemo } from "react";
 import {
-  buildCommandSearchBlob,
-  buildPluginSearchBlob,
-  buildSkillSearchBlob,
+  buildCommandSearchFields,
+  buildPluginSearchFields,
+  buildSkillSearchFields,
   isInstalledProviderPlugin,
   normalizeProviderDiscoveryText,
+  rankProviderDiscoveryItems,
 } from "~/lib/providerDiscovery";
 import {
   LOCAL_FOLDER_MENTION_NAME,
@@ -94,54 +95,47 @@ export function useComposerCommandMenuItems(input: {
       const agentItems: ComposerCommandItem[] = (() => {
         // Use dynamic agents when available, fallback to static
         if (dynamicAgents.length > 0) {
-          return dynamicAgents
-            .filter(({ name, displayName }) => {
-              if (!query) return true;
-              const searchBlob = `${name} ${displayName}`.toLowerCase();
-              return searchBlob.includes(query);
-            })
-            .map(({ name, displayName }) => ({
-              id: `agent:${provider}:${name}`,
-              type: "agent" as const,
-              provider,
-              alias: name,
-              color: "violet" as const,
-              label: `@${name}`,
-              description: displayName,
-            }));
-        }
-        // Static fallback
-        return getAgentMentionAutocompleteAliases(provider)
-          .filter(({ alias, displayName }) => {
-            if (!query) return true;
-            const searchBlob = `${alias} ${displayName}`.toLowerCase();
-            return searchBlob.includes(query);
-          })
-          .map(({ alias, displayName, color }) => ({
-            id: `agent:${provider}:${alias}`,
+          return rankProviderDiscoveryItems(dynamicAgents, query, ({ name, displayName }) => [
+            { value: name },
+            { value: displayName },
+          ]).map(({ name, displayName }) => ({
+            id: `agent:${provider}:${name}`,
             type: "agent" as const,
             provider,
-            alias,
-            color,
-            label: `@${alias}`,
+            alias: name,
+            color: "violet" as const,
+            label: `@${name}`,
             description: displayName,
           }));
+        }
+        // Static fallback
+        return rankProviderDiscoveryItems(
+          getAgentMentionAutocompleteAliases(provider),
+          query,
+          ({ alias, displayName }) => [{ value: alias }, { value: displayName }],
+        ).map(({ alias, displayName, color }) => ({
+          id: `agent:${provider}:${alias}`,
+          type: "agent" as const,
+          provider,
+          alias,
+          color,
+          label: `@${alias}`,
+          description: displayName,
+        }));
       })();
 
-      const pluginItems = providerPlugins
-        .filter(({ plugin }) => isInstalledProviderPlugin(plugin))
-        .filter(({ plugin }) => {
-          if (!query) return true;
-          return buildPluginSearchBlob(plugin).includes(query);
-        })
-        .map(({ plugin, mention }) => ({
-          id: `plugin:${plugin.id}`,
-          type: "plugin" as const,
-          plugin,
-          mention,
-          label: plugin.interface?.displayName ?? plugin.name,
-          description: plugin.interface?.shortDescription ?? plugin.source.path,
-        }));
+      const pluginItems = rankProviderDiscoveryItems(
+        providerPlugins.filter(({ plugin }) => isInstalledProviderPlugin(plugin)),
+        query,
+        ({ plugin }) => buildPluginSearchFields(plugin),
+      ).map(({ plugin, mention }) => ({
+        id: `plugin:${plugin.id}`,
+        type: "plugin" as const,
+        plugin,
+        mention,
+        label: plugin.interface?.displayName ?? plugin.name,
+        description: plugin.interface?.shortDescription ?? plugin.source.path,
+      }));
       const localRootItems =
         matchesLocalFolderMentionShortcut(composerTrigger.query) && composerTrigger.query !== "/"
           ? [
@@ -203,75 +197,71 @@ export function useComposerCommandMenuItems(input: {
         .filter(
           (command) => !shouldHideProviderNativeCommandFromComposerMenu(provider, command.name),
         )
-        .filter((command) => {
-          if (!query) return true;
-          return (
-            buildCommandSearchBlob(command).includes(query) ||
-            getProviderNativeSlashCommandSearchTerms(provider, command.name).some((term) =>
-              term.includes(query),
-            )
-          );
-        })
         .map((command) => ({
-          id: `provider-command:${provider}:${command.name}`,
-          type: "provider-native-command" as const,
-          provider,
-          command: command.name,
-          label: `/${command.name}`,
-          description: command.description ?? `Run ${provider} native command`,
+          command,
+          aliasFields: getProviderNativeSlashCommandSearchTerms(provider, command.name).map(
+            (term) => ({
+              value: term,
+            }),
+          ),
         }));
+      const rankedProviderCommandItems = rankProviderDiscoveryItems(
+        providerCommandItems,
+        query,
+        ({ command, aliasFields }) => [...aliasFields, ...buildCommandSearchFields(command)],
+      ).map(({ command }) => ({
+        id: `provider-command:${provider}:${command.name}`,
+        type: "provider-native-command" as const,
+        provider,
+        command: command.name,
+        label: `/${command.name}`,
+        description: command.description ?? `Run ${provider} native command`,
+      }));
       // `/` is the universal picker surface; provider dispatch can adapt the
       // visible slash token to backend-specific skill syntax when needed.
-      const skillItems: ComposerCommandItem[] = providerSkills
-        .filter((skill) => {
-          if (!query) return true;
-          return buildSkillSearchBlob(skill).includes(query);
-        })
-        .map((skill) => ({
-          id: `skill:${skill.path}`,
-          type: "skill" as const,
-          skill,
-          label: skill.interface?.displayName ?? skill.name,
-          description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
-        }));
-      return [...builtInMenuItems, ...providerCommandItems, ...skillItems];
+      const skillItems: ComposerCommandItem[] = rankProviderDiscoveryItems(
+        providerSkills,
+        query,
+        buildSkillSearchFields,
+      ).map((skill) => ({
+        id: `skill:${skill.path}`,
+        type: "skill" as const,
+        skill,
+        label: skill.interface?.displayName ?? skill.name,
+        description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
+      }));
+      return [...builtInMenuItems, ...rankedProviderCommandItems, ...skillItems];
     }
 
     if (composerTrigger.kind === "skill") {
       const query = normalizeProviderDiscoveryText(composerTrigger.query);
-      return providerSkills
-        .filter((skill) => {
-          if (!query) return true;
-          return buildSkillSearchBlob(skill).includes(query);
-        })
-        .map((skill) => ({
+      return rankProviderDiscoveryItems(providerSkills, query, buildSkillSearchFields).map(
+        (skill) => ({
           id: `skill:${skill.path}`,
           type: "skill" as const,
           skill,
           label: skill.interface?.displayName ?? skill.name,
           description: skill.interface?.shortDescription ?? skill.description ?? skill.path,
-        }));
+        }),
+      );
     }
 
-    return searchableModelOptions
-      .filter(({ searchSlug, searchName, searchProvider, searchUpstreamProvider }) => {
-        const query = composerTrigger.query.trim().toLowerCase();
-        if (!query) return true;
-        return (
-          searchSlug.includes(query) ||
-          searchName.includes(query) ||
-          searchProvider.includes(query) ||
-          searchUpstreamProvider.includes(query)
-        );
-      })
-      .map(({ provider, providerLabel, slug, name }) => ({
-        id: `model:${provider}:${slug}`,
-        type: "model" as const,
-        provider,
-        model: slug,
-        label: name,
-        description: `${providerLabel} · ${slug}`,
-      }));
+    return rankProviderDiscoveryItems(searchableModelOptions, composerTrigger.query, (option) => [
+      { value: option.name },
+      { value: option.slug },
+      { value: option.searchName },
+      { value: option.searchSlug },
+      { value: option.providerLabel, weight: 200 },
+      { value: option.searchProvider, weight: 200 },
+      { value: option.searchUpstreamProvider, weight: 200 },
+    ]).map(({ provider, providerLabel, slug, name }) => ({
+      id: `model:${provider}:${slug}`,
+      type: "model" as const,
+      provider,
+      model: slug,
+      label: name,
+      description: `${providerLabel} · ${slug}`,
+    }));
   }, [
     canOfferForkCommand,
     canOfferCompactCommand,

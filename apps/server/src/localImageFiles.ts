@@ -1,22 +1,66 @@
 // FILE: localImageFiles.ts
-// Purpose: Resolves local image preview/download requests without exposing arbitrary files.
+// Purpose: Resolves local preview-file (image/PDF) requests without exposing arbitrary files.
 // Layer: Server HTTP utility
 // Exports: local image route constants and allowlisted path resolver
-// Depends on: fs realpath/stat, Codex generated image roots, safe image extensions
+// Depends on: fs realpath/stat, Codex generated image roots, safe preview extensions
 
+import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { LOCAL_IMAGE_ROUTE_PATH, isSupportedLocalImagePath } from "@t3tools/shared/localImage";
+import {
+  LOCAL_IMAGE_ROUTE_PATH,
+  isSupportedLocalImagePath,
+  isSupportedLocalPreviewFilePath,
+} from "@t3tools/shared/localPreviewFiles";
+import { SCRATCH_WORKSPACES_DIRNAME } from "@t3tools/shared/threadWorkspace";
 
 import { resolveCodexGeneratedImagesRoots } from "./codexGeneratedImages.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
 
-export interface ResolvedLocalImageFile {
+export interface ResolvedLocalPreviewFile {
   readonly path: string;
   readonly fileName: string;
+  /** From the allowlist stat, so responses can set Content-Length without re-statting. */
+  readonly sizeBytes: number;
+}
+
+export interface LocalPreviewGrantResult {
+  readonly grant: string;
+  readonly expiresAt: string;
+}
+
+const LOCAL_PREVIEW_GRANT_TTL_MS = 2 * 60 * 1000;
+const localPreviewGrantByToken = new Map<string, { realFilePath: string; expiresAtMs: number }>();
+
+function pruneExpiredPreviewGrants(nowMs = Date.now()): void {
+  for (const [token, grant] of localPreviewGrantByToken) {
+    if (grant.expiresAtMs <= nowMs) {
+      localPreviewGrantByToken.delete(token);
+    }
+  }
+}
+
+function hasValidPreviewGrant(input: {
+  readonly token: string | null | undefined;
+  readonly realFilePath: string;
+}): boolean {
+  return resolveLocalPreviewGrantRealPath({ token: input.token }) === input.realFilePath;
+}
+
+export function resolveLocalPreviewGrantRealPath(input: {
+  readonly token: string | null | undefined;
+}): string | null {
+  const token = input.token?.trim();
+  if (!token) {
+    return null;
+  }
+  const nowMs = Date.now();
+  pruneExpiredPreviewGrants(nowMs);
+  const grant = localPreviewGrantByToken.get(token);
+  return grant !== undefined && grant.expiresAtMs > nowMs ? grant.realFilePath : null;
 }
 
 function isPathInside(candidate: string, root: string): boolean {
@@ -55,7 +99,7 @@ async function findGitRoot(startPath: string): Promise<string | null> {
   }
 }
 
-async function temporaryImageRoots(): Promise<string[]> {
+async function temporaryDirectoryRoots(): Promise<string[]> {
   const candidates = [
     os.tmpdir(),
     process.env.TMPDIR,
@@ -77,46 +121,103 @@ async function resolveWorkspaceRoot(cwd: string | null): Promise<string | null> 
   return (gitRoot ? await realpathOrNull(gitRoot) : realCwd) ?? null;
 }
 
-export async function resolveAllowedLocalImageFile(input: {
+export async function resolveAllowedLocalPreviewFile(input: {
   readonly requestedPath: string | null;
   readonly cwd: string | null;
   readonly codexHomePath?: string;
-}): Promise<ResolvedLocalImageFile | null> {
+  readonly allowAbsoluteLocalPreviewFile?: boolean;
+  readonly previewGrant?: string | null;
+}): Promise<ResolvedLocalPreviewFile | null> {
   const requestedPath = input.requestedPath?.trim();
-  if (!requestedPath || requestedPath.includes("\0") || !isSupportedLocalImagePath(requestedPath)) {
+  if (
+    !requestedPath ||
+    requestedPath.includes("\0") ||
+    !isSupportedLocalPreviewFilePath(requestedPath)
+  ) {
     return null;
   }
 
   const resolvedRequestedPath = path.isAbsolute(requestedPath)
     ? path.resolve(requestedPath)
     : path.resolve(input.cwd ?? process.cwd(), requestedPath);
-  const realImagePath = await realpathOrNull(resolvedRequestedPath);
-  if (!realImagePath || !isSupportedLocalImagePath(realImagePath)) {
+  const realFilePath = await realpathOrNull(resolvedRequestedPath);
+  if (!realFilePath || !isSupportedLocalPreviewFilePath(realFilePath)) {
     return null;
   }
 
-  const stat = await fs.stat(realImagePath).catch(() => null);
+  const stat = await fs.stat(realFilePath).catch(() => null);
   if (!stat?.isFile()) {
     return null;
   }
+  const resolved: ResolvedLocalPreviewFile = {
+    path: realFilePath,
+    fileName: path.basename(realFilePath),
+    sizeBytes: stat.size,
+  };
 
-  const [workspaceRoot, generatedImagesRoots, tempRoots] = await Promise.all([
-    resolveWorkspaceRoot(input.cwd),
-    Promise.all(resolveCodexGeneratedImagesRoots(input.codexHomePath).map(realpathOrNull)).then(
-      (roots) => roots.filter((root): root is string => root !== null),
-    ),
-    temporaryImageRoots(),
-  ]);
-  const allowed =
-    (workspaceRoot !== null && isPathInside(realImagePath, workspaceRoot)) ||
-    generatedImagesRoots.some((root) => isPathInside(realImagePath, root)) ||
-    tempRoots.some((root) => isPathInside(realImagePath, root));
-  if (!allowed) {
-    return null;
+  // The workspace check covers the common case (file previews), so resolve it
+  // first and skip the broader root lookups entirely when it passes.
+  const workspaceRoot = await resolveWorkspaceRoot(input.cwd);
+  if (workspaceRoot !== null && isPathInside(realFilePath, workspaceRoot)) {
+    return resolved;
   }
 
-  return {
-    path: realImagePath,
-    fileName: path.basename(realImagePath),
-  };
+  // Sessions that start before a project workspace exists run in per-thread
+  // scratch directories under the OS temp dir. Files agents create there are
+  // workspace-equivalent, so every preview type is servable from that root.
+  const tempRoots = await temporaryDirectoryRoots();
+  const scratchWorkspaceRoots = tempRoots.map((root) =>
+    path.join(root, SCRATCH_WORKSPACES_DIRNAME),
+  );
+  if (scratchWorkspaceRoots.some((root) => isPathInside(realFilePath, root))) {
+    return resolved;
+  }
+
+  // The in-app file panel may intentionally preview an absolute local path
+  // supplied by the agent (for example a file in Downloads). Keep this opt-in
+  // so other callers retain the narrower workspace/generated-image allowlist.
+  if (
+    input.allowAbsoluteLocalPreviewFile === true &&
+    path.isAbsolute(requestedPath) &&
+    hasValidPreviewGrant({ token: input.previewGrant, realFilePath })
+  ) {
+    return resolved;
+  }
+
+  // The generated-image and temp-dir roots exist for agent-produced images in
+  // chat markdown; keep them image-only so they never serve documents.
+  if (!isSupportedLocalImagePath(realFilePath)) {
+    return null;
+  }
+  const generatedImagesRoots = await Promise.all(
+    resolveCodexGeneratedImagesRoots(input.codexHomePath).map(realpathOrNull),
+  ).then((roots) => roots.filter((root): root is string => root !== null));
+  const allowed =
+    generatedImagesRoots.some((root) => isPathInside(realFilePath, root)) ||
+    tempRoots.some((root) => isPathInside(realFilePath, root));
+  return allowed ? resolved : null;
+}
+
+export async function createLocalPreviewGrant(input: {
+  readonly requestedPath: string;
+}): Promise<LocalPreviewGrantResult> {
+  const requestedPath = input.requestedPath.trim();
+  if (!requestedPath || requestedPath.includes("\0") || !path.isAbsolute(requestedPath)) {
+    throw new Error("Only absolute local files can be granted.");
+  }
+
+  const realFilePath = await realpathOrNull(path.resolve(requestedPath));
+  if (!realFilePath) {
+    throw new Error("Preview file not found.");
+  }
+  const stat = await fs.stat(realFilePath).catch(() => null);
+  if (!stat?.isFile()) {
+    throw new Error("Preview path is not a file.");
+  }
+
+  const expiresAtMs = Date.now() + LOCAL_PREVIEW_GRANT_TTL_MS;
+  const grant = crypto.randomUUID();
+  localPreviewGrantByToken.set(grant, { realFilePath, expiresAtMs });
+  pruneExpiredPreviewGrants();
+  return { grant, expiresAt: new Date(expiresAtMs).toISOString() };
 }

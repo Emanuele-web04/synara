@@ -22,7 +22,7 @@ import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } 
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
-import { formatRelativeTime } from "./Sidebar";
+import { formatRelativeTime } from "~/lib/relativeTime";
 import { readNativeApi } from "~/nativeApi";
 import { isMacPlatform } from "~/lib/utils";
 import { Kbd, KbdGroup } from "./ui/kbd";
@@ -86,6 +86,7 @@ interface SidebarSearchPaletteProps {
   homeDir: string | null;
   initialBrowseQuery?: string | null;
   onOpenSettings: () => void;
+  onOpenUsageSettings: () => void;
   onOpenProject: (projectId: string) => void;
   onOpenThread: (threadId: string) => void;
   importProviders: readonly ImportProviderKind[];
@@ -99,7 +100,10 @@ export type ImportProviderKind = Extract<
 
 function actionHandler(
   actionId: string,
-  props: Pick<SidebarSearchPaletteProps, "onCreateChat" | "onCreateThread" | "onOpenSettings">,
+  props: Pick<
+    SidebarSearchPaletteProps,
+    "onCreateChat" | "onCreateThread" | "onOpenSettings" | "onOpenUsageSettings"
+  >,
 ): (() => void) | null {
   switch (actionId) {
     case "new-chat":
@@ -108,6 +112,8 @@ function actionHandler(
       return props.onCreateThread;
     case "settings":
       return props.onOpenSettings;
+    case "usage-settings":
+      return props.onOpenUsageSettings;
     default:
       return null;
   }
@@ -121,6 +127,7 @@ const ACTION_ICONS: Record<string, IconComponent> = {
   "add-project": FolderClosed,
   "import-thread": LuArrowDownToLine,
   settings: SettingsIcon,
+  "usage-settings": SettingsIcon,
 };
 
 const BROWSE_STALE_TIME_MS = 10_000;
@@ -612,9 +619,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
             </div>
             <div className="space-y-4 px-4 py-4">
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Provider
-                </p>
+                <p className="text-xs font-medium text-muted-foreground">Provider</p>
                 <div className="flex gap-2">
                   {props.importProviders.map((provider) => (
                     <Button
@@ -647,9 +652,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                 ) : null}
               </div>
               <div className="space-y-2">
-                <p className="text-xs font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {importFieldLabel}
-                </p>
+                <p className="text-xs font-medium text-muted-foreground">{importFieldLabel}</p>
                 <Input
                   autoFocus
                   nativeInput

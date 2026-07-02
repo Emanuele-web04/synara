@@ -11,6 +11,7 @@ import {
   stripEmbeddedAssistantSelections,
   stripTrailingAssistantSelections,
 } from "./assistantSelections";
+import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
 
 describe("assistantSelections", () => {
   it("appends a trailing assistant selection block", () => {
@@ -97,6 +98,34 @@ describe("assistantSelections", () => {
         "  12 | git status",
         "</terminal_context>",
       ].join("\n"),
+    );
+  });
+
+  it("strips assistant selections while preserving trailing pasted text blocks", () => {
+    const prompt = appendPastedTextsToPrompt(
+      appendAssistantSelectionsToPrompt("Investigate this", [
+        {
+          assistantMessageId: "msg-1",
+          text: "selected line",
+        },
+      ]),
+      [
+        createPastedTextDraft({
+          id: "paste-1",
+          createdAt: "2026-06-15T00:00:00.000Z",
+          text: "large pasted text",
+        }),
+      ],
+    );
+
+    expect(stripEmbeddedAssistantSelections(prompt)).toBe(
+      appendPastedTextsToPrompt("Investigate this", [
+        createPastedTextDraft({
+          id: "paste-1",
+          createdAt: "2026-06-15T00:00:00.000Z",
+          text: "large pasted text",
+        }),
+      ]),
     );
   });
 

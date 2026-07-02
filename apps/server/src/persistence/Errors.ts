@@ -60,6 +60,23 @@ export function toPersistenceDecodeCauseError(operation: string) {
 export const isPersistenceError = (u: unknown) =>
   Schema.is(PersistenceSqlError)(u) || Schema.is(PersistenceDecodeError)(u);
 
+export class MigrationLineageError extends Schema.TaggedErrorClass<MigrationLineageError>()(
+  "MigrationLineageError",
+  {
+    firstDivergedId: Schema.Number,
+    expectedName: Schema.String,
+    recordedName: Schema.String,
+  },
+) {
+  override get message(): string {
+    return (
+      `Migration tracker does not match any known lineage: migration ${this.firstDivergedId} ` +
+      `is recorded as "${this.recordedName}" but Synara expects "${this.expectedName}". ` +
+      `Refusing to run migrations against an unrecognized database.`
+    );
+  }
+}
+
 // ===============================
 // Provider Session Repository Errors
 // ===============================
@@ -107,3 +124,5 @@ export type ProjectionRepositoryError = PersistenceSqlError | PersistenceDecodeE
 export type AuthPairingLinkRepositoryError = PersistenceSqlError | PersistenceDecodeError;
 
 export type AuthSessionRepositoryError = PersistenceSqlError | PersistenceDecodeError;
+
+export type AutomationRepositoryError = PersistenceSqlError | PersistenceDecodeError;

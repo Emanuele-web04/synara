@@ -22,6 +22,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type PreviewRuntimeEvent,
+  type ProjectDevServerEvent,
   type ServerProviderStatusesUpdatedPayload,
   type ServerLifecycleStreamEvent,
   type ServerSettingsUpdatedPayload,
@@ -34,6 +35,7 @@ import {
   WS_CHANNELS,
   WS_METHODS,
   type WsWelcomePayload,
+  type AutomationStreamEvent,
 } from "@t3tools/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
@@ -69,6 +71,8 @@ function omitNullUserInputAnswers(
 }
 const terminalEventListeners = new Set<(payload: TerminalEvent) => void>();
 const previewEventListeners = new Set<(payload: PreviewRuntimeEvent) => void>();
+const projectDevServerEventListeners = new Set<(payload: ProjectDevServerEvent) => void>();
+const automationEventListeners = new Set<(payload: AutomationStreamEvent) => void>();
 const orchestrationDomainEventListeners = new Set<(payload: OrchestrationEvent) => void>();
 const orchestrationShellEventListeners = new Set<(payload: OrchestrationShellStreamItem) => void>();
 const orchestrationThreadEventListeners = new Set<
@@ -401,6 +405,26 @@ export function createWsNativeApi(): NativeApi {
       }
     }
   });
+  transport.subscribe(WS_CHANNELS.projectDevServerEvent, (message) => {
+    const payload = message.data;
+    for (const listener of projectDevServerEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
+  transport.subscribe(WS_CHANNELS.automationEvent, (message) => {
+    const payload = message.data;
+    for (const listener of automationEventListeners) {
+      try {
+        listener(payload);
+      } catch {
+        // Swallow listener errors
+      }
+    }
+  });
   transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
     const payload = message.data;
     for (const listener of orchestrationDomainEventListeners) {
@@ -486,13 +510,26 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     projects: {
+      discoverScripts: (input) => transport.request(WS_METHODS.projectsDiscoverScripts, input),
       listDirectories: (input) => transport.request(WS_METHODS.projectsListDirectories, input),
       searchEntries: (input) => transport.request(WS_METHODS.projectsSearchEntries, input),
       searchLocalEntries: (input) =>
         transport.request(WS_METHODS.projectsSearchLocalEntries, input),
+      readFile: (input) => transport.request(WS_METHODS.projectsReadFile, input),
+      createLocalFilePreviewGrant: (input) =>
+        transport.request(WS_METHODS.projectsCreateLocalFilePreviewGrant, input),
       writeFile: (input) => transport.request(WS_METHODS.projectsWriteFile, input),
       applyTextEdit: (input) => transport.request(WS_METHODS.projectsApplyTextEdit, input),
       applyStyleEdit: (input) => transport.request(WS_METHODS.projectsApplyStyleEdit, input),
+      runDevServer: (input) => transport.request(WS_METHODS.projectsRunDevServer, input),
+      stopDevServer: (input) => transport.request(WS_METHODS.projectsStopDevServer, input),
+      listDevServers: () => transport.request(WS_METHODS.projectsListDevServers),
+      onDevServerEvent: (callback) => {
+        projectDevServerEventListeners.add(callback);
+        return () => {
+          projectDevServerEventListeners.delete(callback);
+        };
+      },
     },
     filesystem: {
       browse: (input) => transport.request(WS_METHODS.filesystemBrowse, input),
@@ -521,6 +558,7 @@ export function createWsNativeApi(): NativeApi {
       },
     },
     git: {
+      githubRepository: (input) => transport.request(WS_METHODS.gitGithubRepository, input),
       pull: (input) => transport.request(WS_METHODS.gitPull, input),
       status: (input) => transport.request(WS_METHODS.gitStatus, input),
       readWorkingTreeDiff: (input) => transport.request(WS_METHODS.gitReadWorkingTreeDiff, input),
@@ -611,9 +649,20 @@ export function createWsNativeApi(): NativeApi {
       refreshProviders: () => transport.request(WS_METHODS.serverRefreshProviders),
       updateProvider: (input) => transport.request(WS_METHODS.serverUpdateProvider, input),
       listWorktrees: () => transport.request(WS_METHODS.serverListWorktrees),
+      listLocalServers: () => transport.request(WS_METHODS.serverListLocalServers),
+      stopLocalServer: (input) => transport.request(WS_METHODS.serverStopLocalServer, input),
       getProviderUsageSnapshot: (input) =>
         transport.request(WS_METHODS.serverGetProviderUsageSnapshot, input),
+      listProviderUsage: (input) => transport.request(WS_METHODS.serverListProviderUsage, input),
       getDiagnostics: () => transport.request(WS_METHODS.serverGetDiagnostics),
+      generateThreadRecap: (input) =>
+        transport.request(WS_METHODS.serverGenerateThreadRecap, input, {
+          timeoutMs: null,
+        }),
+      generateAutomationIntent: (input) =>
+        transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
@@ -622,12 +671,18 @@ export function createWsNativeApi(): NativeApi {
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
+    stats: {
+      getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),
+      getProfileTokenStats: (input) =>
+        transport.request(WS_METHODS.statsGetProfileTokenStats, input),
+    },
     provider: {
       getComposerCapabilities: (input) =>
         transport.request(WS_METHODS.providerGetComposerCapabilities, input),
       compactThread: (input) => transport.request(WS_METHODS.providerCompactThread, input),
       listCommands: (input) => transport.request(WS_METHODS.providerListCommands, input),
       listSkills: (input) => transport.request(WS_METHODS.providerListSkills, input),
+      listSkillsCatalog: (input) => transport.request(WS_METHODS.providerListSkillsCatalog, input),
       listPlugins: (input) => transport.request(WS_METHODS.providerListPlugins, input),
       readPlugin: (input) => transport.request(WS_METHODS.providerReadPlugin, input),
       listModels: (input) => transport.request(WS_METHODS.providerListModels, input),
@@ -673,6 +728,22 @@ export function createWsNativeApi(): NativeApi {
         orchestrationThreadEventListeners.add(callback);
         return () => {
           orchestrationThreadEventListeners.delete(callback);
+        };
+      },
+    },
+    automation: {
+      list: (input) => transport.request(WS_METHODS.automationList, input),
+      create: (input) => transport.request(WS_METHODS.automationCreate, input),
+      update: (input) => transport.request(WS_METHODS.automationUpdate, input),
+      delete: (input) => transport.request(WS_METHODS.automationDelete, input),
+      runNow: (input) => transport.request(WS_METHODS.automationRunNow, input),
+      cancelRun: (input) => transport.request(WS_METHODS.automationCancelRun, input),
+      markRunRead: (input) => transport.request(WS_METHODS.automationMarkRunRead, input),
+      archiveRun: (input) => transport.request(WS_METHODS.automationArchiveRun, input),
+      onEvent: (callback) => {
+        automationEventListeners.add(callback);
+        return () => {
+          automationEventListeners.delete(callback);
         };
       },
     },
@@ -731,6 +802,18 @@ export function createWsNativeApi(): NativeApi {
           return window.desktopBridge.browser.attachWebview(input);
         }
         return cloneBrowserState(getFallbackBrowserState(input.threadId));
+      },
+      detachWebview: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.detachWebview(input);
+        }
+      },
+      copyLink: async (input) => {
+        if (window.desktopBridge) {
+          await window.desktopBridge.browser.copyLink(input);
+          return;
+        }
+        throw new Error("Copying the browser link requires the desktop app.");
       },
       copyScreenshotToClipboard: async (input) => {
         if (window.desktopBridge) {
@@ -801,11 +884,17 @@ export function createWsNativeApi(): NativeApi {
         if (window.desktopBridge) {
           return window.desktopBridge.browser.closeTab(input);
         }
-        const state = getFallbackBrowserState(input.threadId);
-        state.tabs = state.tabs.filter((tab) => tab.id !== input.tabId);
-        if (state.tabs.length === 0) {
-          state.open = false;
-          state.activeTabId = null;
+        const state = ensureFallbackBrowserWorkspace(input.threadId);
+        const nextTabs = state.tabs.filter((tab) => tab.id !== input.tabId);
+        if (nextTabs.length === state.tabs.length) {
+          return cloneBrowserState(state);
+        }
+        state.tabs = nextTabs;
+        if (nextTabs.length === 0) {
+          const replacementTab = createFallbackTab();
+          state.tabs = [replacementTab];
+          state.activeTabId = replacementTab.id;
+          state.lastError = null;
         } else if (!state.tabs.some((tab) => tab.id === state.activeTabId)) {
           state.activeTabId = state.tabs[0]?.id ?? null;
         }
@@ -848,11 +937,38 @@ export function createWsNativeApi(): NativeApi {
         void callback;
         return () => undefined;
       },
+      onCopyLink: (callback) => {
+        if (window.desktopBridge) {
+          return window.desktopBridge.browser.onBrowserCopyLink(callback);
+        }
+        return () => {};
+      },
     },
   };
 
   instance = { api, transport };
   return api;
+}
+
+// Browser-mode tests mount full app roots repeatedly in one page; reset the
+// singleton so each test gets a fresh WebSocket stream and cached push state.
+export function resetWsNativeApiForTest(): void {
+  instance?.transport.dispose();
+  instance = null;
+  welcomeListeners.clear();
+  serverConfigUpdatedListeners.clear();
+  serverProviderStatusesUpdatedListeners.clear();
+  serverMaintenanceUpdatedListeners.clear();
+  serverSettingsUpdatedListeners.clear();
+  gitActionProgressListeners.clear();
+  terminalEventListeners.clear();
+  projectDevServerEventListeners.clear();
+  automationEventListeners.clear();
+  orchestrationDomainEventListeners.clear();
+  orchestrationShellEventListeners.clear();
+  orchestrationThreadEventListeners.clear();
+  fallbackBrowserStateListeners.clear();
+  fallbackBrowserStates.clear();
 }
 
 if (import.meta.hot) {
@@ -865,6 +981,7 @@ if (import.meta.hot) {
     serverSettingsUpdatedListeners.clear();
     gitActionProgressListeners.clear();
     terminalEventListeners.clear();
+    projectDevServerEventListeners.clear();
     orchestrationDomainEventListeners.clear();
     orchestrationShellEventListeners.clear();
     orchestrationThreadEventListeners.clear();

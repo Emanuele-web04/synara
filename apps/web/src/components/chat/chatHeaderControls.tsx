@@ -16,7 +16,7 @@ import { forwardRef, type ComponentProps, type ReactNode } from "react";
 import { CHAT_SURFACE_HEADER_HEIGHT_PX } from "@t3tools/shared/desktopChrome";
 
 import { CentralIcon } from "~/lib/central-icons";
-import type { LucideIcon } from "~/lib/icons";
+import { type LucideIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
@@ -47,7 +47,7 @@ export const CHAT_SURFACE_HEADER_PADDING_X_CLASS = "px-3 sm:px-5";
 
 /**
  * Bottom hairline shared by every chat-surface chrome bar (chat header, workspace
- * header, dock pane + tab strip headers, diff panel header, single-thread skeleton).
+ * header, dock pane + tab strip headers, diff panel header).
  * Implemented as the `.chat-surface-divider` component class (a 1px background gradient,
  * see index.css) rather than a CSS border: it reads from the SAME `--app-surface-divider`
  * token as the vertical sidebar↔chat seam, and — because it's a gradient — the seam corner
@@ -60,7 +60,7 @@ export const CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME = "chat-surface-divider";
 /**
  * Standard chat-surface chrome-bar row: the shared flex baseline + fixed height + bottom
  * hairline that the simple headers all repeat (empty-state chat header, dock pane header,
- * right-dock tab strip, single-thread skeleton). Call sites add only their own gap/padding
+ * right-dock tab strip). Call sites add only their own gap/padding
  * and extras (drag-region, traffic-light gutter). Headers with bespoke layout (the main
  * chat header with its split toolbar, the diff panel header with `justify-between`) compose
  * {@link CHAT_SURFACE_HEADER_HEIGHT_CLASS} + {@link CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}
@@ -107,7 +107,7 @@ export const CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME =
  */
 export const CHAT_SURFACE_CHIP_CLASS_NAME = cn(
   CHAT_HEADER_CONTROL_CLASS_NAME,
-  "gap-1.5 border-0 px-2 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
+  "gap-1.5 border-0 px-1.5 text-[length:var(--app-font-size-ui-sm,11px)] font-normal transition-colors",
   CHAT_SURFACE_CONTROL_IDLE_TEXT_CLASS_NAME,
   CHAT_SURFACE_CONTROL_HOVER_CLASS_NAME,
 );
@@ -137,17 +137,19 @@ export const CHAT_HEADER_TOGGLE_CLASS_NAME = cn(
   "data-pressed:text-[var(--color-text-foreground)]",
 );
 
-/** Flat dock tab chip — identical chrome to the header diff toggle. */
+/** Flat dock tab chip — shares the header diff toggle chrome, but adds one extra
+ *  step of right padding (`px-1.5` → `pr-2.5`) so the label/trailing edge has a
+ *  touch more breathing room than the symmetric chip base. */
 export const DOCK_TAB_CHIP_CLASS_NAME = cn(
   CHAT_SURFACE_CHIP_CLASS_NAME,
-  "inline-flex min-w-0 items-center",
+  "inline-flex min-w-0 items-center pr-2.5",
 );
 
 /** Icon slot for dock tabs — bare larger icon at rest; on hover a circular disc + X appears.
  *  Color is muted while the tab (not the close button) is hovered and brightens to full
  *  foreground on direct hover of the close button so the X reads as interactive. */
 export const DOCK_TAB_ICON_SLOT_CLASS_NAME =
-  "relative flex size-4 shrink-0 items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
+  "relative flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full bg-transparent text-[var(--color-text-foreground-secondary)] transition-colors group-hover/dock-tab:bg-[var(--color-background-button-secondary-hover)] group-focus-within/dock-tab:bg-[var(--color-background-button-secondary-hover)] hover:bg-[var(--color-background-button-secondary)] hover:text-[var(--color-text-foreground)]";
 
 /** Dock-only extra: fade the resting glyph out so the hover X can swap in.
  *  Layered on top of {@link SurfaceChipIcon}'s shared size/strength. */
@@ -292,6 +294,8 @@ export function ChatHeaderSplitGroup({
 export function ChatHeaderSplitDivider() {
   return <div aria-hidden="true" className="w-px self-stretch bg-border" />;
 }
+
+export type DiffRenderMode = "stacked" | "split";
 
 /** Visual treatment shared across the header row. */
 export type ChatHeaderControlTone = "plain" | "outline";

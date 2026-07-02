@@ -3,12 +3,12 @@
 // Layer: Web utility
 // Exports: local image URL detection and builders
 // Depends on: wsHttpUrl (so desktop requests carry the legacy startup token used by attachments)
-//             and @t3tools/shared/localImage for the canonical route + extension allowlist.
+//             and @t3tools/shared/localPreviewFiles for the canonical route + extension allowlist.
 
 import {
   LOCAL_IMAGE_ROUTE_PATH,
   SUPPORTED_LOCAL_IMAGE_EXTENSION_REGEX,
-} from "@t3tools/shared/localImage";
+} from "@t3tools/shared/localPreviewFiles";
 import { isWindowsAbsolutePath } from "@t3tools/shared/path";
 
 import { resolveWsHttpUrl } from "./wsHttpUrl";
@@ -54,10 +54,17 @@ export function buildLocalImageUrl(input: {
   readonly src: string;
   readonly cwd: string | undefined;
   readonly download?: boolean;
+  // Accept an explicit `undefined` (not just absent) so callers can forward an
+  // optional `previewGrant: string | null | undefined` straight through under
+  // exactOptionalPropertyTypes. Internally falsy grants are simply omitted below.
+  readonly grant?: string | null | undefined;
 }): string {
   const params = new URLSearchParams({ path: normalizeMarkdownImagePath(input.src) });
   if (input.cwd) {
     params.set("cwd", input.cwd);
+  }
+  if (input.grant) {
+    params.set("grant", input.grant);
   }
   if (input.download) {
     params.set("download", "1");

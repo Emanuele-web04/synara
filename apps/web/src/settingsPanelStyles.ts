@@ -33,7 +33,8 @@ export const SETTINGS_CARD_CLASS_NAME = [
 ].join(" ");
 
 /** Row padding inside a settings card. */
-export const SETTINGS_CARD_ROW_CLASS_NAME = "px-3 py-2.5";
+export const SETTINGS_CARD_ROW_CLASS_NAME =
+  "px-3 py-[var(--app-density-settings-row-padding-y,0.625rem)]";
 
 /** Row title — same UI font/size as the description; weight and color differ. */
 export const SETTINGS_CARD_ROW_TITLE_CLASS_NAME =

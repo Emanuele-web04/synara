@@ -11,6 +11,7 @@ import {
   COMPOSER_PICKER_MENU_POPUP_BODY_CLASS_NAME,
   COMPOSER_PICKER_MENU_SURFACE_CLASS_NAME,
 } from "../chat/composerPickerStyles";
+import { SWITCH_THUMB_CLASS_NAME, SWITCH_TRACK_CLASS_NAME } from "./switch";
 
 const MenuCreateHandle = MenuPrimitive.createHandle;
 
@@ -151,10 +152,18 @@ function MenuCheckboxItem({
         <>
           <span className="col-start-1">{children}</span>
           <MenuPrimitive.CheckboxItemIndicator
-            className="inset-shadow-[0_1px_--theme(--color-black/4%)] inline-flex h-[calc(var(--thumb-size)+2px)] w-[calc(var(--thumb-size)*2-2px)] shrink-0 items-center rounded-full p-px outline-none transition-[background-color,box-shadow] duration-200 [--thumb-size:--spacing(4)] focus-visible:ring-1 focus-visible:ring-ring/60 focus-visible:ring-offset-1 focus-visible:ring-offset-background data-checked:bg-primary data-unchecked:bg-input data-disabled:opacity-64 sm:[--thumb-size:--spacing(3)]"
+            className={cn(
+              SWITCH_TRACK_CLASS_NAME,
+              "inset-shadow-[0_1px_--theme(--color-black/4%)] [--thumb-size:--spacing(4)] focus-visible:ring-1 sm:[--thumb-size:--spacing(3)]",
+            )}
             keepMounted
           >
-            <span className="pointer-events-none block aspect-square h-full in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] origin-left in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)] rounded-(--thumb-size) bg-background shadow-sm/5 will-change-transform [transition:translate_.15s,border-radius_.15s,scale_.1s_.1s,transform-origin_.15s]" />
+            <span
+              className={cn(
+                SWITCH_THUMB_CLASS_NAME,
+                "in-[[data-slot=menu-checkbox-item][data-checked]]:origin-[var(--thumb-size)_50%] in-[[data-slot=menu-checkbox-item][data-checked]]:translate-x-[calc(var(--thumb-size)-4px)] in-[[data-slot=menu-checkbox-item]:active]:not-data-disabled:scale-x-110 in-[[data-slot=menu-checkbox-item]:active]:rounded-[var(--thumb-size)/calc(var(--thumb-size)*1.10)]",
+              )}
+            />
           </MenuPrimitive.CheckboxItemIndicator>
         </>
       ) : (
@@ -201,10 +210,9 @@ function MenuRadioItem({
       className={cn(
         cn(
           COMPOSER_PICKER_MENU_OPTION_CLASS_NAME,
-          "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)]",
           preserveChildLayout
-            ? "grid-cols-[minmax(0,1fr)_2.5rem] gap-x-1.5 gap-y-0 px-2"
-            : "grid-cols-[1fr_auto] gap-3 px-2.5",
+            ? "grid in-data-[side=none]:min-w-[calc(var(--anchor-width)+1.25rem)] grid-cols-[minmax(0,1fr)_2.5rem] gap-x-1.5 gap-y-0 px-2"
+            : "w-full min-w-0 px-2.5",
         ),
         className,
       )}
@@ -235,9 +243,9 @@ function MenuRadioItem({
           </div>
         </>
       ) : (
-        <>
-          <span className="col-start-1 min-w-0">{children}</span>
-          <MenuPrimitive.RadioItemIndicator className="col-start-2 justify-self-end">
+        <span className="flex w-full min-w-0 items-center gap-2">
+          {children}
+          <MenuPrimitive.RadioItemIndicator className="ml-auto shrink-0">
             <svg
               className="size-3"
               fill="none"
@@ -253,7 +261,7 @@ function MenuRadioItem({
               <path d="M5.252 12.7 10.2 18.63 18.748 5.37" />
             </svg>
           </MenuPrimitive.RadioItemIndicator>
-        </>
+        </span>
       )}
     </MenuPrimitive.RadioItem>
   );

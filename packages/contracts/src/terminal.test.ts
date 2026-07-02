@@ -50,6 +50,30 @@ describe("TerminalOpenInput", () => {
     ).toBe(false);
   });
 
+  it("accepts ultrawide column counts", () => {
+    // Regression: a fit on a wide viewport at a small font legitimately exceeds
+    // the old 400-column cap (e.g. 436), which must not fail the terminal open.
+    expect(
+      decodes(TerminalOpenInput, {
+        threadId: "thread-1",
+        cwd: "/tmp/project",
+        cols: 436,
+        rows: 40,
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects dimensions beyond the PTY ceiling", () => {
+    expect(
+      decodes(TerminalOpenInput, {
+        threadId: "thread-1",
+        cwd: "/tmp/project",
+        cols: 2001,
+        rows: 40,
+      }),
+    ).toBe(false);
+  });
+
   it("defaults terminalId when missing", () => {
     const parsed = decodeSync(TerminalOpenInput, {
       threadId: "thread-1",

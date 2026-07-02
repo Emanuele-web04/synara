@@ -1,9 +1,5 @@
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
-import {
-  BUILT_IN_COMPOSER_SLASH_COMMANDS,
-  isBuiltInComposerSlashCommand,
-  type ComposerSlashCommand,
-} from "./composerSlashCommands";
+import { isBuiltInComposerSlashCommand, type ComposerSlashCommand } from "./composerSlashCommands";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
 export type ComposerTriggerKind = "mention" | "slash-command" | "slash-model" | "skill";
@@ -27,9 +23,11 @@ type ComposerSegmentLike =
   | { type: "text"; text: string }
   | { type: "mention" }
   | { type: "skill" }
+  | { type: "slash-command"; command: ComposerSlashCommand }
   | { type: "terminal-context" }
   | { type: "browser-context" }
-  | { type: "agent-mention"; alias: string };
+  | { type: "agent-mention"; alias: string }
+  | { type: "link"; url: string };
 
 const isInlineTokenSegment = (segment: ComposerSegmentLike): boolean => segment.type !== "text";
 
@@ -54,6 +52,24 @@ function tokenStartForCursor(text: string, cursor: number): number {
     index -= 1;
   }
   return index + 1;
+}
+
+// Finds the `/` that opens the slash token the cursor sits in. The slash may be
+// at the line start OR immediately after whitespace, so `/command` is detected
+// mid-line (e.g. after an existing chip) — matching how `$skill` and `@mention`
+// already behave. Returns the latest such slash before the cursor on the
+// current line, or -1 when the cursor is not within a slash token region.
+function slashTokenStartForCursor(text: string, lineStart: number, cursor: number): number {
+  let slashStart = -1;
+  for (let index = lineStart; index < cursor; index += 1) {
+    if (text[index] !== "/") {
+      continue;
+    }
+    if (index === lineStart || isWhitespace(text[index - 1] ?? "")) {
+      slashStart = index;
+    }
+  }
+  return slashStart;
 }
 
 export function expandCollapsedComposerCursor(text: string, cursorInput: number): number {
@@ -85,9 +101,27 @@ export function expandCollapsedComposerCursor(text: string, cursorInput: number)
       expandedCursor += expandedLength;
       continue;
     }
+    if (segment.type === "slash-command") {
+      const expandedLength = segment.command.length + 1;
+      if (remaining <= 1) {
+        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
+      }
+      remaining -= 1;
+      expandedCursor += expandedLength;
+      continue;
+    }
     if (segment.type === "agent-mention") {
       // @alias = 1 + alias.length
       const expandedLength = segment.alias.length + 1;
+      if (remaining <= 1) {
+        return expandedCursor + (remaining === 0 ? 0 : expandedLength);
+      }
+      remaining -= 1;
+      expandedCursor += expandedLength;
+      continue;
+    }
+    if (segment.type === "link") {
+      const expandedLength = segment.url.length;
       if (remaining <= 1) {
         return expandedCursor + (remaining === 0 ? 0 : expandedLength);
       }
@@ -178,9 +212,33 @@ export function collapseExpandedComposerCursor(text: string, cursorInput: number
       collapsedCursor += 1;
       continue;
     }
+    if (segment.type === "slash-command") {
+      const expandedLength = segment.command.length + 1;
+      if (remaining === 0) {
+        return collapsedCursor;
+      }
+      if (remaining <= expandedLength) {
+        return collapsedCursor + 1;
+      }
+      remaining -= expandedLength;
+      collapsedCursor += 1;
+      continue;
+    }
     if (segment.type === "agent-mention") {
       // @alias = 1 + alias.length
       const expandedLength = segment.alias.length + 1;
+      if (remaining === 0) {
+        return collapsedCursor;
+      }
+      if (remaining <= expandedLength) {
+        return collapsedCursor + 1;
+      }
+      remaining -= expandedLength;
+      collapsedCursor += 1;
+      continue;
+    }
+    if (segment.type === "link") {
+      const expandedLength = segment.url.length;
       if (remaining === 0) {
         return collapsedCursor;
       }
@@ -246,46 +304,43 @@ export function detectComposerTrigger(text: string, cursorInput: number): Compos
   const lineStart = text.lastIndexOf("\n", Math.max(0, cursor - 1)) + 1;
   const linePrefix = text.slice(lineStart, cursor);
 
-  if (linePrefix.startsWith("/")) {
-    const commandMatch = /^\/(\S*)$/.exec(linePrefix);
+  const slashStart = slashTokenStartForCursor(text, lineStart, cursor);
+  if (slashStart !== -1) {
+    const region = text.slice(slashStart, cursor);
+    const commandMatch = /^\/(\S*)$/.exec(region);
     if (commandMatch) {
       const commandQuery = commandMatch[1] ?? "";
+      // Command names are `[a-z-]+` (see parseStandaloneComposerSlashCommand), so a
+      // query containing "/" can never be a command — e.g. a typed path or "/and/or"
+      // after a space. Treat it as plain text instead of opening an empty picker.
+      if (commandQuery.includes("/")) {
+        return null;
+      }
+      // `/model` opens the model picker; every other `/query` (known or unknown)
+      // stays in the slash-command lane so provider-native commands and skills
+      // can be suggested without borrowing the `$skill` flow.
       if (commandQuery.toLowerCase() === "model") {
         return {
           kind: "slash-model",
           query: "",
-          rangeStart: lineStart,
+          rangeStart: slashStart,
           rangeEnd: cursor,
         };
       }
-      if (
-        BUILT_IN_COMPOSER_SLASH_COMMANDS.some((command) =>
-          command.startsWith(commandQuery.toLowerCase()),
-        )
-      ) {
-        return {
-          kind: "slash-command",
-          query: commandQuery,
-          rangeStart: lineStart,
-          rangeEnd: cursor,
-        };
-      }
-      // Unknown `/query` stays in the slash-command lane so provider-native
-      // commands can be suggested without borrowing the `$skill` flow.
       return {
         kind: "slash-command",
         query: commandQuery,
-        rangeStart: lineStart,
+        rangeStart: slashStart,
         rangeEnd: cursor,
       };
     }
 
-    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(linePrefix);
+    const modelMatch = /^\/model(?:\s+(.*))?$/.exec(region);
     if (modelMatch) {
       return {
         kind: "slash-model",
         query: (modelMatch[1] ?? "").trim(),
-        rangeStart: lineStart,
+        rangeStart: slashStart,
         rangeEnd: cursor,
       };
     }

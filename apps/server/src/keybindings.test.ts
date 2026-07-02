@@ -262,6 +262,252 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
+  it.effect("migrates old recent-view defaults to work with terminal focus", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "ctrl+tab", command: "view.recent.next", when: "!terminalFocus" },
+        { key: "ctrl+shift+tab", command: "view.recent.previous", when: "!terminalFocus" },
+      ]);
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      const next = configState.keybindings.find((entry) => entry.command === "view.recent.next");
+      const previous = configState.keybindings.find(
+        (entry) => entry.command === "view.recent.previous",
+      );
+      assert.isUndefined(next?.whenAst);
+      assert.isUndefined(previous?.whenAst);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+tab" &&
+            entry.command === "view.recent.next" &&
+            entry.when === undefined,
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "ctrl+shift+tab" &&
+            entry.command === "view.recent.previous" &&
+            entry.when === undefined,
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.command === "view.recent.next" && entry.when === "!terminalFocus",
+        ),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.command === "view.recent.previous" && entry.when === "!terminalFocus",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("preserves new-chat Cmd/Option/N while relaxing its terminal guard", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      // Existing configs already persisted the old shipped keys. Startup should only
+      // relax the creation guard; it must not move new-chat away from Cmd/Option/N.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+shift+o", command: "sidebar.addProject", when: "!terminalFocus" },
+        { key: "mod+alt+n", command: "chat.newChat", when: "!terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+shift+o" &&
+            entry.command === "sidebar.addProject" &&
+            entry.when === "!terminalFocus",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+alt+n" &&
+            entry.command === "chat.newChat" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      assert.isFalse(
+        persisted.some((entry) => entry.key === "mod+shift+o" && entry.command === "chat.newChat"),
+      );
+      assert.isFalse(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+p" && entry.command === "sidebar.addProject",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("relaxes creation-command terminal guards so macOS can create from the terminal", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      // A config still carrying the old bare `!terminalFocus` guard on creation commands,
+      // including one the user rebound to a custom key, plus a non-creation command.
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+n", command: "chat.new", when: "!terminalFocus" },
+        { key: "mod+shift+k", command: "chat.newTerminal", when: "!terminalFocus" },
+        { key: "mod+shift+u", command: "settings.usage", when: "!terminalFocus" },
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      // Creation commands gain the `|| isMac` escape hatch, even on a rebound key.
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+n" &&
+            entry.command === "chat.new" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) =>
+            entry.key === "mod+shift+k" &&
+            entry.command === "chat.newTerminal" &&
+            entry.when === "!terminalFocus || isMac",
+        ),
+      );
+      // Non-creation commands keep their original guard untouched.
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.command === "settings.usage" && entry.when === "!terminalFocus",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("accepts synced composer picker keybindings without startup issues", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([
+          { key: "mod+shift+m", command: "modelPicker.toggle" },
+          { key: "mod+shift+e", command: "effortPicker.toggle" },
+        ]),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "modelPicker.toggle" && entry.shortcut.key === "m",
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "traitsPicker.toggle" && entry.shortcut.key === "e",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+m" && entry.command === "modelPicker.toggle",
+        ),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+e" && entry.command === "traitsPicker.toggle",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("drops retired model picker jump keybindings without startup issues", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify([
+          { key: "mod+1", command: "modelPicker.jump.1" },
+          { key: "mod+2", command: "composer.modelPicker.jump.2" },
+          { key: "mod+k", command: "sidebar.search" },
+        ]),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+
+      assert.deepEqual(configState.issues, []);
+      assert.isFalse(
+        configState.keybindings.some((entry) =>
+          String(entry.command).includes("modelPicker.jump."),
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "modelPicker.toggle" && entry.shortcut.key === "m",
+        ),
+      );
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "thread.jump.1" && entry.shortcut.key === "1",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(
+        persisted.some((entry) => String(entry.command).includes("modelPicker.jump.")),
+      );
+      assert.isFalse(
+        persisted.some((entry) => entry.command === "modelPicker.toggle" && entry.key === "mod+1"),
+      );
+      assert.isTrue(
+        persisted.some(
+          (entry) => entry.key === "mod+shift+m" && entry.command === "modelPicker.toggle",
+        ),
+      );
+      assert.isTrue(
+        persisted.some((entry) => entry.key === "mod+1" && entry.command === "thread.jump.1"),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
   it.effect(
     "upserts missing default keybindings on startup without overriding existing command rules",
     () =>

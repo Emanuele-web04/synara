@@ -1,3 +1,8 @@
+// FILE: OpenCodeTextGeneration.ts
+// Purpose: Runs OpenCode-compatible one-shot text generation for titles, branches, recaps, and release text.
+// Layer: Server git/text-generation adapter
+// Depends on: OpenCode SDK runtime, prompt builders, attachment projection, and server config.
+
 import { Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import * as Semaphore from "effect/Semaphore";
 
@@ -14,6 +19,7 @@ import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../../provider/attachmentProjection.ts";
 import {
   OpenCodeRuntime,
   KILO_CLI_SPEC,
@@ -27,20 +33,25 @@ import {
 } from "../../provider/opencodeRuntime.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
+  type TextGenerationOperation,
   type TextGenerationShape,
   KiloTextGeneration,
   OpenCodeTextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
+  buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
 
@@ -93,8 +104,15 @@ interface SharedOpenCodeTextGenerationServerState {
   server: OpenCodeServerProcess | null;
   serverScope: Scope.Closeable | null;
   binaryPath: string | null;
+  cwd: string | null;
   activeRequests: number;
   idleCloseFiber: Fiber.Fiber<void, never> | null;
+}
+
+interface AcquiredOpenCodeTextGenerationServer {
+  server: OpenCodeServerProcess;
+  shared: boolean;
+  serverScope: Scope.Closeable | null;
 }
 
 type OpenCodeCompatibleTextGenerationProvider = "opencode" | "kilo";
@@ -141,6 +159,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       server: null,
       serverScope: null,
       binaryPath: null,
+      cwd: null,
       activeRequests: 0,
       idleCloseFiber: null,
     };
@@ -150,6 +169,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       sharedServerState.server = null;
       sharedServerState.serverScope = null;
       sharedServerState.binaryPath = null;
+      sharedServerState.cwd = null;
       if (scope !== null) {
         yield* Scope.close(scope, Exit.void).pipe(Effect.ignore);
       }
@@ -186,88 +206,115 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
 
     const acquireSharedServer = (input: {
       readonly binaryPath: string;
-      readonly operation:
-        | "generateCommitMessage"
-        | "generatePrContent"
-        | "generateDiffSummary"
-        | "generateBranchName"
-        | "generateThreadTitle";
+      readonly cwd: string;
+      readonly operation: TextGenerationOperation;
     }) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
           yield* cancelIdleCloseFiber();
 
+          const startServer = Effect.fn("startOpenCodeTextGenerationServer")(function* () {
+            const serverScope = yield* Scope.make();
+            const startedExit = yield* Effect.exit(
+              openCodeRuntime
+                .startOpenCodeServerProcess({
+                  binaryPath: input.binaryPath,
+                  cliSpec: config.cliSpec,
+                  cwd: input.cwd,
+                })
+                .pipe(
+                  Effect.provideService(Scope.Scope, serverScope),
+                  Effect.mapError(
+                    (cause) =>
+                      new TextGenerationError({
+                        operation: input.operation,
+                        detail: openCodeRuntimeErrorDetail(cause),
+                        cause,
+                      }),
+                  ),
+                ),
+            );
+
+            if (startedExit._tag === "Failure") {
+              yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
+              return yield* Effect.failCause(startedExit.cause);
+            }
+
+            return {
+              server: startedExit.value,
+              serverScope,
+            };
+          });
+
           const existingServer = sharedServerState.server;
           if (existingServer !== null) {
-            if (
-              sharedServerState.binaryPath !== input.binaryPath &&
-              sharedServerState.activeRequests === 0
-            ) {
+            const sameConfigScope =
+              sharedServerState.binaryPath === input.binaryPath &&
+              sharedServerState.cwd === input.cwd;
+            if (!sameConfigScope && sharedServerState.activeRequests === 0) {
               yield* closeSharedServer();
             } else {
-              if (sharedServerState.binaryPath !== input.binaryPath) {
+              if (!sameConfigScope) {
                 yield* Effect.logWarning(
-                  `${config.displayName} shared server binary path mismatch: requested ` +
+                  `${config.displayName} shared server config scope mismatch: requested ` +
                     input.binaryPath +
+                    " at " +
+                    input.cwd +
                     " but active server uses " +
                     sharedServerState.binaryPath +
-                    "; reusing existing server because there are active requests",
+                    " at " +
+                    sharedServerState.cwd +
+                    "; starting a dedicated server for this request",
                 );
+                const dedicated = yield* startServer();
+                return {
+                  server: dedicated.server,
+                  shared: false,
+                  serverScope: dedicated.serverScope,
+                } satisfies AcquiredOpenCodeTextGenerationServer;
               }
               sharedServerState.activeRequests += 1;
-              return existingServer;
+              return {
+                server: existingServer,
+                shared: true,
+                serverScope: null,
+              } satisfies AcquiredOpenCodeTextGenerationServer;
             }
           }
 
           return yield* Effect.uninterruptibleMask((restore) =>
             Effect.gen(function* () {
-              const serverScope = yield* Scope.make();
-              const startedExit = yield* Effect.exit(
-                restore(
-                  openCodeRuntime
-                    .startOpenCodeServerProcess({
-                      binaryPath: input.binaryPath,
-                      cliSpec: config.cliSpec,
-                    })
-                    .pipe(
-                      Effect.provideService(Scope.Scope, serverScope),
-                      Effect.mapError(
-                        (cause) =>
-                          new TextGenerationError({
-                            operation: input.operation,
-                            detail: openCodeRuntimeErrorDetail(cause),
-                            cause,
-                          }),
-                      ),
-                    ),
-                ),
-              );
-
-              if (startedExit._tag === "Failure") {
-                yield* Scope.close(serverScope, Exit.void).pipe(Effect.ignore);
-                return yield* Effect.failCause(startedExit.cause);
-              }
-
-              const server = startedExit.value;
+              const { server, serverScope } = yield* restore(startServer());
               sharedServerState.server = server;
               sharedServerState.serverScope = serverScope;
               sharedServerState.binaryPath = input.binaryPath;
+              sharedServerState.cwd = input.cwd;
               sharedServerState.activeRequests = 1;
-              return server;
+              return {
+                server,
+                shared: true,
+                serverScope: null,
+              } satisfies AcquiredOpenCodeTextGenerationServer;
             }),
           );
         }),
       );
 
-    const releaseSharedServer = (server: OpenCodeServerProcess) =>
+    const releaseSharedServer = (acquired: AcquiredOpenCodeTextGenerationServer) =>
       sharedServerMutex.withPermit(
         Effect.gen(function* () {
-          if (sharedServerState.server !== server) {
+          if (!acquired.shared) {
+            if (acquired.serverScope !== null) {
+              yield* Scope.close(acquired.serverScope, Exit.void).pipe(Effect.ignore);
+            }
+            return;
+          }
+          if (sharedServerState.server !== acquired.server) {
             return;
           }
           sharedServerState.activeRequests = Math.max(0, sharedServerState.activeRequests - 1);
           if (sharedServerState.activeRequests === 0) {
-            yield* scheduleIdleClose(server);
+            yield* scheduleIdleClose(acquired.server);
           }
         }),
       );
@@ -283,12 +330,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
     );
 
     const runOpenCodeJson = Effect.fn("runOpenCodeJson")(function* <S extends Schema.Top>(input: {
-      readonly operation:
-        | "generateCommitMessage"
-        | "generatePrContent"
-        | "generateDiffSummary"
-        | "generateBranchName"
-        | "generateThreadTitle";
+      readonly operation: TextGenerationOperation;
       readonly cwd: string;
       readonly prompt: string;
       readonly outputSchemaJson: S;
@@ -315,6 +357,13 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       const agent = modelOptions?.agent?.trim();
       const variant = getModelSelectionStringOptionValue(input.modelSelection, "variant")?.trim();
 
+      const promptText =
+        appendFileAttachmentsPromptBlock({
+          text: input.prompt,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        }) ?? input.prompt;
       const fileParts = toOpenCodeFileParts({
         attachments: input.attachments,
         resolveAttachmentPath: (attachment) =>
@@ -352,7 +401,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
               model: parsedModel,
               ...(agent ? { agent } : {}),
               ...(variant ? { variant } : {}),
-              parts: [{ type: "text", text: input.prompt }, ...fileParts],
+              parts: [{ type: "text", text: promptText }, ...fileParts],
             });
             const info = result.data?.info;
             const errorMessage = getOpenCodePromptErrorMessage(info?.error);
@@ -400,9 +449,10 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
           : yield* Effect.acquireUseRelease(
               acquireSharedServer({
                 binaryPath,
+                cwd: input.cwd,
                 operation: input.operation,
               }),
-              runAgainstServer,
+              (acquired) => runAgainstServer(acquired.server),
               releaseSharedServer,
             );
 
@@ -574,12 +624,93 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       };
     });
 
+    const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = Effect.fn(
+      `${config.serviceName}.generateThreadRecap`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateThreadRecap",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson, rawTextFallback } = buildThreadRecapPrompt({
+        ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+        newMaterial: input.newMaterial,
+        ...(input.currentState ? { currentState: input.currentState } : {}),
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generateThreadRecap",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        rawTextFallback,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+
+      return {
+        recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+      };
+    });
+
+    const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
+      `${config.serviceName}.generateAutomationIntent`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generateAutomationIntent",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+        message: input.message,
+        ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+        nowIso: input.nowIso,
+      });
+      return yield* runOpenCodeJson({
+        operation: "generateAutomationIntent",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
+    const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] =
+      Effect.fn(`${config.serviceName}.evaluateAutomationCompletion`)(function* (input) {
+        const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+        if (!modelSelection) {
+          return yield* new TextGenerationError({
+            operation: "evaluateAutomationCompletion",
+            detail: `Invalid ${config.displayName} model selection.`,
+          });
+        }
+
+        const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+        return yield* runOpenCodeJson({
+          operation: "evaluateAutomationCompletion",
+          cwd: input.cwd,
+          prompt,
+          outputSchemaJson,
+          modelSelection,
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+        });
+      });
+
     return {
       generateCommitMessage,
       generatePrContent,
       generateDiffSummary,
       generateBranchName,
       generateThreadTitle,
+      generateThreadRecap,
+      generateAutomationIntent,
+      evaluateAutomationCompletion,
     } satisfies TextGenerationShape;
   });
 

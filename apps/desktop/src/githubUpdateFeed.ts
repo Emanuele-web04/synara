@@ -1,3 +1,8 @@
+// FILE: githubUpdateFeed.ts
+// Purpose: Derives human-facing GitHub release URLs from electron-updater config.
+// Layer: Desktop update utility
+// Exports: resolveGitHubUpdateSource, buildGitHubReleasesPageUrl
+
 type GitHubUpdateSource = {
   readonly owner: string;
   readonly repo: string;
@@ -5,59 +10,8 @@ type GitHubUpdateSource = {
   readonly protocol: "http" | "https";
 };
 
-type GitHubReleaseRecord = {
-  readonly tag_name?: unknown;
-  readonly draft?: unknown;
-  readonly prerelease?: unknown;
-};
-
-export type LatestGitHubRelease = {
-  readonly tag: string;
-  readonly version: string;
-};
-
-export type ResolveLatestStableGitHubReleaseOptions = {
-  readonly fetchImpl?: typeof fetch;
-  readonly signal?: AbortSignal;
-};
-
-type ParsedVersion = {
-  readonly major: number;
-  readonly minor: number;
-  readonly patch: number;
-};
-
 function normalizeGitHubProtocol(protocol: string | undefined): "http" | "https" {
   return protocol === "http" ? "http" : "https";
-}
-
-function parseStableSemver(rawTag: string): ParsedVersion | null {
-  const match = rawTag.trim().match(/^v?(\d+)\.(\d+)\.(\d+)$/);
-  if (!match) {
-    return null;
-  }
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
-  };
-}
-
-function compareParsedVersions(left: ParsedVersion, right: ParsedVersion): number {
-  if (left.major !== right.major) {
-    return left.major - right.major;
-  }
-  if (left.minor !== right.minor) {
-    return left.minor - right.minor;
-  }
-  return left.patch - right.patch;
-}
-
-function getGitHubApiBaseUrl(source: GitHubUpdateSource): URL {
-  if (source.host === "github.com" || source.host === "api.github.com") {
-    return new URL(`${source.protocol}://api.github.com`);
-  }
-  return new URL(`${source.protocol}://${source.host}/api/v3`);
 }
 
 export function resolveGitHubUpdateSource(
@@ -81,95 +35,11 @@ export function resolveGitHubUpdateSource(
   };
 }
 
-export function pickLatestStableGitHubRelease(
-  releases: ReadonlyArray<GitHubReleaseRecord>,
-): LatestGitHubRelease | null {
-  let best: LatestGitHubRelease | null = null;
-  let bestVersion: ParsedVersion | null = null;
-
-  for (const release of releases) {
-    if (release.draft === true || release.prerelease === true) {
-      continue;
-    }
-
-    const tag = typeof release.tag_name === "string" ? release.tag_name.trim() : "";
-    if (tag.length === 0) {
-      continue;
-    }
-
-    const version = parseStableSemver(tag);
-    if (version === null) {
-      continue;
-    }
-
-    if (bestVersion === null || compareParsedVersions(version, bestVersion) > 0) {
-      bestVersion = version;
-      best = {
-        tag,
-        version: `${version.major}.${version.minor}.${version.patch}`,
-      };
-    }
-  }
-
-  return best;
-}
-
-export function buildGitHubReleaseDownloadBaseUrl(source: GitHubUpdateSource, tag: string): string {
-  return new URL(
-    `/${source.owner}/${source.repo}/releases/download/${tag}/`,
-    `${source.protocol}://${source.host}`,
-  ).toString();
-}
-
-// Human-facing releases page used as the manual-download fallback when the
-// in-app updater cannot apply an update. Points at the exact tag when known,
-// otherwise the "latest" redirect so the user always lands on a real release.
+// Human-facing releases page used only by the manual-download fallback.
 export function buildGitHubReleasesPageUrl(source: GitHubUpdateSource, tag?: string): string {
   const path =
     tag && tag.trim().length > 0
       ? `/${source.owner}/${source.repo}/releases/tag/${tag.trim()}`
       : `/${source.owner}/${source.repo}/releases/latest`;
   return new URL(path, `${source.protocol}://${source.host}`).toString();
-}
-
-export async function resolveLatestStableGitHubRelease(
-  source: GitHubUpdateSource,
-  token?: string,
-  options: ResolveLatestStableGitHubReleaseOptions = {},
-): Promise<LatestGitHubRelease | null> {
-  const apiBaseUrl = getGitHubApiBaseUrl(source);
-  const fetchImpl = options.fetchImpl ?? fetch;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-  };
-  if (token && token.trim().length > 0) {
-    headers.Authorization = `token ${token.trim()}`;
-  }
-
-  const releases: GitHubReleaseRecord[] = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const requestUrl = new URL(
-      `/repos/${source.owner}/${source.repo}/releases?per_page=100&page=${page}`,
-      apiBaseUrl,
-    );
-    const response = await fetchImpl(requestUrl, {
-      headers,
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub releases request failed (${response.status} ${response.statusText})`);
-    }
-
-    const payload = (await response.json()) as unknown;
-    if (!Array.isArray(payload) || payload.length === 0) {
-      break;
-    }
-
-    releases.push(...(payload as GitHubReleaseRecord[]));
-    if (payload.length < 100) {
-      break;
-    }
-  }
-
-  return pickLatestStableGitHubRelease(releases);
 }

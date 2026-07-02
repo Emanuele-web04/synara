@@ -12,6 +12,7 @@ import {
   TurnId,
   type OrchestrationThreadActivity,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -29,6 +30,7 @@ import {
   generatedImagePathFromRuntimeEvent,
   isGeneratedImageOnlyMarkdown,
 } from "../../codexGeneratedImages.ts";
+import { parseCheckpointFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
@@ -52,18 +54,23 @@ const providerCommandId = (event: ProviderRuntimeEvent, tag: string): CommandId 
   CommandId.makeUnsafe(`provider:${event.eventId}:${tag}:${crypto.randomUUID()}`);
 
 const DEFAULT_ASSISTANT_DELIVERY_MODE: AssistantDeliveryMode = "buffered";
-const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
-const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
-const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
-const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
-const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
-const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 2_048;
+const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(60);
+const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 1_024;
+const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(60);
+const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 1_024;
+const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(60);
+const BUFFERED_TOOL_OUTPUT_BY_KEY_CACHE_CAPACITY = 2_048;
+const BUFFERED_TOOL_OUTPUT_BY_KEY_TTL = Duration.minutes(60);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const MAX_BUFFERED_PROPOSED_PLAN_CHARS = 64_000;
+const MAX_BUFFERED_TOOL_OUTPUT_CHARS = 24_000;
 const MAX_ACTIVITY_DATA_JSON_CHARS = 16_000;
 const MAX_ACTIVITY_DATA_STRING_CHARS = 2_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 24;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 64;
 const ACTIVITY_DATA_TRUNCATION_MARKER = "__synaraTruncated";
+const BUFFERED_TEXT_TRUNCATION_MARKER = "... [truncated]";
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -82,6 +89,78 @@ type RuntimeIngestionInput =
     };
 
 type ActivityPayload = OrchestrationThreadActivity["payload"];
+type ToolOutputStreamKind = "command_output" | "file_change_output";
+type BufferedToolOutput = {
+  readonly text: string;
+  readonly truncated: boolean;
+};
+type ProviderDiffPlaceholder = {
+  readonly checkpointRef: CheckpointRef;
+  readonly checkpointTurnCount: number;
+  // Immutable snapshot of the turn's diff files. Stored values are only ever read
+  // (forwarded to dispatch / re-stored), never mutated in place, so this is a
+  // ReadonlyArray — which also lets it accept the readonly `checkpoint.files` from
+  // an OrchestrationThread without a defensive copy.
+  readonly files: ReadonlyArray<ReturnType<typeof parseCheckpointFilesFromUnifiedDiff>[number]>;
+};
+
+/**
+ * Promote a cheap thread *shell* into a full {@link OrchestrationThread} by
+ * filling the heavy arrays with empties. Only valid for events that do not read
+ * those arrays (see {@link eventNeedsHeavyThreadDetail}); the empties are never
+ * observed on those code paths.
+ */
+function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationThread {
+  return {
+    ...shell,
+    deletedAt: null,
+    messages: [],
+    proposedPlans: [],
+    activities: [],
+    checkpoints: [],
+  };
+}
+
+/**
+ * PERF: ingesting one runtime event used to load the full thread detail, which
+ * decodes every message's text. For a long turn that streams a large output
+ * (tens of thousands of deltas over a growing transcript) this is quadratic, so
+ * the live transcript — and crucially the `turn.completed` event — fall minutes
+ * behind the provider even though the turn already finished.
+ *
+ * The overwhelming majority of events (assistant deltas, tool-call lifecycle,
+ * message parts) only ever read thread *shell* fields. Only the handlers for the
+ * event types below read the heavy arrays (`thread.messages` /
+ * `thread.proposedPlans` / `thread.checkpoints`), so only those pay for the full
+ * detail; everything else uses the cheap shell.
+ */
+function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
+  switch (event.type) {
+    case "turn.proposed.completed":
+    case "turn.completed":
+    case "turn.aborted":
+    case "turn.diff.updated":
+      return true;
+    case "item.completed":
+      // assistant_message completion reads thread.messages to decide whether to
+      // apply fallback completion text; image_generation completion scans
+      // thread.messages to attach the generated-image reference.
+      return (
+        event.payload.itemType === "assistant_message" ||
+        generatedImagePathFromRuntimeEvent(event) !== undefined
+      );
+    default:
+      return false;
+  }
+}
+
+function parseProviderTurnDiffFiles(unifiedDiff: string) {
+  try {
+    return parseCheckpointFilesFromUnifiedDiff(unifiedDiff);
+  } catch {
+    return null;
+  }
+}
 
 function toActivityPayload(payload: unknown): ActivityPayload {
   return payload as ActivityPayload;
@@ -157,6 +236,91 @@ function stringifyJsonLike(value: unknown): string {
 
 function truncateJsonString(value: string, limit: number): string {
   return value.length > limit ? `${value.slice(0, Math.max(0, limit - 15))}... [truncated]` : value;
+}
+
+export function appendCappedBufferedText(existing: string, delta: string, limit: number): string {
+  const normalizedLimit = Math.max(0, Math.floor(limit));
+  if (normalizedLimit === 0) {
+    return "";
+  }
+  const next = `${existing}${delta}`;
+  if (next.length <= normalizedLimit) {
+    return next;
+  }
+  if (normalizedLimit <= BUFFERED_TEXT_TRUNCATION_MARKER.length) {
+    return BUFFERED_TEXT_TRUNCATION_MARKER.slice(0, normalizedLimit);
+  }
+  return `${next.slice(
+    0,
+    normalizedLimit - BUFFERED_TEXT_TRUNCATION_MARKER.length,
+  )}${BUFFERED_TEXT_TRUNCATION_MARKER}`;
+}
+
+function toolOutputStreamKind(event: ProviderRuntimeEvent): ToolOutputStreamKind | undefined {
+  if (event.type !== "content.delta") {
+    return undefined;
+  }
+  return event.payload.streamKind === "command_output" ||
+    event.payload.streamKind === "file_change_output"
+    ? event.payload.streamKind
+    : undefined;
+}
+
+function toolOutputBufferKey(event: ProviderRuntimeEvent): string | null {
+  if (!event.itemId) {
+    return null;
+  }
+  return [event.threadId, event.turnId ?? "no-turn", event.itemId].join(":");
+}
+
+function hasNonEmptyString(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function mergeBufferedToolOutputData(
+  data: unknown,
+  bufferedOutput: BufferedToolOutput,
+): Record<string, unknown> {
+  const baseData = isJsonObject(data) ? data : {};
+  const existingRawOutput = isJsonObject(baseData.rawOutput)
+    ? baseData.rawOutput
+    : typeof baseData.rawOutput === "string" && baseData.rawOutput.trim().length > 0
+      ? { output: baseData.rawOutput }
+      : {};
+  const hasStructuredOutput =
+    hasNonEmptyString(existingRawOutput.output) ||
+    hasNonEmptyString(existingRawOutput.stdout) ||
+    hasNonEmptyString(existingRawOutput.stderr);
+  return {
+    ...baseData,
+    rawOutput: {
+      ...existingRawOutput,
+      ...(hasStructuredOutput ? {} : { output: bufferedOutput.text }),
+      ...(bufferedOutput.truncated ? { truncated: true } : {}),
+    },
+  };
+}
+
+function withBufferedToolOutputData(
+  event: ProviderRuntimeEvent,
+  bufferedOutput: BufferedToolOutput | undefined,
+): ProviderRuntimeEvent {
+  if (!bufferedOutput) {
+    return event;
+  }
+  if (event.type !== "item.updated" && event.type !== "item.completed") {
+    return event;
+  }
+  if (event.payload.itemType !== "command_execution" && event.payload.itemType !== "file_change") {
+    return event;
+  }
+  return {
+    ...event,
+    payload: {
+      ...event.payload,
+      data: mergeBufferedToolOutputData(event.payload.data, bufferedOutput),
+    },
+  } as ProviderRuntimeEvent;
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -489,6 +653,36 @@ function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unkno
   return payload as Record<string, unknown>;
 }
 
+function rawRuntimeEventPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+  const raw = asObject((event as { raw?: unknown }).raw);
+  return asObject(raw?.payload);
+}
+
+function runtimeWarningSummary(event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>) {
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  if (
+    (event.provider === "opencode" || event.provider === "kilo") &&
+    (nativeType === "session.next.retried" || nativeType === "session.status")
+  ) {
+    return event.provider === "opencode" ? "OpenCode retrying" : "Kilo retrying";
+  }
+  return "Runtime warning";
+}
+
+// Runtime warning rows should show the user-visible message even when raw detail is structured.
+function runtimeWarningPayload(
+  event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>,
+): ActivityPayload {
+  const message = truncateDetail(event.payload.message);
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  return toActivityPayload({
+    message,
+    detail: message,
+    ...(nativeType ? { nativeEventType: nativeType } : {}),
+    ...activityDataField(event.payload.detail),
+  });
+}
+
 function normalizeRuntimeTurnState(
   value: string | undefined,
 ): "completed" | "failed" | "interrupted" | "cancelled" {
@@ -688,11 +882,8 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
-          payload: toActivityPayload({
-            message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          }),
+          summary: runtimeWarningSummary(event),
+          payload: runtimeWarningPayload(event),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -1126,6 +1317,12 @@ const make = Effect.gen(function* () {
     timeToLive: BUFFERED_PROPOSED_PLAN_BY_ID_TTL,
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
+  const bufferedToolOutputByKey = yield* Cache.make<string, BufferedToolOutput | undefined>({
+    capacity: BUFFERED_TOOL_OUTPUT_BY_KEY_CACHE_CAPACITY,
+    timeToLive: BUFFERED_TOOL_OUTPUT_BY_KEY_TTL,
+    lookup: () => Effect.succeed(undefined),
+  });
+  const providerDiffPlaceholdersRef = yield* Ref.make(new Map<string, ProviderDiffPlaceholder>());
 
   const getThreadDetail = Effect.fnUntraced(function* (
     threadId: ThreadId,
@@ -1135,6 +1332,20 @@ const make = Effect.gen(function* () {
         .getThreadDetailById(threadId)
         .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
     );
+  });
+
+  // PERF: cheap counterpart to getThreadDetail for events that never read the
+  // heavy thread arrays. Loads only the shell projection and promotes it with
+  // empty arrays. See eventNeedsHeavyThreadDetail.
+  const getThreadShellDetail = Effect.fnUntraced(function* (
+    threadId: ThreadId,
+  ): Effect.fn.Return<OrchestrationThread | undefined> {
+    const shell = Option.getOrUndefined(
+      yield* projectionSnapshotQuery
+        .getThreadShellById(threadId)
+        .pipe(Effect.catch(() => Effect.succeed(Option.none()))),
+    );
+    return shell ? threadDetailFromShell(shell) : undefined;
   });
 
   const getProjectShell = Effect.fnUntraced(function* (
@@ -1165,6 +1376,22 @@ const make = Effect.gen(function* () {
     }
     return isGitRepository(workspaceCwd);
   });
+
+  const supportsLiveTurnDiffPatch = Effect.fnUntraced(function* (
+    provider: ProviderRuntimeEvent["provider"],
+  ) {
+    const capabilities = yield* providerService
+      .getCapabilities(provider)
+      .pipe(Effect.catch(() => Effect.succeed(null)));
+    return capabilities?.supportsLiveTurnDiffPatch === true;
+  });
+
+  const clearProviderDiffPlaceholder = (threadId: ThreadId, turnId: TurnId) =>
+    Ref.update(providerDiffPlaceholdersRef, (placeholders) => {
+      const next = new Map(placeholders);
+      next.delete(providerTurnKey(threadId, turnId));
+      return next;
+    });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
     Cache.getOption(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId)).pipe(
@@ -1248,7 +1475,11 @@ const make = Effect.gen(function* () {
       Effect.flatMap((existingEntry) => {
         const existing = Option.getOrUndefined(existingEntry);
         return Cache.set(bufferedProposedPlanById, planId, {
-          text: `${existing?.text ?? ""}${delta}`,
+          text: appendCappedBufferedText(
+            existing?.text ?? "",
+            delta,
+            MAX_BUFFERED_PROPOSED_PLAN_CHARS,
+          ),
           createdAt:
             existing?.createdAt && existing.createdAt.length > 0 ? existing.createdAt : createdAt,
         });
@@ -1266,6 +1497,33 @@ const make = Effect.gen(function* () {
 
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
+
+  const appendBufferedToolOutput = (key: string, delta: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.flatMap((existingEntry) => {
+        const existing = Option.getOrUndefined(existingEntry);
+        const existingText = existing?.text ?? "";
+        const truncated = existingText.length + delta.length > MAX_BUFFERED_TOOL_OUTPUT_CHARS;
+        return Cache.set(bufferedToolOutputByKey, key, {
+          text: appendCappedBufferedText(existingText, delta, MAX_BUFFERED_TOOL_OUTPUT_CHARS),
+          truncated: existing?.truncated === true || truncated,
+        });
+      }),
+    );
+
+  const getBufferedToolOutput = (key: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.map((existingEntry) => Option.getOrUndefined(existingEntry)),
+    );
+
+  const takeBufferedToolOutput = (key: string) =>
+    Cache.getOption(bufferedToolOutputByKey, key).pipe(
+      Effect.flatMap((existingEntry) =>
+        Cache.invalidate(bufferedToolOutputByKey, key).pipe(
+          Effect.as(Option.getOrUndefined(existingEntry)),
+        ),
+      ),
+    );
 
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
@@ -1718,7 +1976,14 @@ const make = Effect.gen(function* () {
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
       const now = event.createdAt;
-      const parentThread = yield* getThreadDetail(event.threadId);
+      // Load the full (heavy) detail only when this event's handlers actually read
+      // thread.messages / proposedPlans / checkpoints; otherwise use the cheap
+      // shell so high-frequency streaming events don't re-decode the whole
+      // transcript. See eventNeedsHeavyThreadDetail for the safety rationale.
+      const needsHeavyThreadDetail = eventNeedsHeavyThreadDetail(event);
+      const parentThread = needsHeavyThreadDetail
+        ? yield* getThreadDetail(event.threadId)
+        : yield* getThreadShellDetail(event.threadId);
       if (!parentThread) return;
 
       const ensureSubagentThread = (
@@ -1732,7 +1997,14 @@ const make = Effect.gen(function* () {
           const childThreadId = subagentThreadId(parentThread.id, providerThreadId);
           // A single provider event can describe the child both as a collab receiver and
           // as the event's provider thread, so re-read after any earlier dispatch in this handler.
-          const existingThread = yield* projectionSnapshotQuery.getThreadDetailById(childThreadId);
+          // Mirror the parent load: only this event's heavy-detail handlers read the
+          // child's message/plan/checkpoint arrays, so otherwise use the cheap shell.
+          const existingThread = needsHeavyThreadDetail
+            ? yield* projectionSnapshotQuery.getThreadDetailById(childThreadId)
+            : Option.map(
+                yield* projectionSnapshotQuery.getThreadShellById(childThreadId),
+                threadDetailFromShell,
+              );
           const resolvedModelSelection =
             identity?.model && identity.modelIsRequestedHint !== true
               ? {
@@ -2012,6 +2284,17 @@ const make = Effect.gen(function* () {
         }
       }
 
+      const toolOutputKind = toolOutputStreamKind(event);
+      const toolOutputKey = toolOutputBufferKey(event);
+      if (
+        toolOutputKind &&
+        toolOutputKey &&
+        event.type === "content.delta" &&
+        event.payload.delta.length > 0
+      ) {
+        yield* appendBufferedToolOutput(toolOutputKey, event.payload.delta);
+      }
+
       const assistantDelta =
         event.type === "content.delta" && event.payload.streamKind === "assistant_text"
           ? event.payload.delta
@@ -2164,6 +2447,7 @@ const make = Effect.gen(function* () {
             turnId: finalizedTurnId,
             updatedAt: now,
           });
+          yield* clearProviderDiffPlaceholder(thread.id, finalizedTurnId);
         }
       }
 
@@ -2178,6 +2462,7 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete-session-exit",
             finalDeltaCommandTag: "assistant-delta-session-exit",
           });
+          yield* clearProviderDiffPlaceholder(thread.id, exitedTurnId);
         }
         yield* clearTurnStateForSession(thread.id);
       }
@@ -2195,6 +2480,7 @@ const make = Effect.gen(function* () {
             commandTag: "assistant-complete-runtime-error",
             finalDeltaCommandTag: "assistant-delta-runtime-error",
           });
+          yield* clearProviderDiffPlaceholder(thread.id, erroredTurnId);
         }
 
         const shouldApplyRuntimeError = !STRICT_PROVIDER_LIFECYCLE_GUARD
@@ -2232,17 +2518,41 @@ const make = Effect.gen(function* () {
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
         if (turnId && (yield* isGitRepoForThread(thread.id))) {
-          // Skip if a checkpoint already exists for this turn. A real
-          // (non-placeholder) capture from CheckpointReactor should not
-          // be clobbered, and dispatching a duplicate placeholder for the
-          // same turnId would produce an unstable checkpointTurnCount.
-          if (thread.checkpoints.some((c) => c.turnId === turnId)) {
-            // Already tracked; no-op.
+          const existingCheckpoint = thread.checkpoints.find((c) => c.turnId === turnId);
+          const placeholderKey = providerTurnKey(thread.id, turnId);
+          const trackedPlaceholder = (yield* Ref.get(providerDiffPlaceholdersRef)).get(
+            placeholderKey,
+          );
+          const existingProviderPlaceholder =
+            existingCheckpoint?.checkpointRef.startsWith("provider-diff:") === true
+              ? {
+                  checkpointRef: existingCheckpoint.checkpointRef,
+                  checkpointTurnCount: existingCheckpoint.checkpointTurnCount,
+                  files: existingCheckpoint.files,
+                }
+              : null;
+          // Only provider-diff placeholders are live-updated. A real checkpoint from
+          // CheckpointReactor is the terminal turn diff and must stay authoritative.
+          if (existingCheckpoint && !existingProviderPlaceholder) {
+            yield* clearProviderDiffPlaceholder(thread.id, turnId);
           } else {
+            const canParseLiveDiffPatch = yield* supportsLiveTurnDiffPatch(event.provider);
+            const livePlaceholder = trackedPlaceholder ?? existingProviderPlaceholder;
             const maxTurnCount = thread.checkpoints.reduce(
               (max, c) => Math.max(max, c.checkpointTurnCount),
               0,
             );
+            const files =
+              (canParseLiveDiffPatch
+                ? parseProviderTurnDiffFiles(event.payload.unifiedDiff)
+                : null) ??
+              trackedPlaceholder?.files ??
+              existingCheckpoint?.files ??
+              [];
+            const checkpointRef =
+              livePlaceholder?.checkpointRef ??
+              CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`);
+            const checkpointTurnCount = livePlaceholder?.checkpointTurnCount ?? maxTurnCount + 1;
             // Leave assistantMessageId undefined on the placeholder: the real
             // capture performed by CheckpointReactor will resolve the actual
             // assistant MessageId once the message is finalized. Emitting a
@@ -2254,18 +2564,35 @@ const make = Effect.gen(function* () {
               threadId: thread.id,
               turnId,
               completedAt: now,
-              checkpointRef: CheckpointRef.makeUnsafe(`provider-diff:${event.eventId}`),
+              checkpointRef,
               status: "missing",
-              files: [],
+              files,
               assistantMessageId: undefined,
-              checkpointTurnCount: maxTurnCount + 1,
+              checkpointTurnCount,
               createdAt: now,
             });
+            if (canParseLiveDiffPatch) {
+              yield* Ref.update(providerDiffPlaceholdersRef, (placeholders) => {
+                const next = new Map(placeholders);
+                next.set(placeholderKey, {
+                  checkpointRef,
+                  checkpointTurnCount,
+                  files,
+                });
+                return next;
+              });
+            }
           }
         }
       }
 
-      const activities = runtimeEventToActivities(event);
+      const activityEvent =
+        event.type === "item.completed" && toolOutputKey
+          ? withBufferedToolOutputData(event, yield* takeBufferedToolOutput(toolOutputKey))
+          : event.type === "item.updated" && toolOutputKey
+            ? withBufferedToolOutputData(event, yield* getBufferedToolOutput(toolOutputKey))
+            : event;
+      const activities = runtimeEventToActivities(activityEvent);
       yield* Effect.forEach(activities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",

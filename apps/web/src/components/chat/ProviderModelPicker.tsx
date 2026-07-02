@@ -24,18 +24,14 @@ import { cn } from "~/lib/utils";
 import { PickerPanelShell } from "./PickerPanelShell";
 import { PickerTriggerButton } from "./PickerTriggerButton";
 import { ProviderModelOptionGroupList } from "./ProviderModelOptionGroupList";
-import {
-  ComposerPickerMenuPopup,
-  ComposerPickerMenuSubPopup,
-  ComposerPickerTooltipPopup,
-} from "./ComposerPickerMenuPopup";
+import { ComposerPickerMenuPopup, ComposerPickerMenuSubPopup } from "./ComposerPickerMenuPopup";
 import {
   COMPOSER_PICKER_MODEL_LIST_MAX_HEIGHT_CLASS_NAME,
   COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
   COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME,
 } from "./composerPickerStyles";
 import { ShortcutKbd } from "../ui/shortcut-kbd";
-import { Tooltip, TooltipTrigger } from "../ui/tooltip";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   groupProviderModelOptions,
   groupProviderModelOptionsWithFavorites,
@@ -373,7 +369,11 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
           />
         </MenuRadioGroup>
       ) : (
-        <div className="px-2 py-2 text-muted-foreground text-sm">No matches</div>
+        <div className="px-2 py-2 text-muted-foreground text-sm">
+          {provider === "pi" && normalizedModelSearchQuery.length === 0
+            ? "No Pi models found"
+            : "No matches"}
+        </div>
       );
 
     if (!shouldShowSearch) {
@@ -433,7 +433,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
                 )}
               />
               <span>{option.label}</span>
-              <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+              <span className="ms-auto text-[11px] text-muted-foreground/80">
                 {availability.label}
               </span>
             </MenuItem>
@@ -470,9 +470,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
             />
             <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-              Coming soon
-            </span>
+            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
           </MenuItem>
         );
       })}
@@ -513,6 +511,8 @@ type ProviderModelPickerProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   activeProviderIconClassName?: string;
   compact?: boolean;
+  // Icon-only trigger for narrow composers; the model name moves to title/sr-only.
+  hideLabel?: boolean;
   disabled?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
@@ -574,6 +574,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
     <PickerTriggerButton
       disabled={props.disabled ?? false}
       compact={props.compact ?? false}
+      hideLabel={props.hideLabel ?? false}
       icon={
         <ProviderIcon
           aria-hidden="true"
@@ -605,7 +606,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
             <span className="sr-only">{selectedModelLabel}</span>
           </TooltipTrigger>
           {!isMenuOpen ? (
-            <ComposerPickerTooltipPopup side="top" sideOffset={6}>
+            <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
                 <span>Change model</span>
                 <ShortcutKbd
@@ -613,7 +614,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
                 />
               </span>
-            </ComposerPickerTooltipPopup>
+            </TooltipPopup>
           ) : null}
         </Tooltip>
       ) : (

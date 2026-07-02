@@ -17,11 +17,13 @@ import {
   type MouseEvent as ReactMouseEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useStore as useZustandStore } from "zustand";
 import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   type BrowserCaptureScreenshotResult,
+  type ServerLocalServerProcess,
   type ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -29,12 +31,12 @@ import {
   ArrowLeftIcon,
   ArrowRightIcon,
   CameraIcon,
-  CopyIcon,
   EllipsisIcon,
   EraserIcon,
   ExternalLinkIcon,
   EyeIcon,
   GlobeIcon,
+  LinkIcon,
   LoaderCircleIcon,
   PencilIcon,
   PlayIcon,
@@ -47,10 +49,24 @@ import {
   XIcon,
 } from "~/lib/icons";
 
+import { localServerPrimaryLabel } from "@t3tools/shared/localServers";
+import {
+  BROWSER_BLANK_URL,
+  isBlankBrowserTabUrl,
+  resolveCopyableBrowserTabUrl,
+} from "@t3tools/shared/browserSession";
+import {
+  BROWSER_COPY_LINK_TOAST_TITLE,
+  isBrowserCopyLinkChord,
+} from "@t3tools/shared/browserShortcuts";
+
+import { isElectron } from "~/env";
 import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
+import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
-import { cn, randomUUID } from "~/lib/utils";
+import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
+import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 
 import {
   useBrowserStateStore,
@@ -116,6 +132,7 @@ import {
   type BrowserAddressSuggestion,
 } from "./BrowserPanel.logic";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
+import { LocalServerIdentity } from "./LocalServerIdentity";
 import { Button } from "./ui/button";
 import { ComposerPickerMenuPopup } from "./chat/ComposerPickerMenuPopup";
 import { Input } from "./ui/input";
@@ -136,10 +153,14 @@ interface BrowserPanelProps {
 const BROWSER_BOUNDS_SYNC_BURST_FRAMES = 30;
 const BROWSER_BOUNDS_SYNC_STABLE_FRAME_TARGET = 2;
 const BROWSER_WEBVIEW_PARTITION = "persist:synara-browser";
-const BROWSER_BLANK_URL = "about:blank";
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const SYNARA_BROWSER_LABEL = "Synara browser";
-const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
+// The address field and tab pills share one chrome-control surface so the whole row reads
+// as a single cohesive control: matching height, radius, border width, and type scale.
+const BROWSER_CHROME_CONTROL_CLASS_NAME = "h-8 rounded-lg border text-xs";
+// The address field's filled look, reused by the active tab so the selected tab visually
+// matches the search input (same border tone + faint fill).
+const BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME = "border-border bg-background/70";
 const BROWSER_ACTION_MENU_PANEL_CLASS_NAME = "w-52 min-w-52";
 const BROWSER_ACTION_MENU_ITEM_CLASS_NAME =
   "text-[var(--color-text-foreground)] data-highlighted:text-[var(--color-text-foreground)]";
@@ -2631,6 +2652,10 @@ async function composeAnnotatedBrowserScreenshot(input: {
   });
 }
 
+function ignoreBrowserWebviewDetachError(): void {
+  // Renderer webview detach is best-effort cleanup; a stale/destroyed guest is already gone.
+}
+
 function setBrowserWebviewOverlayOcclusion(
   webview: BrowserWebviewElement | null,
   occluded: boolean,
@@ -2805,6 +2830,131 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
   );
 }
 
+function browserLocalServerUrl(server: ServerLocalServerProcess): string | null {
+  const addressWithUrl = server.addresses.find((address) => address.url);
+  if (addressWithUrl?.url) {
+    return addressWithUrl.url;
+  }
+
+  const port = server.ports[0];
+  if (!port) {
+    return null;
+  }
+  return `http://localhost:${port}/`;
+}
+
+// Paints a tiny browser-preview tile without fetching screenshots or adding network work.
+// The page name and address are rendered into the tile so it reads as a real preview.
+function BrowserLocalServerThumbnail({ server }: { server: ServerLocalServerProcess }) {
+  const label = localServerPrimaryLabel(server);
+  const port = server.ports[0];
+
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-12 w-[4.5rem] shrink-0 flex-col gap-1 overflow-hidden rounded-md border border-white/12 bg-[#f7f7f2] p-1.5 shadow-[0_4px_12px_rgba(0,0,0,0.28)]"
+    >
+      <span className="flex gap-[3px]">
+        <span className="size-[3px] rounded-full bg-[#ff6b65]" />
+        <span className="size-[3px] rounded-full bg-[#f4c047]" />
+        <span className="size-[3px] rounded-full bg-[#45cf77]" />
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col justify-center gap-0.5">
+        <span className="truncate text-[7px] font-bold leading-none text-[#2a2a2a]">{label}</span>
+        {port ? (
+          <span className="truncate text-[6px] font-medium leading-none text-[#9a9a9a]">
+            localhost:{port}
+          </span>
+        ) : null}
+      </span>
+    </span>
+  );
+}
+
+// Replaces about:blank with a local-server launcher so the browser never opens to white.
+function BrowserLocalServersHome({
+  activeTabId,
+  loading,
+  onNavigate,
+  onRefresh,
+  servers,
+}: {
+  activeTabId: string | null;
+  loading: boolean;
+  onNavigate: (url: string, tabId: string | null) => void;
+  onRefresh: () => void;
+  servers: readonly ServerLocalServerProcess[];
+}) {
+  const hasServers = servers.length > 0;
+
+  return (
+    <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0d0d0d] text-white">
+      <div className="mx-auto flex h-full w-full max-w-[52rem] flex-col px-8 py-9">
+        <div className="flex shrink-0 items-center justify-between">
+          <p className="text-[15px] font-medium text-white/35">Local</p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 text-white/35 hover:bg-white/[0.06] hover:text-white/70"
+            disabled={loading}
+            onClick={onRefresh}
+            aria-label="Refresh local servers"
+            title="Refresh local servers"
+          >
+            <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} />
+          </Button>
+        </div>
+
+        {!hasServers ? (
+          <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
+            {loading ? (
+              <>
+                <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
+                <p className="text-base font-semibold text-white">Scanning local servers</p>
+                <p className="mt-2 text-sm text-white/35">Checking localhost ports</p>
+              </>
+            ) : (
+              <>
+                <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
+                <p className="text-base font-semibold text-white">No local servers</p>
+                <p className="mt-2 text-sm text-white/35">Try another browser URL</p>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-6">
+            {servers.map((server) => {
+              const url = browserLocalServerUrl(server);
+
+              return (
+                <button
+                  key={server.id}
+                  type="button"
+                  disabled={!url}
+                  onClick={() => {
+                    if (url) {
+                      onNavigate(url, activeTabId);
+                    }
+                  }}
+                  className="group grid w-full shrink-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3.5 rounded-xl border border-white/[0.07] px-3 py-2.5 text-left transition-colors hover:border-white/[0.14] hover:bg-white/[0.04] disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <BrowserLocalServerThumbnail server={server} />
+                  <LocalServerIdentity server={server} tone="browser" />
+                  <span
+                    className="mr-1 size-2 rounded-full bg-[#36d07b] shadow-[0_0_0_2.5px_rgba(54,208,123,0.16)]"
+                    aria-hidden
+                  />
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function BrowserPanel({
   mode,
   threadId,
@@ -2825,6 +2975,9 @@ export function BrowserPanel({
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const composerDraftImageCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.images.length ?? 0,
+  );
+  const composerDraftFileCount = useComposerDraftStore(
+    (store) => store.draftsByThreadId[threadId]?.files.length ?? 0,
   );
   const composerDraftAssistantSelectionCount = useComposerDraftStore(
     (store) => store.draftsByThreadId[threadId]?.assistantSelections.length ?? 0,
@@ -3015,11 +3168,14 @@ export function BrowserPanel({
     threadBrowserState?.tabs[0] ??
     null;
   const loading = activeTab?.isLoading ?? false;
+  const activeTabIsBlank = isBlankBrowserTabUrl(activeTab);
+  const showLocalServersHome = isLiveRuntime && workspaceReady && (!activeTab || activeTabIsBlank);
+  const localServersQuery = useQuery(serverLocalServersQueryOptions(showLocalServersHome));
   const activeTabStatus = activeTab?.status ?? "suspended";
   const browserChromeStatus = resolveBrowserChromeStatus({
     localError,
     threadLastError: threadBrowserState?.lastError,
-    activeTabStatus,
+    activeTabStatus: showLocalServersHome ? "live" : activeTabStatus,
     hasActiveTab: activeTab !== null,
     workspaceReady: runtimeReady,
   });
@@ -3053,13 +3209,6 @@ export function BrowserPanel({
       setLocalError(formatBrowserActionError(error));
       return null;
     }
-  }, []);
-
-  const removeBrowserWebview = useCallback(() => {
-    browserWebviewRef.current?.remove();
-    browserWebviewRef.current = null;
-    browserWebviewTabIdRef.current = null;
-    browserWebviewAttachKeyRef.current = null;
   }, []);
 
   const navigateBrowserToPreviewUrl = useCallback(
@@ -4286,6 +4435,32 @@ export function BrowserPanel({
     [readElementHoverContextAtPoint, setInspectHoverBoxIfChanged],
   );
 
+  // Renderer-owned <webview>s are adopted by the desktop manager. Always detach before
+  // removing the DOM node so main never keeps a stale webContents runtime.
+  const detachRendererBrowserWebview = useCallback(() => {
+    const webview = browserWebviewRef.current;
+    const tabId = browserWebviewTabIdRef.current;
+
+    if (webview && api && isLiveRuntime && tabId) {
+      let webContentsId: number | undefined;
+      try {
+        webContentsId = webview.getWebContentsId?.();
+      } catch {
+        webContentsId = undefined;
+      }
+      if (webContentsId && webContentsId > 0) {
+        void api.browser
+          .detachWebview({ threadId, tabId, webContentsId })
+          .catch(ignoreBrowserWebviewDetachError);
+      }
+    }
+
+    webview?.remove();
+    browserWebviewRef.current = null;
+    browserWebviewTabIdRef.current = null;
+    browserWebviewAttachKeyRef.current = null;
+  }, [api, isLiveRuntime, threadId]);
+
   useEffect(() => {
     if (!api || !isLiveRuntime) {
       return;
@@ -4804,6 +4979,11 @@ export function BrowserPanel({
       return;
     }
 
+    if (showLocalServersHome) {
+      detachRendererBrowserWebview();
+      return;
+    }
+
     const host = browserViewportRef.current;
     if (!host) {
       return;
@@ -4816,9 +4996,18 @@ export function BrowserPanel({
       webview.style.display = "flex";
       webview.style.width = "100%";
       webview.style.height = "100%";
-      webview.style.backgroundColor = "#fff";
+      webview.style.backgroundColor = "#0d0d0d";
       webview.setAttribute("partition", BROWSER_WEBVIEW_PARTITION);
       webview.setAttribute("webpreferences", "contextIsolation=yes,nodeIntegration=no,sandbox=yes");
+      // A <webview> blocks window.open() unless `allowpopups` is set. Without it, clicking
+      // "Continue with Google" (and any OAuth/popup flow) is silently dropped before the main
+      // process's window-open handler ever runs. Enabling it lets the popup classifier in
+      // browserManager decide popup-vs-tab and keep the OAuth `window.opener` handshake alive.
+      webview.setAttribute("allowpopups", "true");
+      // No `useragent` attribute on purpose: the desktop main process spoofs a desktop Chrome
+      // UA on the shared persistent partition, so this webview (and OAuth popups) inherit the
+      // same identity. This keeps in-app Google/OAuth sign-in working without duplicating the
+      // UA string into the renderer.
       browserWebviewRef.current = webview;
       host.append(webview);
     } else if (webview.parentElement !== host) {
@@ -4874,8 +5063,10 @@ export function BrowserPanel({
     activeTab,
     api,
     canUseNativeBrowserSurface,
+    detachRendererBrowserWebview,
     runBrowserAction,
     scheduleStylePreviewReapply,
+    showLocalServersHome,
     threadId,
     upsertThreadState,
     workspaceReady,
@@ -4885,14 +5076,14 @@ export function BrowserPanel({
     if (activeTab || !canUseNativeBrowserSurface) {
       return;
     }
-    removeBrowserWebview();
+    detachRendererBrowserWebview();
     browserWebviewAttachKeyRef.current = null;
     if (api) {
       void api.browser
         .setPanelBounds({ threadId, bounds: null, surface: "renderer" })
         .catch(ignoreBrowserBoundsSyncError);
     }
-  }, [activeTab, api, canUseNativeBrowserSurface, removeBrowserWebview, threadId]);
+  }, [activeTab, api, canUseNativeBrowserSurface, detachRendererBrowserWebview, threadId]);
 
   useEffect(() => {
     const tabCount = threadBrowserState?.tabs.length ?? 0;
@@ -4926,9 +5117,9 @@ export function BrowserPanel({
         window.clearTimeout(previewSourceReloadTimeoutRef.current);
         previewSourceReloadTimeoutRef.current = null;
       }
-      removeBrowserWebview();
+      detachRendererBrowserWebview();
     };
-  }, [removeBrowserWebview]);
+  }, [detachRendererBrowserWebview]);
 
   useEffect(() => {
     const liveTabIds = new Set(threadBrowserState?.tabs.map((tab) => tab.id) ?? []);
@@ -4969,7 +5160,10 @@ export function BrowserPanel({
 
     const syncBounds = () => {
       perfCountersRef.current.syncAttempts += 1;
-      const obscuredByOverlay = hasNativeBrowserObscuringOverlay(element);
+      // While the local-servers home is up, force the browser surface hidden instead of
+      // trusting the obscuring-overlay heuristic. The native/inline webview otherwise paints
+      // about:blank white over our dark DOM home — the "always white" empty state.
+      const obscuredByOverlay = showLocalServersHome || hasNativeBrowserObscuringOverlay(element);
       lastOverlayObscuredRef.current = obscuredByOverlay;
       setBrowserWebviewOverlayOcclusion(browserWebviewRef.current, obscuredByOverlay);
       const rect = element.getBoundingClientRect();
@@ -5105,7 +5299,7 @@ export function BrowserPanel({
       burstFramesRemainingRef.current = 0;
       burstStableFramesRef.current = 0;
     };
-  }, [activeTab, api, canUseNativeBrowserSurface, threadId]);
+  }, [activeTab, api, isLiveRuntime, showLocalServersHome, threadId]);
 
   const onSubmitAddress = useCallback(() => {
     if (!ensureLiveRuntime()) {
@@ -5186,6 +5380,37 @@ export function BrowserPanel({
     [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState],
   );
 
+  const onOpenLocalServer = useCallback(
+    (url: string, tabId: string | null) => {
+      if (!api) {
+        return;
+      }
+      if (!ensureLiveRuntime()) {
+        return;
+      }
+
+      isAddressEditingRef.current = false;
+      setIsAddressFocused(false);
+      setAddressValue(url);
+      if (tabId) {
+        addressDraftsByTabIdRef.current.set(tabId, url);
+      }
+
+      void runBrowserAction(() =>
+        api.browser.navigate({
+          threadId,
+          url,
+          ...(tabId ? { tabId } : {}),
+        }),
+      ).then((state) => {
+        if (state) {
+          upsertThreadState(state);
+        }
+      });
+    },
+    [api, ensureLiveRuntime, runBrowserAction, threadId, upsertThreadState],
+  );
+
   const onCreateTab = useCallback(() => {
     if (!ensureLiveRuntime()) {
       return;
@@ -5212,7 +5437,8 @@ export function BrowserPanel({
       return;
     }
 
-    const attachmentCount = composerDraftImageCount + composerDraftAssistantSelectionCount;
+    const attachmentCount =
+      composerDraftImageCount + composerDraftFileCount + composerDraftAssistantSelectionCount;
     if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       setLocalError(
         `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
@@ -5241,6 +5467,7 @@ export function BrowserPanel({
     addComposerDraftImage,
     api,
     composerDraftAssistantSelectionCount,
+    composerDraftFileCount,
     composerDraftImageCount,
     ensureLiveRuntime,
     runBrowserAction,
@@ -5282,6 +5509,81 @@ export function BrowserPanel({
       });
     });
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
+
+  const copyActiveTabLink = useCallback(() => {
+    if (!activeTab) {
+      return;
+    }
+    // Desktop: copy through the native Electron clipboard. navigator.clipboard can reject
+    // with "Document is not focused" while the native browser view holds focus, so this
+    // mirrors the keyboard chord — main writes the URL and emits onCopyLink, which surfaces
+    // the toast in the listener below.
+    if (isElectron && api) {
+      void runBrowserAction(() => api.browser.copyLink({ threadId, tabId: activeTab.id }));
+      return;
+    }
+    const url = resolveCopyableBrowserTabUrl(activeTab);
+    if (!url) {
+      return;
+    }
+    const clipboard = typeof navigator !== "undefined" ? navigator.clipboard : undefined;
+    if (!clipboard) {
+      return;
+    }
+    void clipboard.writeText(url).then(
+      () => {
+        toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+      },
+      () => {
+        // Clipboard writes can reject without user gesture; nothing actionable to surface.
+      },
+    );
+  }, [activeTab, api, runBrowserAction, threadId]);
+
+  // React chrome focus path: the native page handles the chord through the desktop main
+  // process, so this only fires when the address bar/tab strip (not the page) is focused.
+  useEffect(() => {
+    if (!isLiveRuntime) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) {
+        return;
+      }
+      const matches = isBrowserCopyLinkChord(
+        {
+          meta: event.metaKey,
+          ctrl: event.ctrlKey,
+          shift: event.shiftKey,
+          alt: event.altKey,
+          key: event.key,
+        },
+        isMacPlatform(navigator.platform),
+      );
+      if (!matches) {
+        return;
+      }
+      event.preventDefault();
+      copyActiveTabLink();
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [copyActiveTabLink, isLiveRuntime]);
+
+  // Native page focus path: main already wrote the URL to the clipboard, so just toast.
+  useEffect(() => {
+    if (!api || !isLiveRuntime) {
+      return;
+    }
+    return api.browser.onCopyLink((event) => {
+      if (event.threadId !== threadId) {
+        return;
+      }
+      toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+    });
+  }, [api, isLiveRuntime, threadId]);
 
   const onCloseTab = useCallback(
     (tabId: string) => {
@@ -7810,7 +8112,11 @@ export function BrowserPanel({
               setIsAddressFocused(false);
             }}
             placeholder="Search or enter a URL"
-            className="font-mono h-8 min-w-0 bg-background/70 text-xs [-webkit-app-region:no-drag]"
+            className={cn(
+              "font-mono min-w-0 [-webkit-app-region:no-drag]",
+              BROWSER_CHROME_CONTROL_CLASS_NAME,
+              BROWSER_CHROME_CONTROL_FILLED_CLASS_NAME,
+            )}
           />
         </form>
         {showBrowserAddressSuggestions ? (
@@ -7848,11 +8154,37 @@ export function BrowserPanel({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1 [-webkit-app-region:no-drag]">
+        <Button
+          ref={copyScreenshotButtonRef}
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          aria-label="Copy screenshot"
+          title="Copy screenshot"
+          onClick={onCopyScreenshotToClipboard}
+        >
+          <CameraIcon className="size-3.5" />
+          <span className="sr-only">Copy screenshot</span>
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="size-7"
+          disabled={!activeTab}
+          aria-label="Copy link"
+          title="Copy link"
+          onClick={copyActiveTabLink}
+        >
+          <LinkIcon className="size-3.5" />
+          <span className="sr-only">Copy link</span>
+        </Button>
         <Menu modal={false}>
           <MenuTrigger
             render={
               <Button
-                ref={copyScreenshotButtonRef}
                 type="button"
                 variant="ghost"
                 size="icon-sm"
@@ -7879,14 +8211,6 @@ export function BrowserPanel({
             >
               <BrowserActionMenuIcon icon={CameraIcon} />
               <span>Capture screenshot</span>
-            </MenuItem>
-            <MenuItem
-              className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
-              disabled={!activeTab}
-              onClick={onCopyScreenshotToClipboard}
-            >
-              <BrowserActionMenuIcon icon={CopyIcon} />
-              <span>Copy screenshot</span>
             </MenuItem>
             <MenuItem
               className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -8745,6 +9069,15 @@ export function BrowserPanel({
                 </>
               ) : null}
             </div>
+          ) : null}
+          {showLocalServersHome ? (
+            <BrowserLocalServersHome
+              activeTabId={activeTab?.id ?? null}
+              loading={localServersQuery.isLoading || localServersQuery.isFetching}
+              onNavigate={onOpenLocalServer}
+              onRefresh={() => void localServersQuery.refetch()}
+              servers={localServersQuery.data?.servers ?? []}
+            />
           ) : null}
         </div>
       </div>

@@ -6,9 +6,11 @@
 import * as Crypto from "node:crypto";
 
 import {
+  app,
   BrowserWindow,
   clipboard,
   nativeImage,
+  session,
   shell,
   webContents as electronWebContents,
   WebContentsView,
@@ -17,6 +19,8 @@ import type { WebContents } from "electron";
 import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
+  BrowserCopyLinkEvent,
+  BrowserDetachWebviewInput,
   BrowserEditorShortcutEvent,
   BrowserEditorShortcutsInput,
   BrowserExecuteCdpInput,
@@ -31,20 +35,30 @@ import type {
   ThreadBrowserState,
   ThreadId,
 } from "@t3tools/contracts";
+import { isBrowserCopyLinkChord } from "@t3tools/shared/browserShortcuts";
+import {
+  BROWSER_BLANK_URL as ABOUT_BLANK_URL,
+  buildAcceptLanguageHeader,
+  buildChromeClientHints,
+  classifyBrowserWindowOpen,
+  deriveChromeUserAgent,
+  isBlankBrowserTabUrl,
+  normalizeBrowserUrlInput as normalizeUrlInput,
+  resolveCopyableBrowserTabUrl,
+} from "@t3tools/shared/browserSession";
 
 import { BROWSER_IPC_CHANNELS } from "./browserIpc";
 
-const ABOUT_BLANK_URL = "about:blank";
 const BROWSER_SESSION_PARTITION = "persist:synara-browser";
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_MS = 1_500;
 const BROWSER_INACTIVE_TAB_SUSPEND_DELAY_PRESSURED_MS = 400;
 const BROWSER_MAX_WARM_INACTIVE_RUNTIMES_PER_THREAD = 1;
 const BROWSER_THREAD_SUSPEND_DELAY_MS = 30_000;
 const BROWSER_ERROR_ABORTED = -3;
-const SEARCH_URL_PREFIX = "https://www.google.com/search?q=";
 const BROWSER_EDITOR_SHORTCUT_KEYS = new Set(["b", "d", "i", "t"]);
 
 type BrowserStateListener = (state: ThreadBrowserState) => void;
+type BrowserCopyLinkListener = (event: BrowserCopyLinkEvent) => void;
 
 interface LiveTabRuntime {
   key: string;
@@ -53,6 +67,16 @@ interface LiveTabRuntime {
   webContents: WebContents;
   view: WebContentsView | null;
   ownsWebContents: boolean;
+  listenerDisposers: Array<() => void>;
+}
+
+interface OAuthPopupContext {
+  threadId: ThreadId;
+  tabId: string;
+}
+
+interface OAuthPopupRuntime extends OAuthPopupContext {
+  window: BrowserWindow;
   listenerDisposers: Array<() => void>;
 }
 
@@ -179,55 +203,6 @@ function normalizeBounds(bounds: BrowserPanelBounds | null): BrowserPanelBounds 
   };
 }
 
-function looksLikeUrlInput(value: string): boolean {
-  return (
-    value.includes(".") ||
-    value.startsWith("localhost") ||
-    value.startsWith("127.0.0.1") ||
-    value.startsWith("0.0.0.0") ||
-    value.startsWith("[::1]")
-  );
-}
-
-function normalizeUrlInput(input: string | undefined): string {
-  const trimmed = input?.trim() ?? "";
-  if (trimmed.length === 0) {
-    return ABOUT_BLANK_URL;
-  }
-
-  try {
-    const withScheme = new URL(trimmed);
-    if (withScheme.protocol === "http:" || withScheme.protocol === "https:") {
-      return withScheme.toString();
-    }
-    if (withScheme.protocol === "about:") {
-      return withScheme.toString();
-    }
-  } catch {
-    // Fall through to heuristics below.
-  }
-
-  if (trimmed.includes(" ")) {
-    return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-  }
-
-  if (looksLikeUrlInput(trimmed)) {
-    const prefersHttp =
-      trimmed.startsWith("localhost") ||
-      trimmed.startsWith("127.0.0.1") ||
-      trimmed.startsWith("0.0.0.0") ||
-      trimmed.startsWith("[::1]");
-    const scheme = prefersHttp ? "http" : "https";
-    try {
-      return new URL(`${scheme}://${trimmed}`).toString();
-    } catch {
-      return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-    }
-  }
-
-  return `${SEARCH_URL_PREFIX}${encodeURIComponent(trimmed)}`;
-}
-
 function isAbortedNavigationError(error: unknown): boolean {
   if (!(error instanceof Error)) {
     return false;
@@ -301,6 +276,12 @@ export class DesktopBrowserManager {
   private readonly pendingRuntimeSyncs = new Map<string, PendingRuntimeSync>();
   private readonly listeners = new Set<BrowserStateListener>();
   private readonly editorShortcutThreadIds = new Set<ThreadId>();
+  private readonly copyLinkListeners = new Set<BrowserCopyLinkListener>();
+  // OAuth/sign-in popups opened by pages via `window.open`. Tracked so they can be sized over
+  // the panel and torn down cleanly without leaking native windows.
+  private readonly popupRuntimes = new Map<BrowserWindow, OAuthPopupRuntime>();
+  private spoofedUserAgent: string | null = null;
+  private sessionConfigured = false;
   private readonly tabSuspendTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly suspendTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
   private runtimeSyncFlushScheduled = false;
@@ -333,6 +314,7 @@ export class DesktopBrowserManager {
 
     this.detachAttachedRuntime();
     this.destroyAllRuntimes();
+    this.closeAllPopupWindows();
   }
 
   subscribe(listener: BrowserStateListener): () => void {
@@ -340,6 +322,246 @@ export class DesktopBrowserManager {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  subscribeCopyLink(listener: BrowserCopyLinkListener): () => void {
+    this.copyLinkListeners.add(listener);
+    return () => {
+      this.copyLinkListeners.delete(listener);
+    };
+  }
+
+  // Desktop Chrome UA with the Electron/app product tokens stripped. Computed once from the
+  // running build so the Chrome version stays accurate instead of drifting against a hardcoded
+  // string. Centralized here (and in `@t3tools/shared/browserSession`) so every browser
+  // surface presents the same identity.
+  private resolveSpoofedUserAgent(): string {
+    if (this.spoofedUserAgent === null) {
+      this.spoofedUserAgent = deriveChromeUserAgent(app.userAgentFallback, [app.getName()]);
+    }
+    return this.spoofedUserAgent;
+  }
+
+  // Applies the spoofed UA to the shared persistent partition once. Every webContents in that
+  // session (native tabs, the adopted renderer <webview>, and OAuth popups) then inherits it,
+  // so we avoid duplicating the UA string across the desktop/web surfaces.
+  private ensureSessionConfigured(): void {
+    if (this.sessionConfigured) {
+      return;
+    }
+    this.sessionConfigured = true;
+    try {
+      const partitionSession = session.fromPartition(BROWSER_SESSION_PARTITION);
+      const userAgent = this.resolveSpoofedUserAgent();
+      partitionSession.setUserAgent(userAgent);
+
+      // `setUserAgent` fixes navigator.userAgent + the UA request header, but NOT the
+      // User-Agent Client Hints (`sec-ch-ua*`), which still leak the Electron brand. OAuth
+      // providers read those, so rewrite them (and Accept-Language) to a real desktop Chrome on
+      // every request in this partition — the same technique the Codex desktop app uses.
+      const clientHints = buildChromeClientHints(userAgent, process.platform);
+      const acceptLanguage = buildAcceptLanguageHeader(app.getPreferredSystemLanguages());
+      partitionSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        const requestHeaders = withRequestHeadersCaseInsensitive(details.requestHeaders, {
+          "User-Agent": userAgent,
+          ...(acceptLanguage ? { "Accept-Language": acceptLanguage } : {}),
+          ...(clientHints ?? {}),
+        });
+        callback({ requestHeaders });
+      });
+    } catch {
+      // If the session can't be configured yet, leave it for the per-webContents fallback.
+      this.sessionConfigured = false;
+    }
+  }
+
+  // Options for an OAuth/sign-in popup. Stays on the shared persistent partition and keeps the
+  // hardened sandbox; `window.opener` is preserved by Electron because we allow (not deny) the
+  // open, which is what lets the auth callback `postMessage`/`window.close()` back to the page.
+  private buildOAuthPopupWindowOptions(): Electron.BrowserWindowConstructorOptions {
+    const options: Electron.BrowserWindowConstructorOptions = {
+      width: 480,
+      height: 640,
+      resizable: true,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      autoHideMenuBar: true,
+      skipTaskbar: true,
+      title: "Sign in",
+      webPreferences: {
+        partition: BROWSER_SESSION_PARTITION,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+      },
+    };
+    if (this.window) {
+      options.parent = this.window;
+    }
+    return options;
+  }
+
+  private registerOAuthPopupWindow(popup: BrowserWindow, context: OAuthPopupContext): void {
+    if (this.popupRuntimes.has(popup)) {
+      return;
+    }
+    const runtime: OAuthPopupRuntime = {
+      ...context,
+      window: popup,
+      listenerDisposers: [],
+    };
+    this.popupRuntimes.set(popup, runtime);
+    popup.setMenuBarVisibility(false);
+    this.configureOAuthPopupRuntime(runtime);
+    this.centerPopupWindow(runtime);
+  }
+
+  private configureOAuthPopupRuntime(runtime: OAuthPopupRuntime): void {
+    const { window: popup } = runtime;
+    const { webContents } = popup;
+    webContents.setUserAgent(this.resolveSpoofedUserAgent());
+    const closeOnInput = (event: Electron.Event, input: Electron.Input) => {
+      if (input.type !== "keyDown") {
+        return;
+      }
+      const key = input.key.toLowerCase();
+      const isCloseChord =
+        key === "escape" ||
+        (key === "w" && !input.shift && !input.alt && (input.meta || input.control));
+      if (!isCloseChord) {
+        return;
+      }
+      event.preventDefault();
+      this.closePopupRuntime(runtime);
+    };
+    webContents.on("before-input-event", closeOnInput);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("before-input-event", closeOnInput);
+    });
+
+    // Auth providers can chain popups (provider -> consent). Keep nested windows inside the
+    // shared session too, and send genuine external (non-web) URLs to the OS browser.
+    webContents.setWindowOpenHandler((details) => {
+      const { url } = details;
+      const isWebUrl =
+        url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
+      if (!isWebUrl) {
+        void shell.openExternal(url);
+        return { action: "deny" };
+      }
+
+      const kind = classifyBrowserWindowOpen({
+        url,
+        frameName: details.frameName,
+        features: details.features,
+        disposition: details.disposition,
+      });
+      if (kind === "popup") {
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
+        };
+      }
+
+      this.newTab({
+        threadId: runtime.threadId,
+        url,
+        activate: true,
+      });
+      const bounds = this.getVisibleBoundsForThread(runtime.threadId);
+      if (this.activeThreadId === runtime.threadId && bounds) {
+        this.attachActiveTab(runtime.threadId, bounds);
+      }
+      return { action: "deny" };
+    });
+
+    const nestedWindowHandler = (nested: BrowserWindow) => {
+      this.registerOAuthPopupWindow(nested, {
+        threadId: runtime.threadId,
+        tabId: runtime.tabId,
+      });
+    };
+    webContents.on("did-create-window", nestedWindowHandler);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-create-window", nestedWindowHandler);
+    });
+
+    popup.once("closed", () => {
+      this.removePopupRuntime(runtime);
+    });
+  }
+
+  private removePopupRuntime(runtime: OAuthPopupRuntime): void {
+    if (this.popupRuntimes.get(runtime.window) !== runtime) {
+      return;
+    }
+    for (const dispose of runtime.listenerDisposers.splice(0)) {
+      dispose();
+    }
+    this.popupRuntimes.delete(runtime.window);
+  }
+
+  private closePopupRuntime(runtime: OAuthPopupRuntime): void {
+    this.removePopupRuntime(runtime);
+    if (!runtime.window.isDestroyed()) {
+      runtime.window.destroy();
+    }
+  }
+
+  private centerPopupWindow(runtime: OAuthPopupRuntime): void {
+    const parent = this.window;
+    const popup = runtime.window;
+    if (!parent || parent.isDestroyed() || popup.isDestroyed()) {
+      return;
+    }
+    const parentBounds = parent.getBounds();
+    const popupBounds = popup.getBounds();
+    const nextBounds = {
+      x: Math.round(parentBounds.x + (parentBounds.width - popupBounds.width) / 2),
+      y: Math.round(parentBounds.y + (parentBounds.height - popupBounds.height) / 2),
+      width: popupBounds.width,
+      height: popupBounds.height,
+    };
+    if (
+      popupBounds.x === nextBounds.x &&
+      popupBounds.y === nextBounds.y &&
+      popupBounds.width === nextBounds.width &&
+      popupBounds.height === nextBounds.height
+    ) {
+      return;
+    }
+    popup.setBounds(nextBounds);
+  }
+
+  private updatePopupWindowsForThread(threadId: ThreadId): void {
+    for (const runtime of this.popupRuntimes.values()) {
+      if (runtime.threadId === threadId) {
+        this.centerPopupWindow(runtime);
+      }
+    }
+  }
+
+  private closePopupWindowsWhere(shouldClose: (runtime: OAuthPopupRuntime) => boolean): void {
+    for (const runtime of [...this.popupRuntimes.values()]) {
+      if (shouldClose(runtime)) {
+        this.closePopupRuntime(runtime);
+      }
+    }
+  }
+
+  private closePopupWindowsForThread(threadId: ThreadId): void {
+    this.closePopupWindowsWhere((runtime) => runtime.threadId === threadId);
+  }
+
+  private closePopupWindowsForTab(threadId: ThreadId, tabId: string): void {
+    this.closePopupWindowsWhere(
+      (runtime) => runtime.threadId === threadId && runtime.tabId === tabId,
+    );
+  }
+
+  private closeAllPopupWindows(): void {
+    this.closePopupWindowsWhere(() => true);
   }
 
   dispose(): void {
@@ -353,9 +575,11 @@ export class DesktopBrowserManager {
     this.tabSuspendTimers.clear();
     this.detachAttachedRuntime();
     this.destroyAllRuntimes();
+    this.closeAllPopupWindows();
     this.pendingRuntimeSyncs.clear();
     this.runtimeLastActiveAtByKey.clear();
     this.listeners.clear();
+    this.copyLinkListeners.clear();
     this.states.clear();
     this.threadVersionById.clear();
     this.snapshotCacheByThreadId.clear();
@@ -402,6 +626,16 @@ export class DesktopBrowserManager {
     const state = this.ensureWorkspace(input.threadId, input.initialUrl);
     const didChange = !state.open;
     state.open = true;
+    const nextInitialUrl = input.initialUrl ? normalizeUrlInput(input.initialUrl) : null;
+    const activeTab = nextInitialUrl ? this.getActiveTab(state) : null;
+    if (nextInitialUrl && activeTab && activeTab.url !== nextInitialUrl) {
+      return this.navigate({
+        threadId: input.threadId,
+        tabId: activeTab.id,
+        url: nextInitialUrl,
+      });
+    }
+
     const nextDidChange = syncThreadLastError(state) || didChange;
 
     if (
@@ -409,7 +643,10 @@ export class DesktopBrowserManager {
       this.activeBoundsThreadId === input.threadId &&
       (this.activeThreadId === null || this.activeThreadId === input.threadId)
     ) {
-      this.activateThread(input.threadId, this.activeBounds);
+      const visibleTab = this.getActiveTab(state);
+      if (!isBlankBrowserTabUrl(visibleTab)) {
+        this.activateThread(input.threadId, this.activeBounds);
+      }
     }
 
     if (nextDidChange) {
@@ -427,6 +664,7 @@ export class DesktopBrowserManager {
       this.activeThreadId = null;
     }
     this.clearActiveBoundsForThread(input.threadId);
+    this.closePopupWindowsForThread(input.threadId);
 
     this.destroyThreadRuntimes(input.threadId);
 
@@ -501,6 +739,11 @@ export class DesktopBrowserManager {
       this.attachedBoundsSignature = null;
     }
 
+    if (input.surface === "renderer" && activeTabId && !activeRuntime) {
+      this.activateThreadForPendingRenderer(input.threadId, nextBounds);
+      return;
+    }
+
     // Bounds sync fires often during panel motion. If the visible runtime and
     // applied viewport are already current, avoid waking the browser stack again.
     if (
@@ -511,6 +754,8 @@ export class DesktopBrowserManager {
       this.perfCounters.setPanelBoundsNoopSkips += 1;
       return;
     }
+
+    this.updatePopupWindowsForThread(input.threadId);
 
     if (this.activeThreadId === input.threadId) {
       if (activeRuntimeKey && this.attachedRuntimeKey === activeRuntimeKey) {
@@ -578,6 +823,28 @@ export class DesktopBrowserManager {
     this.queueRuntimeStateSync(input.threadId, tab.id);
     this.emitState(input.threadId);
     return this.snapshotThreadState(input.threadId, state);
+  }
+
+  // Drops main-process ownership of a renderer-owned <webview> that React removed.
+  // The webContents id guard keeps stale cleanup calls from tearing down a newly attached view.
+  detachWebview(input: BrowserDetachWebviewInput): void {
+    const state = this.states.get(input.threadId);
+    const tab = state ? this.getTab(state, input.tabId) : null;
+    if (!state || !tab) {
+      return;
+    }
+
+    const runtime = this.runtimes.get(buildRuntimeKey(input.threadId, input.tabId));
+    if (!runtime || runtime.ownsWebContents || runtime.webContents.id !== input.webContentsId) {
+      return;
+    }
+
+    this.destroyRuntime(input.threadId, input.tabId);
+    const didChange = suspendTabState(tab) || syncThreadLastError(state);
+    if (didChange) {
+      this.markThreadStateChanged(input.threadId);
+      this.emitState(input.threadId);
+    }
   }
 
   navigate(input: BrowserNavigateInput): ThreadBrowserState {
@@ -655,9 +922,7 @@ export class DesktopBrowserManager {
       this.resumeThread(input.threadId);
       const bounds = this.getVisibleBoundsForThread(input.threadId);
       if (state.activeTabId === tab.id && bounds) {
-        this.ensureLiveRuntime(input.threadId, tab.id);
-        void this.loadTab(input.threadId, tab.id, { force: true });
-        this.attachActiveTab(input.threadId, bounds);
+        this.attachActiveTab(input.threadId, bounds, { forceLoad: true });
       }
     } else {
       tab.status = "suspended";
@@ -679,18 +944,19 @@ export class DesktopBrowserManager {
       return this.snapshotThreadState(input.threadId, state);
     }
 
+    this.closePopupWindowsForTab(input.threadId, input.tabId);
     this.destroyRuntime(input.threadId, input.tabId);
     state.tabs = nextTabs;
 
     if (nextTabs.length === 0) {
-      state.open = false;
-      state.activeTabId = null;
+      // Closing the last tab keeps the browser open on a fresh blank tab (the same state
+      // as a brand-new browser session) so the user can type a new URL in the search box,
+      // instead of tearing the whole panel down.
+      const replacementTab = createBrowserTab();
+      state.tabs = [replacementTab];
+      state.activeTabId = replacementTab.id;
       state.lastError = null;
-      if (this.activeThreadId === input.threadId) {
-        this.detachAttachedRuntime();
-        this.activeThreadId = null;
-      }
-      this.clearActiveBoundsForThread(input.threadId);
+
       this.markThreadStateChanged(input.threadId);
       this.emitState(input.threadId);
       return this.snapshotThreadState(input.threadId, state);
@@ -815,6 +1081,14 @@ export class DesktopBrowserManager {
     };
   }
 
+  // Copies the active tab's URL via the native clipboard and emits the copy-link
+  // event, mirroring the keyboard-chord path. The renderer's navigator.clipboard
+  // can reject with "Document is not focused" while the native page view holds
+  // focus, so the React toolbar button routes through here for reliability.
+  copyLink(input: BrowserTabInput): void {
+    this.copyTabLink(input.threadId, input.tabId);
+  }
+
   // Writes the current browser viewport screenshot straight to the native
   // clipboard so the renderer does not have to ferry image payloads over IPC.
   async copyScreenshotToClipboard(input: BrowserTabInput): Promise<void> {
@@ -918,6 +1192,7 @@ export class DesktopBrowserManager {
   }
 
   private activateThread(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+    const previousThreadId = this.activeThreadId;
     if (this.activeThreadId && this.activeThreadId !== threadId) {
       this.scheduleThreadSuspend(this.activeThreadId);
     }
@@ -925,8 +1200,27 @@ export class DesktopBrowserManager {
     this.activeThreadId = threadId;
     this.activeBounds = bounds;
     this.activeBoundsThreadId = threadId;
+    if (previousThreadId && previousThreadId !== threadId) {
+      this.updatePopupWindowsForThread(previousThreadId);
+    }
     this.resumeThread(threadId);
     this.attachActiveTab(threadId, bounds);
+    this.updatePopupWindowsForThread(threadId);
+  }
+
+  // Renderer panels create their own <webview>; keep active-thread bookkeeping current while
+  // waiting for attachWebview so startup does not create a duplicate native WebContentsView.
+  private activateThreadForPendingRenderer(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+    const previousThreadId = this.activeThreadId;
+    if (previousThreadId && previousThreadId !== threadId) {
+      this.scheduleThreadSuspend(previousThreadId);
+      this.updatePopupWindowsForThread(previousThreadId);
+    }
+    this.activeThreadId = threadId;
+    this.activeBounds = bounds;
+    this.activeBoundsThreadId = threadId;
+    this.clearSuspendTimer(threadId);
+    this.updatePopupWindowsForThread(threadId);
   }
 
   private setActiveBounds(threadId: ThreadId, bounds: BrowserPanelBounds | null): void {
@@ -1113,7 +1407,11 @@ export class DesktopBrowserManager {
     this.perfCounters.inactiveTabSuspendCancelled += 1;
   }
 
-  private attachActiveTab(threadId: ThreadId, bounds: BrowserPanelBounds): void {
+  private attachActiveTab(
+    threadId: ThreadId,
+    bounds: BrowserPanelBounds,
+    options: { forceLoad?: boolean } = {},
+  ): void {
     const state = this.ensureWorkspace(threadId);
     const activeTab = this.getActiveTab(state);
     if (!activeTab) {
@@ -1124,8 +1422,11 @@ export class DesktopBrowserManager {
     const wasSuspended = activeTab.status === SUSPENDED_TAB_STATUS;
     const runtime = this.ensureLiveRuntime(threadId, activeTab.id);
     this.attachRuntime(runtime, bounds);
-    if (wasSuspended) {
-      void this.loadTab(threadId, activeTab.id, { force: true, runtime });
+    if (options.forceLoad || wasSuspended) {
+      void this.loadTab(threadId, activeTab.id, {
+        force: options.forceLoad || wasSuspended,
+        runtime,
+      });
     } else {
       this.syncRuntimeState(threadId, activeTab.id);
     }
@@ -1147,11 +1448,13 @@ export class DesktopBrowserManager {
       }
       this.attachedRuntimeKey = runtime.key;
       this.attachedBoundsSignature = nextBoundsSignature;
+      this.updatePopupWindowsForThread(runtime.threadId);
       return;
     }
     if (!runtime.view) {
       this.attachedRuntimeKey = runtime.key;
       this.attachedBoundsSignature = nextBoundsSignature;
+      this.updatePopupWindowsForThread(runtime.threadId);
       return;
     }
     if (this.attachedRuntimeKey === runtime.key) {
@@ -1162,6 +1465,7 @@ export class DesktopBrowserManager {
       }
       runtime.view.setBounds(bounds);
       this.attachedBoundsSignature = nextBoundsSignature;
+      this.updatePopupWindowsForThread(runtime.threadId);
       return;
     }
 
@@ -1171,6 +1475,7 @@ export class DesktopBrowserManager {
     runtime.view.setBounds(bounds);
     this.attachedRuntimeKey = runtime.key;
     this.attachedBoundsSignature = nextBoundsSignature;
+    this.updatePopupWindowsForThread(runtime.threadId);
   }
 
   private bringRuntimeViewToFront(runtime: LiveTabRuntime): void {
@@ -1267,58 +1572,108 @@ export class DesktopBrowserManager {
   private configureRuntimeWebContents(runtime: LiveTabRuntime): void {
     const { threadId, tabId, webContents } = runtime;
 
-    webContents.setWindowOpenHandler(({ url }) => {
-      if (url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL) {
-        this.newTab({
-          threadId,
-          url,
-          activate: true,
-        });
-        const bounds = this.getVisibleBoundsForThread(threadId);
-        if (this.activeThreadId === threadId && bounds) {
-          this.attachActiveTab(threadId, bounds);
-        }
+    // Belt-and-suspenders alongside the session-level UA: also covers an adopted renderer
+    // <webview> for any navigation after it attaches.
+    webContents.setUserAgent(this.resolveSpoofedUserAgent());
+
+    webContents.setWindowOpenHandler((details) => {
+      const { url } = details;
+      const isWebUrl =
+        url.startsWith("http://") || url.startsWith("https://") || url === ABOUT_BLANK_URL;
+      if (!isWebUrl) {
+        void shell.openExternal(url);
         return { action: "deny" };
       }
 
-      void shell.openExternal(url);
+      const kind = classifyBrowserWindowOpen({
+        url,
+        frameName: details.frameName,
+        features: details.features,
+        disposition: details.disposition,
+      });
+      if (kind === "popup") {
+        // Allow (don't deny) so Electron creates a real child window that keeps
+        // `window.opener`, which the OAuth callback needs to message the page back.
+        return {
+          action: "allow",
+          overrideBrowserWindowOptions: this.buildOAuthPopupWindowOptions(),
+        };
+      }
+
+      this.newTab({
+        threadId,
+        url,
+        activate: true,
+      });
+      const bounds = this.getVisibleBoundsForThread(threadId);
+      if (this.activeThreadId === threadId && bounds) {
+        this.attachActiveTab(threadId, bounds);
+      }
       return { action: "deny" };
     });
 
+    const didCreateWindow = (childWindow: BrowserWindow) => {
+      this.registerOAuthPopupWindow(childWindow, { threadId, tabId });
+    };
+    webContents.on("did-create-window", didCreateWindow);
+    runtime.listenerDisposers.push(() => {
+      webContents.removeListener("did-create-window", didCreateWindow);
+    });
+
+    // The native page owns keyboard focus while browsing, so the renderer never sees
+    // editor shortcuts or the copy-link chord. Intercept both here: forward editor
+    // shortcuts when Live Edit owns the thread, then fall through to copy-link.
     const beforeInputEvent = (event: Electron.Event, input: Electron.Input) => {
-      if (!this.editorShortcutThreadIds.has(threadId)) {
+      if (this.editorShortcutThreadIds.has(threadId)) {
+        const key = input.key.toLowerCase();
+        const isMetaModifier =
+          key === "meta" || input.code === "MetaLeft" || input.code === "MetaRight";
+        if (isMetaModifier) {
+          this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
+            threadId,
+            tabId,
+            type: "modifier",
+            key: "meta",
+            down: input.type === "keyDown",
+          } satisfies BrowserEditorShortcutEvent);
+          return;
+        }
+        if (
+          input.type === "keyDown" &&
+          input.meta &&
+          !input.control &&
+          !input.alt &&
+          !input.shift &&
+          BROWSER_EDITOR_SHORTCUT_KEYS.has(key)
+        ) {
+          event.preventDefault();
+          this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
+            threadId,
+            tabId,
+            type: "shortcut",
+            key,
+          } satisfies BrowserEditorShortcutEvent);
+          return;
+        }
+      }
+      if (input.type !== "keyDown") {
         return;
       }
-      const key = input.key.toLowerCase();
-      const isMetaModifier =
-        key === "meta" || input.code === "MetaLeft" || input.code === "MetaRight";
-      if (isMetaModifier) {
-        this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
-          threadId,
-          tabId,
-          type: "modifier",
-          key: "meta",
-          down: input.type === "keyDown",
-        } satisfies BrowserEditorShortcutEvent);
-        return;
-      }
-      if (
-        input.type !== "keyDown" ||
-        !input.meta ||
-        input.control ||
-        input.alt ||
-        input.shift ||
-        !BROWSER_EDITOR_SHORTCUT_KEYS.has(key)
-      ) {
+      const matches = isBrowserCopyLinkChord(
+        {
+          meta: input.meta,
+          ctrl: input.control,
+          shift: input.shift,
+          alt: input.alt,
+          key: input.key,
+        },
+        process.platform === "darwin",
+      );
+      if (!matches) {
         return;
       }
       event.preventDefault();
-      this.window?.webContents.send(BROWSER_IPC_CHANNELS.editorShortcut, {
-        threadId,
-        tabId,
-        type: "shortcut",
-        key,
-      } satisfies BrowserEditorShortcutEvent);
+      this.copyTabLink(threadId, tabId);
     };
     webContents.on("before-input-event", beforeInputEvent);
     runtime.listenerDisposers.push(() => {
@@ -1665,6 +2020,7 @@ export class DesktopBrowserManager {
   }
 
   private ensureWorkspace(threadId: ThreadId, initialUrl?: string): ThreadBrowserState {
+    this.ensureSessionConfigured();
     const state = this.getOrCreateState(threadId);
     if (state.tabs.length === 0) {
       const initialTab = createBrowserTab(normalizeUrlInput(initialUrl));
@@ -1705,6 +2061,33 @@ export class DesktopBrowserManager {
     return state.tabs.find((tab) => tab.id === tabId) ?? null;
   }
 
+  // Resolves the most accurate URL for a tab, preferring the live page over cached state and
+  // ignoring blank placeholders so the copy-link chord never yields "about:blank".
+  private resolveCopyableTabUrl(
+    threadId: ThreadId,
+    tabId: string,
+    runtime: LiveTabRuntime | undefined,
+  ): string | null {
+    const state = this.states.get(threadId);
+    const tab = state ? this.getTab(state, tabId) : null;
+    const liveUrl =
+      runtime && !runtime.webContents.isDestroyed() ? runtime.webContents.getURL() : null;
+    return resolveCopyableBrowserTabUrl(tab, liveUrl);
+  }
+
+  private copyTabLink(threadId: ThreadId, tabId: string): void {
+    const runtime = this.runtimes.get(buildRuntimeKey(threadId, tabId));
+    const url = this.resolveCopyableTabUrl(threadId, tabId, runtime);
+    if (!url) {
+      return;
+    }
+    clipboard.writeText(url);
+    const event: BrowserCopyLinkEvent = { threadId, url };
+    for (const listener of this.copyLinkListeners) {
+      listener(event);
+    }
+  }
+
   private emitState(threadId: ThreadId): void {
     this.perfCounters.stateEmitCalls += 1;
     const state = this.getOrCreateState(threadId);
@@ -1719,6 +2102,25 @@ export class DesktopBrowserManager {
       listener(snapshot);
     }
   }
+}
+
+// Applies spoofed request headers with one case-insensitive scan per request.
+function withRequestHeadersCaseInsensitive(
+  headers: Record<string, string>,
+  replacements: Record<string, string>,
+): Record<string, string> {
+  const replacementNamesByLower = new Set(
+    Object.keys(replacements).map((name) => name.toLowerCase()),
+  );
+  for (const existing of Object.keys(headers)) {
+    if (replacementNamesByLower.has(existing.toLowerCase())) {
+      delete headers[existing];
+    }
+  }
+  for (const [name, value] of Object.entries(replacements)) {
+    headers[name] = value;
+  }
+  return headers;
 }
 
 function setIfChanged<T>(current: T, next: T, apply: (value: T) => void): boolean {

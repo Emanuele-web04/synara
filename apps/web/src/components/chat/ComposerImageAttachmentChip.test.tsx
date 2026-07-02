@@ -8,7 +8,7 @@ import {
 } from "./ExpandedImagePreview";
 
 describe("ComposerImageAttachmentChip", () => {
-  it("renders a filename-first pill instead of the old thumbnail tile", () => {
+  it("renders a compact thumbnail with preview and remove actions", () => {
     const markup = renderToStaticMarkup(
       <ComposerImageAttachmentChip
         image={{
@@ -42,10 +42,9 @@ describe("ComposerImageAttachmentChip", () => {
     );
 
     expect(markup).toContain("CleanShot 2026-04-11 at 20.00.33@2x.png");
-    expect(markup).toContain("rounded-full");
+    expect(markup).toContain("size-16");
     expect(markup).toContain("Preview CleanShot 2026-04-11 at 20.00.33@2x.png");
     expect(markup).toContain("Remove CleanShot 2026-04-11 at 20.00.33@2x.png");
-    expect(markup).not.toContain("absolute right-1 top-1");
     expect(markup).not.toContain("h-14 w-14");
   });
 

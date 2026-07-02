@@ -175,6 +175,7 @@ describe("normalizeCompactToolLabel", () => {
 
 describe("computeStableMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
+  type WorkTimelineRow = Extract<MessagesTimelineRow, { kind: "work" }>;
 
   const emptyStableRows = (): StableMessagesTimelineRowsState => ({
     byId: new Map(),
@@ -216,6 +217,86 @@ describe("computeStableMessagesTimelineRows", () => {
             toolTitle: "Read",
             detail: "apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts:12",
             changedFiles: ["apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts"],
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces work rows when the activity kind changes", () => {
+    const firstRow: WorkTimelineRow = {
+      kind: "work",
+      id: "work-group-user-input",
+      createdAt: "2026-05-09T10:00:00.000Z",
+      groupedEntries: [
+        {
+          id: "activity-user-input",
+          createdAt: "2026-05-09T10:00:00.000Z",
+          label: "Needs input",
+          tone: "info",
+        },
+      ],
+    };
+    const firstRows: MessagesTimelineRow[] = [firstRow];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        ...firstRow,
+        groupedEntries: [
+          {
+            ...firstRow.groupedEntries[0]!,
+            activityKind: "user-input.requested",
+          },
+        ],
+      },
+    ];
+
+    const second = computeStableMessagesTimelineRows(enrichedRows, first);
+
+    expect(second).not.toBe(first);
+    expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("replaces work rows when automation card fields are added", () => {
+    const firstRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+          },
+        ],
+      },
+    ];
+    const first = computeStableMessagesTimelineRows(firstRows, emptyStableRows());
+
+    const enrichedRows: MessagesTimelineRow[] = [
+      {
+        kind: "work",
+        id: "work-group-automation",
+        createdAt: "2026-05-09T10:00:00.000Z",
+        groupedEntries: [
+          {
+            id: "automation-created",
+            createdAt: "2026-05-09T10:00:00.000Z",
+            label: "Created automation",
+            tone: "info",
+            automation: {
+              id: "automation-7",
+              name: "Watch Synara PR 231",
+              cadenceLabel: "Every 5m",
+            },
           },
         ],
       },
@@ -666,6 +747,87 @@ describe("deriveMessagesTimelineRows", () => {
     const terminal = messageRow(rows, "a3");
     expect(terminal).toBeDefined();
     expect(terminal!.collapsedTurnItems).toBeUndefined();
+  });
+
+  it("keeps pre-existing tool work above the new live narration text", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnId: TurnId.makeUnsafe("t1"),
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        assistantEntry("a1", "2026-01-01T00:00:01Z", {
+          turnId: "t1",
+          text: "I will inspect it.",
+          completedAt: "2026-01-01T00:00:01Z",
+        }),
+        workEntry("w1", "2026-01-01T00:00:02Z", "read files"),
+        assistantEntry("a2", "2026-01-01T00:00:03Z", {
+          turnId: "t1",
+          text: "Here is what I found so far.",
+          streaming: true,
+        }),
+        workEntry("w2", "2026-01-01T00:00:04Z", "search files"),
+      ],
+    });
+
+    const streamingNarration = messageRow(rows, "a2");
+
+    expect(streamingNarration?.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(streamingNarration?.leadingWorkGroupId).toBe("entry-w1");
+    expect(streamingNarration?.inlineWorkEntries?.map((entry) => entry.id)).toEqual(["w2"]);
+    expect(streamingNarration?.inlineWorkGroupId).toBe("entry-w2");
+  });
+
+  it("keeps a just-settled tail assistant expanded when the active turn id is briefly unavailable", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a1");
+    expect(terminal).toBeDefined();
+    expect(terminal!.leadingWorkEntries?.map((entry) => entry.id)).toEqual(["w1"]);
+    expect(terminal!.inlineWorkEntries).toBeUndefined();
+    expect(terminal!.collapsedTurnItems).toBeUndefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("collapses an older settled turn when a follow-up user message is waiting for output", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      activeTurnInProgress: true,
+      activeTurnStartedAt: "2026-01-01T00:00:05Z",
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:01Z", "tool 1"),
+        assistantEntry("a1", "2026-01-01T00:00:02Z", {
+          turnId: "t1",
+          text: "All done",
+          completedAt: "2026-01-01T00:00:03Z",
+        }),
+        userEntry("u2", "2026-01-01T00:00:05Z"),
+      ],
+    });
+
+    const previousAssistant = messageRow(rows, "a1");
+    expect(previousAssistant).toBeDefined();
+    expect(collapsedSignature(previousAssistant!)).toEqual(["work:w1"]);
+    expect(previousAssistant!.inlineWorkEntries).toBeUndefined();
+    expect(messageRow(rows, "u2")).toBeDefined();
+    expect(rows.some((row) => row.kind === "work")).toBe(false);
   });
 
   it("collapses adjacent provider mini-turns into the same user-visible response", () => {

@@ -1,8 +1,9 @@
-import { ThreadId, type ModelSlug } from "@t3tools/contracts";
+import { ThreadId, TurnId, type ModelSlug } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   appendVoiceTranscriptToPrompt,
+  buildComposerMenuSelectionKey,
   filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
   deriveComposerSendState,
@@ -11,17 +12,110 @@ import {
   hasServerAcknowledgedLocalDispatch,
   isVoiceAuthExpiredMessage,
   resolveActiveThreadTitle,
+  resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
+  resolveDefaultEnvironmentPanelOpen,
+  resolveEnvironmentPanelOpen,
+  resolveEnvironmentPanelVisible,
+  resolveProjectScriptTerminalTarget,
   resolveRuntimeModeAfterApprovalDecision,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
+  shouldEnableComposerPastedTextCollapse,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
 } from "./ChatView.logic";
+
+describe("composer menu selection", () => {
+  const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
+
+  it("builds a stable key from query and displayed item order", () => {
+    const baseKey = buildComposerMenuSelectionKey({
+      menuOpen: true,
+      picker: null,
+      triggerKind: "slash-command",
+      triggerQuery: "check",
+      items,
+    });
+
+    expect(
+      buildComposerMenuSelectionKey({
+        menuOpen: true,
+        picker: null,
+        triggerKind: "slash-command",
+        triggerQuery: "check",
+        items: [...items],
+      }),
+    ).toBe(baseKey);
+    expect(
+      buildComposerMenuSelectionKey({
+        menuOpen: true,
+        picker: null,
+        triggerKind: "slash-command",
+        triggerQuery: "chec",
+        items,
+      }),
+    ).not.toBe(baseKey);
+    expect(
+      buildComposerMenuSelectionKey({
+        menuOpen: true,
+        picker: null,
+        triggerKind: "slash-command",
+        triggerQuery: "check",
+        items: [...items].reverse(),
+      }),
+    ).not.toBe(baseKey);
+  });
+
+  it("returns null while the menu is closed", () => {
+    expect(
+      buildComposerMenuSelectionKey({
+        menuOpen: false,
+        picker: null,
+        triggerKind: "slash-command",
+        triggerQuery: "check",
+        items,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("composer pasted text collapse", () => {
+  it("is enabled only for regular chat sends", () => {
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: true,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: false,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldEnableComposerPastedTextCollapse({
+        isComposerApprovalState: true,
+        hasPendingUserInput: false,
+        showPlanFollowUpPrompt: false,
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("voice helpers", () => {
   it("keeps manual titles visible for empty home chats", () => {
@@ -153,6 +247,248 @@ describe("voice helpers", () => {
       canRenderVoiceNotes: false,
       canStartVoiceNotes: false,
       showVoiceNotesControl: true,
+    });
+  });
+});
+
+describe("environment panel visibility", () => {
+  it("opens normal chat threads by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps empty landing, terminal-primary, and constrained layouts closed by default", () => {
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: true,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: true,
+        isConstrainedChatLayout: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveDefaultEnvironmentPanelOpen({
+        environmentEnabled: true,
+        isCenteredEmptyLanding: false,
+        isTerminalPrimarySurface: false,
+        isConstrainedChatLayout: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("lets a manual preference override the default while switching chats", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: false,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: false,
+        userPreferenceOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("treats action dismissals as transient closes instead of stored preferences", () => {
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: true,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: true,
+        actionDismissed: false,
+        userPreferenceOpen: null,
+      }),
+    ).toBe(true);
+    expect(
+      resolveEnvironmentPanelOpen({
+        defaultOpen: false,
+        actionDismissed: true,
+        userPreferenceOpen: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("renders the panel when the user toggles it open on empty landing", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the panel hidden when environment controls are disabled or closed", () => {
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: false,
+        environmentPanelOpen: true,
+      }),
+    ).toBe(false);
+    expect(
+      resolveEnvironmentPanelVisible({
+        environmentEnabled: true,
+        environmentPanelOpen: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("resolveActiveTurnLiveDiffState", () => {
+  it("uses only the diff summary for the active turn", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.makeUnsafe("turn-previous"),
+            completedAt: "2026-06-13T10:00:00.000Z",
+            files: [{ path: "old.ts", additions: 100, deletions: 50 }],
+          },
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [
+              { path: "src/a.ts", additions: 2, deletions: 1 },
+              { path: "src/b.ts", additions: 3, deletions: 0 },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: activeTurnId,
+      fileCount: 2,
+      additions: 5,
+      deletions: 1,
+      hasChanges: true,
+    });
+  });
+
+  it("returns zero totals before the active turn has a diff summary or file-edit work", () => {
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: TurnId.makeUnsafe("turn-active"),
+        turnDiffSummaries: [
+          {
+            turnId: TurnId.makeUnsafe("turn-previous"),
+            completedAt: "2026-06-13T10:00:00.000Z",
+            files: [{ path: "old.ts", additions: 100, deletions: 50 }],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    });
+  });
+
+  it("treats an empty active turn diff summary as authoritative over tool-log file hints", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [
+          {
+            turnId: activeTurnId,
+            completedAt: "2026-06-13T10:01:00.000Z",
+            files: [],
+          },
+        ],
+        workLogEntries: [
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts"],
+          },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    });
+  });
+
+  it("falls back to in-turn file-edit work before the diff summary lands", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [
+          // Other turn / non-edit work is ignored.
+          { turnId: TurnId.makeUnsafe("turn-previous"), itemType: "file_change" },
+          { turnId: activeTurnId, requestKind: "command" },
+          {
+            turnId: activeTurnId,
+            itemType: "file_change",
+            changedFiles: ["src/a.ts", "src/b.ts"],
+          },
+          { turnId: activeTurnId, itemType: "file_change", changedFiles: ["src/a.ts"] },
+        ],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: 2,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    });
+  });
+
+  it("surfaces a stat-less strip when file-edit work has no changed paths yet", () => {
+    const activeTurnId = TurnId.makeUnsafe("turn-active");
+
+    expect(
+      resolveActiveTurnLiveDiffState({
+        latestTurnId: activeTurnId,
+        turnDiffSummaries: [],
+        workLogEntries: [{ turnId: activeTurnId, itemType: "file_change" }],
+      }),
+    ).toEqual({
+      turnId: null,
+      fileCount: null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
     });
   });
 });
@@ -300,7 +636,9 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: "\uFFFC",
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -313,6 +651,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("");
@@ -325,7 +664,9 @@ describe("deriveComposerSendState", () => {
     const state = deriveComposerSendState({
       prompt: `yoo \uFFFC waddup`,
       imageCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [
         {
           id: "ctx-expired",
@@ -338,6 +679,7 @@ describe("deriveComposerSendState", () => {
           createdAt: "2026-03-17T12:52:29.000Z",
         },
       ],
+      pastedTexts: [],
     });
 
     expect(state.trimmedPrompt).toBe("yoo  waddup");
@@ -350,8 +692,39 @@ describe("deriveComposerSendState", () => {
       prompt: "",
       imageCount: 0,
       browserContextCount: 0,
+      fileCount: 0,
       assistantSelectionCount: 1,
+      fileCommentCount: 0,
       terminalContexts: [],
+      pastedTexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats file comments as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      fileCount: 0,
+      assistantSelectionCount: 0,
+      fileCommentCount: 1,
+      terminalContexts: [],
+      pastedTexts: [],
+    });
+
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats file attachments as sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      fileCount: 1,
+      assistantSelectionCount: 0,
+      fileCommentCount: 0,
+      terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -362,8 +735,11 @@ describe("deriveComposerSendState", () => {
       prompt: "",
       imageCount: 0,
       browserContextCount: 1,
+      fileCount: 0,
       assistantSelectionCount: 0,
+      fileCommentCount: 0,
       terminalContexts: [],
+      pastedTexts: [],
     });
 
     expect(state.hasSendableContent).toBe(true);
@@ -409,6 +785,63 @@ describe("shouldRenderTerminalWorkspace", () => {
         terminalOpen: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("resolveProjectScriptTerminalTarget", () => {
+  it("reuses the base terminal only when no terminal is open or running", () => {
+    const target = resolveProjectScriptTerminalTarget({
+      baseTerminalId: "default",
+      createTerminalId: () => "new-terminal",
+      hasRunningTerminal: false,
+      terminalOpen: false,
+    });
+
+    expect(target).toEqual({
+      shouldCreateNewTerminal: false,
+      terminalId: "default",
+    });
+  });
+
+  it("creates a fresh terminal when a live terminal could keep stale cwd or env", () => {
+    expect(
+      resolveProjectScriptTerminalTarget({
+        baseTerminalId: "default",
+        createTerminalId: () => "visible-script-terminal",
+        hasRunningTerminal: false,
+        terminalOpen: true,
+      }),
+    ).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "visible-script-terminal",
+    });
+
+    expect(
+      resolveProjectScriptTerminalTarget({
+        baseTerminalId: "default",
+        createTerminalId: () => "running-script-terminal",
+        hasRunningTerminal: true,
+        terminalOpen: false,
+      }),
+    ).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "running-script-terminal",
+    });
+  });
+
+  it("honors explicit requests for a new terminal", () => {
+    const target = resolveProjectScriptTerminalTarget({
+      baseTerminalId: "default",
+      createTerminalId: () => "forced-script-terminal",
+      hasRunningTerminal: false,
+      preferNewTerminal: true,
+      terminalOpen: false,
+    });
+
+    expect(target).toEqual({
+      shouldCreateNewTerminal: true,
+      terminalId: "forced-script-terminal",
+    });
   });
 });
 

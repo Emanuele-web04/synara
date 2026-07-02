@@ -17,7 +17,7 @@ function Textarea({ className, size = "default", unstyled = false, ...props }: T
       className={
         cn(
           !unstyled &&
-            "relative inline-flex w-full rounded-lg border border-input bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground ring-ring/24 has-focus-visible:has-aria-invalid:border-destructive/64 has-focus-visible:has-aria-invalid:ring-destructive/16 has-aria-invalid:border-destructive/36 has-focus-visible:border-ring has-disabled:opacity-64 has-focus-visible:ring-[3px] sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32 dark:has-aria-invalid:ring-destructive/24",
+            "relative inline-flex w-full rounded-lg border border-input bg-background text-[length:var(--app-font-size-ui,12px)] text-foreground has-aria-invalid:border-destructive/36 has-focus-visible:has-aria-invalid:border-destructive/64 has-focus-visible:border-foreground/30 has-disabled:opacity-64 sm:text-[length:var(--app-font-size-ui,12px)] dark:bg-input/32",
           className,
         ) || undefined
       }
@@ -28,7 +28,7 @@ function Textarea({ className, size = "default", unstyled = false, ...props }: T
         render={(defaultProps) => (
           <textarea
             className={cn(
-              "font-system-ui field-sizing-content min-h-17.5 w-full rounded-[inherit] px-[calc(--spacing(3)-1px)] py-[calc(--spacing(1.5)-1px)] outline-none max-sm:min-h-20.5",
+              "font-system-ui field-sizing-content min-h-17.5 w-full resize-none rounded-[inherit] px-[calc(--spacing(3)-1px)] py-[calc(--spacing(1.5)-1px)] outline-none max-sm:min-h-20.5",
               size === "sm" &&
                 "min-h-16.5 px-[calc(--spacing(2.5)-1px)] py-[calc(--spacing(1)-1px)] max-sm:min-h-19.5",
               size === "lg" && "min-h-18.5 py-[calc(--spacing(2)-1px)] max-sm:min-h-21.5",

@@ -13,8 +13,9 @@ export type DiffPanelMode = "inline" | "sheet" | "sidebar";
 
 function getDiffPanelHeaderRowClassName(mode: DiffPanelMode, className?: string) {
   const shouldUseDragRegion = isElectron && mode !== "sheet";
+  // Match RightDock tab strip inset (`px-1.5`) so picker triggers line up under dock tabs.
   return cn(
-    "flex items-center justify-between gap-2 px-4",
+    "flex w-full min-w-0 items-center gap-1.5 px-1.5",
     CHAT_SURFACE_HEADER_HEIGHT_CLASS,
     shouldUseDragRegion && cn("drag-region", CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME),
     className,
@@ -23,11 +24,12 @@ function getDiffPanelHeaderRowClassName(mode: DiffPanelMode, className?: string)
 
 export function DiffPanelShell(props: {
   mode: DiffPanelMode;
-  header: ReactNode;
+  header?: ReactNode;
   children: ReactNode;
   headerRowClassName?: string;
 }) {
   const shouldUseDragRegion = isElectron && props.mode !== "sheet";
+  const hasHeader = props.header !== null && props.header !== undefined;
 
   return (
     <div
@@ -38,39 +40,36 @@ export function DiffPanelShell(props: {
           : "w-full",
       )}
     >
-      {shouldUseDragRegion ? (
-        <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
-          {props.header}
-        </div>
-      ) : (
-        <div className={CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}>
+      {hasHeader ? (
+        shouldUseDragRegion ? (
           <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
             {props.header}
           </div>
-        </div>
-      )}
-      {props.children}
+        ) : (
+          <div className={CHAT_SURFACE_HEADER_DIVIDER_CLASS_NAME}>
+            <div className={getDiffPanelHeaderRowClassName(props.mode, props.headerRowClassName)}>
+              {props.header}
+            </div>
+          </div>
+        )
+      ) : null}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">{props.children}</div>
     </div>
   );
 }
 
 export function DiffPanelHeaderSkeleton() {
   return (
-    <>
-      <div className="relative min-w-0 flex-1">
-        <Skeleton className="absolute left-0 top-1/2 size-6 -translate-y-1/2 rounded-md border border-border/50" />
-        <Skeleton className="absolute right-0 top-1/2 size-6 -translate-y-1/2 rounded-md border border-border/50" />
-        <div className="flex gap-1 overflow-hidden px-8 py-0.5">
-          <Skeleton className="h-6 w-16 shrink-0 rounded-md" />
-          <Skeleton className="h-6 w-24 shrink-0 rounded-md" />
-          <Skeleton className="h-6 w-24 shrink-0 rounded-md max-sm:hidden" />
-        </div>
-      </div>
-      <div className="flex shrink-0 gap-1">
+    <div className="flex h-full w-full items-center gap-2">
+      <Skeleton className="h-8 w-28 shrink-0 rounded-lg" />
+      <Skeleton className="h-4 w-14 shrink-0 rounded-full" />
+      <div className="ml-auto flex items-center gap-1.5">
         <Skeleton className="size-7 rounded-md" />
         <Skeleton className="size-7 rounded-md" />
+        <Skeleton className="h-7 w-16 rounded-md" />
+        <Skeleton className="h-8 w-20 rounded-lg" />
       </div>
-    </>
+    </div>
   );
 }
 

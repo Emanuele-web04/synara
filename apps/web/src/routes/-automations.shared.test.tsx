@@ -1,0 +1,687 @@
+// FILE: -automations.shared.test.tsx
+// Purpose: Verifies pure automation UI helpers for schedule and triage behavior.
+// Layer: Web route helper test
+// Depends on: -automations.shared exported helper functions.
+
+import {
+  AutomationId,
+  AutomationRunId,
+  CommandId,
+  MessageId,
+  ProjectId,
+  ThreadId,
+  DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+  type AutomationDefinition,
+  type AutomationRun,
+  type ProviderStartOptions,
+} from "@t3tools/contracts";
+import { describe, expect, it } from "vitest";
+
+import {
+  applyScheduleToForm,
+  allVisibleTriageRuns,
+  applyAutomationEvent,
+  automationAttentionCount,
+  automationFastIntervalLimitMessage,
+  canCancelAutomationRun,
+  createInputFromForm,
+  datetimeLocalFromIso,
+  formatCadence,
+  formatSchedule,
+  formFromDefinition,
+  isoFromDatetimeLocal,
+  isFormSubmittable,
+  maxIterationOptions,
+  modelSelectionForProjectChange,
+  providerOptionsForAutomationEdit,
+  providerOptionsForAutomationModelSelection,
+  runResultSummary,
+  scheduleKindFromSchedule,
+  scheduleFromForm,
+  updateWeeklyScheduleDay,
+  updateWeeklyScheduleTime,
+  unresolvedTriageRuns,
+} from "./-automations.shared";
+
+const runId = (value: string) => AutomationRunId.makeUnsafe(value);
+const automationId = (value: string) => AutomationId.makeUnsafe(value);
+const projectId = (value: string) => ProjectId.makeUnsafe(value);
+const threadId = (value: string) => ThreadId.makeUnsafe(value);
+const commandId = (value: string) => CommandId.makeUnsafe(value);
+const messageId = (value: string) => MessageId.makeUnsafe(value);
+
+const baseRun: AutomationRun = {
+  id: runId("run-1"),
+  automationId: automationId("automation-1"),
+  projectId: projectId("project-1"),
+  threadId: threadId("thread-1"),
+  turnId: null,
+  trigger: { type: "scheduled" },
+  status: "succeeded",
+  scheduledFor: "2026-06-19T10:00:00.000Z",
+  claimedBy: null,
+  claimedAt: null,
+  leaseExpiresAt: null,
+  startedAt: "2026-06-19T10:00:00.000Z",
+  finishedAt: "2026-06-19T10:01:00.000Z",
+  threadCreateCommandId: commandId("cmd-thread-create"),
+  turnStartCommandId: commandId("cmd-turn-start"),
+  messageId: messageId("message-1"),
+  error: null,
+  result: {
+    outcome: "unknown",
+    summary: "Review run output.",
+    unread: true,
+    archivedAt: null,
+  },
+  permissionSnapshot: {
+    provider: "codex",
+    modelSelection: { provider: "codex", model: "gpt-5-codex" },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    worktreeMode: "auto",
+    allowedCapabilities: ["send-turn"],
+    createdAt: "2026-06-19T10:00:00.000Z",
+  },
+  createdAt: "2026-06-19T10:00:00.000Z",
+  updatedAt: "2026-06-19T10:01:00.000Z",
+};
+
+const baseDefinition: AutomationDefinition = {
+  id: automationId("automation-1"),
+  projectId: projectId("project-1"),
+  sourceThreadId: null,
+  name: "Check status",
+  prompt: "Check status.",
+  schedule: { type: "interval", everySeconds: 3600 },
+  enabled: true,
+  nextRunAt: "2026-06-19T11:00:00.000Z",
+  modelSelection: { provider: "codex", model: "gpt-5-codex" },
+  runtimeMode: "approval-required",
+  interactionMode: "default",
+  worktreeMode: "auto",
+  mode: "standalone",
+  targetThreadId: null,
+  maxIterations: null,
+  stopOnError: true,
+  completionPolicy: { type: "none" },
+  completionPolicyVersion: 1,
+  completionPolicyUpdatedAt: "2026-06-19T10:00:00.000Z",
+  minimumIntervalSeconds: 60,
+  maxRuntimeSeconds: 3600,
+  retryPolicy: { type: "none" },
+  misfirePolicy: "coalesce",
+  acknowledgedRisks: [],
+  iterationCount: 0,
+  createdAt: "2026-06-19T10:00:00.000Z",
+  updatedAt: "2026-06-19T10:00:00.000Z",
+  archivedAt: null,
+};
+
+function runWith(overrides: Partial<AutomationRun>): AutomationRun {
+  return { ...baseRun, ...overrides };
+}
+
+function definitionWith(overrides: Partial<AutomationDefinition>): AutomationDefinition {
+  return { ...baseDefinition, ...overrides };
+}
+
+describe("automation shared route helpers", () => {
+  it("preserves manual and new schedule kinds", () => {
+    expect(scheduleKindFromSchedule({ type: "manual" })).toBe("manual");
+    expect(scheduleKindFromSchedule({ type: "once", runAt: "2026-06-19T10:15:00.000Z" })).toBe(
+      "once",
+    );
+    expect(
+      scheduleKindFromSchedule({
+        type: "cron",
+        expression: "0 9 * * *",
+        timezone: "Europe/Rome",
+      }),
+    ).toBe("cron");
+  });
+
+  it("counts only unread unarchived triage runs", () => {
+    const unresolved = runWith({ id: runId("run-unresolved") });
+    const read = runWith({
+      id: runId("run-read"),
+      result: { ...baseRun.result!, unread: false },
+    });
+    const archived = runWith({
+      id: runId("run-archived"),
+      result: { ...baseRun.result!, archivedAt: "2026-06-19T10:05:00.000Z" },
+    });
+    const noResult = runWith({ id: runId("run-no-result"), result: null });
+    const failedWithoutResult = runWith({
+      id: runId("run-failed-no-result"),
+      status: "failed",
+      result: null,
+    });
+
+    const runs = [unresolved, read, archived, noResult, failedWithoutResult];
+
+    expect(unresolvedTriageRuns(runs).map((run) => run.id)).toEqual([
+      "run-unresolved",
+      "run-failed-no-result",
+    ]);
+    expect(automationAttentionCount(runs)).toBe(2);
+    expect(allVisibleTriageRuns(runs).map((run) => run.id)).toEqual([
+      "run-unresolved",
+      "run-read",
+      "run-failed-no-result",
+    ]);
+  });
+
+  it("allows cancelling active and waiting runs only", () => {
+    expect(canCancelAutomationRun(runWith({ status: "pending" }))).toBe(true);
+    expect(canCancelAutomationRun(runWith({ status: "running" }))).toBe(true);
+    expect(canCancelAutomationRun(runWith({ status: "waiting-for-approval" }))).toBe(true);
+    expect(canCancelAutomationRun(runWith({ status: "succeeded" }))).toBe(false);
+    expect(canCancelAutomationRun(runWith({ status: "cancelled" }))).toBe(false);
+  });
+
+  it("uses human labels for resultless and unknown-result runs", () => {
+    expect(runResultSummary(runWith({ result: null, status: "waiting-for-approval" }))).toBe(
+      "Waiting for approval",
+    );
+    expect(
+      runResultSummary(
+        runWith({
+          result: { ...baseRun.result!, summary: null, outcome: "unknown" },
+          status: "succeeded",
+        }),
+      ),
+    ).toBe("Completed; open the thread for the reply");
+  });
+
+  it("round-trips one-shot datetimes through datetime-local values", () => {
+    const runAt = "2026-06-19T10:00:00.000Z";
+
+    expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
+  });
+
+  it("preserves one-shot datetime seconds through datetime-local values", () => {
+    const runAt = "2026-06-19T10:00:15.000Z";
+
+    expect(isoFromDatetimeLocal(datetimeLocalFromIso(runAt))).toBe(runAt);
+  });
+
+  it("preserves sub-minute custom intervals through the form state", () => {
+    const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
+      type: "interval",
+      everySeconds: 15,
+    });
+
+    expect(form.intervalAmount).toBe("15");
+    expect(form.intervalUnit).toBe("seconds");
+    expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 15 });
+  });
+
+  it("preserves non-minute interval cadences through the form state", () => {
+    const form = applyScheduleToForm(formFromDefinition(null, "project-1"), {
+      type: "interval",
+      everySeconds: 90,
+    });
+
+    expect(form.intervalAmount).toBe("90");
+    expect(form.intervalUnit).toBe("seconds");
+    expect(scheduleFromForm(form)).toEqual({ type: "interval", everySeconds: 90 });
+  });
+
+  it("labels non-minute interval cadences without rounding", () => {
+    const schedule = { type: "interval", everySeconds: 90 } as const;
+
+    expect(formatSchedule(schedule)).toBe("Every 90 sec");
+    expect(formatCadence(schedule)).toBe("Every 90s");
+  });
+
+  it("requires a hard iteration cap for sub-minute interval forms", () => {
+    const form = {
+      ...applyScheduleToForm(formFromDefinition(null, "project-1"), {
+        type: "interval",
+        everySeconds: 15,
+      }),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+    const cappedForm = { ...form, maxIterations: "10" };
+
+    expect(automationFastIntervalLimitMessage(form)).toBe(
+      "Intervals under one minute need max iterations set to 10 runs or fewer.",
+    );
+    expect(isFormSubmittable(form)).toBe(false);
+    expect(automationFastIntervalLimitMessage(cappedForm)).toBeNull();
+    expect(isFormSubmittable(cappedForm)).toBe(true);
+  });
+
+  it("keeps custom max-iteration caps visible in picker options", () => {
+    expect(maxIterationOptions("3")[0]).toEqual({ value: "3", label: "3 runs" });
+    expect(maxIterationOptions(10)[0]).toEqual({ value: "", label: "Unlimited" });
+  });
+
+  it("refreshes the default model when the current model came from the old project", () => {
+    const projects = [
+      {
+        id: projectId("project-old"),
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      },
+      {
+        id: projectId("project-new"),
+        defaultModelSelection: { provider: "claudeAgent", model: "sonnet" },
+      },
+    ] as Parameters<typeof modelSelectionForProjectChange>[0];
+
+    expect(
+      modelSelectionForProjectChange(projects, "project-old", "project-new", {
+        provider: "codex",
+        model: "gpt-5-codex",
+      }),
+    ).toEqual({ provider: "claudeAgent", model: "sonnet" });
+  });
+
+  it("preserves an explicitly chosen model when switching projects", () => {
+    const projects = [
+      {
+        id: projectId("project-old"),
+        defaultModelSelection: { provider: "codex", model: "gpt-5-codex" },
+      },
+      {
+        id: projectId("project-new"),
+        defaultModelSelection: { provider: "claudeAgent", model: "sonnet" },
+      },
+    ] as Parameters<typeof modelSelectionForProjectChange>[0];
+
+    expect(
+      modelSelectionForProjectChange(projects, "project-old", "project-new", {
+        provider: "cursor",
+        model: "cursor-default",
+      }),
+    ).toEqual({ provider: "cursor", model: "cursor-default" });
+  });
+
+  it("preserves timezone when changing weekly day and time", () => {
+    const schedule = {
+      type: "weekly",
+      dayOfWeek: 1,
+      timeOfDay: "09:30",
+      timezone: "Europe/Rome",
+    } as const;
+
+    expect(updateWeeklyScheduleDay(schedule, 5)).toEqual({
+      type: "weekly",
+      dayOfWeek: 5,
+      timeOfDay: "09:30",
+      timezone: "Europe/Rome",
+    });
+    expect(updateWeeklyScheduleTime(schedule, "14:45")).toEqual({
+      type: "weekly",
+      dayOfWeek: 1,
+      timeOfDay: "14:45",
+      timezone: "Europe/Rome",
+    });
+  });
+
+  it("preserves legacy UTC semantics for stored wall-clock schedules without timezone", () => {
+    const form = formFromDefinition(
+      definitionWith({
+        schedule: { type: "daily", timeOfDay: "09:00" },
+      }),
+      "project-1",
+    );
+
+    expect(form.timezone).toBe("UTC");
+    expect(scheduleFromForm(form)).toEqual({
+      type: "daily",
+      timeOfDay: "09:00",
+      timezone: "UTC",
+    });
+  });
+
+  it("requires timezone text for timezone-based schedules", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Check status",
+      prompt: "Check status",
+      timezone: "",
+    };
+
+    expect(isFormSubmittable(form)).toBe(false);
+    expect(isFormSubmittable({ ...form, timezone: "UTC" })).toBe(true);
+  });
+
+  it("serializes heartbeat stop clauses as completion policies", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Watch PR",
+      prompt: "Check the PR.",
+      mode: "heartbeat" as const,
+      targetThreadId: "thread-1",
+      stopWhen: "the PR is ready to merge",
+    };
+
+    expect(createInputFromForm(form).completionPolicy).toEqual({
+      type: "ai-evaluated",
+      stopWhen: "the PR is ready to merge",
+      confidenceThreshold: DEFAULT_AUTOMATION_STOP_CONFIDENCE_THRESHOLD,
+    });
+  });
+
+  it("serializes standalone max iterations when chat parsing supplies a run limit", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+      mode: "standalone" as const,
+      maxIterations: "3",
+    };
+
+    expect(createInputFromForm(form)).toMatchObject({
+      mode: "standalone",
+      maxIterations: 3,
+      completionPolicy: { type: "none" },
+    });
+  });
+
+  it("serializes composer source thread provenance on create inputs", () => {
+    const form = {
+      ...formFromDefinition(null, "project-1"),
+      name: "Say hi",
+      prompt: "Say hi.",
+    };
+
+    expect(
+      createInputFromForm(form, undefined, undefined, threadId("thread-source")),
+    ).toMatchObject({
+      sourceThreadId: "thread-source",
+    });
+  });
+
+  it("preserves saved provider options when editing without changing models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/new/opencode", serverUrl: "http://new.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const form = formFromDefinition(definition, "project-1");
+
+    expect(providerOptionsForAutomationEdit(definition, form, currentProviderOptions)).toEqual(
+      savedProviderOptions,
+    );
+  });
+
+  it("uses current provider options when an automation edit changes models", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      cursor: { binaryPath: "/current/cursor", apiEndpoint: "http://cursor.example" },
+    };
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: savedProviderOptions,
+    });
+    const nextModelSelection = { provider: "cursor" as const, model: "composer-2" };
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        nextModelSelection,
+        currentProviderOptions,
+      ),
+    ).toEqual(currentProviderOptions);
+  });
+
+  it("preserves saved provider options when only model capability options change", () => {
+    const savedProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/old/codex", homePath: "/old/home" },
+    };
+    const currentProviderOptions: ProviderStartOptions = {
+      codex: { binaryPath: "/new/codex", homePath: "/new/home" },
+    };
+    const definition = definitionWith({
+      modelSelection: {
+        provider: "codex",
+        model: "gpt-5-codex",
+        options: { reasoningEffort: "medium" },
+      },
+      providerOptions: savedProviderOptions,
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(
+        definition,
+        {
+          provider: "codex",
+          model: "gpt-5-codex",
+          options: { reasoningEffort: "high" },
+        },
+        currentProviderOptions,
+      ),
+    ).toEqual(savedProviderOptions);
+  });
+
+  it("clears stale provider options when an automation edit changes models without current options", () => {
+    const definition = definitionWith({
+      modelSelection: { provider: "opencode", model: "openai/gpt-5" },
+      providerOptions: {
+        opencode: { binaryPath: "/old/opencode", serverUrl: "http://old.example" },
+      },
+    });
+
+    expect(
+      providerOptionsForAutomationModelSelection(definition, {
+        provider: "cursor",
+        model: "composer-2",
+      }),
+    ).toEqual({});
+  });
+
+  it("keeps a newer run update when an older automation snapshot arrives later", () => {
+    const staleRun = runWith({
+      id: runId("run-cache-race"),
+      result: { ...baseRun.result!, unread: true },
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerRun = runWith({
+      ...staleRun,
+      result: { ...baseRun.result!, unread: false },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLiveUpdate = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [staleRun] },
+      { type: "run-upserted", run: newerRun },
+    );
+    const afterLateSnapshot = applyAutomationEvent(afterLiveUpdate, {
+      type: "snapshot",
+      definitions: [baseDefinition],
+      runs: [staleRun],
+    });
+
+    expect(afterLateSnapshot.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
+      false,
+    );
+  });
+
+  it("keeps a newer run update when an older live event arrives later", () => {
+    const staleRun = runWith({
+      id: runId("run-live-cache-race"),
+      result: { ...baseRun.result!, unread: true },
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerRun = runWith({
+      ...staleRun,
+      result: { ...baseRun.result!, unread: false },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [newerRun] },
+      { type: "run-upserted", run: staleRun },
+    );
+
+    expect(afterLateLiveEvent.runs.find((run) => run.id === newerRun.id)?.result?.unread).toBe(
+      false,
+    );
+  });
+
+  it("applies equal-timestamp live run updates", () => {
+    const firstRun = runWith({
+      id: runId("run-live-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const followUpRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterLiveEvent = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "run-upserted", run: followUpRun },
+    );
+
+    expect(afterLiveEvent.runs.find((run) => run.id === followUpRun.id)?.result).toMatchObject({
+      unread: false,
+      archivedAt: "2026-06-19T10:02:00.000Z",
+    });
+  });
+
+  it("keeps cached run state when an equal-timestamp snapshot arrives later", () => {
+    const firstRun = runWith({
+      id: runId("run-snapshot-cache-equal"),
+      result: { ...baseRun.result!, unread: true, archivedAt: null },
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotRun = runWith({
+      ...firstRun,
+      result: { ...baseRun.result!, unread: false, archivedAt: "2026-06-19T10:02:00.000Z" },
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [baseDefinition], runs: [firstRun] },
+      { type: "snapshot", definitions: [baseDefinition], runs: [snapshotRun] },
+    );
+
+    expect(afterSnapshot.runs.find((run) => run.id === snapshotRun.id)?.result).toMatchObject({
+      unread: true,
+      archivedAt: null,
+    });
+  });
+
+  it("keeps a newer definition update when an older live event arrives later", () => {
+    const staleDefinition = definitionWith({
+      id: automationId("automation-live-cache-race"),
+      name: "Old name",
+      updatedAt: "2026-06-19T10:01:00.000Z",
+    });
+    const newerDefinition = definitionWith({
+      ...staleDefinition,
+      name: "New name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+
+    const afterLateLiveEvent = applyAutomationEvent(
+      { definitions: [newerDefinition], runs: [] },
+      { type: "definition-upserted", definition: staleDefinition },
+    );
+
+    expect(
+      afterLateLiveEvent.definitions.find((definition) => definition.id === newerDefinition.id)
+        ?.name,
+    ).toBe("New name");
+  });
+
+  it("keeps cached definition state when an equal-timestamp snapshot arrives later", () => {
+    const cachedDefinition = definitionWith({
+      id: automationId("automation-snapshot-cache-equal"),
+      name: "Updated name",
+      updatedAt: "2026-06-19T10:02:00.000Z",
+    });
+    const snapshotDefinition = definitionWith({
+      ...cachedDefinition,
+      name: "Older snapshot name",
+    });
+
+    const afterSnapshot = applyAutomationEvent(
+      { definitions: [cachedDefinition], runs: [] },
+      { type: "snapshot", definitions: [snapshotDefinition], runs: [] },
+    );
+
+    expect(
+      afterSnapshot.definitions.find((definition) => definition.id === cachedDefinition.id)?.name,
+    ).toBe("Updated name");
+  });
+
+  it("does not resurrect a deleted automation from a late snapshot", () => {
+    const deletedDefinition = definitionWith({
+      id: automationId("automation-deleted-cache-race"),
+    });
+    const deletedRun = runWith({
+      id: runId("run-deleted-cache-race"),
+      automationId: deletedDefinition.id,
+    });
+
+    const afterDelete = applyAutomationEvent(
+      { definitions: [deletedDefinition], runs: [deletedRun] },
+      { type: "definition-deleted", automationId: deletedDefinition.id },
+    );
+    const afterLateSnapshot = applyAutomationEvent(afterDelete, {
+      type: "snapshot",
+      definitions: [deletedDefinition],
+      runs: [deletedRun],
+    });
+
+    expect(afterLateSnapshot.definitions).toEqual([]);
+    expect(afterLateSnapshot.runs).toEqual([]);
+  });
+
+  it("drops definitions and runs that disappear from a reconnect snapshot", () => {
+    const deletedDefinition = definitionWith({
+      id: automationId("automation-missed-delete"),
+    });
+    const deletedRun = runWith({
+      id: runId("run-missed-delete"),
+      automationId: deletedDefinition.id,
+    });
+
+    const afterReconnectSnapshot = applyAutomationEvent(
+      { definitions: [deletedDefinition], runs: [deletedRun] },
+      {
+        type: "snapshot",
+        definitions: [],
+        runs: [],
+      },
+    );
+
+    expect(afterReconnectSnapshot.definitions).toEqual([]);
+    expect(afterReconnectSnapshot.runs).toEqual([]);
+  });
+
+  it("drops runs that disappear from a reconnect snapshot for an existing definition", () => {
+    const definition = definitionWith({
+      id: automationId("automation-existing-definition"),
+    });
+    const deletedRun = runWith({
+      id: runId("run-missed-delete-existing-definition"),
+      automationId: definition.id,
+    });
+
+    const afterReconnectSnapshot = applyAutomationEvent(
+      { definitions: [definition], runs: [deletedRun] },
+      {
+        type: "snapshot",
+        definitions: [definition],
+        runs: [],
+      },
+    );
+
+    expect(afterReconnectSnapshot.definitions).toEqual([definition]);
+    expect(afterReconnectSnapshot.runs).toEqual([]);
+  });
+});

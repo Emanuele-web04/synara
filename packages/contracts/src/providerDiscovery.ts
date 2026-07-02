@@ -81,6 +81,19 @@ export const ProviderListSkillsResult = Schema.Struct({
 });
 export type ProviderListSkillsResult = typeof ProviderListSkillsResult.Type;
 
+// Unified cross-provider skills catalog (Synara portable skills). Descriptors use
+// `scope` to carry the origin label ("synara", "codex", "claude", "cursor", ...).
+export const ProviderSkillsCatalogInput = Schema.Struct({
+  cwd: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderSkillsCatalogInput = typeof ProviderSkillsCatalogInput.Type;
+
+export const ProviderSkillsCatalogResult = Schema.Struct({
+  skills: Schema.Array(ProviderSkillDescriptor),
+  synaraSkillsDir: Schema.optional(TrimmedNonEmptyString),
+});
+export type ProviderSkillsCatalogResult = typeof ProviderSkillsCatalogResult.Type;
+
 export const ProviderNativeCommandDescriptor = Schema.Struct({
   name: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
@@ -231,6 +244,7 @@ export const ProviderListModelsInput = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
   apiEndpoint: Schema.optional(TrimmedNonEmptyString),
   agentDir: Schema.optional(TrimmedNonEmptyString),
+  cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListModelsInput = typeof ProviderListModelsInput.Type;
 
@@ -274,6 +288,8 @@ export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 
 export const ProviderListAgentsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
+  binaryPath: Schema.optional(TrimmedNonEmptyString),
+  cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;
 

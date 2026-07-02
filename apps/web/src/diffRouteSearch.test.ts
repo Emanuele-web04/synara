@@ -53,7 +53,7 @@ describe("parseDiffRouteSearch", () => {
     expect(parsed).toEqual({});
   });
 
-  it("drops file value when turn is not selected", () => {
+  it("preserves file value for repo diff selections without a turn", () => {
     const parsed = parseDiffRouteSearch({
       diff: "1",
       diffFilePath: "src/app.ts",
@@ -62,6 +62,7 @@ describe("parseDiffRouteSearch", () => {
     expect(parsed).toEqual({
       panel: "diff",
       diff: "1",
+      diffFilePath: "src/app.ts",
     });
   });
 

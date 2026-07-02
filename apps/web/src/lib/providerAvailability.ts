@@ -4,6 +4,17 @@ import {
   type ServerProviderStatus,
 } from "@t3tools/contracts";
 
+export interface ProviderSendAvailability {
+  readonly provider: ProviderKind;
+  readonly status: ServerProviderStatus | null;
+  readonly usable: boolean;
+  readonly unavailableReason: string;
+}
+
+export type ProviderStatusRefresh = () => Promise<
+  readonly ServerProviderStatus[] | null | undefined
+>;
+
 export function normalizeCustomBinaryPath(value: string | null | undefined): string | null {
   if (typeof value !== "string") {
     return null;
@@ -76,4 +87,56 @@ export function providerUnavailableReason(status: ServerProviderStatus | null | 
     return status.message ?? `${providerLabel} is unavailable right now.`;
   }
   return status.message ?? `${providerLabel} has limited availability right now.`;
+}
+
+export function findProviderStatus(
+  statuses: readonly ServerProviderStatus[],
+  provider: ProviderKind,
+): ServerProviderStatus | null {
+  return statuses.find((status) => status.provider === provider) ?? null;
+}
+
+// Shared send gate used by chat, Kanban, shortcuts, and handoff flows.
+export function resolveProviderSendAvailability(input: {
+  readonly provider: ProviderKind;
+  readonly statuses: readonly ServerProviderStatus[];
+}): ProviderSendAvailability {
+  const status = findProviderStatus(input.statuses, input.provider);
+  return {
+    provider: input.provider,
+    status,
+    usable: isProviderUsable(status),
+    unavailableReason: providerUnavailableReason(status),
+  };
+}
+
+function shouldRefreshBeforeBlocking(status: ServerProviderStatus | null): boolean {
+  return !status || !status.available || status.authStatus === "unauthenticated";
+}
+
+// Re-check a blocked provider once before surfacing stale install/auth state to the user.
+export async function resolveProviderSendAvailabilityWithRefresh(input: {
+  readonly provider: ProviderKind;
+  readonly statuses: readonly ServerProviderStatus[];
+  readonly refreshStatuses: ProviderStatusRefresh;
+}): Promise<ProviderSendAvailability> {
+  const initial = resolveProviderSendAvailability(input);
+  if (initial.usable || !shouldRefreshBeforeBlocking(initial.status)) {
+    return initial;
+  }
+
+  let refreshedStatuses: readonly ServerProviderStatus[] | null | undefined;
+  try {
+    refreshedStatuses = await input.refreshStatuses();
+  } catch {
+    refreshedStatuses = null;
+  }
+  if (!refreshedStatuses) {
+    return initial;
+  }
+
+  return resolveProviderSendAvailability({
+    provider: input.provider,
+    statuses: refreshedStatuses,
+  });
 }

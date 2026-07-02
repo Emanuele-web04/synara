@@ -5,6 +5,18 @@ import {
   type OrchestrationEvent,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
+import {
+  addPinnedMessage,
+  removePinnedMessage,
+  setPinnedMessageDone,
+  setPinnedMessageLabel,
+} from "@t3tools/shared/pinnedMessages";
+import {
+  addThreadMarker,
+  removeThreadMarker,
+  setThreadMarkerDone,
+  setThreadMarkerLabel,
+} from "@t3tools/shared/threadMarkers";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -60,6 +72,7 @@ import {
   advanceProjectMetadataSnapshotState,
   PROJECT_METADATA_SNAPSHOT_PROJECTORS,
 } from "../projectMetadataProjection.ts";
+import { resolveStableMessageTurnId } from "../messageTurnId.ts";
 import {
   attachmentRelativePath,
   parseAttachmentIdFromRelativePath,
@@ -440,7 +453,7 @@ function collectThreadAttachmentRelativePaths(
   const relativePaths = new Set<string>();
   for (const message of messages) {
     for (const attachment of message.attachments ?? []) {
-      if (attachment.type !== "image") {
+      if (attachment.type !== "image" && attachment.type !== "file") {
         continue;
       }
       const attachmentThreadSegment = parseThreadSegmentFromAttachmentId(attachment.id);
@@ -618,6 +631,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             lastKnownPr: event.payload.lastKnownPr ?? null,
             latestTurnId: null,
             handoff: event.payload.handoff,
+            pinnedMessages: null,
+            threadMarkers: null,
+            notes: null,
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
@@ -683,6 +699,157 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               ? { lastKnownPr: event.payload.lastKnownPr }
               : {}),
             ...(event.payload.handoff !== undefined ? { handoff: event.payload.handoff } : {}),
+            ...(event.payload.pinnedMessages !== undefined
+              ? { pinnedMessages: event.payload.pinnedMessages }
+              : {}),
+            ...(event.payload.threadMarkers !== undefined
+              ? { threadMarkers: event.payload.threadMarkers }
+              : {}),
+            ...(event.payload.notes !== undefined ? { notes: event.payload.notes } : {}),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.pinned-message-added": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedMessages: addPinnedMessage(existingRow.value.pinnedMessages, event.payload.pin),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.pinned-message-removed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedMessages: removePinnedMessage(
+              existingRow.value.pinnedMessages,
+              event.payload.messageId,
+            ),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.pinned-message-done-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedMessages: setPinnedMessageDone(
+              existingRow.value.pinnedMessages,
+              event.payload.messageId,
+              event.payload.done,
+            ),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.pinned-message-label-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            pinnedMessages: setPinnedMessageLabel(
+              existingRow.value.pinnedMessages,
+              event.payload.messageId,
+              event.payload.label,
+            ),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.marker-added": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            threadMarkers: addThreadMarker(existingRow.value.threadMarkers, event.payload.marker),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.marker-removed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            threadMarkers: removeThreadMarker(
+              existingRow.value.threadMarkers,
+              event.payload.markerId,
+            ),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.marker-done-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            threadMarkers: setThreadMarkerDone(
+              existingRow.value.threadMarkers,
+              event.payload.markerId,
+              event.payload.done,
+              event.payload.updatedAt,
+            ),
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.marker-label-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            threadMarkers: setThreadMarkerLabel(
+              existingRow.value.threadMarkers,
+              event.payload.markerId,
+              event.payload.label,
+              event.payload.updatedAt,
+            ),
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -926,7 +1093,10 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
-            turnId: event.payload.turnId,
+            turnId: resolveStableMessageTurnId({
+              existingTurnId: Option.isSome(existingMessage) ? existingMessage.value.turnId : null,
+              incomingTurnId: event.payload.turnId,
+            }),
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),

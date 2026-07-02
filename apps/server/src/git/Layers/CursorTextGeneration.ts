@@ -13,19 +13,24 @@ import {
 import { TextGenerationError } from "../Errors.ts";
 import {
   CursorTextGeneration,
+  type TextGenerationOperation,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
+  buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
 
@@ -33,15 +38,8 @@ const CURSOR_TEXT_GENERATION_LABEL = "Cursor Agent";
 
 const CURSOR_TIMEOUT_MS = 180_000;
 
-type CursorTextGenerationOperation =
-  | "generateCommitMessage"
-  | "generatePrContent"
-  | "generateDiffSummary"
-  | "generateBranchName"
-  | "generateThreadTitle";
-
 function mapCursorAcpError(
-  operation: CursorTextGenerationOperation,
+  operation: TextGenerationOperation,
   detail: string,
   cause: unknown,
 ): TextGenerationError {
@@ -99,7 +97,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     modelSelection,
     providerOptions,
   }: {
-    operation: CursorTextGenerationOperation;
+    operation: TextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -353,12 +351,93 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     };
   });
 
+  const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = Effect.fn(
+    "CursorTextGeneration.generateThreadRecap",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateThreadRecap",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson, rawTextFallback } = buildThreadRecapPrompt({
+      ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+      newMaterial: input.newMaterial,
+      ...(input.currentState ? { currentState: input.currentState } : {}),
+    });
+    const generated = yield* runCursorJson({
+      operation: "generateThreadRecap",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      rawTextFallback,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+
+    return {
+      recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+    };
+  });
+
+  const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = Effect.fn(
+    "CursorTextGeneration.generateAutomationIntent",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generateAutomationIntent",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+      message: input.message,
+      ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+      nowIso: input.nowIso,
+    });
+    return yield* runCursorJson({
+      operation: "generateAutomationIntent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  });
+
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] =
+    Effect.fn("CursorTextGeneration.evaluateAutomationCompletion")(function* (input) {
+      const modelSelection = resolveCursorModelSelection(input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "evaluateAutomationCompletion",
+          detail: "Invalid Cursor model selection.",
+        });
+      }
+
+      const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+      return yield* runCursorJson({
+        operation: "evaluateAutomationCompletion",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
     generateBranchName,
     generateThreadTitle,
+    generateThreadRecap,
+    generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

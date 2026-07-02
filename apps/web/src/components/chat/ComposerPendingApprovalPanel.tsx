@@ -31,11 +31,11 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
     <div className="px-5 pt-3 pb-3 sm:px-6">
       <div className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-baseline gap-1.5">
-          <span className="shrink-0 text-[10px] font-semibold tracking-[0.14em] uppercase text-muted-foreground/50">
+          <span className="shrink-0 text-[10px] font-semibold text-muted-foreground/50">
             {kindLabel}
           </span>
           {parsed.tool ? (
-            <span className="truncate text-[10px] font-medium tracking-[0.08em] uppercase text-muted-foreground/55">
+            <span className="truncate text-[10px] font-medium text-muted-foreground/55">
               · {parsed.tool}
             </span>
           ) : null}

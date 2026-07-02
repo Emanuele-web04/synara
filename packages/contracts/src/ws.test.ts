@@ -109,6 +109,64 @@ it.effect("accepts preview.stopAll requests", () =>
   }),
 );
 
+it.effect("accepts project script discovery requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-project-scripts-1",
+      body: {
+        _tag: WS_METHODS.projectsDiscoverScripts,
+        cwd: "/repo",
+        depth: 1,
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.projectsDiscoverScripts);
+  }),
+);
+
+it.effect("accepts automation create requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WebSocketRequest, {
+      id: "req-automation-create-1",
+      body: {
+        _tag: WS_METHODS.automationCreate,
+        name: "Nightly maintenance",
+        projectId: "project-1",
+        prompt: "Check stale dependencies.",
+        schedule: { type: "manual" },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.automationCreate);
+  }),
+);
+
+it.effect("accepts automation run action requests", () =>
+  Effect.gen(function* () {
+    const markRead = yield* decode(WebSocketRequest, {
+      id: "req-automation-read-1",
+      body: {
+        _tag: WS_METHODS.automationMarkRunRead,
+        runId: "run-1",
+        unread: false,
+      },
+    });
+    const archive = yield* decode(WebSocketRequest, {
+      id: "req-automation-archive-1",
+      body: {
+        _tag: WS_METHODS.automationArchiveRun,
+        runId: "run-1",
+        archived: true,
+      },
+    });
+
+    assert.strictEqual(markRead.body._tag, WS_METHODS.automationMarkRunRead);
+    assert.strictEqual(archive.body._tag, WS_METHODS.automationArchiveRun);
+  }),
+);
+
 it.effect("accepts typed websocket push envelopes with sequence", () =>
   Effect.gen(function* () {
     const parsed = yield* decode(WsResponse, {
@@ -152,6 +210,26 @@ it.effect("accepts git.actionProgress push envelopes", () =>
     }
 
     assert.strictEqual(parsed.channel, WS_CHANNELS.gitActionProgress);
+  }),
+);
+
+it.effect("accepts automation.event push envelopes", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decode(WsResponse, {
+      type: "push",
+      sequence: 4,
+      channel: WS_CHANNELS.automationEvent,
+      data: {
+        type: "definition-deleted",
+        automationId: "automation-1",
+      },
+    });
+
+    if (!("type" in parsed) || parsed.type !== "push") {
+      assert.fail("expected websocket response to decode as a push envelope");
+    }
+
+    assert.strictEqual(parsed.channel, WS_CHANNELS.automationEvent);
   }),
 );
 

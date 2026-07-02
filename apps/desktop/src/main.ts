@@ -12,6 +12,7 @@ import * as Path from "node:path";
 import {
   app,
   BrowserWindow,
+  clipboard,
   dialog,
   ipcMain,
   Menu,
@@ -35,17 +36,31 @@ import type {
   DesktopUpdateActionResult,
   DesktopUpdateState,
 } from "@t3tools/contracts";
-import { autoUpdater, CancellationToken } from "electron-updater";
+import { autoUpdater, BaseUpdater, CancellationToken } from "electron-updater";
 
 import type { ContextMenuItem } from "@t3tools/contracts";
 import { getMacTrafficLightPosition } from "@t3tools/shared/desktopChrome";
 import { NetService } from "@t3tools/shared/Net";
 import { RotatingFileSink } from "@t3tools/shared/logging";
 import { isBackendReadinessAborted, waitForHttpReady } from "./backendReadiness";
+import { resolveBackendNodeArgs } from "./backendNodeOptions";
 import { waitForBackendStartupReady } from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
+import {
+  LSREGISTER_PATH,
+  parseLastLaunchVersion,
+  resolveLaunchVersionRecordPath,
+  resolveMacAppBundlePath,
+  serializeLaunchVersionRecord,
+  shouldRefreshIconCache,
+} from "./macIconCacheRefresh";
 import { openInitialBackendWindow } from "./initialBackendWindowOpen";
 import { shouldAllowMediaPermissionRequest } from "./mediaPermissions";
+import {
+  installResumableUpdateDownloader,
+  type ResumableDownloaderTarget,
+} from "./resumableUpdateDownload";
+import { hardenElectronUpdater } from "./electronUpdaterSecurity";
 import { ServerListeningDetector } from "./serverListeningDetector";
 import { syncShellEnvironment } from "./syncShellEnvironment";
 import {
@@ -81,17 +96,15 @@ import {
   resolveElectronUpdaterCacheDirName,
   resolveElectronUpdaterPendingCacheDir,
 } from "./updatePendingCache";
-import {
-  buildGitHubReleaseDownloadBaseUrl,
-  buildGitHubReleasesPageUrl,
-  type LatestGitHubRelease,
-  resolveGitHubUpdateSource,
-  resolveLatestStableGitHubRelease,
-} from "./githubUpdateFeed";
-import { CachedGitHubUpdateFeedRefresher } from "./updateFeedCache";
+import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch";
 import { DesktopBrowserManager } from "./browserManager";
-import { BROWSER_IPC_CHANNELS, registerBrowserIpcHandlers, sendBrowserState } from "./browserIpc";
+import {
+  BROWSER_IPC_CHANNELS,
+  registerBrowserIpcHandlers,
+  sendBrowserCopyLink,
+  sendBrowserState,
+} from "./browserIpc";
 import {
   BrowserUsePipeServer,
   DPCODE_BROWSER_USE_PIPE_ENV,
@@ -120,6 +133,13 @@ const SET_THEME_CHANNEL = "desktop:set-theme";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 const SHOW_IN_FOLDER_CHANNEL = "desktop:show-in-folder";
+const CLIPBOARD_WRITE_IMAGE_CHANNEL = "desktop:clipboard-write-image";
+const MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH = 16 * 1024 * 1024;
+const WINDOW_MINIMIZE_CHANNEL = "desktop:window-minimize";
+const WINDOW_TOGGLE_MAXIMIZE_CHANNEL = "desktop:window-toggle-maximize";
+const WINDOW_CLOSE_CHANNEL = "desktop:window-close";
+const WINDOW_GET_STATE_CHANNEL = "desktop:window-get-state";
+const WINDOW_STATE_CHANNEL = "desktop:window-state";
 const MENU_ACTION_CHANNEL = "desktop:menu-action";
 const ZOOM_FACTOR_CHANNEL = "desktop:zoom-factor";
 const ZOOM_FACTOR_CHANGED_CHANNEL = "desktop:zoom-factor-changed";
@@ -153,19 +173,22 @@ const AUTO_UPDATE_POLL_INTERVAL_MS = 4 * 60 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const AUTO_UPDATE_FOREGROUND_RECHECK_MIN_BACKGROUND_MS = 30 * 1000;
 const AUTO_UPDATE_CHECK_TIMEOUT_MS = 45 * 1000;
-const AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 90 * 1000;
+const AUTO_UPDATE_DOWNLOAD_STALL_TIMEOUT_MS = 60 * 1000;
 // Upper bound on how long we wait for electron-updater to release a cancelled
 // download before allowing a retry, so a wedged updater promise can't block updates.
-const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 30 * 1000;
+const AUTO_UPDATE_DOWNLOAD_SETTLE_TIMEOUT_MS = 20 * 1000;
 const AUTO_UPDATE_STALLED_DOWNLOAD_CANCELLATION_SUPPRESSION_MS = 2 * 60 * 1000;
-const AUTO_UPDATE_FEED_CACHE_TTL_MS = 30 * 60 * 1000;
-const AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS = 10 * 1000;
 // How long we give quitAndInstall() to actually quit/relaunch the app before we
 // conclude the OS installer never started (unsigned/quarantined build, read-only
 // install dir, blocked NSIS run) and surface the manual-download fallback.
 const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
+const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
+  "SYNARA_BACKEND_MAX_OLD_SPACE_MB",
+  "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
+  "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
+] as const;
 const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
@@ -207,12 +230,14 @@ let browserPerfInterval: ReturnType<typeof setInterval> | null = null;
 const browserManager = new DesktopBrowserManager();
 let browserUsePipeServer: BrowserUsePipeServer | null = null;
 let configuredGitHubUpdateSource: ReturnType<typeof resolveGitHubUpdateSource> = null;
-let configuredGitHubUpdateToken = "";
-let configuredGitHubUpdateFeedRefresher: CachedGitHubUpdateFeedRefresher | null = null;
 let configuredUpdaterCacheDirName: string | null = null;
 
 browserManager.subscribe((state) => {
   sendBrowserState(mainWindow?.webContents, state);
+});
+
+browserManager.subscribeCopyLink((event) => {
+  sendBrowserCopyLink(mainWindow?.webContents, event);
 });
 
 function startBrowserPerformanceLogging(): void {
@@ -322,6 +347,21 @@ function getSafeTheme(rawTheme: unknown): DesktopTheme | null {
   }
 
   return null;
+}
+
+function getDesktopWindowState(window: BrowserWindow): {
+  isMaximized: boolean;
+  isFullscreen: boolean;
+} {
+  return {
+    isMaximized: window.isMaximized(),
+    isFullscreen: window.isFullScreen(),
+  };
+}
+
+function emitDesktopWindowState(window: BrowserWindow | null = mainWindow): void {
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(WINDOW_STATE_CHANNEL, getDesktopWindowState(window));
 }
 
 function isSaveFileInput(input: unknown): input is {
@@ -1248,12 +1288,9 @@ function configureAppIdentity(): void {
   }
 }
 
-// macOS 26 (Darwin 25+, "Tahoe") masks the full-bleed bundle icon into a clean squircle
-// on its own, so we leave it completely untouched there. Older macOS does NOT round app
-// icons, so the same square bundle icon would look square in the dock. Only on those
-// older versions do we override the dock tile with a pre-rounded literal image (drawn
-// as-is, no system styling). Baking transparent rounded corners into the bundle icon is
-// not an option because that transparency is exactly what triggers Tahoe's Liquid Glass.
+// The packaged bundle icon is a solid, pre-rounded ICNS so Tahoe does not reinterpret
+// the mark as Icon Composer glass. Older macOS gets the same literal rounded artwork as
+// a runtime dock override because it does not apply the modern system mask itself.
 function applyLegacyMacDockIcon(): void {
   if (process.platform !== "darwin" || !app.dock) {
     return;
@@ -1271,6 +1308,79 @@ function applyLegacyMacDockIcon(): void {
     return;
   }
   app.dock.setIcon(image);
+}
+
+function readLaunchVersionRecordContents(): string | null {
+  try {
+    return FS.readFileSync(resolveLaunchVersionRecordPath(app.getPath("userData")), "utf8");
+  } catch {
+    // No prior record (fresh profile) or an unreadable file.
+    return null;
+  }
+}
+
+function persistLastLaunchVersion(version: string): void {
+  const recordPath = resolveLaunchVersionRecordPath(app.getPath("userData"));
+  try {
+    // The userData directory is not guaranteed to exist this early on a clean
+    // first launch, so ensure it before writing or the record silently fails to
+    // persist and the refresh re-runs on every launch.
+    FS.mkdirSync(Path.dirname(recordPath), { recursive: true });
+    FS.writeFileSync(recordPath, serializeLaunchVersionRecord(version));
+  } catch (error) {
+    console.warn("[desktop] Failed to persist last launch version", error);
+  }
+}
+
+// macOS keeps an aggressive Launch Services / IconServices cache keyed by bundle
+// path + identifier. electron-updater swaps the bundle in place, so after an
+// update the refreshed icon.icns is already on disk while the dock and Finder
+// keep painting the previous icon — most visibly on Tahoe, where we no longer
+// apply a runtime dock icon (see applyLegacyMacDockIcon). When the version
+// changes across launches, force Launch Services to re-read the bundle so the
+// new icon shows on every surface. Best-effort: never blocks startup.
+function refreshMacIconCacheOnVersionChange(): void {
+  if (process.platform !== "darwin" || !app.isPackaged) {
+    return;
+  }
+
+  const currentVersion = app.getVersion();
+  const previousVersion = parseLastLaunchVersion(readLaunchVersionRecordContents());
+  if (!shouldRefreshIconCache(previousVersion, currentVersion)) {
+    return;
+  }
+
+  // Record the new version before refreshing so a failed re-registration is not
+  // retried on every launch; the icon then heals on the next version bump
+  // instead of spawning lsregister each time.
+  persistLastLaunchVersion(currentVersion);
+
+  const bundlePath = resolveMacAppBundlePath(process.execPath, process.platform);
+  if (!bundlePath || !FS.existsSync(LSREGISTER_PATH)) {
+    return;
+  }
+
+  // Bump the bundle mtime so Launch Services notices the swap, then re-register
+  // it. The codesign signature covers Contents, not the bundle directory mtime,
+  // so this is signature-safe; the bundle may be read-only for this user, in
+  // which case the re-registration below still nudges the cache.
+  try {
+    const now = new Date();
+    FS.utimesSync(bundlePath, now, now);
+  } catch {
+    // Read-only bundle: fall through to lsregister.
+  }
+
+  const child = ChildProcess.spawn(LSREGISTER_PATH, ["-f", bundlePath], { stdio: "ignore" });
+  child.unref();
+  child.once("error", (error) => {
+    console.warn("[desktop] Failed to refresh macOS icon cache after update", error);
+  });
+  child.once("exit", (code) => {
+    console.info(
+      `[desktop] Refreshed macOS icon registration after update ${previousVersion ?? "(none)"} -> ${currentVersion} (lsregister exit ${code ?? "unknown"}).`,
+    );
+  });
 }
 
 function clearUpdatePollTimer(): void {
@@ -1311,68 +1421,6 @@ function setUpdateState(patch: Partial<DesktopUpdateState>): void {
 
 function shouldEnableAutoUpdates(): boolean {
   return resolveAutoUpdateDisabledReason() === null;
-}
-
-function applyConfiguredGitHubUpdateFeed(latestRelease: LatestGitHubRelease): void {
-  if (configuredGitHubUpdateSource === null) {
-    return;
-  }
-  // Keep the manual-download fallback pinned to the exact release we are about
-  // to offer, so a user whose in-app update fails lands on the matching assets.
-  setUpdateState({
-    releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource, latestRelease.tag),
-  });
-  autoUpdater.setFeedURL({
-    provider: "generic",
-    url: buildGitHubReleaseDownloadBaseUrl(configuredGitHubUpdateSource, latestRelease.tag),
-    ...(configuredGitHubUpdateToken
-      ? {
-          requestHeaders: {
-            authorization: `token ${configuredGitHubUpdateToken}`,
-          },
-        }
-      : {}),
-  });
-}
-
-async function resolveLatestConfiguredGitHubRelease(): Promise<LatestGitHubRelease | null> {
-  if (configuredGitHubUpdateSource === null) {
-    return null;
-  }
-
-  const controller = new AbortController();
-  let timedOut = false;
-  const timeoutTimer = setTimeout(() => {
-    timedOut = true;
-    controller.abort();
-  }, AUTO_UPDATE_FEED_REFRESH_TIMEOUT_MS);
-  timeoutTimer.unref();
-
-  try {
-    return await resolveLatestStableGitHubRelease(
-      configuredGitHubUpdateSource,
-      configuredGitHubUpdateToken,
-      { signal: controller.signal },
-    );
-  } catch (error) {
-    if (timedOut) {
-      throw new Error("Timed out while refreshing the desktop update feed.");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timeoutTimer);
-  }
-}
-
-function shouldForceUpdateFeedRefresh(reason: string): boolean {
-  return reason === "menu" || reason === "renderer";
-}
-
-// Explicit user checks bypass the feed TTL; automatic checks keep startup/foreground latency low.
-async function refreshConfiguredUpdateFeed(
-  options: { readonly force?: boolean } = {},
-): Promise<void> {
-  await configuredGitHubUpdateFeedRefresher?.refresh(options);
 }
 
 function isKnownUpdateVersionNewer(version: string | null | undefined): boolean {
@@ -1574,7 +1622,6 @@ async function checkForUpdates(reason: string): Promise<void> {
   console.info(`[desktop-updater] Checking for updates (${reason})...`);
 
   try {
-    await refreshConfiguredUpdateFeed({ force: shouldForceUpdateFeedRefresh(reason) });
     await autoUpdater.checkForUpdates();
   } catch (error: unknown) {
     clearUpdateCheckTimeoutTimer();
@@ -1733,35 +1780,16 @@ function configureAutoUpdater(): void {
   });
   if (!enabled) {
     configuredGitHubUpdateSource = null;
-    configuredGitHubUpdateToken = "";
-    configuredGitHubUpdateFeedRefresher = null;
     configuredUpdaterCacheDirName = null;
     return;
   }
   updaterConfigured = true;
+  hardenElectronUpdater({ BaseUpdater }, autoUpdater);
   configuredGitHubUpdateSource = resolveGitHubUpdateSource(appUpdateYml);
   if (configuredGitHubUpdateSource !== null) {
-    // Seed the manual-download fallback with the "latest" releases page until a
-    // specific release tag is resolved by the feed refresher.
+    // The updater itself uses app-update.yml; this URL is only the human fallback.
     setUpdateState({ releaseUrl: buildGitHubReleasesPageUrl(configuredGitHubUpdateSource) });
   }
-
-  const githubToken =
-    process.env.T3CODE_DESKTOP_UPDATE_GITHUB_TOKEN?.trim() || process.env.GH_TOKEN?.trim() || "";
-  configuredGitHubUpdateToken = githubToken;
-  configuredGitHubUpdateFeedRefresher =
-    configuredGitHubUpdateSource === null
-      ? null
-      : new CachedGitHubUpdateFeedRefresher({
-          cacheTtlMs: AUTO_UPDATE_FEED_CACHE_TTL_MS,
-          resolveLatestRelease: resolveLatestConfiguredGitHubRelease,
-          applyRelease: applyConfiguredGitHubUpdateFeed,
-          onStaleRefreshFailure: (error, release) => {
-            console.warn(
-              `[desktop-updater] Failed to refresh update feed; using cached ${release.tag}: ${formatErrorMessage(error)}`,
-            );
-          },
-        });
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -1769,9 +1797,24 @@ function configureAutoUpdater(): void {
   autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
-  // The feed is pinned to an exact release tag before each check, so blockmap
-  // differential downloads can be used without racing a moving "latest" target.
-  autoUpdater.disableDifferentialDownload = false;
+  // Match electron-updater's native GitHub provider path; the packaged
+  // app-update.yml owns the production feed, and generic feeds stay mock-only.
+  // macOS release builds repack and validate the Squirrel update zip, then omit
+  // the stale zip blockmap so ShipIt always installs the exact signed payload.
+  autoUpdater.disableDifferentialDownload =
+    process.platform === "darwin" || isArm64HostRunningIntelBuild(desktopRuntimeInfo);
+  // electron-updater has no working idle timeout on macOS (its socket timeout is
+  // wired to a `socket` event Electron's net.request never emits) and never
+  // resumes from a byte offset, so a stalled CDN transfer hangs for minutes
+  // until TCP recovers on its own. installResumableUpdateDownloader replaces the
+  // download transfer with a stall-aware, resumable one and installs a real idle
+  // timeout, so an intermittent stall becomes a brief reconnect-and-resume
+  // instead of a multi-minute freeze. Independent of the zip-validation fix.
+  if (!installResumableUpdateDownloader(autoUpdater as unknown as ResumableDownloaderTarget)) {
+    console.warn(
+      "[desktop-updater] Could not install resumable update downloader; falling back to default transfer.",
+    );
+  }
   let lastLoggedDownloadMilestone = -1;
 
   if (isArm64HostRunningIntelBuild(desktopRuntimeInfo)) {
@@ -1879,6 +1922,19 @@ function configureAutoUpdater(): void {
 
   scheduleUpdatePoll();
 }
+// Builds process-local Node args so provider/tool children do not inherit Synara's heap guard.
+function backendNodeArgs(): string[] {
+  const configuredMaxOldSpaceMb =
+    BACKEND_MAX_OLD_SPACE_ENV_KEYS.map((key) => process.env[key]).find(
+      (value) => value !== undefined && value.trim().length > 0,
+    ) ?? null;
+  return resolveBackendNodeArgs({
+    configuredMaxOldSpaceMb,
+    existingNodeOptions: process.env.NODE_OPTIONS,
+    totalMemoryBytes: OS.totalmem(),
+  });
+}
+
 function backendEnv(): NodeJS.ProcessEnv {
   return {
     ...process.env,
@@ -1941,7 +1997,7 @@ function startBackend(): void {
   }
 
   const captureBackendLogs = app.isPackaged && backendLogSink !== null;
-  const child = ChildProcess.spawn(process.execPath, [backendEntry], {
+  const child = ChildProcess.spawn(process.execPath, [...backendNodeArgs(), backendEntry], {
     cwd: resolveBackendCwd(),
     // In Electron main, process.execPath points to the Electron binary.
     // Run the child in Node mode so this backend process does not become a GUI app instance.
@@ -2290,6 +2346,29 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.removeHandler(CLIPBOARD_WRITE_IMAGE_CHANNEL);
+  ipcMain.handle(CLIPBOARD_WRITE_IMAGE_CHANNEL, async (_event, rawDataUrl: unknown) => {
+    if (typeof rawDataUrl !== "string") {
+      return false;
+    }
+    if (rawDataUrl.length > MAX_CLIPBOARD_IMAGE_DATA_URL_LENGTH) {
+      return false;
+    }
+
+    const dataUrl = rawDataUrl.trim();
+    if (!dataUrl.startsWith("data:image/png;base64,")) {
+      return false;
+    }
+
+    const image = nativeImage.createFromDataURL(dataUrl);
+    if (image.isEmpty()) {
+      return false;
+    }
+
+    clipboard.writeImage(image);
+    return true;
+  });
+
   ipcMain.removeHandler(SHOW_IN_FOLDER_CHANNEL);
   ipcMain.handle(SHOW_IN_FOLDER_CHANNEL, async (_event, rawPath: unknown) => {
     if (typeof rawPath !== "string" || rawPath.trim().length === 0) {
@@ -2313,6 +2392,40 @@ function registerIpcHandlers(): void {
     }
 
     shell.showItemInFolder(resolvedPath);
+  });
+
+  ipcMain.removeHandler(WINDOW_MINIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_MINIMIZE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.minimize();
+  });
+
+  ipcMain.removeHandler(WINDOW_TOGGLE_MAXIMIZE_CHANNEL);
+  ipcMain.handle(WINDOW_TOGGLE_MAXIMIZE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    if (!window) {
+      return { isMaximized: false, isFullscreen: false };
+    }
+    if (window.isMaximized()) {
+      window.unmaximize();
+    } else {
+      window.maximize();
+    }
+    const state = getDesktopWindowState(window);
+    window.webContents.send(WINDOW_STATE_CHANNEL, state);
+    return state;
+  });
+
+  ipcMain.removeHandler(WINDOW_CLOSE_CHANNEL);
+  ipcMain.handle(WINDOW_CLOSE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    window?.close();
+  });
+
+  ipcMain.removeHandler(WINDOW_GET_STATE_CHANNEL);
+  ipcMain.handle(WINDOW_GET_STATE_CHANNEL, async (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender) ?? mainWindow;
+    return window ? getDesktopWindowState(window) : { isMaximized: false, isFullscreen: false };
   });
 
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
@@ -2413,12 +2526,13 @@ function getWindowMaterialOptions(): BrowserWindowConstructorOptions {
   };
 }
 
-// macOS uses a frameless shell with the traffic lights inset into the renderer's
-// top chrome (see CHAT_SURFACE_HEADER_HEIGHT_CLASS in apps/web). Windows/Linux have
-// no inset-traffic-light concept and the renderer ships no custom window-control UI,
-// so a hidden title bar there would strip the min/max/close buttons. Keep the native
-// framed title bar off macOS so window controls always work.
+// macOS keeps native traffic lights inset into the renderer's top chrome. Windows
+// uses a fully frameless shell and renderer-owned minimize/maximize/close controls,
+// so the toolbar can occupy the top edge instead of sitting below a native title bar.
 function getTitleBarOptions(): BrowserWindowConstructorOptions {
+  if (process.platform === "win32") {
+    return { frame: false };
+  }
   if (process.platform !== "darwin") {
     return {};
   }
@@ -2513,7 +2627,13 @@ function createWindow(): BrowserWindow {
     // restore bounds when the user toggles the window back out of maximized.
     window.maximize();
     window.show();
+    emitDesktopWindowState(window);
   });
+
+  window.on("maximize", () => emitDesktopWindowState(window));
+  window.on("unmaximize", () => emitDesktopWindowState(window));
+  window.on("enter-full-screen", () => emitDesktopWindowState(window));
+  window.on("leave-full-screen", () => emitDesktopWindowState(window));
 
   if (isDevelopment) {
     void window.loadURL(process.env.VITE_DEV_SERVER_URL as string);
@@ -2658,6 +2778,7 @@ if (hasSingleInstanceLock) {
       writeDesktopLogHeader("app ready");
       configureAppIdentity();
       applyLegacyMacDockIcon();
+      refreshMacIconCacheOnVersionChange();
       configureMediaPermissions();
       configureApplicationMenu();
       registerDesktopProtocol();

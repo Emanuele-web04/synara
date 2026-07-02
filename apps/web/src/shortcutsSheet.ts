@@ -63,7 +63,7 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
   {
     command: "chat.new",
     label: "New thread",
-    description: "Start a fresh thread in the current project.",
+    description: "Start a fresh thread in the current project, or the most recent one.",
   },
   {
     command: "chat.newLatestProject",
@@ -104,6 +104,31 @@ const AVAILABLE_NOW_DEFINITIONS: readonly ShortcutDefinition[] = [
     command: "chat.split",
     label: "Split chat",
     description: "Open the current conversation in a second pane.",
+  },
+  {
+    command: "view.recent.previous",
+    label: "Previous recent view",
+    description: "Cycle backward through recently opened primary views.",
+  },
+  {
+    command: "view.recent.next",
+    label: "Next recent view",
+    description: "Cycle forward through recently opened primary views.",
+  },
+  {
+    command: "modelPicker.toggle",
+    label: "Model picker",
+    description: "Open the composer provider and model picker.",
+  },
+  {
+    command: "traitsPicker.toggle",
+    label: "Reasoning picker",
+    description: "Open the composer reasoning and trait controls.",
+  },
+  {
+    command: "composer.focus.toggle",
+    label: "Focus composer",
+    description: "Focus or blur the chat prompt composer.",
   },
   {
     command: "terminal.toggle",
@@ -321,4 +346,32 @@ export function buildShortcutSheetSections(
   }
 
   return sections;
+}
+
+// Match a single entry against a free-text query on the human-readable label, the
+// description, and the rendered shortcut label, so a user can search by action name
+// ("terminal"), intent ("split"), or even the key combo itself ("⌘N" / "ctrl+n").
+function shortcutSheetEntryMatchesQuery(entry: ShortcutSheetEntry, needle: string): boolean {
+  return (
+    entry.label.toLowerCase().includes(needle) ||
+    entry.description.toLowerCase().includes(needle) ||
+    entry.shortcutLabel.toLowerCase().includes(needle)
+  );
+}
+
+// Filter each section's entries against a free-text query, dropping sections that end up
+// empty. Shared by the keyboard-shortcuts dialog (Mod+/) and the settings reference panel
+// so the two surfaces search identically.
+export function filterShortcutSheetSections(
+  sections: ShortcutSheetSection[],
+  query: string,
+): ShortcutSheetSection[] {
+  const trimmed = query.trim().toLowerCase();
+  if (trimmed.length === 0) return sections;
+  return sections
+    .map((section) => ({
+      ...section,
+      entries: section.entries.filter((entry) => shortcutSheetEntryMatchesQuery(entry, trimmed)),
+    }))
+    .filter((section) => section.entries.length > 0);
 }

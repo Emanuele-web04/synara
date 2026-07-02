@@ -1,3 +1,9 @@
+// FILE: Diffs.ts
+// Purpose: Parses unified diffs into turn/checkpoint file summaries.
+// Layer: Server checkpointing helper
+// Exports: turn diff file parsers used by checkpoint capture and provider live-diff ingestion
+
+import type { OrchestrationCheckpointFile } from "@t3tools/contracts";
 import { parsePatchFiles } from "@pierre/diffs";
 
 export interface TurnDiffFileSummary {
@@ -32,4 +38,13 @@ export function parseTurnDiffFilesFromUnifiedDiff(
   return Array.from(filesByPath.values()).toSorted((left, right) =>
     left.path.localeCompare(right.path),
   );
+}
+
+export function parseCheckpointFilesFromUnifiedDiff(diff: string): OrchestrationCheckpointFile[] {
+  return parseTurnDiffFilesFromUnifiedDiff(diff).map((file) => ({
+    path: file.path,
+    kind: "modified",
+    additions: file.additions,
+    deletions: file.deletions,
+  }));
 }

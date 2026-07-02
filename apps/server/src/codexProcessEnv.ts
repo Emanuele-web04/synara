@@ -33,6 +33,7 @@ import {
 const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
+const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
 
 export function resolveCodexBrowserUsePipePath(
   input: {
@@ -118,10 +119,11 @@ function ensureCodexOverlaySymlink(input: {
 
     if (
       targetStat.isSymbolicLink() ||
-      /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName)
+      /^.+\.sqlite(?:-(?:wal|shm|journal))?$/.test(input.entryName) ||
+      CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)
     ) {
-      // SQLite files must stay generation-matched; mixed DB/WAL/SHM/journal files
-      // make Codex fail during initialize. Other real overlay data is preserved.
+      // SQLite files must stay generation-matched, and auth must mirror the
+      // user's real Codex home so external `codex login` changes are visible.
       rmSync(input.targetPath, { recursive: true, force: true });
     } else {
       return;

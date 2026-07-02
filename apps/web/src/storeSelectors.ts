@@ -2,11 +2,23 @@
 // Purpose: Stable Zustand selectors for entity lookups and lightweight sidebar projections.
 // Exports: Selector factories used by routes and sidebar-heavy components.
 
-import type { ProjectId, ThreadId } from "@t3tools/contracts";
+import type { ProjectId, ThreadEnvironmentMode, ThreadId } from "@t3tools/contracts";
 
 import type { AppState } from "./store";
-import { getThreadFromState, getThreadsFromState } from "./threadDerivation";
-import type { Project, SidebarThreadSummary, Thread } from "./types";
+import { collectByIds, getThreadFromState, getThreadsFromState } from "./threadDerivation";
+import type { Project, SidebarThreadSummary, Thread, ThreadShell } from "./types";
+
+const EMPTY_THREAD_SHELLS: ThreadShell[] = [];
+
+export interface ThreadWorkspaceMetadata {
+  envMode: ThreadEnvironmentMode | undefined;
+  worktreePath: string | null;
+}
+
+const EMPTY_THREAD_WORKSPACE_METADATA: ThreadWorkspaceMetadata = Object.freeze({
+  envMode: undefined,
+  worktreePath: null,
+});
 
 function createStableEntitySelector<T extends { id: string }>(
   selectItems: (state: AppState) => readonly T[],
@@ -97,18 +109,91 @@ export function createAllThreadsSelector(): (state: AppState) => readonly Thread
   };
 }
 
+/** Shell-only projection of all threads, in `threadIds` order. Unlike
+ *  `createAllThreadsSelector`, this stays reference-stable across message/activity
+ *  streaming updates, so subscribers only re-render on thread-level changes
+ *  (create/delete/archive/title/workspace). Use it when message content is not needed. */
+export function createThreadShellsSelector(): (state: AppState) => readonly ThreadShell[] {
+  return (state) => collectByIds(state.threadIds, state.threadShellById, EMPTY_THREAD_SHELLS);
+}
+
+/** True when no known thread has any messages (vacuously true with zero threads).
+ *  Reads message id lists only, so streaming content updates do not invalidate it. */
+export function createAllThreadsMessagelessSelector(): (state: AppState) => boolean {
+  let previousThreadIds: readonly ThreadId[] | undefined;
+  let previousMessageIdsByThreadId: AppState["messageIdsByThreadId"] | undefined;
+  let previousResult = true;
+
+  return (state) => {
+    if (
+      previousThreadIds === state.threadIds &&
+      previousMessageIdsByThreadId === state.messageIdsByThreadId
+    ) {
+      return previousResult;
+    }
+
+    previousThreadIds = state.threadIds;
+    previousMessageIdsByThreadId = state.messageIdsByThreadId;
+    previousResult = (state.threadIds ?? []).every(
+      (threadId) => (state.messageIdsByThreadId?.[threadId]?.length ?? 0) === 0,
+    );
+    return previousResult;
+  };
+}
+
 export function createThreadProjectIdSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => ProjectId | null {
-  const selectThread = createThreadSelector(threadId);
-  return (state) => selectThread(state)?.projectId ?? null;
+  return (state) => {
+    if (!threadId) {
+      return null;
+    }
+    return (
+      state.threadShellById?.[threadId]?.projectId ??
+      state.threads.find((thread) => thread.id === threadId)?.projectId ??
+      null
+    );
+  };
+}
+
+export function createThreadWorkspaceMetadataSelector(
+  threadId: ThreadId | null | undefined,
+): (state: AppState) => ThreadWorkspaceMetadata {
+  let previousEnvMode: ThreadEnvironmentMode | undefined = undefined;
+  let previousWorktreePath: string | null = null;
+  let previousResult = EMPTY_THREAD_WORKSPACE_METADATA;
+
+  return (state) => {
+    if (!threadId) {
+      return EMPTY_THREAD_WORKSPACE_METADATA;
+    }
+
+    // Shell-only: avoid subscribing preview panes to live message/activity detail slices.
+    const source = state.threadShellById?.[threadId];
+    const envMode = source?.envMode;
+    const worktreePath = source?.worktreePath ?? null;
+    if (previousEnvMode === envMode && previousWorktreePath === worktreePath) {
+      return previousResult;
+    }
+
+    previousEnvMode = envMode;
+    previousWorktreePath = worktreePath;
+    previousResult =
+      envMode === undefined && worktreePath === null
+        ? EMPTY_THREAD_WORKSPACE_METADATA
+        : { envMode, worktreePath };
+    return previousResult;
+  };
 }
 
 export function createThreadExistsSelector(
   threadId: ThreadId | null | undefined,
 ): (state: AppState) => boolean {
-  const selectThread = createThreadSelector(threadId);
-  return (state) => selectThread(state) !== undefined;
+  return (state) =>
+    threadId
+      ? Boolean(state.threadShellById?.[threadId]) ||
+        state.threads.some((thread) => thread.id === threadId)
+      : false;
 }
 
 export function createSidebarThreadSummarySelector(

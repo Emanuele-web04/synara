@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import {
+  type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_SERVER_SETTINGS,
   TrimmedNonEmptyString,
@@ -32,6 +33,11 @@ import {
 import { ensureNativeApi } from "./nativeApi";
 import { providerDiscoveryQueryKeys } from "./lib/providerDiscoveryReactQuery";
 import { serverQueryKeys, serverSettingsQueryOptions } from "./lib/serverReactQuery";
+import {
+  DEFAULT_UI_DENSITY,
+  UI_DENSITY_MODES,
+  normalizeUiDensity as normalizeUiDensityValue,
+} from "./lib/appDensity";
 
 const APP_SETTINGS_STORAGE_KEY = "synara:app-settings:v1";
 const SERVER_SETTINGS_MIGRATION_STORAGE_KEY = "t3code:server-settings-migrated:v1";
@@ -73,6 +79,10 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "manu
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+
+export const UiDensity = Schema.Literals(UI_DENSITY_MODES);
+export type UiDensity = typeof UiDensity.Type;
+export { DEFAULT_UI_DENSITY };
 
 export function getDefaultNativeFontSmoothing(platform = globalThis.navigator?.platform ?? "") {
   return /mac|iphone|ipad|ipod/i.test(platform);
@@ -123,6 +133,7 @@ const withDefaults =
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  uiDensity: UiDensity.pipe(withDefaults(() => DEFAULT_UI_DENSITY)),
   chatFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_CHAT_FONT_SIZE_PX)),
   chatCodeFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   terminalFontSizePx: Schema.Number.pipe(withDefaults(() => DEFAULT_TERMINAL_FONT_SIZE_PX)),
@@ -151,18 +162,27 @@ export const AppSettingsSchema = Schema.Struct({
   confirmThreadArchive: Schema.Boolean.pipe(withDefaults(() => false)),
   confirmTerminalTabClose: Schema.Boolean.pipe(withDefaults(() => true)),
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
-  // Local-only UI preference: show prompt suggestions under the composer on the
-  // empty new-thread landing. Off hides the suggestion list entirely.
-  enableComposerSuggestions: Schema.Boolean.pipe(withDefaults(() => true)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
   // (rootless chats not tied to a project). `showWorkspaceSection` controls the
   // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
-  // shown, so the switcher simply collapses to a static Threads view when Workspace
-  // is hidden (see the sidebar segmented picker).
+  // shown, so the switcher is hidden by default and only appears when Workspace is
+  // enabled in Settings (see the sidebar segmented picker).
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => true)),
-  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => false)),
+  showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
+  // Local-only UI preferences: which optional sections of the chat Environment panel are
+  // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
+  // toggle the sections beneath it via the panel header's gear menu.
+  showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
   enableTaskCompletionToasts: Schema.Boolean.pipe(withDefaults(() => true)),
   enableSystemTaskCompletionNotifications: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -231,7 +251,7 @@ const PROVIDER_CUSTOM_MODEL_CONFIG: Record<ProviderKind, ProviderCustomModelConf
     title: "Claude",
     description: "Save additional Claude model slugs for the picker and `/model` command.",
     placeholder: "your-claude-model-slug",
-    example: "claude-sonnet-5-0",
+    example: "claude-custom-model",
   },
   cursor: {
     provider: "cursor",
@@ -398,6 +418,7 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
       settings.openCodeBinaryPath,
     ),
     piBinaryPath: normalizeProviderBinaryPathOverride("pi", settings.piBinaryPath),
+    uiDensity: normalizeUiDensityValue(settings.uiDensity),
     chatFontSizePx: normalizeChatFontSizePx(settings.chatFontSizePx),
     terminalFontSizePx: normalizeTerminalFontSizePx(settings.terminalFontSizePx),
     terminalFontFamily: normalizeTerminalFontFamily(settings.terminalFontFamily),
@@ -424,6 +445,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
     enableAssistantStreaming: settings.enableAssistantStreaming,
+    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
     grokBinaryPath: settings.providers.grok.binaryPath,
     kiloBinaryPath: settings.providers.kilo.binaryPath,
@@ -482,6 +504,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
 
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
+  }
+  if (hasOwn(patch, "enableProviderUpdateChecks")) {
+    serverPatch.enableProviderUpdateChecks = Boolean(patch.enableProviderUpdateChecks);
   }
   if (patch.defaultThreadEnvMode === "local" || patch.defaultThreadEnvMode === "worktree") {
     serverPatch.defaultThreadEnvMode = patch.defaultThreadEnvMode;
@@ -620,6 +645,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorBinaryPath",
     "defaultThreadEnvMode",
     "enableAssistantStreaming",
+    "enableProviderUpdateChecks",
     "geminiBinaryPath",
     "grokBinaryPath",
     "kiloBinaryPath",
@@ -929,6 +955,16 @@ export function getProviderStartOptions(
   };
 
   return Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
+}
+
+/**
+ * Single source of truth for mapping the streaming preference onto the orchestration
+ * delivery mode used when dispatching turns (composer, chat, and kanban share this).
+ */
+export function resolveAssistantDeliveryMode(
+  settings: Pick<AppSettings, "enableAssistantStreaming">,
+): AssistantDeliveryMode {
+  return settings.enableAssistantStreaming ? "streaming" : "buffered";
 }
 
 export function getCustomBinaryPathForProvider(

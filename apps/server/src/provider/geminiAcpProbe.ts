@@ -13,6 +13,7 @@ import {
   GEMINI_3_MODEL_CAPABILITIES,
   geminiCapabilitiesForModel,
 } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect } from "effect";
 import { asNumber, asRecord, trimToUndefined } from "./geminiValue.ts";
 
@@ -23,6 +24,18 @@ const GEMINI_ACP_PROBE_TIMEOUT_MS = 30_000;
 const GEMINI_ACP_AUTH_REQUIRED_CODE = -32_000;
 const MAX_CAPTURED_LOG_LINES = 5;
 const MAX_CAPTURED_LOG_LENGTH = 240;
+const GEMINI_BROWSER_BLOCKLIST_VALUE = "www-browser";
+const GEMINI_API_KEY_ENV_HINT = "`GEMINI_API_KEY`";
+const GEMINI_VERTEX_ENV_HINT =
+  "`GOOGLE_GENAI_USE_VERTEXAI=true`, `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION`, plus ADC or `GOOGLE_API_KEY`";
+const GEMINI_HEADLESS_AUTH_GUIDANCE = `Use Gemini API key or Vertex AI auth for Synara: set ${GEMINI_API_KEY_ENV_HINT} in \`~/.gemini/.env\`, or set Vertex AI env (${GEMINI_VERTEX_ENV_HINT}), then refresh provider status.`;
+const GEMINI_CODE_ASSIST_MIGRATION_AUTH_MESSAGE = `Gemini is not authenticated because Google Code Assist OAuth for individual accounts appears to require Antigravity. For Synara, use ${GEMINI_API_KEY_ENV_HINT} or Vertex AI auth (${GEMINI_VERTEX_ENV_HINT}); use Antigravity for individual Code Assist OAuth until Gemini CLI exposes a compatible path.`;
+
+const GEMINI_OAUTH_BROWSER_PROMPT_PATTERNS = [
+  /opening your browser for oauth sign-in/i,
+  /attempting to open authentication page in your browser/i,
+  /accounts\.google\.com\/(?:v3\/signin|signin\/oauth)/i,
+];
 
 export {
   DEFAULT_GEMINI_MODEL_CAPABILITIES,
@@ -61,11 +74,49 @@ function formatGeminiDiscoveryWarning(detail: string): string {
 }
 
 function formatGeminiAuthMessage(detail: string): string {
-  return `Gemini is not authenticated. ${detail}`;
+  return `Gemini is not authenticated. ${detail} ${GEMINI_HEADLESS_AUTH_GUIDANCE}`;
+}
+
+function formatGeminiCodeAssistMigrationAuthMessage(): string {
+  return GEMINI_CODE_ASSIST_MIGRATION_AUTH_MESSAGE;
 }
 
 function formatGeminiModelDiscoveryFallbackMessage(): string {
   return "Gemini CLI is installed and authenticated, but it did not report any available models. Synara will use its built-in Gemini model list.";
+}
+
+function isGeminiUnauthenticatedFailure(message: string, code?: number): boolean {
+  const lowerMessage = message.toLowerCase();
+  return (
+    code === GEMINI_ACP_AUTH_REQUIRED_CODE ||
+    isGeminiCodeAssistMigrationAuthFailure(message) ||
+    lowerMessage.includes("authentication required") ||
+    lowerMessage.includes("api key is missing") ||
+    lowerMessage.includes("auth method") ||
+    lowerMessage.includes("not configured")
+  );
+}
+
+function isGeminiLogUnauthenticatedFailure(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+  return (
+    isGeminiCodeAssistMigrationAuthFailure(message) ||
+    lowerMessage.includes("authentication required") ||
+    lowerMessage.includes("api key is missing") ||
+    lowerMessage.includes("auth method")
+  );
+}
+
+function buildGeminiUnauthenticatedResult(
+  message: string,
+): Omit<GeminiCapabilityProbeResult, "models"> {
+  return {
+    status: "error",
+    auth: { status: "unauthenticated" },
+    message: isGeminiCodeAssistMigrationAuthFailure(message)
+      ? formatGeminiCodeAssistMigrationAuthMessage()
+      : formatGeminiAuthMessage(message),
+  };
 }
 
 function detailFromProbeLogs(
@@ -81,20 +132,9 @@ export function parseGeminiAcpProbeError(
   const record = asRecord(error);
   const code = asNumber(record?.code);
   const message = trimToUndefined(record?.message) ?? "Gemini ACP request failed.";
-  const lowerMessage = message.toLowerCase();
-  const unauthenticated =
-    code === GEMINI_ACP_AUTH_REQUIRED_CODE ||
-    lowerMessage.includes("authentication required") ||
-    lowerMessage.includes("api key is missing") ||
-    lowerMessage.includes("auth method") ||
-    lowerMessage.includes("not configured");
 
-  if (unauthenticated) {
-    return {
-      status: "error",
-      auth: { status: "unauthenticated" },
-      message: formatGeminiAuthMessage(message),
-    };
+  if (isGeminiUnauthenticatedFailure(message, code)) {
+    return buildGeminiUnauthenticatedResult(message);
   }
 
   return {
@@ -102,6 +142,51 @@ export function parseGeminiAcpProbeError(
     auth: { status: "unknown" },
     message: formatGeminiDiscoveryWarning(message),
   };
+}
+
+export function parseGeminiAcpProbeLogFailure(
+  detail: string,
+): Omit<GeminiCapabilityProbeResult, "models"> | undefined {
+  return isGeminiLogUnauthenticatedFailure(detail)
+    ? buildGeminiUnauthenticatedResult(detail)
+    : undefined;
+}
+
+export function captureGeminiAcpProbeLogFailure(
+  captured: Omit<GeminiCapabilityProbeResult, "models"> | undefined,
+  line: string,
+): Omit<GeminiCapabilityProbeResult, "models"> | undefined {
+  return captured ?? parseGeminiAcpProbeLogFailure(line);
+}
+
+// Runs Gemini probes as status checks only; they must never launch an OAuth browser.
+export function buildGeminiProbeEnv(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+  return {
+    ...env,
+    NO_BROWSER: "true",
+    BROWSER: GEMINI_BROWSER_BLOCKLIST_VALUE,
+    CI: "true",
+    DEBIAN_FRONTEND: "noninteractive",
+  };
+}
+
+export function isGeminiOAuthBrowserPrompt(line: string): boolean {
+  return GEMINI_OAUTH_BROWSER_PROMPT_PATTERNS.some((pattern) => pattern.test(line));
+}
+
+// Code Assist OAuth failures can surface either as the explicit Antigravity
+// migration message or as a closed loadCodeAssist transport in ACP mode.
+export function isGeminiCodeAssistMigrationAuthFailure(message: string): boolean {
+  const lowerMessage = message.toLowerCase();
+  const explicitMigration =
+    lowerMessage.includes("gemini code assist") &&
+    (lowerMessage.includes("antigravity") ||
+      lowerMessage.includes("client is no longer supported") ||
+      lowerMessage.includes("migrate"));
+  const loadCodeAssistClosed =
+    lowerMessage.includes("loadcodeassist") && lowerMessage.includes("premature close");
+
+  return explicitMigration || loadCodeAssistClosed;
 }
 
 export function normalizeGeminiCapabilityProbeResult(
@@ -155,9 +240,16 @@ export const probeGeminiCapabilities = (input: {
   Effect.tryPromise(
     () =>
       new Promise<GeminiCapabilityProbeResult>((resolve) => {
-        const child = spawn(input.binaryPath, ["--acp"], {
+        const env = buildGeminiProbeEnv();
+        const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--acp"], {
           cwd: input.cwd,
-          shell: process.platform === "win32",
+          env,
+        });
+        const child = spawn(prepared.command, prepared.args, {
+          cwd: input.cwd,
+          env,
+          shell: prepared.shell,
+          windowsHide: prepared.windowsHide,
           stdio: ["pipe", "pipe", "pipe"],
         });
 
@@ -181,6 +273,7 @@ export const probeGeminiCapabilities = (input: {
 
         let settled = false;
         let sessionNewRequested = false;
+        let capturedAuthFailure: Omit<GeminiCapabilityProbeResult, "models"> | undefined;
         let timeout: ReturnType<typeof setTimeout> | undefined;
 
         const cleanup = () => {
@@ -259,8 +352,38 @@ export const probeGeminiCapabilities = (input: {
           );
         };
 
+        const finalizeOAuthBrowserPrompt = () => {
+          finalize({
+            status: "error",
+            auth: { status: "unauthenticated" },
+            models: [],
+            message: formatGeminiAuthMessage(
+              "Gemini attempted to start an OAuth browser flow during a Synara status check. Run `gemini` in a terminal to sign in.",
+            ),
+          });
+        };
+
+        const capturePlainAuthLogLine = (line: string) => {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith("{")) {
+            return;
+          }
+
+          capturedAuthFailure = captureGeminiAcpProbeLogFailure(capturedAuthFailure, trimmed);
+        };
+
         timeout = setTimeout(() => {
           const detail = detailFromProbeLogs(stdoutLines, stderrLines);
+          const authFailure =
+            capturedAuthFailure ?? (detail ? parseGeminiAcpProbeLogFailure(detail) : undefined);
+          if (authFailure) {
+            finalize({
+              ...authFailure,
+              models: [],
+            });
+            return;
+          }
+
           finalize({
             status: "warning",
             auth: { status: "unknown" },
@@ -275,9 +398,14 @@ export const probeGeminiCapabilities = (input: {
 
         stdoutReader.on("line", (line) => {
           pushLogLine(stdoutLines, line);
+          if (isGeminiOAuthBrowserPrompt(line)) {
+            finalizeOAuthBrowserPrompt();
+            return;
+          }
 
           const trimmed = line.trim();
           if (!trimmed.startsWith("{")) {
+            capturePlainAuthLogLine(line);
             return;
           }
 
@@ -350,6 +478,12 @@ export const probeGeminiCapabilities = (input: {
 
         stderrReader.on("line", (line) => {
           pushLogLine(stderrLines, line);
+          if (isGeminiOAuthBrowserPrompt(line)) {
+            finalizeOAuthBrowserPrompt();
+            return;
+          }
+
+          capturePlainAuthLogLine(line);
         });
 
         child.once("error", (error) => {
@@ -369,6 +503,16 @@ export const probeGeminiCapabilities = (input: {
           }
 
           const detail = detailFromProbeLogs(stdoutLines, stderrLines);
+          const authFailure =
+            capturedAuthFailure ?? (detail ? parseGeminiAcpProbeLogFailure(detail) : undefined);
+          if (authFailure) {
+            finalize({
+              ...authFailure,
+              models: [],
+            });
+            return;
+          }
+
           const exitMessage =
             detail ??
             `Gemini ACP exited before responding (code ${code ?? "null"}${signal ? `, signal ${signal}` : ""}).`;

@@ -22,6 +22,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   DateTime,
   Deferred,
@@ -43,6 +44,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterProcessError,
@@ -74,13 +76,22 @@ import {
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
+  forkAcpTurnIdleWatchdog,
+  resolveAcpTurnIdleTimeoutMs,
+} from "../acp/AcpTurnIdleWatchdog.ts";
+import {
   applyCursorAcpModelSelection,
+  buildCursorCliModelListCommand,
+  fetchCursorAcpModelDescriptors,
   makeCursorAcpRuntime,
   parseCursorCliModelList,
   resolveCursorAcpBaseModelId,
   type CursorAcpRuntimeCursorSettings,
 } from "../acp/CursorAcpSupport.ts";
-import { resolveCursorAgentBinaryPath } from "../acp/CursorAcpCommand.ts";
+import {
+  buildCursorAgentHeadlessEnv,
+  resolveCursorAgentBinaryPath,
+} from "../acp/CursorAcpCommand.ts";
 import {
   CursorAskQuestionRequest,
   CursorCreatePlanRequest,
@@ -97,6 +108,14 @@ import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
 const PROVIDER = "cursor" as const;
 const CURSOR_RESUME_VERSION = 1 as const;
 const CURSOR_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
+// Backstop for an alive-but-silent cursor-agent child: if a turn produces no
+// ACP activity for this long, force-fail it instead of showing "Working"
+// forever. Generous by design; override with SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS.
+const CURSOR_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_CURSOR_TURN_IDLE_TIMEOUT_MS",
+  defaultMs: 600_000,
+});
+const CURSOR_TURN_WATCHDOG_INTERVAL_MS = 15_000;
 const ACP_PLAN_MODE_ALIASES = ["plan", "architect"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
@@ -113,6 +132,23 @@ const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.
     () => "",
     (acc, chunk) => acc + new TextDecoder().decode(chunk),
   );
+
+function mergeCursorModelDescriptors(
+  preferredModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+  additionalModels: ReadonlyArray<ProviderListModelsResult["models"][number]>,
+): ProviderListModelsResult["models"] {
+  const seen = new Set<string>();
+  const merged: Array<ProviderListModelsResult["models"][number]> = [];
+  for (const model of [...preferredModels, ...additionalModels]) {
+    const key = model.slug.trim().toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(model);
+  }
+  return merged;
+}
 
 export interface CursorAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
@@ -137,12 +173,16 @@ interface CursorSessionContext {
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
   readonly turns: Array<{ id: TurnId; items: Array<unknown> }>;
+  readonly assistantItemTurnIds: Map<string, TurnId>;
   lastPlanFingerprint: string | undefined;
   completedPlanFingerprint: string | undefined;
   activeInteractionMode: ProviderInteractionMode | undefined;
   activeTurnId: TurnId | undefined;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
+  // idle-progress watchdog that force-fails a silently hung turn.
+  lastTurnActivityAt: number | undefined;
   latestSessionCostUsd: number | undefined;
   stopped: boolean;
 }
@@ -159,6 +199,33 @@ function clearCursorActiveTurn(ctx: CursorSessionContext, turnId: TurnId): boole
   const { activeTurnId: _activeTurnId, ...session } = ctx.session;
   ctx.session = session;
   return true;
+}
+
+function resolveCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string | undefined,
+): TurnId | undefined {
+  if (itemId === undefined) {
+    return ctx.activeTurnId;
+  }
+  const knownTurnId = ctx.assistantItemTurnIds.get(itemId);
+  if (knownTurnId !== undefined) {
+    return knownTurnId;
+  }
+  if (ctx.activeTurnId !== undefined) {
+    ctx.assistantItemTurnIds.set(itemId, ctx.activeTurnId);
+    return ctx.activeTurnId;
+  }
+  return ctx.assistantItemTurnIds.get(itemId);
+}
+
+function completeCursorAssistantItemTurnId(
+  ctx: CursorSessionContext,
+  itemId: string,
+): TurnId | undefined {
+  const turnId = resolveCursorAssistantItemTurnId(ctx, itemId);
+  ctx.assistantItemTurnIds.delete(itemId);
+  return turnId;
 }
 
 function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
@@ -472,6 +539,51 @@ export function makeCursorAdapter(
         yield* Effect.ignore(ctx.acp.cancel);
         if (activePromptFiber) {
           yield* Fiber.interrupt(activePromptFiber);
+        }
+      });
+
+    // Idle-progress watchdog escape hatch: force-fail a turn whose cursor-agent
+    // child is alive but has gone completely silent. Stays idempotent via
+    // clearCursorActiveTurn, so it is a no-op if the turn settled normally first.
+    const failCursorTurnAsTimedOut = (ctx: CursorSessionContext, turnId: TurnId, idleMs: number) =>
+      Effect.gen(function* () {
+        const promptFiber = ctx.activePromptFiber;
+        if (!clearCursorActiveTurn(ctx, turnId)) {
+          return;
+        }
+        const completedCost = finalizeCursorActiveTurnCost(ctx);
+        const idleSeconds = Math.round(idleMs / 1000);
+        const detail = `Cursor stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
+        ctx.turns.push({ id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
+        ctx.session = {
+          ...ctx.session,
+          status: "error",
+          updatedAt: yield* nowIso,
+          lastError: detail,
+        };
+        yield* Effect.logWarning("cursor.acp.turn_idle_timeout", {
+          threadId: ctx.threadId,
+          turnId,
+          idleMs,
+        });
+        yield* offerRuntimeEvent({
+          type: "turn.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId,
+          payload: {
+            state: "failed",
+            stopReason: null,
+            errorMessage: detail,
+            ...completedCost,
+          },
+        });
+        // Best-effort: tell the child to abandon the turn, then unwind the
+        // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
+        yield* Effect.ignore(ctx.acp.cancel);
+        if (promptFiber) {
+          yield* Fiber.interrupt(promptFiber);
         }
       });
 
@@ -839,12 +951,14 @@ export function makeCursorAdapter(
             pendingApprovals,
             pendingUserInputs,
             turns: [],
+            assistantItemTurnIds: new Map(),
             lastPlanFingerprint: undefined,
             completedPlanFingerprint: undefined,
             activeInteractionMode: undefined,
             activeTurnId: undefined,
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            lastTurnActivityAt: undefined,
             latestSessionCostUsd: undefined,
             stopped: false,
           };
@@ -852,32 +966,41 @@ export function makeCursorAdapter(
           const nf = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
+                // Any inbound ACP event proves the child is alive and making
+                // progress; reset the idle-progress watchdog clock.
+                ctx.lastTurnActivityAt = Date.now();
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
                   case "AssistantItemStarted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.started",
-                      }),
-                    );
+                    {
+                      const turnId = resolveCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.started",
+                        }),
+                      );
+                    }
                     return;
                   case "AssistantItemCompleted":
-                    yield* offerRuntimeEvent(
-                      makeAcpAssistantItemEvent({
-                        stamp: yield* makeEventStamp(),
-                        provider: PROVIDER,
-                        threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
-                        itemId: event.itemId,
-                        lifecycle: "item.completed",
-                      }),
-                    );
+                    {
+                      const turnId = completeCursorAssistantItemTurnId(ctx, event.itemId);
+                      yield* offerRuntimeEvent(
+                        makeAcpAssistantItemEvent({
+                          stamp: yield* makeEventStamp(),
+                          provider: PROVIDER,
+                          threadId: ctx.threadId,
+                          turnId,
+                          itemId: event.itemId,
+                          lifecycle: "item.completed",
+                        }),
+                      );
+                    }
                     return;
                   case "PlanUpdated":
                     yield* logNative(
@@ -928,7 +1051,7 @@ export function makeCursorAdapter(
                         stamp: yield* makeEventStamp(),
                         provider: PROVIDER,
                         threadId: ctx.threadId,
-                        turnId: ctx.activeTurnId,
+                        turnId: resolveCursorAssistantItemTurnId(ctx, event.itemId),
                         ...(event.itemId ? { itemId: event.itemId } : {}),
                         text: event.text,
                         ...(event.streamKind ? { streamKind: event.streamKind } : {}),
@@ -1013,15 +1136,23 @@ export function makeCursorAdapter(
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
+        const promptText = appendFileAttachmentsPromptBlock({
+          text: input.input?.trim()
+            ? withCursorPlanModePrompt({
+                text: input.input.trim(),
+                ...(input.interactionMode !== undefined
+                  ? { interactionMode: input.interactionMode }
+                  : {}),
+              })
+            : undefined,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        });
+        if (promptText) {
           promptParts.push({
             type: "text",
-            text: withCursorPlanModePrompt({
-              text: input.input.trim(),
-              ...(input.interactionMode !== undefined
-                ? { interactionMode: input.interactionMode }
-                : {}),
-            }),
+            text: promptText,
           });
         }
         if (input.attachments && input.attachments.length > 0) {
@@ -1069,6 +1200,7 @@ export function makeCursorAdapter(
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.completedPlanFingerprint = undefined;
+        ctx.lastTurnActivityAt = Date.now();
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
         ctx.session = {
           ...sessionWithoutLastError,
@@ -1189,6 +1321,22 @@ export function makeCursorAdapter(
           Effect.forkIn(ctx.scope),
         );
         ctx.activePromptFiber = yield* runPrompt;
+
+        // Backstop the forked prompt: if the child goes silent, fail the turn
+        // instead of leaving it "Working" forever. Self-terminates when the
+        // turn settles; pauses while a human approval is pending.
+        yield* forkAcpTurnIdleWatchdog({
+          idleTimeoutMs: CURSOR_TURN_IDLE_TIMEOUT_MS,
+          checkIntervalMs: CURSOR_TURN_WATCHDOG_INTERVAL_MS,
+          scope: ctx.scope,
+          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
+          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
+          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
+          touchActivity: () => {
+            ctx.lastTurnActivityAt = Date.now();
+          },
+          onIdleTimeout: (idleMs) => failCursorTurnAsTimedOut(ctx, turnId, idleMs),
+        });
 
         return {
           threadId: input.threadId,
@@ -1333,15 +1481,19 @@ export function makeCursorAdapter(
       );
       const effectiveApiEndpoint = apiEndpoint || cursorSettings.apiEndpoint;
       const runCursorModelListCommand = Effect.gen(function* () {
+        const command = buildCursorCliModelListCommand({
+          binaryPath: effectiveBinaryPath,
+          ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+        });
+        const env = buildCursorAgentHeadlessEnv();
+        const prepared = prepareWindowsSafeProcess(command.command, command.args, {
+          env,
+        });
         const child = yield* childProcessSpawner.spawn(
-          ChildProcess.make(
-            effectiveBinaryPath,
-            [...(effectiveApiEndpoint ? (["-e", effectiveApiEndpoint] as const) : []), "models"],
-            {
-              shell: process.platform === "win32",
-              env: process.env,
-            },
-          ),
+          ChildProcess.make(prepared.command, prepared.args, {
+            shell: prepared.shell,
+            env,
+          }),
         );
         const [stdout, stderr, exitCode] = yield* Effect.all(
           [
@@ -1357,7 +1509,7 @@ export function makeCursorAdapter(
             method: "model/list",
             detail:
               stderr.trim() ||
-              `Cursor model discovery failed because '${effectiveBinaryPath} models' exited with code ${exitCode}.`,
+              `Cursor model discovery failed because '${[command.command, ...command.args].join(" ")}' exited with code ${exitCode}.`,
           });
         }
         const models = parseCursorCliModelList(stdout);
@@ -1386,14 +1538,77 @@ export function makeCursorAdapter(
           }),
         ),
       );
-      const discovery = Effect.gen(function* () {
-        const cliModels = yield* runCursorModelListCommand;
-        return {
-          models: cliModels,
-          source: "cursor.cli",
+      // Preferred path: the ACP `cursor/list_available_models` extension exposes
+      // each model's full parameter matrix (context window, effort, thinking,
+      // fast) — data the flat `cursor-agent models` CLI list cannot provide.
+      const effectiveAcpSettings: CursorAcpRuntimeCursorSettings = {
+        binaryPath: effectiveBinaryPath,
+        ...(effectiveApiEndpoint ? { apiEndpoint: effectiveApiEndpoint } : {}),
+      };
+      const runCursorAcpModelDiscovery = Effect.gen(function* () {
+        const runtime = yield* makeCursorAcpRuntime({
+          cursorSettings: effectiveAcpSettings,
+          childProcessSpawner,
+          cwd: process.cwd(),
+          clientInfo: { name: "Synara", version: "0.0.0" },
+        });
+        const started = yield* runtime.start();
+        const models = yield* fetchCursorAcpModelDescriptors(runtime, started.sessionId);
+        if (models.length === 0) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "model/list",
+            detail: "Cursor ACP model discovery returned no models.",
+          });
+        }
+        return models;
+      }).pipe(
+        Effect.scoped,
+        Effect.timeoutOption(CURSOR_MODEL_DISCOVERY_TIMEOUT_MS),
+        Effect.flatMap(
+          Option.match({
+            onNone: () =>
+              Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "model/list",
+                  detail: "Timed out while discovering Cursor models via ACP.",
+                }),
+              ),
+            onSome: (models) => Effect.succeed(models),
+          }),
+        ),
+      );
+
+      const discovery = runCursorAcpModelDiscovery.pipe(
+        Effect.flatMap((acpModels) =>
+          runCursorModelListCommand.pipe(
+            Effect.map((cliModels) => mergeCursorModelDescriptors(acpModels, cliModels)),
+            // ACP is the authoritative source for editable model parameters; keep
+            // it even if the raw CLI variant list is temporarily unavailable.
+            Effect.catch(() => Effect.succeed(acpModels)),
+          ),
+        ),
+        Effect.map((models) => ({
+          models,
+          source: "cursor.acp",
           cached: false,
-        } satisfies ProviderListModelsResult;
-      });
+        })),
+        // The CLI list still works without an authenticated ACP session and keeps
+        // discovery resilient if the extension method is unavailable.
+        Effect.catch(() =>
+          runCursorModelListCommand.pipe(
+            Effect.map(
+              (cliModels) =>
+                ({
+                  models: cliModels,
+                  source: "cursor.cli",
+                  cached: false,
+                }) satisfies ProviderListModelsResult,
+            ),
+          ),
+        ),
+      );
 
       return discovery.pipe(
         Effect.mapError((cause) =>
@@ -1402,7 +1617,7 @@ export function makeCursorAdapter(
             : new ProviderAdapterRequestError({
                 provider: PROVIDER,
                 method: "model/list",
-                detail: "Failed to discover Cursor models via CLI.",
+                detail: "Failed to discover Cursor models.",
                 cause,
               }),
         ),

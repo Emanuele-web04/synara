@@ -28,10 +28,15 @@ async function mountMenu(props?: {
     prompt: props?.prompt ?? "",
     images: [],
     browserContexts: [],
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {
       [provider]: {
@@ -107,7 +112,7 @@ describe("CompactComposerControlsMenu", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
     });
@@ -121,7 +126,7 @@ describe("CompactComposerControlsMenu", () => {
     await page.getByLabelText("More composer controls").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Fast Mode");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
     });
   });
 

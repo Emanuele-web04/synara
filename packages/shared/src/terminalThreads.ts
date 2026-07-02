@@ -485,7 +485,8 @@ export function resolveTerminalVisualIdentity(input: {
   state?: TerminalVisualState | null | undefined;
   title?: string | null | undefined;
 }): ResolvedTerminalVisualIdentity {
-  const resolvedCliKind = input.cliKind ?? inferCliKindFromTitle(input.title);
+  const resolvedCliKind =
+    input.cliKind === undefined ? inferCliKindFromTitle(input.title) : input.cliKind;
   const title =
     input.title?.trim() ||
     (resolvedCliKind ? defaultTerminalTitleForCliKind(resolvedCliKind) : input.fallbackTitle);

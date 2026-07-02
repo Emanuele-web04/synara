@@ -1,20 +1,15 @@
 import type { GitBranch, ProviderKind } from "@t3tools/contracts";
+import {
+  BUILT_IN_COMPOSER_SLASH_COMMANDS,
+  isBuiltInComposerSlashCommandName,
+  normalizeComposerSlashCommandName,
+  type BuiltInComposerSlashCommand,
+} from "@t3tools/shared/composerSlashCommands";
+import { rankProviderDiscoveryItems } from "./lib/providerDiscovery";
 
-export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
-  "clear",
-  "compact",
-  "model",
-  "plan",
-  "default",
-  "review",
-  "fork",
-  "side",
-  "status",
-  "subagents",
-  "fast",
-] as const;
+export { BUILT_IN_COMPOSER_SLASH_COMMANDS };
 
-export type ComposerSlashCommand = (typeof BUILT_IN_COMPOSER_SLASH_COMMANDS)[number];
+export type ComposerSlashCommand = BuiltInComposerSlashCommand;
 
 export interface ComposerSlashCommandDefinition {
   command: ComposerSlashCommand;
@@ -30,10 +25,6 @@ export interface ComposerSlashInvocation {
 
 export type FastSlashCommandAction = "toggle" | "on" | "off" | "status" | "invalid";
 export type ForkSlashCommandTarget = "local" | "worktree";
-
-function normalizeSlashCommandName(value: string): string {
-  return value.trim().replace(/^\/+/, "").toLowerCase();
-}
 
 const CLAUDE_NATIVE_COMMAND_ALIASES: Record<string, readonly string[]> = {
   clear: ["reset", "new"],
@@ -52,7 +43,7 @@ function getProviderNativeSlashCommandAliases(
   provider: ProviderKind,
   command: string,
 ): readonly string[] {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   if (provider !== "claudeAgent") {
     return [];
   }
@@ -65,7 +56,7 @@ function expandProviderNativeSlashCommandNames(
 ): string[] {
   const expandedNames = new Set<string>();
   for (const commandName of commandNames) {
-    const normalizedCommandName = normalizeSlashCommandName(commandName);
+    const normalizedCommandName = normalizeComposerSlashCommandName(commandName);
     if (!normalizedCommandName) {
       continue;
     }
@@ -81,22 +72,24 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return provider === "codex" && command === "review";
+  return command === "automation" || (provider === "codex" && command === "review");
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
   provider: ProviderKind,
   command: string,
 ): boolean {
-  const normalizedCommand = normalizeSlashCommandName(command);
-  return provider === "codex" && normalizedCommand === "review";
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
+  return (
+    normalizedCommand === "automation" || (provider === "codex" && normalizedCommand === "review")
+  );
 }
 
 export function getProviderNativeSlashCommandSearchTerms(
   provider: ProviderKind,
   command: string,
 ): readonly string[] {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   return [normalizedCommand, ...getProviderNativeSlashCommandAliases(provider, normalizedCommand)];
 }
 
@@ -149,7 +142,7 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
   side: {
     command: "side",
     label: "/side",
-    description: "Open a guarded sidechat from this thread",
+    description: "Open a guarded Side from this thread",
     source: "app",
   },
   status: {
@@ -170,11 +163,16 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     description: "Turn fast mode on or off for this thread",
     source: "app",
   },
+  automation: {
+    command: "automation",
+    label: "/automation",
+    description: "Create a scheduled automation from this prompt",
+    source: "app",
+  },
 };
 
 export function isBuiltInComposerSlashCommand(value: string): value is ComposerSlashCommand {
-  const normalizedValue = normalizeSlashCommandName(value);
-  return BUILT_IN_COMPOSER_SLASH_COMMANDS.some((command) => command === normalizedValue);
+  return isBuiltInComposerSlashCommandName(value);
 }
 
 export function parseComposerSlashInvocation(text: string): ComposerSlashInvocation | null {
@@ -189,7 +187,7 @@ export function parseComposerSlashInvocationForCommands(
   if (!match) {
     return null;
   }
-  const command = normalizeSlashCommandName(match[1] ?? "");
+  const command = normalizeComposerSlashCommandName(match[1] ?? "");
   if (!command || !commands.includes(command as ComposerSlashCommand)) {
     return null;
   }
@@ -229,6 +227,8 @@ export function getComposerSlashCommandMenuTitle(command: ComposerSlashCommand):
       return "Status";
     case "subagents":
       return "Subagents";
+    case "automation":
+      return "Automation";
   }
 }
 
@@ -236,17 +236,13 @@ export function filterComposerSlashCommands(
   query: string,
   commands: ReadonlyArray<ComposerSlashCommand> = BUILT_IN_COMPOSER_SLASH_COMMANDS,
 ): ComposerSlashCommandDefinition[] {
-  const normalizedQuery = query.trim().toLowerCase();
-  const matches = commands.filter((command) => {
-    if (!normalizedQuery) {
-      return true;
-    }
+  const matches = rankProviderDiscoveryItems(commands, query, (command) => {
     const definition = COMPOSER_SLASH_COMMAND_DEFINITIONS[command];
-    return (
-      command.includes(normalizedQuery) ||
-      definition.label.slice(1).includes(normalizedQuery) ||
-      definition.description.toLowerCase().includes(normalizedQuery)
-    );
+    return [
+      { value: command },
+      { value: definition.label.slice(1) },
+      { value: definition.description, weight: 200 },
+    ];
   });
 
   return matches.map((command) => COMPOSER_SLASH_COMMAND_DEFINITIONS[command]);
@@ -400,11 +396,13 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
           // creates a Synara split/context clone before the provider sees the first turn.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
 }
@@ -414,7 +412,7 @@ export function hasProviderNativeSlashCommand(
   commandNames: ReadonlyArray<string>,
   command: string,
 ): boolean {
-  const normalizedCommand = normalizeSlashCommandName(command);
+  const normalizedCommand = normalizeComposerSlashCommandName(command);
   return expandProviderNativeSlashCommandNames(provider, commandNames).includes(normalizedCommand);
 }
 

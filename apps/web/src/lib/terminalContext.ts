@@ -3,6 +3,8 @@ import {
   extractTrailingAssistantSelections,
   type ParsedAssistantSelectionEntry,
 } from "./assistantSelections";
+import { extractTrailingFileComments, type ParsedFileCommentEntry } from "./fileComments";
+import { extractTrailingPastedTexts, type ParsedPastedTextEntry } from "./composerPastedText";
 
 export interface TerminalContextSelection {
   terminalId: string;
@@ -32,6 +34,8 @@ export interface DisplayedUserMessageState {
   previewTitle: string | null;
   contexts: ParsedTerminalContextEntry[];
   assistantSelections: ParsedAssistantSelectionEntry[];
+  fileComments: ParsedFileCommentEntry[];
+  pastedTexts: ParsedPastedTextEntry[];
 }
 
 export interface ParsedTerminalContextEntry {
@@ -46,6 +50,12 @@ export const IMAGE_ONLY_VISIBLE_PLACEHOLDER = "(No Content)";
 
 const TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN =
   /\n*<terminal_context>\n([\s\S]*?)\n<\/terminal_context>\s*$/;
+const TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS = [
+  /\n*(<pasted_text>\n[\s\S]*?\n<\/pasted_text>)\s*$/u,
+  /\n*(<file_comments>\n[\s\S]*?\n<\/file_comments>)\s*$/u,
+  /\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>)\s*$/u,
+  /\n*(<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>)\s*$/u,
+] as const;
 
 interface DisplayedUserMessageOptions {
   hideImageOnlyBootstrapPrompt?: boolean;
@@ -225,13 +235,39 @@ export function appendOriginalTerminalContextBlock(input: {
   editedPrompt: string;
   originalPrompt: string;
 }): string {
-  const match = TRAILING_TERMINAL_CONTEXT_BLOCK_PATTERN.exec(input.originalPrompt);
-  if (!match) {
-    return input.editedPrompt.trim();
+  return appendOriginalComposerPromptBlocks(input);
+}
+
+// Edits operate on visible bubble text. Reattach the hidden composer metadata
+// blocks from the original message so resend keeps the same references.
+export function appendOriginalComposerPromptBlocks(input: {
+  editedPrompt: string;
+  originalPrompt: string;
+}): string {
+  let remainingPrompt = input.originalPrompt;
+  const originalBlocks: string[] = [];
+  let strippedBlock = true;
+  while (strippedBlock) {
+    strippedBlock = false;
+    for (const pattern of TRAILING_SERIALIZED_COMPOSER_BLOCK_PATTERNS) {
+      const match = pattern.exec(remainingPrompt);
+      const rawBlock = match?.[1];
+      if (!match || !rawBlock) {
+        continue;
+      }
+      originalBlocks.unshift(rawBlock.trim());
+      remainingPrompt = remainingPrompt.slice(0, match.index).replace(/\n+$/u, "");
+      strippedBlock = true;
+      break;
+    }
   }
-  const contextBlock = input.originalPrompt.slice(match.index).trim();
+
   const editedPrompt = input.editedPrompt.trim();
-  return editedPrompt.length > 0 ? `${editedPrompt}\n\n${contextBlock}` : contextBlock;
+  if (originalBlocks.length === 0) {
+    return editedPrompt;
+  }
+  const serializedBlocks = originalBlocks.join("\n\n");
+  return editedPrompt.length > 0 ? `${editedPrompt}\n\n${serializedBlocks}` : serializedBlocks;
 }
 
 export function extractTrailingTerminalContexts(prompt: string): ExtractedTerminalContexts {
@@ -263,7 +299,12 @@ export function deriveDisplayedUserMessageState(
   prompt: string,
   options?: DisplayedUserMessageOptions,
 ): DisplayedUserMessageState {
-  const extractedContexts = extractTrailingTerminalContexts(prompt);
+  // Trailing blocks are serialized in order: assistant selections, then terminal
+  // contexts, then file comments, then pasted text (outermost). Strip them in
+  // reverse so each extractor sees its block at the end of the remaining text.
+  const extractedPastedTexts = extractTrailingPastedTexts(prompt);
+  const extractedFileComments = extractTrailingFileComments(extractedPastedTexts.promptText);
+  const extractedContexts = extractTrailingTerminalContexts(extractedFileComments.promptText);
   const extractedAssistantSelections = extractTrailingAssistantSelections(
     extractedContexts.promptText,
   );
@@ -281,6 +322,8 @@ export function deriveDisplayedUserMessageState(
     previewTitle: extractedContexts.previewTitle,
     contexts: extractedContexts.contexts,
     assistantSelections: extractedAssistantSelections.selections,
+    fileComments: extractedFileComments.comments,
+    pastedTexts: extractedPastedTexts.pastedTexts,
   };
 }
 

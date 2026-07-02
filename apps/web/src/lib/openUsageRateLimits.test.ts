@@ -106,6 +106,100 @@ describe("openUsageRateLimits", () => {
     ]);
   });
 
+  it("keeps the freshest window when two sources report the same provider limit", () => {
+    expect(
+      mergeProviderRateLimits(
+        [
+          {
+            provider: "codex",
+            updatedAt: "2099-04-08T18:00:00.000Z",
+            limits: [
+              {
+                window: "Weekly",
+                usedPercent: 65,
+                resetsAt: "2099-04-14T18:00:00.000Z",
+                windowDurationMins: 10080,
+              },
+            ],
+          },
+        ],
+        [
+          {
+            provider: "codex",
+            updatedAt: "2099-04-08T18:05:00.000Z",
+            limits: [
+              {
+                window: "Weekly",
+                usedPercent: 84,
+                resetsAt: "2099-04-14T18:00:00.000Z",
+                windowDurationMins: 10080,
+              },
+            ],
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        provider: "codex",
+        updatedAt: "2099-04-08T18:05:00.000Z",
+        limits: [
+          {
+            window: "Weekly",
+            usedPercent: 84,
+            resetsAt: "2099-04-14T18:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("fills missing timing metadata from an older source when the freshest row only has usage", () => {
+    expect(
+      mergeProviderRateLimits(
+        [
+          {
+            provider: "codex",
+            updatedAt: "2099-04-08T18:00:00.000Z",
+            limits: [
+              {
+                window: "Weekly",
+                usedPercent: 65,
+                resetsAt: "2099-04-14T18:00:00.000Z",
+                windowDurationMins: 10080,
+              },
+            ],
+          },
+        ],
+        [
+          {
+            provider: "codex",
+            updatedAt: "2099-04-08T18:05:00.000Z",
+            limits: [
+              {
+                window: "Weekly",
+                usedPercent: 84,
+              },
+            ],
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        provider: "codex",
+        updatedAt: "2099-04-08T18:05:00.000Z",
+        limits: [
+          {
+            window: "Weekly",
+            usedPercent: 84,
+            resetsAt: "2099-04-14T18:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      },
+    ]);
+  });
+
   it("preserves OpenUsage text lines for daily token usage summaries", () => {
     expect(
       normalizeOpenUsageUsageLines({

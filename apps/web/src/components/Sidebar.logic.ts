@@ -2,11 +2,22 @@
 // Purpose: Shared sidebar sorting and status helpers used by the thread list UI.
 // Exports: Sidebar row state derivation, add-project error helpers, sort utilities, and visibility helpers.
 
-import type { KeybindingCommand, ProjectId, ThreadId } from "@t3tools/contracts";
+import {
+  MAX_PINNED_PROJECTS,
+  type KeybindingCommand,
+  type ProjectId,
+  type ThreadId,
+} from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
+import {
+  derivePinnedIds,
+  getPinnedItems,
+  isLatestPinMutation,
+  orderPinnedItemsFirst,
+} from "../pinning.logic";
 import {
   SIDEBAR_ROW_ACTIVE_CLASS_NAME,
   SIDEBAR_ROW_HOVER_CLASS_NAME,
@@ -14,13 +25,16 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
 import {
+  canSessionAnswerPendingRequests,
   hasLiveLatestTurn,
   findLatestProposedPlan,
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
+import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 
 export {
   extractDuplicateProjectCreateProjectId,
@@ -43,6 +57,61 @@ type SidebarThreadSortInput = {
   latestUserMessageAt?: string | null | undefined;
   messages?: ReadonlyArray<Pick<ChatMessage, "role" | "createdAt">> | undefined;
 };
+
+function nonEmptyDisplayValue(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed && trimmed.length > 0 ? trimmed : null;
+}
+
+function differentDisplayValue(
+  value: string | null | undefined,
+  existing: string | null,
+): string | null {
+  const normalized = nonEmptyDisplayValue(value);
+  if (!normalized) {
+    return null;
+  }
+  return existing !== null && normalized === existing ? null : normalized;
+}
+
+export type SidebarThreadHoverMetadata = {
+  projectName: string | null;
+  projectCwd: string | null;
+  sourceProjectName: string | null;
+  branch: string | null;
+  worktreeName: string | null;
+};
+
+export function resolveThreadHoverCardMetadata(input: {
+  thread: Pick<
+    SidebarThreadSummary,
+    "envMode" | "branch" | "worktreePath" | "associatedWorktreePath" | "associatedWorktreeBranch"
+  >;
+  project: Pick<Project, "name" | "folderName" | "cwd"> | null;
+}): SidebarThreadHoverMetadata {
+  const projectName =
+    nonEmptyDisplayValue(input.project?.name) ?? nonEmptyDisplayValue(input.project?.folderName);
+  const activeWorktreePath = nonEmptyDisplayValue(input.thread.worktreePath);
+  const isWorktree =
+    resolveThreadEnvironmentMode({
+      envMode: input.thread.envMode,
+      worktreePath: activeWorktreePath,
+    }) === "worktree";
+  const associatedWorktreePath = nonEmptyDisplayValue(input.thread.associatedWorktreePath);
+  const worktreePath = isWorktree ? (associatedWorktreePath ?? activeWorktreePath) : null;
+
+  return {
+    projectName,
+    projectCwd: input.project?.cwd ?? null,
+    sourceProjectName: isWorktree
+      ? differentDisplayValue(input.project?.folderName, projectName)
+      : null,
+    branch:
+      nonEmptyDisplayValue(input.thread.associatedWorktreeBranch) ??
+      nonEmptyDisplayValue(input.thread.branch),
+    worktreeName: worktreePath ? formatWorktreePathForDisplay(worktreePath) : null,
+  };
+}
 
 export function isLoopbackHostname(hostname: string): boolean {
   const normalizedHostname = hostname.trim().toLowerCase().replace(/\.$/, "");
@@ -73,7 +142,17 @@ export type SidebarProjectEntry = {
   isExpanded: boolean;
 };
 
+export type SidebarThreadHoverAnchorScope = "pinned" | "chat" | "project";
+
+export function createSidebarThreadHoverAnchorId(input: {
+  scope: SidebarThreadHoverAnchorScope;
+  threadId: ThreadId;
+}): string {
+  return `${input.scope}:${input.threadId}`;
+}
+
 export type SidebarDerivedProjectData = {
+  allProjectThreadCount: number;
   projectThreads: SidebarThreadSummary[];
   orderedProjectThreadIds: ThreadId[];
   visibleEntries: SidebarProjectEntry[];
@@ -183,6 +262,29 @@ export type SettingsBackTarget =
       kind: "home";
     };
 
+export function buildSettingsBackAvailableThreadIds(input: {
+  sidebarThreadSummaryById: Readonly<Record<string, unknown>>;
+  draftThreadsByThreadId: Readonly<Record<string, unknown>>;
+}): ReadonlySet<string> {
+  const availableThreadIds = new Set<string>();
+
+  for (const threadId of Object.keys(input.sidebarThreadSummaryById)) {
+    if (threadId.length > 0) {
+      availableThreadIds.add(threadId);
+    }
+  }
+
+  // Settings can be opened from a fresh unsent chat, which has a route id but
+  // no persisted sidebar summary yet. Keep that draft route as a valid return target.
+  for (const threadId of Object.keys(input.draftThreadsByThreadId)) {
+    if (threadId.length > 0) {
+      availableThreadIds.add(threadId);
+    }
+  }
+
+  return availableThreadIds;
+}
+
 export function resolveSettingsBackTarget(input: {
   lastThreadRoute: LastThreadRoute | null;
   availableThreadIds: ReadonlySet<string>;
@@ -248,28 +350,40 @@ export function pruneExpandedProjectThreadListsForCollapsedProjects<
 
 /**
  * Trailing padding that protects the title from the absolutely-positioned
- * trailing cluster. Split into two reserves so the title is only truncated by
- * content that is actually on screen:
+ * trailing cluster, sized to what the slot ACTUALLY shows so the title runs as
+ * far right as the on-screen content allows:
  *
- * - Idle rows reserve just enough for the timestamp/status glyph plus any
- *   fork/worktree/handoff meta chips. A row with no badges therefore runs the
- *   title nearly to the timestamp instead of truncating against permanently
- *   reserved empty space.
- * - The wider reserve that clears the hover pin/archive actions is only applied
+ * - The relative time now lives in the row hover card, so an idle row with no
+ *   status/jump glyph and no meta chips reserves almost nothing — the title runs
+ *   to the row edge instead of truncating against permanently reserved space.
+ * - A status/loader (or keyboard-jump) glyph occupies a ~2.25rem slot, and each
+ *   fork/worktree/handoff meta chip adds width; the reserve grows only for the
+ *   badges that are present.
+ * - The wider reserve that clears the hover pin/archive actions is applied only
  *   on hover/focus (mirroring the project header row), so the title gives up that
  *   width exactly when those actions appear and not a moment sooner.
  *
  * Literal class strings are required so Tailwind's JIT scanner emits them.
  */
-export function resolveThreadRowTrailingReserveClass(metaChipCount: number): string {
-  // Hover/focus reveals the pin/archive actions; the meta chips + timestamp fade
-  // out at the same time, so this reserve is a constant regardless of chip count.
+export function resolveThreadRowTrailingReserveClass(input: {
+  metaChipCount: number;
+  hasTrailingGlyph: boolean;
+}): string {
+  // Hover/focus reveals the pin/archive actions; the meta chips + glyph fade out
+  // at the same time, so the hover reserve is constant regardless of rest content.
   const hoverReserve =
     "transition-[padding] duration-150 ease-out group-hover/thread-row:pr-[4.75rem] group-focus-within/thread-row:pr-[4.75rem]";
-  if (metaChipCount <= 0) return cn("pr-[2.25rem]", hoverReserve);
-  if (metaChipCount === 1) return cn("pr-[3.5rem]", hoverReserve);
-  if (metaChipCount === 2) return cn("pr-[4rem]", hoverReserve);
-  return cn("pr-[4.5rem]", hoverReserve);
+  const { metaChipCount, hasTrailingGlyph } = input;
+  if (metaChipCount <= 0) {
+    return cn(hasTrailingGlyph ? "pr-[1.75rem]" : "pr-2", hoverReserve);
+  }
+  if (metaChipCount === 1) {
+    return cn(hasTrailingGlyph ? "pr-[3rem]" : "pr-[1.75rem]", hoverReserve);
+  }
+  if (metaChipCount === 2) {
+    return cn(hasTrailingGlyph ? "pr-[4rem]" : "pr-[3rem]", hoverReserve);
+  }
+  return cn(hasTrailingGlyph ? "pr-[4.5rem]" : "pr-[4.25rem]", hoverReserve);
 }
 
 export function resolveThreadRowClassName(input: {
@@ -300,7 +414,13 @@ export function resolveThreadStatusPill(input: {
   hasPendingApprovals: boolean;
   hasPendingUserInput: boolean;
 }): ThreadStatusPill | null {
-  const { hasPendingApprovals, hasPendingUserInput, thread } = input;
+  const { thread } = input;
+  // A dead session can't receive approval/input answers anymore — drop the
+  // actionable pills instead of advertising a request nobody can fulfill.
+  // Mirrored by the kanban board's deriveKanbanColumn.
+  const canAnswerPendingRequests = canSessionAnswerPendingRequests(thread.session);
+  const hasPendingApprovals = input.hasPendingApprovals && canAnswerPendingRequests;
+  const hasPendingUserInput = input.hasPendingUserInput && canAnswerPendingRequests;
 
   if (hasPendingApprovals) {
     const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
@@ -431,6 +551,30 @@ export function findWorkspaceRootMatch<T>(
   getWorkspaceRoot: (item: T) => string,
 ): T | undefined {
   return items.find((item) => workspaceRootsEqual(getWorkspaceRoot(item), targetWorkspaceRoot));
+}
+
+// Finds the item whose workspace root most specifically contains `targetPath`
+// (equal to it, or its closest ancestor). Used to attribute a dev server's cwd
+// to a project even when it runs from a monorepo subdirectory; the deepest root
+// wins so a nested project beats its parent.
+export function findDeepestWorkspaceRootMatch<T>(
+  items: readonly T[],
+  targetPath: string,
+  getWorkspaceRoot: (item: T) => string,
+): T | undefined {
+  let best: T | undefined;
+  let bestRootLength = -1;
+  for (const item of items) {
+    const root = getWorkspaceRoot(item);
+    if (!isWorkspaceRootWithin(targetPath, root)) {
+      continue;
+    }
+    if (root.length > bestRootLength) {
+      best = item;
+      bestRootLength = root.length;
+    }
+  }
+  return best;
 }
 
 // Rechecks an existing local project against the server before the add flow decides to reuse it.
@@ -615,18 +759,8 @@ export function getVisibleSidebarEntriesForPreview<
   visibleEntries: T[];
 } {
   const { activeEntryId, entries, isExpanded, previewLimit } = input;
-  const orderedRootRowIds: Thread["id"][] = [];
-  const seenRootRowIds = new Set<Thread["id"]>();
+  const hasHiddenEntries = entries.length > previewLimit;
 
-  for (const entry of entries) {
-    if (seenRootRowIds.has(entry.rootRowId)) {
-      continue;
-    }
-    seenRootRowIds.add(entry.rootRowId);
-    orderedRootRowIds.push(entry.rootRowId);
-  }
-
-  const hasHiddenEntries = orderedRootRowIds.length > previewLimit;
   if (!hasHiddenEntries || isExpanded) {
     return {
       hasHiddenEntries,
@@ -634,41 +768,51 @@ export function getVisibleSidebarEntriesForPreview<
     };
   }
 
-  const visibleRootRowIds = new Set(orderedRootRowIds.slice(0, previewLimit));
-  const activeRootRowId =
-    activeEntryId !== undefined
-      ? (entries.find((entry) => entry.rowId === activeEntryId)?.rootRowId ?? null)
-      : null;
+  const previewEntries = entries.slice(0, previewLimit);
+  const visibleEntryIds = new Set(previewEntries.map((entry) => entry.rowId));
 
-  if (activeRootRowId) {
-    visibleRootRowIds.add(activeRootRowId);
+  if (!activeEntryId || visibleEntryIds.has(activeEntryId)) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntryId);
+  if (activeEntryIndex === -1) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const activeEntry = entries[activeEntryIndex];
+  if (!activeEntry) {
+    return {
+      hasHiddenEntries: true,
+      visibleEntries: previewEntries,
+    };
+  }
+
+  const rootEntryIndex = entries.findIndex((entry) => entry.rowId === activeEntry.rootRowId);
+  const forcedVisibleEntries =
+    rootEntryIndex === -1 ? [activeEntry] : entries.slice(rootEntryIndex, activeEntryIndex + 1);
+
+  for (const entry of forcedVisibleEntries) {
+    visibleEntryIds.add(entry.rowId);
   }
 
   return {
     hasHiddenEntries: true,
-    visibleEntries: entries.filter((entry) => visibleRootRowIds.has(entry.rootRowId)),
+    visibleEntries: entries.filter((entry) => visibleEntryIds.has(entry.rowId)),
   };
 }
 
-// Preserve the persisted pin order while discarding ids that no longer exist locally.
 export function getPinnedThreadsForSidebar<T extends Pick<Thread, "id">>(
   threads: readonly T[],
   pinnedThreadIds: readonly T["id"][],
 ): T[] {
-  const threadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-  const seen = new Set<T["id"]>();
-  const pinnedThreads: T[] = [];
-
-  for (const threadId of pinnedThreadIds) {
-    if (seen.has(threadId)) continue;
-    seen.add(threadId);
-    const thread = threadById.get(threadId);
-    if (thread) {
-      pinnedThreads.push(thread);
-    }
-  }
-
-  return pinnedThreads;
+  return getPinnedItems(threads, pinnedThreadIds);
 }
 
 // Resolve the visible pinned ids from server state, local legacy pins, and pending user clicks.
@@ -677,23 +821,11 @@ export function derivePinnedThreadIdsForSidebar<T extends Pick<Thread, "id" | "i
   readonly persistedPinnedThreadIds: readonly T["id"][];
   readonly optimisticPinnedStateByThreadId: ReadonlyMap<T["id"], boolean>;
 }): T["id"][] {
-  const next = new Set<T["id"]>();
-
-  for (const thread of input.threads) {
-    const optimisticPinned = input.optimisticPinnedStateByThreadId.get(thread.id);
-    if (optimisticPinned ?? thread.isPinned === true) {
-      next.add(thread.id);
-    }
-  }
-
-  for (const threadId of input.persistedPinnedThreadIds) {
-    if (input.optimisticPinnedStateByThreadId.get(threadId) === false) {
-      continue;
-    }
-    next.add(threadId);
-  }
-
-  return [...next];
+  return derivePinnedIds({
+    items: input.threads,
+    persistedPinnedIds: input.persistedPinnedThreadIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByThreadId,
+  });
 }
 
 // Only the newest pin mutation may roll back optimistic state after rapid clicks.
@@ -702,7 +834,45 @@ export function isLatestPinnedThreadMutation<T>(input: {
   readonly requestVersion: number;
   readonly latestMutationVersionByThreadId: ReadonlyMap<T, number>;
 }): boolean {
-  return input.latestMutationVersionByThreadId.get(input.threadId) === input.requestVersion;
+  return isLatestPinMutation({
+    id: input.threadId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByThreadId,
+  });
+}
+
+export function isLatestPinnedProjectMutation<T>(input: {
+  readonly projectId: T;
+  readonly requestVersion: number;
+  readonly latestMutationVersionByProjectId: ReadonlyMap<T, number>;
+}): boolean {
+  return isLatestPinMutation({
+    id: input.projectId,
+    requestVersion: input.requestVersion,
+    latestMutationVersionById: input.latestMutationVersionByProjectId,
+  });
+}
+
+export function derivePinnedProjectIdsForSidebar<
+  T extends Pick<Project, "id" | "isPinned">,
+>(input: {
+  readonly projects: readonly T[];
+  readonly persistedPinnedProjectIds: readonly T["id"][];
+  readonly optimisticPinnedStateByProjectId: ReadonlyMap<T["id"], boolean>;
+}): T["id"][] {
+  return derivePinnedIds({
+    items: input.projects,
+    persistedPinnedIds: input.persistedPinnedProjectIds,
+    optimisticPinnedStateById: input.optimisticPinnedStateByProjectId,
+    maxCount: MAX_PINNED_PROJECTS,
+  });
+}
+
+export function orderPinnedProjectsForSidebar<T extends Pick<Project, "id">>(
+  projects: readonly T[],
+  pinnedProjectIds: readonly T["id"][],
+): T[] {
+  return orderPinnedItemsFirst(projects, pinnedProjectIds);
 }
 
 // Hide globally pinned rows from the per-project lists so the sidebar doesn't duplicate chats.
@@ -790,10 +960,20 @@ export function getVisibleSidebarThreadIds(input: {
     threads,
   } = input;
   const visibleThreadIds: Thread["id"][] = [];
+  const threadsByProjectId = new Map<ProjectId, (typeof threads)[number][]>();
+
+  for (const thread of threads) {
+    const projectThreads = threadsByProjectId.get(thread.projectId);
+    if (projectThreads) {
+      projectThreads.push(thread);
+    } else {
+      threadsByProjectId.set(thread.projectId, [thread]);
+    }
+  }
 
   for (const project of projects) {
     const projectThreads = sortThreadsForSidebar(
-      threads.filter((thread) => thread.projectId === project.id),
+      threadsByProjectId.get(project.id) ?? [],
       threadSortOrder,
     );
     const projectThreadTree = buildProjectThreadTree({
@@ -1134,6 +1314,7 @@ export function deriveSidebarProjectData(input: {
             ];
 
       byProjectId.set(project.id, {
+        allProjectThreadCount: allProjectThreads.length,
         projectThreads,
         orderedProjectThreadIds,
         visibleEntries,
@@ -1173,6 +1354,7 @@ export function deriveSidebarProjectData(input: {
     });
 
     byProjectId.set(project.id, {
+      allProjectThreadCount: allProjectThreads.length,
       projectThreads,
       orderedProjectThreadIds,
       visibleEntries: renderedEntries,
@@ -1184,4 +1366,36 @@ export function deriveSidebarProjectData(input: {
   }
 
   return byProjectId;
+}
+
+/** Shared PR-state presentation so sidebar badges and kanban cards color PRs identically. */
+export interface PrStatePresentation {
+  label: "PR open" | "PR closed" | "PR merged";
+  colorClass: string;
+  iconKind: "pull-request" | "merged-simple";
+}
+
+export function resolvePrStatePresentation(
+  state: "open" | "closed" | "merged",
+): PrStatePresentation {
+  if (state === "open") {
+    return {
+      label: "PR open",
+      // Match the diff "+" green so an opened PR reads as the same positive signal.
+      colorClass: "text-[var(--color-decoration-added)]",
+      iconKind: "pull-request",
+    };
+  }
+  if (state === "closed") {
+    return {
+      label: "PR closed",
+      colorClass: "text-zinc-500 dark:text-zinc-400/80",
+      iconKind: "pull-request",
+    };
+  }
+  return {
+    label: "PR merged",
+    colorClass: "text-indigo-500 dark:text-indigo-400",
+    iconKind: "merged-simple",
+  };
 }

@@ -1,3 +1,7 @@
+// FILE: store.test.ts
+// Purpose: Exercises the web store's pure state transitions for orchestration snapshots/events.
+// Exports: Vitest coverage for thread/project projection, sidebar summaries, and local UI state.
+
 import {
   ApprovalRequestId,
   CheckpointRef,
@@ -6,11 +10,14 @@ import {
   OrchestrationProposedPlanId,
   ProjectId,
   ThreadId,
+  ThreadMarkerId,
   TurnId,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadActivity,
+  type ThreadMarker,
 } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -21,9 +28,11 @@ import {
   collapseProjectsExcept,
   markThreadUnread,
   renameProjectLocally,
+  removeDeletedThreadFromClientState,
   reorderProjects,
   setThreadWorkspace,
   setAllProjectsExpanded,
+  syncServerShellSnapshot,
   syncServerReadModel,
   syncServerThreadDetailHotPath,
   type AppState,
@@ -192,6 +201,28 @@ function makeReadModel(thread: OrchestrationReadModel["threads"][number]): Orche
   };
 }
 
+function makeShellSnapshot(thread: OrchestrationShellSnapshot["threads"][number]) {
+  return {
+    snapshotSequence: 2,
+    updatedAt: "2026-02-27T00:01:00.000Z",
+    projects: [
+      {
+        id: ProjectId.makeUnsafe("project-1"),
+        title: "Project",
+        workspaceRoot: "/tmp/project",
+        defaultModelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+        scripts: [],
+      },
+    ],
+    threads: [thread],
+  } satisfies OrchestrationShellSnapshot;
+}
+
 function makeReadModelProject(
   overrides: Partial<OrchestrationReadModel["projects"][number]>,
 ): OrchestrationReadModel["projects"][number] {
@@ -269,6 +300,57 @@ describe("store pure functions", () => {
     );
 
     expect(next.threads[0]?.branch).toBe("feature/semantic-branch");
+  });
+
+  it("preserves message mention references from read-model snapshots", () => {
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          messages: [
+            {
+              id: MessageId.makeUnsafe("message-with-plugin-mention"),
+              role: "user",
+              text: "Use @linear",
+              attachments: [],
+              mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+              turnId: null,
+              streaming: false,
+              source: "native",
+              createdAt: "2026-02-27T00:00:00.000Z",
+              updatedAt: "2026-02-27T00:00:00.000Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+      { name: "linear", path: "plugin://linear@openai-curated" },
+    ]);
+  });
+
+  it("preserves plugin mention references from live thread.message-sent events", () => {
+    const messageId = MessageId.makeUnsafe("message-with-plugin-mention");
+    const next = applyOrchestrationEvents(makeState(makeThread()), [
+      makeDomainEvent("thread.message-sent", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId,
+        role: "user",
+        text: "Use @linear",
+        attachments: [],
+        mentions: [{ name: "linear", path: "plugin://linear@openai-curated" }],
+        turnId: null,
+        streaming: false,
+        source: "native",
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.messages[0]?.mentions).toEqual([
+      { name: "linear", path: "plugin://linear@openai-curated" },
+    ]);
   });
 
   it("does not regress a semantic branch when local workspace patches only report a temp branch", () => {
@@ -1021,6 +1103,272 @@ describe("store pure functions", () => {
     expect(next.threads[0]?.createBranchFlowCompleted).toBe(true);
   });
 
+  it("preserves pinnedMessages and notes through the normalized read-model projection", () => {
+    // Regression: the normalized ThreadShell projection used to omit pinnedMessages/notes, so a
+    // read-model sync would reconstruct the thread without them — pins clicked in the sidebar
+    // never surfaced in the Environment panel. `next.threads[0]` reads back through
+    // getThreadsFromState (the shell projection), so this asserts the fields survive the round trip.
+    const messageId = MessageId.makeUnsafe("assistant-pin-1");
+    const pinnedMessages = [
+      { messageId, label: null, done: false, pinnedAt: "2026-02-27T00:01:00.000Z" },
+    ];
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          pinnedMessages,
+          notes: "remember to rerun typecheck",
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("remember to rerun typecheck");
+  });
+
+  it("surfaces pinnedMessages and notes from a live thread.meta-updated event", () => {
+    const initialState = makeState(makeThread());
+    const messageId = MessageId.makeUnsafe("assistant-pin-2");
+    const pinnedMessages = [
+      {
+        messageId,
+        label: "Check the migration",
+        done: false,
+        pinnedAt: "2026-02-27T00:02:00.000Z",
+      },
+    ];
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.meta-updated", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pinnedMessages,
+        notes: "scratch",
+        updatedAt: "2026-02-27T00:02:00.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("scratch");
+  });
+
+  it("applies live pinned-message operation events without replacing the whole list", () => {
+    const initialState = makeState(makeThread());
+    const firstMessageId = MessageId.makeUnsafe("assistant-pin-op-1");
+    const secondMessageId = MessageId.makeUnsafe("assistant-pin-op-2");
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.pinned-message-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pin: {
+          messageId: firstMessageId,
+          label: null,
+          done: false,
+          pinnedAt: "2026-02-27T00:03:00.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:00.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        pin: {
+          messageId: secondMessageId,
+          label: null,
+          done: false,
+          pinnedAt: "2026-02-27T00:03:05.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:05.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-done-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: firstMessageId,
+        done: true,
+        updatedAt: "2026-02-27T00:03:10.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-label-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: firstMessageId,
+        label: "Follow up",
+        updatedAt: "2026-02-27T00:03:15.000Z",
+      }),
+      makeDomainEvent("thread.pinned-message-removed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: secondMessageId,
+        updatedAt: "2026-02-27T00:03:20.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.pinnedMessages).toEqual([
+      {
+        messageId: firstMessageId,
+        label: "Follow up",
+        done: true,
+        pinnedAt: "2026-02-27T00:03:00.000Z",
+      },
+    ]);
+    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
+  });
+
+  it("preserves threadMarkers through the normalized read-model projection", () => {
+    const marker: ThreadMarker = {
+      id: ThreadMarkerId.makeUnsafe("marker-1"),
+      messageId: MessageId.makeUnsafe("assistant-marker-1"),
+      startOffset: 6,
+      endOffset: 20,
+      selectedText: "important text",
+      style: "highlight",
+      color: "yellow",
+      label: null,
+      done: false,
+      createdAt: "2026-02-27T00:01:00.000Z",
+      updatedAt: "2026-02-27T00:01:00.000Z",
+    };
+    const next = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          threadMarkers: [marker],
+        }),
+      ),
+    );
+
+    expect(next.threads[0]?.threadMarkers).toEqual([marker]);
+  });
+
+  it("applies live thread marker operation events without replacing the whole list", () => {
+    const initialState = makeState(makeThread());
+    const markerId = ThreadMarkerId.makeUnsafe("marker-op-1");
+    const secondMarkerId = ThreadMarkerId.makeUnsafe("marker-op-2");
+    const messageId = MessageId.makeUnsafe("assistant-marker-op");
+
+    const next = applyOrchestrationEvents(initialState, [
+      makeDomainEvent("thread.marker-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        marker: {
+          id: markerId,
+          messageId,
+          startOffset: 6,
+          endOffset: 20,
+          selectedText: "important text",
+          style: "highlight",
+          color: "yellow",
+          label: null,
+          done: false,
+          createdAt: "2026-02-27T00:03:00.000Z",
+          updatedAt: "2026-02-27T00:03:00.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:00.000Z",
+      }),
+      makeDomainEvent("thread.marker-added", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        marker: {
+          id: secondMarkerId,
+          messageId,
+          startOffset: 30,
+          endOffset: 39,
+          selectedText: "underline",
+          style: "underline",
+          color: "blue",
+          label: null,
+          done: false,
+          createdAt: "2026-02-27T00:03:05.000Z",
+          updatedAt: "2026-02-27T00:03:05.000Z",
+        },
+        updatedAt: "2026-02-27T00:03:05.000Z",
+      }),
+      makeDomainEvent("thread.marker-done-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        markerId,
+        done: true,
+        updatedAt: "2026-02-27T00:03:10.000Z",
+      }),
+      makeDomainEvent("thread.marker-label-set", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        markerId,
+        label: "Follow up",
+        updatedAt: "2026-02-27T00:03:15.000Z",
+      }),
+      makeDomainEvent("thread.marker-removed", {
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        markerId: secondMarkerId,
+        updatedAt: "2026-02-27T00:03:20.000Z",
+      }),
+    ]);
+
+    expect(next.threads[0]?.threadMarkers).toEqual([
+      {
+        id: markerId,
+        messageId,
+        startOffset: 6,
+        endOffset: 20,
+        selectedText: "important text",
+        style: "highlight",
+        color: "yellow",
+        label: "Follow up",
+        done: true,
+        createdAt: "2026-02-27T00:03:00.000Z",
+        updatedAt: "2026-02-27T00:03:15.000Z",
+      },
+    ]);
+    expect(next.threads[0]?.updatedAt).toBe("2026-02-27T00:03:20.000Z");
+  });
+
+  it("does not let a sidebar shell upsert clobber pinnedMessages/notes from the detail path", () => {
+    // The sidebar shell snapshot/event does not carry pinnedMessages or notes. A shell upsert must
+    // preserve the values resolved from the thread-detail path rather than clearing them.
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("assistant-pin-3");
+    const pinnedMessages = [
+      { messageId, label: null, done: true, pinnedAt: "2026-02-27T00:03:00.000Z" },
+    ];
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          pinnedMessages,
+          notes: "keep me",
+        }),
+      ),
+    );
+
+    const next = applyShellEvent(initialState, {
+      kind: "thread-upserted",
+      sequence: 2,
+      thread: {
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        associatedWorktreePath: null,
+        associatedWorktreeBranch: null,
+        associatedWorktreeRef: null,
+        createBranchFlowCompleted: false,
+        parentThreadId: null,
+        subagentAgentId: null,
+        subagentNickname: null,
+        subagentRole: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        lastKnownPr: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:05:00.000Z",
+        archivedAt: null,
+        handoff: null,
+        session: null,
+      },
+    });
+
+    expect(next.threads[0]?.pinnedMessages).toEqual(pinnedMessages);
+    expect(next.threads[0]?.notes).toBe("keep me");
+  });
+
   it("updates turn diffs and latest turn immediately from live events", () => {
     const initialState = makeState(
       makeThread({
@@ -1696,7 +2044,7 @@ describe("store read model sync", () => {
 
     const next = syncServerReadModel(initialState, readModel);
 
-    expect(next.threads[0]?.modelSelection.model).toBe("claude-sonnet-4-6");
+    expect(next.threads[0]?.modelSelection.model).toBe("claude-sonnet-5");
   });
 
   it("preserves OpenCode as the active session provider", () => {
@@ -2515,6 +2863,176 @@ describe("store read model sync", () => {
     expect(next.sidebarThreadSummaryById["thread-archived"]?.archivedAt).toBe(
       "2026-02-27T00:05:00.000Z",
     );
+  });
+
+  it("removes archived threads when a delete event reaches the hot path", () => {
+    const threadId = ThreadId.makeUnsafe("thread-archived");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          archivedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    const next = applyOrchestrationEventsHotPath(
+      initialState,
+      [
+        makeDomainEvent("thread.deleted", {
+          threadId,
+          deletedAt: "2026-02-27T00:06:00.000Z",
+        }),
+      ],
+      { updateThreadArray: false },
+    );
+
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+    expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
+
+    const afterStaleSnapshot = syncServerShellSnapshot(
+      next,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Stale archived thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+      }),
+    );
+    expect(afterStaleSnapshot.threads).toHaveLength(0);
+    expect(afterStaleSnapshot.threadShellById?.[threadId]).toBeUndefined();
+  });
+
+  it("removes successfully deleted archived threads through the shared client helper", () => {
+    const threadId = ThreadId.makeUnsafe("thread-archived");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          archivedAt: "2026-02-27T00:05:00.000Z",
+        }),
+      ),
+    );
+
+    const next = removeDeletedThreadFromClientState(initialState, threadId);
+
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+  });
+
+  it("keeps a client-deleted thread hidden when a stale shell snapshot includes it", () => {
+    const threadId = ThreadId.makeUnsafe("thread-stale-delete");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Soon deleted",
+        }),
+      ),
+    );
+
+    const deletedState = removeDeletedThreadFromClientState(initialState, threadId);
+    const next = syncServerShellSnapshot(
+      deletedState,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Stale resurrected thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+      }),
+    );
+
+    expect(next.deletedThreadIdsById?.[threadId]).toBe(true);
+    expect(next.threads).toHaveLength(0);
+    expect(next.threadIds).not.toContain(threadId);
+    expect(next.threadShellById?.[threadId]).toBeUndefined();
+    expect(next.sidebarThreadSummaryById[threadId]).toBeUndefined();
+  });
+
+  it("does not tombstone shell-only removals so rollback draft ids can rehydrate", () => {
+    const threadId = ThreadId.makeUnsafe("thread-shell-removed");
+    const initialState = syncServerReadModel(
+      makeState(makeThread()),
+      makeReadModel(
+        makeReadModelThread({
+          id: threadId,
+          title: "Shell removed",
+        }),
+      ),
+    );
+
+    const removedState = applyShellEvent(initialState, {
+      kind: "thread-removed",
+      sequence: 3,
+      threadId,
+    } satisfies OrchestrationShellStreamEvent);
+    const next = syncServerShellSnapshot(
+      removedState,
+      makeShellSnapshot({
+        id: threadId,
+        projectId: ProjectId.makeUnsafe("project-1"),
+        title: "Rehydrated shell removed thread",
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5.3-codex",
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        forkSourceThreadId: null,
+        sidechatSourceThreadId: null,
+        latestTurn: null,
+        createdAt: "2026-02-27T00:00:00.000Z",
+        updatedAt: "2026-02-27T00:00:30.000Z",
+        handoff: null,
+        session: null,
+      }),
+    );
+
+    expect(removedState.deletedThreadIdsById?.[threadId]).toBeUndefined();
+    expect(next.threads).toHaveLength(1);
+    expect(next.threadIds).toContain(threadId);
+    expect(next.threadShellById?.[threadId]?.title).toBe("Rehydrated shell removed thread");
   });
 
   it("keeps sidebar summaries shell-owned during hot-path thread detail syncs", () => {

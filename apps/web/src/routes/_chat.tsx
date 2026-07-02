@@ -1,4 +1,4 @@
-import { type ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { Outlet, createFileRoute, useLocation, useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
@@ -9,18 +9,21 @@ import {
   resolveAppNavigationState,
 } from "../appNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
+import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
 import ThreadSidebar from "../components/Sidebar";
 import { isElectron } from "../env";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { useDisposableThreadLifecycle } from "../hooks/useDisposableThreadLifecycle";
+import { useTemporaryThreadLifecycle } from "../hooks/useTemporaryThreadLifecycle";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useRecentViewSwitcher } from "../hooks/useRecentViewSwitcher";
 import { useLatestProjectStore } from "../latestProjectStore";
 import {
   resolveCurrentProjectTargetId,
   resolveLatestProjectTargetId,
+  resolveNewThreadTarget,
 } from "../lib/projectShortcutTargets";
-import { resolveThreadEnvironmentMode } from "../lib/threadEnvironment";
+import { resolveInheritedThreadContext } from "../lib/threadBootstrap";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
@@ -28,12 +31,9 @@ import { useStore } from "../store";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { onServerMaintenanceUpdated } from "../wsNativeApi";
-import { useAppSettings } from "~/appSettings";
-import {
-  isProviderUsable,
-  normalizeProviderStatusForLocalConfig,
-  providerUnavailableReason,
-} from "~/lib/providerAvailability";
+import { useProviderStatusesForLocalConfig } from "~/hooks/useProviderStatusesForLocalConfig";
+import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { resolveProviderSendAvailabilityWithRefresh } from "~/lib/providerAvailability";
 import { toastManager } from "~/components/ui/toast";
 import {
   Sidebar,
@@ -73,7 +73,7 @@ function ThreadRetentionMaintenanceToast() {
         return;
       }
 
-      const { state, purgedCount, totalCount, freePageCount, error } = event.payload;
+      const { state, deletedCount, totalCount, error } = event.payload;
       const eventMs = Date.parse(event.payload.at);
       const isStaleEvent = Number.isFinite(eventMs)
         ? Date.now() - eventMs > MAINTENANCE_EVENT_STALE_MS
@@ -85,8 +85,8 @@ function ThreadRetentionMaintenanceToast() {
       if (state === "started") {
         toastIdRef.current = toastManager.add({
           type: "loading",
-          title: "Cleaning old chats...",
-          description: "Preparing background cleanup.",
+          title: "Hiding old chats...",
+          description: "Preparing background maintenance.",
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -98,41 +98,18 @@ function ThreadRetentionMaintenanceToast() {
           toastIdRef.current ??
           toastManager.add({
             type: "loading",
-            title: "Cleaning old chats...",
+            title: "Hiding old chats...",
             timeout: 0,
             data: { allowCrossThreadVisibility: true },
           });
         toastIdRef.current = toastId;
         toastManager.update(toastId, {
           type: "loading",
-          title: "Cleaning old chats...",
+          title: "Hiding old chats...",
           description:
             totalCount && totalCount > 0
-              ? `${purgedCount ?? 0} of ${totalCount} chats removed.`
-              : `${purgedCount ?? 0} chats removed.`,
-          timeout: 0,
-          data: { allowCrossThreadVisibility: true },
-        });
-        return;
-      }
-
-      if (state === "compacting") {
-        const toastId =
-          toastIdRef.current ??
-          toastManager.add({
-            type: "loading",
-            title: "Compacting chat database...",
-            timeout: 0,
-            data: { allowCrossThreadVisibility: true },
-          });
-        toastIdRef.current = toastId;
-        toastManager.update(toastId, {
-          type: "loading",
-          title: "Compacting chat database...",
-          description:
-            freePageCount && freePageCount > 0
-              ? "Reclaiming unused database space."
-              : "Finishing cleanup.",
+              ? `${deletedCount ?? 0} of ${totalCount} chats hidden.`
+              : `${deletedCount ?? 0} chats hidden.`,
           timeout: 0,
           data: { allowCrossThreadVisibility: true },
         });
@@ -145,7 +122,7 @@ function ThreadRetentionMaintenanceToast() {
         if (toastId) {
           toastManager.update(toastId, {
             type: "warning",
-            title: "Cleanup paused",
+            title: "Chat maintenance paused",
             description: error ?? "Old chats will be retried later.",
             timeout: 6000,
             data: { allowCrossThreadVisibility: true },
@@ -154,7 +131,7 @@ function ThreadRetentionMaintenanceToast() {
         }
         toastManager.add({
           type: "warning",
-          title: "Cleanup paused",
+          title: "Chat maintenance paused",
           description: error ?? "Old chats will be retried later.",
           timeout: 6000,
           data: { allowCrossThreadVisibility: true },
@@ -167,11 +144,11 @@ function ThreadRetentionMaintenanceToast() {
       if (!toastId) return;
       toastManager.update(toastId, {
         type: "success",
-        title: "Old chats cleaned",
+        title: "Old chats hidden",
         description:
-          purgedCount && purgedCount > 0
-            ? `${purgedCount} chats removed from the database.`
-            : "No old chats needed cleanup.",
+          deletedCount && deletedCount > 0
+            ? `${deletedCount} old chats hidden from the app.`
+            : "No old chats needed hiding.",
         timeout: 3500,
         data: { allowCrossThreadVisibility: true },
       });
@@ -213,14 +190,17 @@ function resolveBrowserNavigationShortcut(
   return null;
 }
 
+function isRecentViewSwitcherCommitKey(event: KeyboardEvent): boolean {
+  return event.key === "Enter" || event.key === " " || event.key === "Spacebar";
+}
+
 function ChatRouteGlobalShortcuts() {
   const navigate = useNavigate();
-  const pathname = useLocation({ select: (location) => location.pathname });
-  const { settings: appSettings } = useAppSettings();
   const { toggleSidebar } = useSidebar();
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
   const selectedThreadIdsSize = useThreadSelectionStore((state) => state.selectedThreadIds.size);
+  const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const {
     activeContextThreadId,
     activeDraftThread,
@@ -229,23 +209,32 @@ function ChatRouteGlobalShortcuts() {
     handleNewThread,
     projects,
   } = useHandleNewThread();
+  const {
+    recentSwitcherState,
+    recentViewEntries,
+    openOrAdvanceRecentSwitcher,
+    commitRecentSwitcherSelection,
+    cancelRecentSwitcher,
+  } = useRecentViewSwitcher({
+    activeContextThreadId,
+    activeDraftThread,
+    projects,
+  });
   const { handleNewChat } = useHandleNewChat();
   const latestProjectId = useLatestProjectStore((state) => state.latestProjectId);
   const setLatestProjectId = useLatestProjectStore((state) => state.setLatestProjectId);
   const clearLatestProjectId = useLatestProjectStore((state) => state.clearLatestProjectId);
   const threadsHydrated = useStore((state) => state.threadsHydrated);
-  useDisposableThreadLifecycle(activeContextThreadId);
+  useTemporaryThreadLifecycle(activeContextThreadId);
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const keybindings = serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
-  const providerStatuses = serverConfigQuery.data?.providers ?? [];
-  const activeThreadTerminalState = useTerminalStateStore((state) =>
-    activeContextThreadId
-      ? selectThreadTerminalState(state.terminalStateByThreadId, activeContextThreadId)
-      : null,
-  );
+  const providerStatuses = useProviderStatusesForLocalConfig();
+  const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const activeThreadTerminalState = activeContextThreadId
+    ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
+    : null;
   const terminalOpen = activeThreadTerminalState?.terminalOpen ?? false;
-  const allowProjectFallback = pathname !== "/";
   const activeProject =
     activeProjectId !== null
       ? (projects.find((project) => project.id === activeProjectId) ?? null)
@@ -279,6 +268,20 @@ function ChatRouteGlobalShortcuts() {
         terminalOpen,
         terminalWorkspaceOpen,
       };
+
+      if (recentSwitcherState && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        cancelRecentSwitcher();
+        return;
+      }
+
+      if (recentSwitcherState && isRecentViewSwitcherCommitKey(event)) {
+        event.preventDefault();
+        event.stopPropagation();
+        commitRecentSwitcherSelection();
+        return;
+      }
 
       const isShortcutsHelpShortcut =
         (event.metaKey || event.ctrlKey) &&
@@ -325,6 +328,15 @@ function ChatRouteGlobalShortcuts() {
 
       if (!command) return;
 
+      if (command === "view.recent.next" || command === "view.recent.previous") {
+        event.preventDefault();
+        event.stopPropagation();
+        // Ignore auto-repeat: holding Ctrl+Tab should not race-advance the selection.
+        if (event.repeat) return;
+        openOrAdvanceRecentSwitcher(command === "view.recent.next" ? "next" : "previous");
+        return;
+      }
+
       if (command === "chat.newChat" || command === "chat.newLocal") {
         event.preventDefault();
         event.stopPropagation();
@@ -341,19 +353,14 @@ function ChatRouteGlobalShortcuts() {
       }
 
       if (command === "chat.newTerminal") {
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
+        void handleNewThread(target.projectId, {
+          ...(target.inheritContext
+            ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+            : {}),
           entryPoint: "terminal",
         });
         return;
@@ -373,59 +380,48 @@ function ChatRouteGlobalShortcuts() {
               : command === "chat.newCursor"
                 ? "cursor"
                 : "gemini";
-        const normalizedStatus = normalizeProviderStatusForLocalConfig({
-          provider,
-          status: providerStatuses.find((entry) => entry.provider === provider) ?? null,
-          customBinaryPath:
-            provider === "codex"
-              ? appSettings.codexBinaryPath
-              : provider === "claudeAgent"
-                ? appSettings.claudeBinaryPath
-                : provider === "cursor"
-                  ? appSettings.cursorBinaryPath
-                  : appSettings.geminiBinaryPath,
-        });
-        if (!isProviderUsable(normalizedStatus)) {
-          event.preventDefault();
-          event.stopPropagation();
-          toastManager.add({
-            type: "error",
-            title: providerUnavailableReason(normalizedStatus),
-          });
-          return;
-        }
-        const projectId = activeProjectId ?? (allowProjectFallback ? projects[0]?.id : null);
-        if (!projectId) return;
+        const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+        if (!target) return;
         event.preventDefault();
         event.stopPropagation();
-        void handleNewThread(projectId, {
-          provider,
-          branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-          worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-          envMode:
-            activeDraftThread?.envMode ??
-            resolveThreadEnvironmentMode({
-              envMode: activeThread?.envMode,
-              worktreePath: activeThread?.worktreePath ?? null,
-            }),
-        });
+        void (async () => {
+          const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
+            provider,
+            statuses: providerStatuses,
+            refreshStatuses: () => refreshProviderStatuses({ silent: true }),
+          });
+          if (!providerAvailability.usable) {
+            toastManager.add({
+              type: "error",
+              title: providerAvailability.unavailableReason,
+            });
+            return;
+          }
+          await handleNewThread(target.projectId, {
+            provider,
+            ...(target.inheritContext
+              ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+              : {}),
+          });
+        })();
         return;
       }
 
       if (command !== "chat.new") return;
-      if (!currentProjectId) return;
+      // Falls back to the most recent project when none is focused (e.g. the landing
+      // view) so the primary "new thread" chord always creates a thread; on that
+      // fallback the active branch/worktree context belongs to the absent project, so
+      // `resolveNewThreadTarget` omits it and we defer to the target's defaults.
+      const target = resolveNewThreadTarget({ currentProjectId, latestUsableProjectId });
+      if (!target) return;
       event.preventDefault();
       event.stopPropagation();
-      void handleNewThread(currentProjectId, {
-        branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-        worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
-        envMode:
-          activeDraftThread?.envMode ??
-          resolveThreadEnvironmentMode({
-            envMode: activeThread?.envMode,
-            worktreePath: activeThread?.worktreePath ?? null,
-          }),
-      });
+      void handleNewThread(
+        target.projectId,
+        target.inheritContext
+          ? resolveInheritedThreadContext({ activeThread, activeDraftThread })
+          : undefined,
+      );
     };
 
     window.addEventListener("keydown", onWindowKeyDown, { capture: true });
@@ -434,21 +430,20 @@ function ChatRouteGlobalShortcuts() {
     };
   }, [
     activeDraftThread,
-    activeProjectId,
     activeThread,
-    allowProjectFallback,
+    cancelRecentSwitcher,
     clearSelection,
+    commitRecentSwitcherSelection,
     currentProjectId,
     handleNewChat,
     handleNewThread,
     keybindings,
     latestUsableProjectId,
-    appSettings.claudeBinaryPath,
-    appSettings.codexBinaryPath,
-    appSettings.cursorBinaryPath,
-    appSettings.geminiBinaryPath,
+    openOrAdvanceRecentSwitcher,
+    platform,
     providerStatuses,
-    projects,
+    refreshProviderStatuses,
+    recentSwitcherState,
     selectedThreadIdsSize,
     terminalOpen,
     terminalWorkspaceOpen,
@@ -476,18 +471,26 @@ function ChatRouteGlobalShortcuts() {
   }, [navigate, toggleSidebar]);
 
   return (
-    <ShortcutsDialog
-      open={shortcutsDialogOpen}
-      onOpenChange={setShortcutsDialogOpen}
-      keybindings={keybindings}
-      projectScripts={activeProjectScripts}
-      platform={platform}
-      context={{
-        terminalFocus: isTerminalFocused(),
-        terminalOpen,
-        terminalWorkspaceOpen,
-      }}
-    />
+    <>
+      <ShortcutsDialog
+        open={shortcutsDialogOpen}
+        onOpenChange={setShortcutsDialogOpen}
+        keybindings={keybindings}
+        projectScripts={activeProjectScripts}
+        platform={platform}
+        context={{
+          terminalFocus: isTerminalFocused(),
+          terminalOpen,
+          terminalWorkspaceOpen,
+        }}
+      />
+      {recentSwitcherState ? (
+        <RecentViewSwitcher
+          entries={recentViewEntries}
+          selectedIndex={recentSwitcherState.selectedIndex}
+        />
+      ) : null}
+    </>
   );
 }
 
@@ -501,6 +504,12 @@ const SIDEBAR_GAP_CLASS =
 const SIDEBAR_INNER_CLASS = "app-sidebar-surface";
 
 function ChatRouteLayout() {
+  const isEditorView = useLocation({
+    select: (location) => (location.search as { view?: unknown }).view === "editor",
+  });
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const resolvedSidebarOpen = isEditorView ? false : sidebarOpen;
+
   // The thread sidebar always lives on the left; the right dock is a separate surface.
   const sidebarElement = (
     <Sidebar
@@ -526,9 +535,11 @@ function ChatRouteLayout() {
   // `data-sidebar-side` on the provider selects the seam geometry.
   const mainContentShell = (
     <div className="chat-content-card-backing relative flex h-svh min-h-0 min-w-0 flex-1">
-      <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
-        <SidebarRail placement="content-seam" />
-      </SidebarInstanceProvider>
+      {isEditorView ? null : (
+        <SidebarInstanceProvider side="left" resizable={THREAD_SIDEBAR_RESIZABLE}>
+          <SidebarRail placement="content-seam" />
+        </SidebarInstanceProvider>
+      )}
       <Outlet />
     </div>
   );
@@ -536,6 +547,8 @@ function ChatRouteLayout() {
   return (
     <SidebarProvider
       defaultOpen
+      open={resolvedSidebarOpen}
+      onOpenChange={setSidebarOpen}
       className="bg-[var(--app-shell-background)]"
       data-sidebar-side="left"
     >

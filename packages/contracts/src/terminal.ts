@@ -1,23 +1,27 @@
 import { Schema } from "effect";
-import { TrimmedNonEmptyString } from "./baseSchemas";
+import { ProcessEnvRecord, TrimmedNonEmptyString } from "./baseSchemas";
 
 export const DEFAULT_TERMINAL_ID = "default";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
-const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(20)).check(
-  Schema.isLessThanOrEqualTo(400),
+
+// Dimension bounds for a PTY window. The OS `winsize` fields (`ws_col`/`ws_row`)
+// are unsigned 16-bit, so the only hard ceiling is 65535; these caps stay well
+// below that while comfortably covering ultrawide displays at small font sizes
+// (legitimate fits can exceed 400 columns). The lower bounds keep a usable shell.
+export const TERMINAL_MIN_COLS = 20;
+export const TERMINAL_MAX_COLS = 2000;
+export const TERMINAL_MIN_ROWS = 5;
+export const TERMINAL_MAX_ROWS = 1000;
+
+const TerminalColsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(TERMINAL_MIN_COLS)).check(
+  Schema.isLessThanOrEqualTo(TERMINAL_MAX_COLS),
 );
-const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(5)).check(
-  Schema.isLessThanOrEqualTo(200),
+const TerminalRowsSchema = Schema.Int.check(Schema.isGreaterThanOrEqualTo(TERMINAL_MIN_ROWS)).check(
+  Schema.isLessThanOrEqualTo(TERMINAL_MAX_ROWS),
 );
 const TerminalIdSchema = TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(128));
-const TerminalEnvKeySchema = Schema.String.check(
-  Schema.isPattern(/^[A-Za-z_][A-Za-z0-9_]*$/),
-).check(Schema.isMaxLength(128));
-const TerminalEnvValueSchema = Schema.String.check(Schema.isMaxLength(8_192));
-const TerminalEnvSchema = Schema.Record(TerminalEnvKeySchema, TerminalEnvValueSchema).check(
-  Schema.isMaxProperties(128),
-);
+const TerminalEnvSchema = ProcessEnvRecord;
 
 const TerminalIdWithDefaultSchema = TerminalIdSchema.pipe(
   Schema.withDecodingDefault(() => DEFAULT_TERMINAL_ID),
@@ -40,6 +44,11 @@ export const TerminalOpenInput = Schema.Struct({
   cols: Schema.optional(TerminalColsSchema),
   rows: Schema.optional(TerminalRowsSchema),
   env: Schema.optional(TerminalEnvSchema),
+  // When false, the PTY is still drained and history is still maintained, but
+  // live `output` events are not broadcast. Used for headless background
+  // sessions (e.g. dev servers) whose output no renderer consumes. Defaults to
+  // true so interactive terminals stream as usual.
+  streamOutput: Schema.optional(Schema.Boolean),
 });
 export type TerminalOpenInput = Schema.Codec.Encoded<typeof TerminalOpenInput>;
 

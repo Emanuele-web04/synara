@@ -31,6 +31,7 @@ import {
   resolveTailUserMessageEditTarget,
 } from "@t3tools/shared/conversationEdit";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
 
 import {
@@ -41,11 +42,13 @@ import {
 import { CheckpointStore } from "../../checkpointing/Services/CheckpointStore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { ProviderAdapterRequestError, ProviderServiceError } from "../../provider/Errors.ts";
+import { buildInlineSkillInstructions } from "../../provider/skillPromptInjection.ts";
 import {
   TextGeneration,
   type BranchNameGenerationInput,
   type ThreadTitleGenerationInput,
 } from "../../git/Services/TextGeneration.ts";
+import { resolveTextGenerationInputForSelection } from "../../git/textGenerationSelection.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { clearWorkspaceIndexCache } from "../../workspaceEntries.ts";
@@ -120,7 +123,7 @@ function attachmentTitleSeed(attachment: ChatAttachment | undefined): string {
   if (!attachment) {
     return "";
   }
-  if (attachment.type === "image") {
+  if (attachment.type === "image" || attachment.type === "file") {
     return attachment.name;
   }
   return attachment.text.trim();
@@ -220,13 +223,6 @@ function isRollbackStillInProgressError(error: unknown): boolean {
   );
 }
 
-function stalePendingRequestDetail(
-  requestKind: "approval" | "user-input",
-  requestId: string,
-): string {
-  return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
-}
-
 function buildGeneratedWorktreeBranchName(raw: string): string {
   const normalized = raw
     .trim()
@@ -246,12 +242,6 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
 
   const safeFragment = branchFragment.length > 0 ? branchFragment : "update";
   return `${WORKTREE_BRANCH_PREFIX}/${safeFragment}`;
-}
-
-function hasDedicatedTextGenerationProvider(provider: ProviderKind | undefined): boolean {
-  return (
-    provider === "codex" || provider === "cursor" || provider === "kilo" || provider === "opencode"
-  );
 }
 
 const make = Effect.gen(function* () {
@@ -307,30 +297,6 @@ const make = Effect.gen(function* () {
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
-
-  const resolveTextGenerationInputForSelection = (
-    modelSelection: ModelSelection | undefined,
-    providerOptions: ProviderStartOptions | undefined,
-  ) => {
-    if (!hasDedicatedTextGenerationProvider(modelSelection?.provider)) {
-      return null;
-    }
-
-    if (modelSelection?.provider === "codex") {
-      return {
-        modelSelection,
-        ...(providerOptions ? { providerOptions } : {}),
-        ...(providerOptions?.codex?.homePath
-          ? { codexHomePath: providerOptions.codex.homePath }
-          : {}),
-      } as const;
-    }
-
-    return {
-      modelSelection,
-      ...(providerOptions ? { providerOptions } : {}),
-    } as const;
-  };
 
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -933,10 +899,35 @@ const make = Effect.gen(function* () {
         : priorTranscriptBootstrapText
           ? `<thread_context>\n${priorTranscriptBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
           : boundaryMessageText;
+    // Portable skills fallback: providers that cannot load the referenced skill
+    // file natively get the skill instructions inlined into the prompt.
+    const skillInlineText =
+      input.skills !== undefined && input.skills.length > 0
+        ? yield* Effect.tryPromise(() =>
+            buildInlineSkillInstructions({
+              provider: selectedProvider as ProviderKind,
+              skills: input.skills ?? [],
+              maxChars: Math.max(
+                0,
+                PROVIDER_SEND_TURN_MAX_INPUT_CHARS - providerInput.length - 1_000,
+              ),
+            }),
+          ).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("failed to inline portable skill instructions", {
+                threadId: input.threadId,
+                error,
+              }).pipe(Effect.as("")),
+            ),
+          )
+        : "";
+    const providerInputWithSkills = skillInlineText
+      ? `${providerInput}\n\n${skillInlineText}`
+      : providerInput;
     const normalizedInput = toNonEmptyProviderInput(
       normalizeSkillMentionTextForProvider({
         provider: selectedProvider as ProviderKind,
-        messageText: providerInput,
+        messageText: providerInputWithSkills,
         ...(input.skills !== undefined ? { skills: input.skills } : {}),
       }),
     );
@@ -988,13 +979,15 @@ const make = Effect.gen(function* () {
       }
 
       // Capture before provider dispatch so the later turn diff is bounded by
-      // the user's submit moment, not an async runtime event.
+      // the user's submit moment, not early provider edits. skipIfExists keeps
+      // a backup baseline from CheckpointReactor as the first-writer winner.
       yield* checkpointStore.captureCheckpoint({
         cwd,
         checkpointRef: checkpointRefForThreadMessageStart(
           input.threadId,
           MessageId.makeUnsafe(input.messageId),
         ),
+        skipIfExists: true,
       });
     }).pipe(
       Effect.catchCause((cause) =>
@@ -1057,10 +1050,13 @@ const make = Effect.gen(function* () {
             const retryProviderInput = retryBootstrapText
               ? `<thread_context>\n${retryBootstrapText}\n</thread_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
               : boundaryMessageText;
+            const retryProviderInputWithSkills = skillInlineText
+              ? `${retryProviderInput}\n\n${skillInlineText}`
+              : retryProviderInput;
             const retryNormalizedInput = toNonEmptyProviderInput(
               normalizeSkillMentionTextForProvider({
                 provider: selectedProvider as ProviderKind,
-                messageText: retryProviderInput,
+                messageText: retryProviderInputWithSkills,
                 ...(input.skills !== undefined ? { skills: input.skills } : {}),
               }),
             );
@@ -1365,6 +1361,31 @@ const make = Effect.gen(function* () {
       return;
     }
 
+    // Surface the upcoming work immediately: provider session init can take
+    // seconds (e.g. Cursor), and without an early status the thread reads as
+    // idle until the runtime's first event. Mirrors the message-edit-resend
+    // path. Never touches a live session — a steer turn on a running Codex
+    // session must keep its running state and activeTurnId. Keeps the existing
+    // session's runtimeMode: ensureSessionForThread detects mode changes by
+    // comparing against it, and adopting the requested mode here would mask
+    // the restart.
+    if (thread.session?.status !== "running" && thread.session?.status !== "starting") {
+      yield* setThreadSession({
+        threadId: event.payload.threadId,
+        session: {
+          threadId: event.payload.threadId,
+          status: "starting",
+          providerName: thread.session?.providerName ?? thread.modelSelection.provider,
+          runtimeMode:
+            thread.session?.runtimeMode ?? event.payload.runtimeMode ?? DEFAULT_RUNTIME_MODE,
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
+
     yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
       threadId: event.payload.threadId,
       branch: thread.branch,
@@ -1397,7 +1418,6 @@ const make = Effect.gen(function* () {
         ? "queue"
         : event.payload.dispatchMode;
     const editResendKey = editResendTurnStartKey(event.payload.threadId, event.payload.messageId);
-    const isEditResendTurn = editResendTurnStartKeys.has(editResendKey);
 
     yield* dispatchTurnForThread({
       threadId: event.payload.threadId,
@@ -1531,12 +1551,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.approval-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
-    if (!thread || !providerThread) {
+    if (!thread) {
       return;
     }
-    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
-    if (!hasSession) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (providerThread?.session?.status === "stopped") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.approval.respond.failed",
@@ -1547,10 +1566,11 @@ const make = Effect.gen(function* () {
         requestId: event.payload.requestId,
       });
     }
+    const providerThreadId = providerThread?.id ?? event.payload.threadId;
 
     yield* providerService
       .respondToRequest({
-        threadId: providerThread.id,
+        threadId: providerThreadId,
         requestId: event.payload.requestId,
         decision: event.payload.decision,
       })
@@ -1562,7 +1582,7 @@ const make = Effect.gen(function* () {
               kind: "provider.approval.respond.failed",
               summary: "Provider approval response failed",
               detail: isUnknownPendingApprovalRequestError(cause)
-                ? stalePendingRequestDetail("approval", event.payload.requestId)
+                ? buildStalePendingRequestFailureDetail("approval", event.payload.requestId)
                 : Cause.pretty(cause),
               turnId: null,
               createdAt: event.payload.createdAt,
@@ -1579,12 +1599,11 @@ const make = Effect.gen(function* () {
     event: Extract<ProviderIntentEvent, { type: "thread.user-input-response-requested" }>,
   ) {
     const thread = yield* resolveThread(event.payload.threadId);
-    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
-    if (!thread || !providerThread) {
+    if (!thread) {
       return;
     }
-    const hasSession = providerThread.session && providerThread.session.status !== "stopped";
-    if (!hasSession) {
+    const providerThread = yield* resolveProviderSessionThread(event.payload.threadId);
+    if (providerThread?.session?.status === "stopped") {
       return yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.user-input.respond.failed",
@@ -1595,10 +1614,11 @@ const make = Effect.gen(function* () {
         requestId: event.payload.requestId,
       });
     }
+    const providerThreadId = providerThread?.id ?? event.payload.threadId;
 
     yield* providerService
       .respondToUserInput({
-        threadId: providerThread.id,
+        threadId: providerThreadId,
         requestId: event.payload.requestId,
         answers: event.payload.answers,
       })
@@ -1609,7 +1629,7 @@ const make = Effect.gen(function* () {
             kind: "provider.user-input.respond.failed",
             summary: "Provider user input response failed",
             detail: isUnknownPendingUserInputRequestError(cause)
-              ? stalePendingRequestDetail("user-input", event.payload.requestId)
+              ? buildStalePendingRequestFailureDetail("user-input", event.payload.requestId)
               : Cause.pretty(cause),
             turnId: null,
             createdAt: event.payload.createdAt,

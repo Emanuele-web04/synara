@@ -2,6 +2,7 @@ import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  appendOriginalComposerPromptBlocks,
   appendOriginalTerminalContextBlock,
   appendTerminalContextsToPrompt,
   buildTerminalContextPreviewTitle,
@@ -25,6 +26,8 @@ import {
   type TerminalContextDraft,
 } from "./terminalContext";
 import { appendAssistantSelectionsToPrompt } from "./assistantSelections";
+import { appendPastedTextsToPrompt, createPastedTextDraft } from "./composerPastedText";
+import { appendFileCommentsToPrompt } from "./fileComments";
 
 function makeContext(overrides?: Partial<TerminalContextDraft>): TerminalContextDraft {
   return {
@@ -99,6 +102,49 @@ describe("terminalContext", () => {
     );
   });
 
+  it("preserves all hidden composer blocks when editing display text", () => {
+    const assistantSelections = [{ assistantMessageId: "msg-1", text: "selected line" }];
+    const contexts = [makeContext()];
+    const fileComments = [
+      { path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" },
+    ];
+    const pastedTexts = [
+      createPastedTextDraft({
+        id: "paste-1",
+        createdAt: "2026-06-15T00:00:00.000Z",
+        text: ["before", "</pasted_text>", "after"].join("\n"),
+      }),
+    ];
+    const originalPrompt = appendPastedTextsToPrompt(
+      appendFileCommentsToPrompt(
+        appendTerminalContextsToPrompt(
+          appendAssistantSelectionsToPrompt("Investigate this", assistantSelections),
+          contexts,
+        ),
+        fileComments,
+      ),
+      pastedTexts,
+    );
+
+    expect(
+      appendOriginalComposerPromptBlocks({
+        editedPrompt: "Investigate this edited",
+        originalPrompt,
+      }),
+    ).toBe(
+      appendPastedTextsToPrompt(
+        appendFileCommentsToPrompt(
+          appendTerminalContextsToPrompt(
+            appendAssistantSelectionsToPrompt("Investigate this edited", assistantSelections),
+            contexts,
+          ),
+          fileComments,
+        ),
+        pastedTexts,
+      ),
+    );
+  });
+
   it("replaces inline placeholders with inline terminal labels before appending context blocks", () => {
     expect(
       appendTerminalContextsToPrompt(
@@ -147,6 +193,8 @@ describe("terminalContext", () => {
         },
       ],
       assistantSelections: [],
+      fileComments: [],
+      pastedTexts: [],
     });
   });
 
@@ -164,6 +212,8 @@ describe("terminalContext", () => {
       previewTitle: null,
       contexts: [],
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [],
+      pastedTexts: [],
     });
   });
 
@@ -190,6 +240,38 @@ describe("terminalContext", () => {
         },
       ],
       assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [],
+      pastedTexts: [],
+    });
+  });
+
+  it("separates file comments, terminal context, and assistant selections in display state", () => {
+    // Mirror the composer send path: assistant selections, then terminal
+    // contexts, then file comments (outermost).
+    const prompt = appendFileCommentsToPrompt(
+      appendTerminalContextsToPrompt(
+        appendAssistantSelectionsToPrompt("Investigate this", [
+          { assistantMessageId: "msg-1", text: "selected line" },
+        ]),
+        [makeContext()],
+      ),
+      [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
+    );
+
+    expect(deriveDisplayedUserMessageState(prompt)).toEqual({
+      visibleText: "Investigate this",
+      copyText: "Investigate this",
+      contextCount: 1,
+      previewTitle: "Terminal 1 lines 12-13\n12 | git status\n13 | On branch main",
+      contexts: [
+        {
+          header: "Terminal 1 lines 12-13",
+          body: "12 | git status\n13 | On branch main",
+        },
+      ],
+      assistantSelections: [{ assistantMessageId: "msg-1", text: "selected line" }],
+      fileComments: [{ path: "src/app.ts", startLine: 3, endLine: 5, text: "rename this helper" }],
+      pastedTexts: [],
     });
   });
 
@@ -214,6 +296,8 @@ describe("terminalContext", () => {
       previewTitle: null,
       contexts: [],
       assistantSelections: [],
+      fileComments: [],
+      pastedTexts: [],
     });
   });
 

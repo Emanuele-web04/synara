@@ -40,6 +40,11 @@ const makeProviderTextGeneration = Effect.gen(function* () {
     generateDiffSummary: (input) => resolveImplementation(input).generateDiffSummary(input),
     generateBranchName: (input) => resolveImplementation(input).generateBranchName(input),
     generateThreadTitle: (input) => resolveImplementation(input).generateThreadTitle(input),
+    generateThreadRecap: (input) => resolveImplementation(input).generateThreadRecap(input),
+    generateAutomationIntent: (input) =>
+      resolveImplementation(input).generateAutomationIntent(input),
+    evaluateAutomationCompletion: (input) =>
+      resolveImplementation(input).evaluateAutomationCompletion(input),
   } satisfies TextGenerationShape;
 });
 

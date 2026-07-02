@@ -2,6 +2,22 @@ import { Schema } from "effect";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
+import {
+  AutomationCancelRunInput,
+  AutomationCancelRunResult,
+  AutomationArchiveRunInput,
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationDeleteInput,
+  AutomationListInput,
+  AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
+  AutomationRunNowInput,
+  AutomationRunNowResult,
+  AutomationStreamEvent,
+  AutomationUpdateInput,
+} from "./automation";
 import { OpenInEditorInput } from "./editor";
 import { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
 import {
@@ -12,6 +28,8 @@ import {
   GitCreateDetachedWorktreeResult,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitHubRepositoryInput,
+  GitHubRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitInitInput,
@@ -74,6 +92,8 @@ import {
   ProviderListPluginsResult,
   ProviderListSkillsInput,
   ProviderListSkillsResult,
+  ProviderSkillsCatalogInput,
+  ProviderSkillsCatalogResult,
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
@@ -82,12 +102,24 @@ import {
   ProjectApplyStyleEditResult,
   ProjectApplyTextEditInput,
   ProjectApplyTextEditResult,
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -95,16 +127,25 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerListProviderUsageInput,
+  ServerListProviderUsageResult,
   ServerLifecycleStreamEvent,
   ServerGetSettingsResult,
+  ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
+  ServerStopLocalServerInput,
+  ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingResult,
@@ -122,6 +163,12 @@ import {
   TerminalSessionSnapshot,
   TerminalWriteInput,
 } from "./terminal";
+import {
+  StatsGetProfileStatsInput,
+  StatsGetProfileStatsResult,
+  StatsGetProfileTokenStatsInput,
+  StatsGetProfileTokenStatsResult,
+} from "./stats";
 import { WS_METHODS } from "./ws";
 
 export class WsRpcError extends Schema.TaggedErrorClass<WsRpcError>()("WsRpcError", {
@@ -237,6 +284,12 @@ export const WsProjectsListDirectoriesRpc = Rpc.make(WS_METHODS.projectsListDire
   error: WsRpcError,
 });
 
+export const WsProjectsDiscoverScriptsRpc = Rpc.make(WS_METHODS.projectsDiscoverScripts, {
+  payload: ProjectDiscoverScriptsInput,
+  success: ProjectDiscoverScriptsResult,
+  error: WsRpcError,
+});
+
 export const WsProjectsSearchEntriesRpc = Rpc.make(WS_METHODS.projectsSearchEntries, {
   payload: ProjectSearchEntriesInput,
   success: ProjectSearchEntriesResult,
@@ -248,6 +301,21 @@ export const WsProjectsSearchLocalEntriesRpc = Rpc.make(WS_METHODS.projectsSearc
   success: ProjectSearchLocalEntriesResult,
   error: WsRpcError,
 });
+
+export const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
+  payload: ProjectReadFileInput,
+  success: ProjectReadFileResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsCreateLocalFilePreviewGrantRpc = Rpc.make(
+  WS_METHODS.projectsCreateLocalFilePreviewGrant,
+  {
+    payload: ProjectCreateLocalFilePreviewGrantInput,
+    success: ProjectCreateLocalFilePreviewGrantResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsProjectsWriteFileRpc = Rpc.make(WS_METHODS.projectsWriteFile, {
   payload: ProjectWriteFileInput,
@@ -267,6 +335,34 @@ export const WsProjectsApplyStyleEditRpc = Rpc.make(WS_METHODS.projectsApplyStyl
   error: WsRpcError,
 });
 
+export const WsProjectsRunDevServerRpc = Rpc.make(WS_METHODS.projectsRunDevServer, {
+  payload: ProjectRunDevServerInput,
+  success: ProjectRunDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsStopDevServerRpc = Rpc.make(WS_METHODS.projectsStopDevServer, {
+  payload: ProjectStopDevServerInput,
+  success: ProjectStopDevServerResult,
+  error: WsRpcError,
+});
+
+export const WsProjectsListDevServersRpc = Rpc.make(WS_METHODS.projectsListDevServers, {
+  payload: Schema.Struct({}),
+  success: ProjectListDevServersResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeProjectDevServerEventsRpc = Rpc.make(
+  WS_METHODS.subscribeProjectDevServerEvents,
+  {
+    payload: Schema.Struct({}),
+    success: ProjectDevServerEvent,
+    error: WsRpcError,
+    stream: true,
+  },
+);
+
 export const WsFilesystemBrowseRpc = Rpc.make(WS_METHODS.filesystemBrowse, {
   payload: FilesystemBrowseInput,
   success: FilesystemBrowseResult,
@@ -282,6 +378,12 @@ export const WsShellOpenInEditorRpc = Rpc.make(WS_METHODS.shellOpenInEditor, {
 export const WsGitStatusRpc = Rpc.make(WS_METHODS.gitStatus, {
   payload: GitStatusInput,
   success: GitStatusResult,
+  error: WsRpcError,
+});
+
+export const WsGitGithubRepositoryRpc = Rpc.make(WS_METHODS.gitGithubRepository, {
+  payload: GitHubRepositoryInput,
+  success: GitHubRepositoryResult,
   error: WsRpcError,
 });
 
@@ -534,6 +636,18 @@ export const WsServerListWorktreesRpc = Rpc.make(WS_METHODS.serverListWorktrees,
   error: WsRpcError,
 });
 
+export const WsServerListLocalServersRpc = Rpc.make(WS_METHODS.serverListLocalServers, {
+  payload: Schema.Struct({}),
+  success: ServerListLocalServersResult,
+  error: WsRpcError,
+});
+
+export const WsServerStopLocalServerRpc = Rpc.make(WS_METHODS.serverStopLocalServer, {
+  payload: ServerStopLocalServerInput,
+  success: ServerStopLocalServerResult,
+  error: WsRpcError,
+});
+
 export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
   WS_METHODS.serverGetProviderUsageSnapshot,
   {
@@ -542,6 +656,24 @@ export const WsServerGetProviderUsageSnapshotRpc = Rpc.make(
     error: WsRpcError,
   },
 );
+
+export const WsServerListProviderUsageRpc = Rpc.make(WS_METHODS.serverListProviderUsage, {
+  payload: ServerListProviderUsageInput,
+  success: ServerListProviderUsageResult,
+  error: WsRpcError,
+});
+
+export const WsStatsGetProfileStatsRpc = Rpc.make(WS_METHODS.statsGetProfileStats, {
+  payload: StatsGetProfileStatsInput,
+  success: StatsGetProfileStatsResult,
+  error: WsRpcError,
+});
+
+export const WsStatsGetProfileTokenStatsRpc = Rpc.make(WS_METHODS.statsGetProfileTokenStats, {
+  payload: StatsGetProfileTokenStatsInput,
+  success: StatsGetProfileTokenStatsResult,
+  error: WsRpcError,
+});
 
 export const WsServerGetDiagnosticsRpc = Rpc.make(WS_METHODS.serverGetDiagnostics, {
   payload: Schema.Struct({}),
@@ -554,6 +686,21 @@ export const WsServerTranscribeVoiceRpc = Rpc.make(WS_METHODS.serverTranscribeVo
   success: ServerVoiceTranscriptionResult,
   error: WsRpcError,
 });
+
+export const WsServerGenerateThreadRecapRpc = Rpc.make(WS_METHODS.serverGenerateThreadRecap, {
+  payload: ServerGenerateThreadRecapInput,
+  success: ServerGenerateThreadRecapResult,
+  error: WsRpcError,
+});
+
+export const WsServerGenerateAutomationIntentRpc = Rpc.make(
+  WS_METHODS.serverGenerateAutomationIntent,
+  {
+    payload: ServerGenerateAutomationIntentInput,
+    success: ServerGenerateAutomationIntentResult,
+    error: WsRpcError,
+  },
+);
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: KeybindingRule,
@@ -619,6 +766,12 @@ export const WsProviderListSkillsRpc = Rpc.make(WS_METHODS.providerListSkills, {
   error: WsRpcError,
 });
 
+export const WsProviderListSkillsCatalogRpc = Rpc.make(WS_METHODS.providerListSkillsCatalog, {
+  payload: ProviderSkillsCatalogInput,
+  success: ProviderSkillsCatalogResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListPluginsRpc = Rpc.make(WS_METHODS.providerListPlugins, {
   payload: ProviderListPluginsInput,
   success: ProviderListPluginsResult,
@@ -643,6 +796,61 @@ export const WsProviderListAgentsRpc = Rpc.make(WS_METHODS.providerListAgents, {
   error: WsRpcError,
 });
 
+export const WsAutomationListRpc = Rpc.make(WS_METHODS.automationList, {
+  payload: AutomationListInput,
+  success: AutomationListResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationCreateRpc = Rpc.make(WS_METHODS.automationCreate, {
+  payload: AutomationCreateInput,
+  success: AutomationDefinition,
+  error: WsRpcError,
+});
+
+export const WsAutomationUpdateRpc = Rpc.make(WS_METHODS.automationUpdate, {
+  payload: AutomationUpdateInput,
+  success: AutomationDefinition,
+  error: WsRpcError,
+});
+
+export const WsAutomationDeleteRpc = Rpc.make(WS_METHODS.automationDelete, {
+  payload: AutomationDeleteInput,
+  success: Schema.Void,
+  error: WsRpcError,
+});
+
+export const WsAutomationRunNowRpc = Rpc.make(WS_METHODS.automationRunNow, {
+  payload: AutomationRunNowInput,
+  success: AutomationRunNowResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationCancelRunRpc = Rpc.make(WS_METHODS.automationCancelRun, {
+  payload: AutomationCancelRunInput,
+  success: AutomationCancelRunResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationMarkRunReadRpc = Rpc.make(WS_METHODS.automationMarkRunRead, {
+  payload: AutomationMarkRunReadInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsAutomationArchiveRunRpc = Rpc.make(WS_METHODS.automationArchiveRun, {
+  payload: AutomationArchiveRunInput,
+  success: AutomationRunActionResult,
+  error: WsRpcError,
+});
+
+export const WsSubscribeAutomationEventsRpc = Rpc.make(WS_METHODS.subscribeAutomationEvents, {
+  payload: Schema.Struct({}),
+  success: AutomationStreamEvent,
+  error: WsRpcError,
+  stream: true,
+});
+
 export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationImportThreadRpc,
@@ -657,14 +865,22 @@ export const WsRpcGroup = RpcGroup.make(
   WsOrchestrationSubscribeThreadRpc,
   WsOrchestrationUnsubscribeThreadRpc,
   WsOrchestrationSubscribeDomainEventsRpc,
+  WsProjectsDiscoverScriptsRpc,
   WsProjectsListDirectoriesRpc,
   WsProjectsSearchEntriesRpc,
   WsProjectsSearchLocalEntriesRpc,
+  WsProjectsReadFileRpc,
+  WsProjectsCreateLocalFilePreviewGrantRpc,
   WsProjectsWriteFileRpc,
   WsProjectsApplyTextEditRpc,
   WsProjectsApplyStyleEditRpc,
+  WsProjectsRunDevServerRpc,
+  WsProjectsStopDevServerRpc,
+  WsProjectsListDevServersRpc,
+  WsSubscribeProjectDevServerEventsRpc,
   WsFilesystemBrowseRpc,
   WsShellOpenInEditorRpc,
+  WsGitGithubRepositoryRpc,
   WsGitStatusRpc,
   WsGitReadWorkingTreeDiffRpc,
   WsGitSummarizeDiffRpc,
@@ -707,9 +923,16 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,
   WsServerListWorktreesRpc,
+  WsServerListLocalServersRpc,
+  WsServerStopLocalServerRpc,
   WsServerGetProviderUsageSnapshotRpc,
+  WsServerListProviderUsageRpc,
+  WsStatsGetProfileStatsRpc,
+  WsStatsGetProfileTokenStatsRpc,
   WsServerGetDiagnosticsRpc,
   WsServerTranscribeVoiceRpc,
+  WsServerGenerateThreadRecapRpc,
+  WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
@@ -719,8 +942,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsProviderCompactThreadRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
+  WsProviderListSkillsCatalogRpc,
   WsProviderListPluginsRpc,
   WsProviderReadPluginRpc,
   WsProviderListModelsRpc,
   WsProviderListAgentsRpc,
+  WsAutomationListRpc,
+  WsAutomationCreateRpc,
+  WsAutomationUpdateRpc,
+  WsAutomationDeleteRpc,
+  WsAutomationRunNowRpc,
+  WsAutomationCancelRunRpc,
+  WsAutomationMarkRunReadRpc,
+  WsAutomationArchiveRunRpc,
+  WsSubscribeAutomationEventsRpc,
 );

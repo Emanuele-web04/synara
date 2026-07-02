@@ -19,19 +19,25 @@ import {
   type SessionPhase,
   type Thread,
   type ThreadPrimarySurface,
+  type TurnDiffSummary,
 } from "../types";
-import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
+import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
+import { filterPastedTextsWithText, type PastedTextDraft } from "../lib/composerPastedText";
 import {
   humanizeSubagentStatus,
   resolveSubagentPresentationForThread,
 } from "../lib/subagentPresentation";
-import { hasLiveTurnTailWork, type WorkLogEntry } from "../session-logic";
+import {
+  hasLiveTurnTailWork,
+  isProviderFileEditWorkLogEntry,
+  type WorkLogEntry,
+} from "../session-logic";
 import { localSubagentThreadId } from "./ChatView.selectors";
 import type { ProviderModelOption } from "../providerModelOptions";
 
@@ -65,6 +71,144 @@ export function shouldRenderProviderHealthBanner(input: {
   terminalWorkspaceTerminalTabActive: boolean;
 }): boolean {
   return input.threadEntryPoint === "chat" && !input.terminalWorkspaceTerminalTabActive;
+}
+
+// Big-paste cards are sent only by the normal chat path; non-chat composer flows
+// read plain editor text, so they must let Lexical insert pasted text normally.
+export function shouldEnableComposerPastedTextCollapse(input: {
+  isComposerApprovalState: boolean;
+  hasPendingUserInput: boolean;
+  showPlanFollowUpPrompt: boolean;
+}): boolean {
+  return (
+    !input.isComposerApprovalState && !input.hasPendingUserInput && !input.showPlanFollowUpPrompt
+  );
+}
+
+export function buildComposerMenuSelectionKey(input: {
+  menuOpen: boolean;
+  picker: string | null;
+  triggerKind: string | null;
+  triggerQuery: string;
+  items: readonly { id: string }[];
+}): string | null {
+  if (!input.menuOpen) {
+    return null;
+  }
+  const sourceKey = input.picker
+    ? `picker:${input.picker}`
+    : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
+  return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
+// Default-open policy for the Environment panel; render-time visibility is resolved separately.
+export function resolveDefaultEnvironmentPanelOpen(input: {
+  environmentEnabled: boolean;
+  isCenteredEmptyLanding: boolean;
+  isTerminalPrimarySurface: boolean;
+  isConstrainedChatLayout: boolean;
+}): boolean {
+  return (
+    input.environmentEnabled &&
+    !input.isCenteredEmptyLanding &&
+    !input.isTerminalPrimarySurface &&
+    !input.isConstrainedChatLayout
+  );
+}
+
+export function resolveEnvironmentPanelOpen(input: {
+  defaultOpen: boolean;
+  actionDismissed: boolean;
+  userPreferenceOpen: boolean | null;
+}): boolean {
+  if (input.actionDismissed) {
+    return false;
+  }
+  return input.userPreferenceOpen ?? input.defaultOpen;
+}
+
+export function resolveEnvironmentPanelVisible(input: {
+  environmentEnabled: boolean;
+  environmentPanelOpen: boolean;
+}): boolean {
+  return input.environmentEnabled && input.environmentPanelOpen;
+}
+
+// The composer live strip prefers the turn's computed diff (the
+// `thread.turn-diff-completed` event) so it can show real per-file +/- stats.
+// Before that lands, it falls back to mid-turn file-edit work-log activity so
+// the strip can appear while the turn is running, but without a reviewable
+// turn id. Once a turn diff exists, its empty file list is authoritative and
+// must not be overwritten by tool metadata.
+export function resolveActiveTurnLiveDiffState(input: {
+  latestTurnId: TurnDiffSummary["turnId"] | null | undefined;
+  turnDiffSummaries: ReadonlyArray<TurnDiffSummary>;
+  workLogEntries?: ReadonlyArray<
+    Pick<WorkLogEntry, "changedFiles" | "itemType" | "requestKind" | "turnId">
+  >;
+}): {
+  turnId: TurnDiffSummary["turnId"] | null;
+  fileCount: number | null;
+  additions: number;
+  deletions: number;
+  hasChanges: boolean;
+} {
+  const summary = input.latestTurnId
+    ? (input.turnDiffSummaries.find((entry) => entry.turnId === input.latestTurnId) ?? null)
+    : null;
+  const files = summary?.files ?? [];
+  if (summary && files.length > 0) {
+    return {
+      turnId: summary.turnId,
+      fileCount: files.length,
+      additions: files.reduce((total, file) => total + (file.additions ?? 0), 0),
+      deletions: files.reduce((total, file) => total + (file.deletions ?? 0), 0),
+      hasChanges: true,
+    };
+  }
+  if (summary) {
+    return {
+      turnId: null,
+      fileCount: 0,
+      additions: 0,
+      deletions: 0,
+      hasChanges: false,
+    };
+  }
+
+  // No diff totals yet: keep the strip visible from in-turn file-edit work so it
+  // does not vanish between the first edit and the turn-diff-completed event.
+  const workLogFilePaths = new Set<string>();
+  let hasFileEditWork = false;
+  if (input.latestTurnId) {
+    for (const entry of input.workLogEntries ?? []) {
+      if (entry.turnId !== input.latestTurnId || !isProviderFileEditWorkLogEntry(entry)) {
+        continue;
+      }
+      hasFileEditWork = true;
+      for (const filePath of entry.changedFiles ?? []) {
+        workLogFilePaths.add(filePath);
+      }
+    }
+  }
+
+  if (hasFileEditWork && input.latestTurnId) {
+    return {
+      turnId: null,
+      fileCount: workLogFilePaths.size > 0 ? workLogFilePaths.size : null,
+      additions: 0,
+      deletions: 0,
+      hasChanges: true,
+    };
+  }
+
+  return {
+    turnId: null,
+    fileCount: 0,
+    additions: 0,
+    deletions: 0,
+    hasChanges: false,
+  };
 }
 
 export function buildLocalDraftThread(
@@ -401,23 +545,6 @@ export function shouldStartActiveTurnLayoutGrace(options: {
   );
 }
 
-export function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("load", () => {
-      if (typeof reader.result === "string") {
-        resolve(reader.result);
-        return;
-      }
-      reject(new Error("Could not read image data."));
-    });
-    reader.addEventListener("error", () => {
-      reject(reader.error ?? new Error("Failed to read image."));
-    });
-    reader.readAsDataURL(file);
-  });
-}
-
 export function buildSuggestedWorktreeName(input: {
   associatedWorktreeBranch?: string | null;
   title?: string | null;
@@ -425,48 +552,41 @@ export function buildSuggestedWorktreeName(input: {
   return buildSynaraBranchName(input.associatedWorktreeBranch ?? input.title);
 }
 
-export function cloneComposerImageForRetry(
-  image: ComposerImageAttachment,
-): ComposerImageAttachment {
-  if (typeof URL === "undefined" || !image.previewUrl.startsWith("blob:")) {
-    return image;
-  }
-  try {
-    return {
-      ...image,
-      previewUrl: URL.createObjectURL(image.file),
-    };
-  } catch {
-    return image;
-  }
-}
-
 export function deriveComposerSendState(options: {
   prompt: string;
   imageCount: number;
   browserContextCount?: number;
+  fileCount: number;
   assistantSelectionCount: number;
+  fileCommentCount: number;
   terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  pastedTexts: ReadonlyArray<PastedTextDraft>;
 }): {
   trimmedPrompt: string;
   sendableTerminalContexts: TerminalContextDraft[];
   expiredTerminalContextCount: number;
+  sendablePastedTexts: PastedTextDraft[];
   hasSendableContent: boolean;
 } {
   const trimmedPrompt = stripInlineTerminalContextPlaceholders(options.prompt).trim();
   const sendableTerminalContexts = filterTerminalContextsWithText(options.terminalContexts);
   const expiredTerminalContextCount =
     options.terminalContexts.length - sendableTerminalContexts.length;
+  const sendablePastedTexts = filterPastedTextsWithText(options.pastedTexts);
   return {
     trimmedPrompt,
     sendableTerminalContexts,
     expiredTerminalContextCount,
+    sendablePastedTexts,
     hasSendableContent:
       trimmedPrompt.length > 0 ||
       options.imageCount > 0 ||
       (options.browserContextCount ?? 0) > 0 ||
+      options.fileCount > 0 ||
       options.assistantSelectionCount > 0 ||
-      sendableTerminalContexts.length > 0,
+      options.fileCommentCount > 0 ||
+      sendableTerminalContexts.length > 0 ||
+      sendablePastedTexts.length > 0,
   };
 }
 
@@ -509,6 +629,24 @@ export function shouldRenderTerminalWorkspace(options: {
   return options.terminalOpen && options.presentationMode === "workspace";
 }
 
+export function resolveProjectScriptTerminalTarget(options: {
+  baseTerminalId: string;
+  createTerminalId: () => string;
+  hasRunningTerminal: boolean;
+  preferNewTerminal?: boolean | undefined;
+  terminalOpen: boolean;
+}): { shouldCreateNewTerminal: boolean; terminalId: string } {
+  // Project scripts require their requested cwd/env before the command write;
+  // live PTYs keep their launch context, so visible or running terminals get a new tab.
+  const shouldCreateNewTerminal =
+    Boolean(options.preferNewTerminal) || options.terminalOpen || options.hasRunningTerminal;
+
+  return {
+    shouldCreateNewTerminal,
+    terminalId: shouldCreateNewTerminal ? options.createTerminalId() : options.baseTerminalId,
+  };
+}
+
 export function shouldAutoDeleteTerminalThreadOnLastClose(options: {
   isLastTerminal: boolean;
   isServerThread: boolean;
@@ -542,8 +680,15 @@ export interface ThreadBreadcrumb {
   title: string;
 }
 
+type ThreadBreadcrumbSource = Pick<
+  Thread,
+  "id" | "title" | "parentThreadId" | "subagentAgentId" | "subagentNickname" | "subagentRole"
+> & {
+  activities?: Thread["activities"];
+};
+
 export function buildThreadBreadcrumbs(
-  threads: ReadonlyArray<Thread>,
+  threads: ReadonlyArray<ThreadBreadcrumbSource>,
   thread: Pick<Thread, "id" | "parentThreadId"> | null | undefined,
 ): ThreadBreadcrumb[] {
   if (!thread?.parentThreadId) {

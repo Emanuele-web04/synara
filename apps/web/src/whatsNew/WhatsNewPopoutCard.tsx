@@ -126,9 +126,7 @@ export function WhatsNewPopoutCard({
         </div>
 
         <div className="flex flex-col gap-0.5 px-3 pb-3 pt-2">
-          <p className="text-[11px] font-medium tracking-wide text-primary uppercase">
-            New · v{currentVersion}
-          </p>
+          <p className="text-[11px] font-medium text-primary">New · v{currentVersion}</p>
           <p className="truncate text-sm font-semibold text-foreground">
             {primaryFeatureTitle ?? `What's new in v${currentVersion}`}
           </p>

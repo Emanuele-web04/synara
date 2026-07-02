@@ -61,11 +61,22 @@ function whenAnd(left: KeybindingWhenNode, right: KeybindingWhenNode): Keybindin
   return { type: "and", left, right };
 }
 
+function whenOr(left: KeybindingWhenNode, right: KeybindingWhenNode): KeybindingWhenNode {
+  return { type: "or", left, right };
+}
+
 const whenNotTerminalFocus = whenNot(whenIdentifier("terminalFocus"));
 const whenThreadJumpAvailable = whenAnd(
   whenNotTerminalFocus,
   whenNot(whenIdentifier("terminalWorkspaceOpen")),
 );
+// New-surface creation chords (new chat/terminal/provider chat/split) bind to `mod`,
+// which is Cmd on macOS. xterm never forwards a Cmd-chord to the PTY, so a bare
+// `!terminalFocus` guard silently dropped these chords whenever the terminal had focus
+// — the chord did nothing instead of creating anything. `|| isMac` lets them fire from
+// the terminal on macOS while still yielding the chord to the shell on Linux/Windows,
+// where `mod` is Ctrl and keys like Ctrl+N are real shell input that must pass through.
+const whenCreationAllowed = whenOr(whenNotTerminalFocus, whenIdentifier("isMac"));
 
 export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
   {
@@ -79,38 +90,83 @@ export const DEFAULT_SHORTCUT_FALLBACKS: ResolvedKeybindingsConfig = [
     whenAst: whenNotTerminalFocus,
   },
   {
+    command: "chat.new",
+    shortcut: commandShortcut("n"),
+    whenAst: whenCreationAllowed,
+  },
+  {
     command: "chat.newLatestProject",
     shortcut: commandShortcut("n", { shiftKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.newClaude",
     shortcut: commandShortcut("c", { altKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.newChat",
     shortcut: commandShortcut("n", { altKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
+  },
+  {
+    command: "chat.newTerminal",
+    shortcut: commandShortcut("t", { shiftKey: true }),
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.newCodex",
     shortcut: commandShortcut("x", { altKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.newCursor",
     shortcut: commandShortcut("r", { altKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.newGemini",
     shortcut: commandShortcut("g", { altKey: true }),
-    whenAst: whenNotTerminalFocus,
+    whenAst: whenCreationAllowed,
   },
   {
     command: "chat.split",
     shortcut: commandShortcut("\\"),
+    whenAst: whenCreationAllowed,
+  },
+  // Installed-app only (Electron / standalone PWA). Browsers reserve Ctrl+Tab and
+  // Ctrl+Shift+Tab for tab switching and won't deliver them to the page, so the
+  // recent-view switcher does not open in a normal browser tab. Uses literal Ctrl
+  // (not mod) on purpose so it stays Ctrl+Tab on macOS too, matching Arc/Helium.
+  // This intentionally ignores terminal focus; the chat route captures the chord
+  // before xterm can pass it through to the shell.
+  {
+    command: "view.recent.next",
+    shortcut: commandShortcut("tab", { ctrlKey: true, modKey: false }),
+  },
+  {
+    command: "view.recent.previous",
+    shortcut: commandShortcut("tab", { ctrlKey: true, shiftKey: true, modKey: false }),
+  },
+  {
+    command: "modelPicker.toggle",
+    shortcut: commandShortcut("m", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "traitsPicker.toggle",
+    shortcut: commandShortcut("e", { shiftKey: true }),
+    whenAst: whenNotTerminalFocus,
+  },
+  // Cmd-only instead of mod so Ctrl+L remains available to shells on non-macOS.
+  {
+    command: "composer.focus.toggle",
+    shortcut: commandShortcut("l", { metaKey: true, modKey: false }),
+    whenAst: whenNotTerminalFocus,
+  },
+  {
+    command: "settings.usage",
+    shortcut: commandShortcut("u", { shiftKey: true }),
     whenAst: whenNotTerminalFocus,
   },
   {
@@ -273,9 +329,13 @@ function resolvePlatform(options: ShortcutMatchOptions | undefined): string {
 }
 
 function resolveContext(options: ShortcutMatchOptions | undefined): ShortcutMatchContext {
+  // `isMac` is derived from the resolved platform so `when` clauses can gate on it
+  // (e.g. `whenCreationAllowed`) without every dispatch site having to thread the flag
+  // through `context`. An explicit `context.isMac` still wins via the spread below.
   return {
     terminalFocus: false,
     terminalOpen: false,
+    isMac: isMacPlatform(resolvePlatform(options)),
     ...options?.context,
   };
 }

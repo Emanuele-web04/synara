@@ -1,17 +1,25 @@
 // FILE: OpenInPicker.tsx
-// Purpose: Render the chat header "Open In" controls for the currently active project.
+// Purpose: Render the chat/file header "Open In" controls for the active editor target.
 // Layer: Chat header action
 // Depends on: shared editor metadata, native shell bridge, and preferred editor state.
 
 import { type EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo } from "react";
-import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
-import { usePreferredEditor } from "../../editorPreferences";
-import { resolveAvailableEditorOptions } from "../../editorMetadata";
+import { useQuery } from "@tanstack/react-query";
+import { memo } from "react";
+import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
-import { Menu, MenuItem, MenuSeparator, MenuShortcut, MenuTrigger } from "../ui/menu";
+import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
+import { cn } from "~/lib/utils";
+import {
+  Menu,
+  MenuItem,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuShortcut,
+  MenuTrigger,
+} from "../ui/menu";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
-import { readNativeApi } from "~/nativeApi";
 import {
   ChatHeaderButton,
   ChatHeaderIconButton,
@@ -21,66 +29,69 @@ import {
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chatHeaderControls";
 
+const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+const EMPTY_AVAILABLE_EDITORS: ReadonlyArray<EditorId> = [];
+
 export const OpenInPicker = memo(function OpenInPicker({
-  keybindings,
-  availableEditors,
-  openInCwd,
+  keybindings: keybindingsProp,
+  availableEditors: availableEditorsProp,
+  openInTarget,
   onAddAction,
+  labelMode = "responsive",
+  defaultEditor,
 }: {
-  keybindings: ResolvedKeybindingsConfig;
-  availableEditors: ReadonlyArray<EditorId>;
-  openInCwd: string | null;
+  // Editor config is optional: callers that already hold it (e.g. the chat
+  // header) pass it through, while standalone surfaces (file-preview headers)
+  // omit it and let the picker self-fetch. react-query dedupes by key with an
+  // infinite stale time, so multiple self-fetching pickers share one request.
+  keybindings?: ResolvedKeybindingsConfig;
+  availableEditors?: ReadonlyArray<EditorId>;
+  openInTarget: string | null;
   // Optional project "Add action" entry rendered at the bottom of the editor menu.
   onAddAction?: () => void;
+  // "responsive" (default) hides the "Open" label until the `header-actions`
+  // inline-size container (declared on an ancestor — the chat header and the
+  // file-preview header both do) is wide enough; "always" keeps it visible
+  // regardless, for surfaces that don't establish that container.
+  labelMode?: "responsive" | "always";
+  // Pins the primary "Open" action to a specific editor for this surface without
+  // mutating the shared preferred-editor setting. The PDF viewer uses this to default
+  // to the OS viewer (e.g. Preview) while still listing installed editors.
+  defaultEditor?: EditorId;
 }) {
-  const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
-  const options = useMemo(
-    () => resolveAvailableEditorOptions(navigator.platform, availableEditors),
-    [availableEditors],
-  );
-  const primaryOption = options.find(({ value }) => value === preferredEditor) ?? null;
+  // Only subscribe to the config query when the caller did not supply config.
+  const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
+  const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });
+  const keybindings = keybindingsProp ?? serverConfigQuery.data?.keybindings ?? EMPTY_KEYBINDINGS;
+  const availableEditors =
+    availableEditorsProp ?? serverConfigQuery.data?.availableEditors ?? EMPTY_AVAILABLE_EDITORS;
 
-  const openInEditor = useCallback(
-    (editorId: EditorId | null) => {
-      const api = readNativeApi();
-      if (!api || !openInCwd) return;
-      const editor = editorId ?? preferredEditor;
-      if (!editor) return;
-      void api.shell.openInEditor(openInCwd, editor);
-      setPreferredEditor(editor);
-    },
-    [preferredEditor, openInCwd, setPreferredEditor],
-  );
-
-  const openFavoriteEditorShortcutLabel = useMemo(
-    () => shortcutLabelForCommand(keybindings, "editor.openFavorite"),
-    [keybindings],
-  );
-
-  useEffect(() => {
-    const handler = (e: globalThis.KeyboardEvent) => {
-      const api = readNativeApi();
-      if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
-      if (!api || !openInCwd) return;
-      if (!preferredEditor) return;
-
-      e.preventDefault();
-      void api.shell.openInEditor(openInCwd, preferredEditor);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [preferredEditor, keybindings, openInCwd]);
+  const {
+    options,
+    preferredEditor,
+    primaryOption,
+    openFavoriteShortcutLabel,
+    setDefaultEditor,
+    openInEditor,
+  } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
 
   return (
     <ChatHeaderSplitGroup label="Open in editor">
       <ChatHeaderButton
         tone="outline"
         className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
-        disabled={!preferredEditor || !openInCwd}
+        disabled={!preferredEditor || !openInTarget}
         onClick={() => openInEditor(preferredEditor)}
       >
         {primaryOption?.Icon && <primaryOption.Icon aria-hidden="true" className="size-3.5" />}
-        <span className="sr-only font-normal @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5">
+        <span
+          className={cn(
+            "font-normal",
+            labelMode === "always"
+              ? "ml-0.5"
+              : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
+          )}
+        >
           Open
         </span>
       </ChatHeaderButton>
@@ -99,17 +110,31 @@ export const OpenInPicker = memo(function OpenInPicker({
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
           {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
-          {options.map(({ label, Icon, value }) => (
-            <MenuItem key={value} onClick={() => openInEditor(value)}>
-              <span className="shrink-0">
-                <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
-              </span>
-              {label}
-              {value === preferredEditor && openFavoriteEditorShortcutLabel && (
-                <MenuShortcut>{openFavoriteEditorShortcutLabel}</MenuShortcut>
-              )}
-            </MenuItem>
-          ))}
+          <MenuRadioGroup
+            value={preferredEditor ?? ""}
+            onValueChange={(value) => setDefaultEditor(value as EditorId)}
+          >
+            {options.map(({ label, Icon, value }) => (
+              <MenuRadioItem
+                key={value}
+                preserveChildLayout
+                trailing={
+                  value === preferredEditor && openFavoriteShortcutLabel ? (
+                    <MenuShortcut>{openFavoriteShortcutLabel}</MenuShortcut>
+                  ) : null
+                }
+                value={value}
+                onClick={() => openInEditor(value)}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="shrink-0">
+                    <Icon aria-hidden="true" className="size-3.5 text-muted-foreground" />
+                  </span>
+                  <span className="truncate">{label}</span>
+                </span>
+              </MenuRadioItem>
+            ))}
+          </MenuRadioGroup>
           {onAddAction ? (
             <>
               <MenuSeparator className="mx-1" />

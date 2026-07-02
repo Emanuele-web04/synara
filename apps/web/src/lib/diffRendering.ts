@@ -6,6 +6,8 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 
+export type FileDiffStat = { additions: number; deletions: number };
+
 export const DIFF_THEME_NAMES = {
   // Keep diff syntax highlighting on the bundled GitHub themes for better parity with git tooling.
   light: "github-light",
@@ -31,12 +33,11 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   if (cached) {
     return cached;
   }
-  const titleColor = theme === "dark" ? "#6073CC" : "#526FFF";
   const css = `
 :host {
-  /* Route the entire diff viewer through the chat code font so custom code fonts reach line numbers too. */
+  /* Route diff hunks through the chat code font; keep file headers on the UI stack. */
   --diffs-font-family: var(--font-chat-code-family);
-  --diffs-header-font-family: var(--font-chat-code-family);
+  --diffs-header-font-family: var(--font-ui-family);
   /* Honor the user-chosen chat code font size from settings instead of the library default (13px). */
   --diffs-font-size: var(--app-font-size-chat-code, 11px);
   font-family: var(--font-chat-code-family) !important;
@@ -48,12 +49,7 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
 [data-file],
 [data-error-wrapper],
 [data-virtualizer-buffer] {
-  /* Re-assert the code font inside the library chrome because these nodes live in shadow-rooted markup. */
-  --diffs-font-family: var(--font-chat-code-family) !important;
-  --diffs-header-font-family: var(--font-chat-code-family) !important;
   --diffs-font-size: var(--app-font-size-chat-code, 11px) !important;
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
   --diffs-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-light-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
   --diffs-dark-bg: color-mix(in srgb, var(--card) 90%, var(--background)) !important;
@@ -82,15 +78,28 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   background-color: var(--diffs-bg) !important;
 }
 
-[data-file-info] {
+[data-diff],
+[data-file],
+[data-error-wrapper],
+[data-virtualizer-buffer] {
+  /* Re-assert the code font inside diff hunks because these nodes live in shadow-rooted markup. */
+  --diffs-font-family: var(--font-chat-code-family) !important;
   font-family: var(--font-chat-code-family) !important;
   font-size: var(--app-font-size-chat-code, 11px) !important;
+}
+
+[data-file-info] {
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
   background-color: color-mix(in srgb, var(--card) 94%, var(--foreground)) !important;
   border-block-color: var(--border) !important;
   color: var(--foreground) !important;
 }
 
 [data-diffs-header] {
+  --diffs-header-font-family: var(--font-ui-family) !important;
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
   position: sticky !important;
   top: 0;
   z-index: 4;
@@ -99,16 +108,48 @@ export function buildDiffPanelUnsafeCSS(theme: "light" | "dark"): string {
   cursor: pointer;
 }
 
+[data-header-content] {
+  align-items: center !important;
+}
+
+::slotted([slot="header-prefix"]) {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0 !important;
+  line-height: 0 !important;
+}
+
 /* Hide the default change-type icon (blue circle) — replaced by chevron + file-type icon. */
 [data-change-icon] {
   display: none;
 }
 
-[data-title] {
-  font-family: var(--font-chat-code-family) !important;
-  font-size: var(--app-font-size-chat-code, 11px) !important;
+[data-title],
+[data-prev-name] {
+  font-family: var(--font-ui-family) !important;
+  font-size: var(--app-font-size-ui, 12px) !important;
+  font-weight: 400 !important;
   cursor: pointer;
-  color: ${titleColor} !important;
+  color: var(--foreground) !important;
+}
+
+/* Every number rendered inside a diff reads in the UI font (with tabular figures
+   so columns still line up), not the mono code font: gutter line numbers, the
+   "N unmodified lines" separators, and the header +/- counts. The library pins
+   the header counts to --diffs-font-family and the gutter/separators inherit it
+   from the hunk body, so each needs an explicit override. */
+[data-line-number-content],
+[data-column-number],
+[data-unmodified-lines] {
+  font-family: var(--font-ui-family) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  font-family: var(--font-ui-family) !important;
+  font-variant-numeric: tabular-nums !important;
 }
 `;
   diffPanelUnsafeCssCache.set(theme, css);
@@ -252,10 +293,86 @@ export function summarizeFileDiffStats(files: ReadonlyArray<FileDiffMetadata>): 
   );
 }
 
-export function summarizePatchStats(
+export function summarizeRenderablePatchStats(
+  renderable: RenderablePatch | null | undefined,
+): { additions: number; deletions: number; fileCount: number } | null {
+  if (!renderable || renderable.kind !== "files" || renderable.files.length === 0) {
+    return null;
+  }
+  return { ...summarizeFileDiffStats(renderable.files), fileCount: renderable.files.length };
+}
+
+export function summarizePatchTotals(
   patch: string | undefined,
-): { additions: number; deletions: number } | null {
+): { additions: number; deletions: number; fileCount: number } | null {
   const renderable = getRenderablePatch(patch, "diff-panel:stats");
-  if (renderable?.kind !== "files") return null;
-  return summarizeFileDiffStats(renderable.files);
+  return summarizeRenderablePatchStats(renderable);
+}
+
+// Per-file +N/-M parsed from a unified diff/patch, keyed by working-tree-relative
+// path (a/ b/ prefixes stripped via resolveFileDiffPath). Lets transcript
+// "Edited <file>" rows surface diff stats from a tool call's own patch when no
+// turn-diff summary is in scope (e.g. standalone work rows). Empty map when the
+// patch is missing or unparsable, so callers can fall back gracefully.
+export function fileDiffStatsByPath(patch: string | undefined): Map<string, FileDiffStat> {
+  const stats = new Map<string, FileDiffStat>();
+  const renderable = getRenderablePatch(patch, "tool-row:stats");
+  if (!renderable || renderable.kind !== "files") {
+    return stats;
+  }
+  for (const file of renderable.files) {
+    const path = resolveFileDiffPath(file);
+    if (path.length === 0) {
+      continue;
+    }
+    stats.set(path, summarizeFileDiffStats([file]));
+  }
+  return stats;
+}
+
+function normalizeDiffStatPath(path: string): string {
+  return path
+    .replace(/\\/g, "/")
+    .replace(/^\.\/+/, "")
+    .replace(/\/+/g, "/");
+}
+
+function diffStatPathsReferToSameFile(left: string, right: string): boolean {
+  const normalizedLeft = normalizeDiffStatPath(left);
+  const normalizedRight = normalizeDiffStatPath(right);
+  return (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.endsWith(`/${normalizedRight}`) ||
+    normalizedRight.endsWith(`/${normalizedLeft}`)
+  );
+}
+
+// Resolve a parsed patch stat for a visible changed-file row. Parsed patch paths are
+// usually repo-relative, while work-log changedFiles can be absolute or basename-only.
+export function resolveFileDiffStatByChangedPath(
+  statsByPath: ReadonlyMap<string, FileDiffStat>,
+  changedFilePath: string,
+  changedFileCount: number,
+): FileDiffStat | undefined {
+  if (statsByPath.size === 0) {
+    return undefined;
+  }
+
+  const direct = statsByPath.get(changedFilePath);
+  if (direct) {
+    return direct;
+  }
+
+  const matchingStats = Array.from(statsByPath.entries())
+    .filter(([path]) => diffStatPathsReferToSameFile(path, changedFilePath))
+    .map(([, stat]) => stat);
+  const uniqueMatch = matchingStats.length === 1 ? matchingStats.at(0) : undefined;
+  if (uniqueMatch) {
+    return uniqueMatch;
+  }
+
+  if (statsByPath.size === 1 && changedFileCount === 1) {
+    return statsByPath.values().next().value;
+  }
+  return undefined;
 }

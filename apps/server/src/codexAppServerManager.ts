@@ -1,8 +1,6 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 
@@ -41,6 +39,7 @@ import {
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
 
 import {
@@ -50,7 +49,11 @@ import {
 } from "./provider/codexCliVersion";
 import { isNonFatalCodexErrorMessage } from "./codexErrorClassification.ts";
 import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces.ts";
+import { createLogger } from "./logger";
 import { transcribeVoiceWithChatGptSession } from "./voiceTranscription.ts";
+
+const log = createLogger("codex");
 
 type PendingRequestKey = string;
 
@@ -514,13 +517,6 @@ function resolveCodexTurnOverrides(context: CodexSessionContext): {
   );
 }
 
-export function ensureIsolatedScratchWorkspace(threadId: ThreadId): string {
-  const workspaceRoot = path.join(tmpdir(), "synara-codex-workspaces");
-  const workspaceDir = path.join(workspaceRoot, String(threadId));
-  mkdirSync(workspaceDir, { recursive: true });
-  return workspaceDir;
-}
-
 export function resolveCodexModelForAccount(
   model: string | undefined,
   account: CodexAccountSnapshot,
@@ -532,11 +528,8 @@ export function resolveCodexModelForAccount(
   return CODEX_DEFAULT_MODEL;
 }
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
+// Windows `.cmd` shims still run under an explicit cmd.exe wrapper; taskkill
+// keeps cancellation from leaving the real provider process behind.
 function killChildTree(child: ChildProcessWithoutNullStreams): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
@@ -549,6 +542,24 @@ function killChildTree(child: ChildProcessWithoutNullStreams): void {
     }
   }
   child.kill();
+}
+
+function spawnCodexAppServer(input: {
+  readonly binaryPath: string;
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+}): ChildProcessWithoutNullStreams {
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["app-server"], {
+    cwd: input.cwd,
+    env: input.env,
+  });
+  return spawn(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env: input.env,
+    stdio: ["pipe", "pipe", "pipe"],
+    shell: prepared.shell,
+    windowsHide: prepared.windowsHide,
+  });
 }
 
 export function normalizeCodexModelSlug(
@@ -678,6 +689,35 @@ export interface CodexAppServerManagerEvents {
   event: [event: ProviderEvent];
 }
 
+const CODEX_DISCOVERY_CACHE_MAX_ENTRIES = 128;
+
+function getRecentCacheEntry<K, V>(cache: Map<K, V>, key: K): V | undefined {
+  const value = cache.get(key);
+  if (value === undefined) {
+    return undefined;
+  }
+  cache.delete(key);
+  cache.set(key, value);
+  return value;
+}
+
+function setRecentCacheEntry<K, V>(
+  cache: Map<K, V>,
+  key: K,
+  value: V,
+  maxEntries = CODEX_DISCOVERY_CACHE_MAX_ENTRIES,
+): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > maxEntries) {
+    const oldestKey = cache.keys().next().value as K | undefined;
+    if (oldestKey === undefined) {
+      return;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
 export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEvents> {
   private readonly sessions = new Map<ThreadId, CodexSessionContext>();
   private readonly discoverySessions = new Map<string, CodexSessionContext>();
@@ -689,9 +729,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
   private readonly modelCache = new Map<string, ProviderListModelsResult>();
 
   private runPromise: (effect: Effect.Effect<unknown, never>) => Promise<unknown>;
-  constructor(services?: ServiceMap.ServiceMap<never>) {
+  private readonly synaraSkillsDir: string | undefined;
+  constructor(
+    services?: ServiceMap.ServiceMap<never>,
+    options?: { readonly synaraSkillsDir?: string },
+  ) {
     super();
     this.runPromise = services ? Effect.runPromiseWith(services) : Effect.runPromise;
+    this.synaraSkillsDir = options?.synaraSkillsDir;
+  }
+
+  // Registers `~/.synara/skills` as a codex skill root so portable skills are
+  // first-class: skills/list returns them and turn/start `skill` items inject
+  // their instructions. Verified live: skill items with paths outside known
+  // roots are silently ignored by codex app-server, so this call is required.
+  private async registerSynaraSkillsRoot(context: CodexSessionContext): Promise<void> {
+    if (!this.synaraSkillsDir) {
+      return;
+    }
+    try {
+      await this.sendRequest(context, "skills/extraRoots/set", {
+        extraRoots: [this.synaraSkillsDir],
+      });
+    } catch (error) {
+      // Older codex builds (< extra-roots support) keep working; Synara-only
+      // skills simply stay invisible to codex on those versions.
+      log.warn("skills/extraRoots/set unavailable", { error });
+    }
   }
 
   async startSession(input: CodexAppServerStartSessionInput): Promise<ProviderSession> {
@@ -726,13 +790,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -763,23 +826,24 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
 
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
+        log.info("model/list response", { modelListResponse });
       } catch (error) {
-        console.log("codex model/list failed", error);
+        log.warn("model/list failed", { error });
       }
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
+        log.info("account/read response", { accountReadResponse });
         context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
+        log.info("subscription status", {
           type: context.account.type,
           planType: context.account.planType,
           sparkEnabled: context.account.sparkEnabled,
         });
       } catch (error) {
-        console.log("codex account/read failed", error);
+        log.warn("account/read failed", { error });
       }
 
       const normalizedModel = resolveCodexModelForAccount(
@@ -1148,7 +1212,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
     const turnId = TurnId.makeUnsafe(turnIdRaw);
     context.reviewTurnIds.add(turnId);
-    console.log("[codex-review] review/start acknowledged", {
+    log.info("[codex-review] review/start acknowledged", {
       threadId: context.session.threadId,
       providerThreadId,
       turnId,
@@ -1188,7 +1252,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: context.session.resumeCursor,
       });
     if (!effectiveTurnId || !providerThreadId) {
-      console.log("[codex-review] turn/interrupt skipped", {
+      log.info("[codex-review] turn/interrupt skipped", {
         threadId,
         requestedTurnId: turnId ?? null,
         activeTurnId: context.session.activeTurnId ?? null,
@@ -1197,7 +1261,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
-    console.log("[codex-review] turn/interrupt requested", {
+    log.info("[codex-review] turn/interrupt requested", {
       threadId,
       providerThreadId,
       turnId: effectiveTurnId,
@@ -1208,13 +1272,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId: providerThreadId,
         turnId: effectiveTurnId,
       });
-      console.log("[codex-review] turn/interrupt acknowledged", {
+      log.info("[codex-review] turn/interrupt acknowledged", {
         threadId,
         providerThreadId,
         turnId: effectiveTurnId,
       });
     } catch (error) {
-      console.log("[codex-review] turn/interrupt failed", {
+      log.warn("[codex-review] turn/interrupt failed", {
         threadId,
         providerThreadId,
         turnId: effectiveTurnId,
@@ -1227,7 +1291,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       const snapshot = await this.readThread(threadId);
       const latestReviewTurnId = this.findLatestReviewTurnId(snapshot);
-      console.log("[codex-review] review interrupt recovery snapshot", {
+      log.info("[codex-review] review interrupt recovery snapshot", {
         threadId,
         currentTurnId: effectiveTurnId,
         latestReviewTurnId: latestReviewTurnId ?? null,
@@ -1238,7 +1302,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       });
 
       if (latestReviewTurnId && this.isExitedReviewTurn(snapshot, latestReviewTurnId)) {
-        console.log("[codex-review] settling review from thread/read exitedReviewMode", {
+        log.info("[codex-review] settling review from thread/read exitedReviewMode", {
           threadId,
           turnId: latestReviewTurnId,
         });
@@ -1250,7 +1314,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       if (latestReviewTurnId && latestReviewTurnId !== effectiveTurnId) {
-        console.log("[codex-review] retrying turn/interrupt with refreshed review turn", {
+        log.info("[codex-review] retrying turn/interrupt with refreshed review turn", {
           threadId,
           previousTurnId: effectiveTurnId,
           nextTurnId: latestReviewTurnId,
@@ -1344,13 +1408,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         cwd: resolvedCwd,
         ...(codexHomePath ? { homePath: codexHomePath } : {}),
       });
-      const child = spawn(codexBinaryPath, ["app-server"], {
+      const child = spawnCodexAppServer({
+        binaryPath: codexBinaryPath,
         cwd: resolvedCwd,
         env: buildCodexProcessEnv({
           ...(codexHomePath ? { homePath: codexHomePath } : {}),
         }),
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -1379,6 +1442,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);
@@ -1678,7 +1742,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       threadId: input.threadId?.trim() || null,
     });
     if (!input.forceReload) {
-      const cached = this.skillsCache.get(cacheKey);
+      const cached = getRecentCacheEntry(this.skillsCache, cacheKey);
       if (cached) {
         return {
           ...cached,
@@ -1709,7 +1773,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.skillsCache.set(cacheKey, result);
+    setRecentCacheEntry(this.skillsCache, cacheKey, result);
     return result;
   }
 
@@ -1721,7 +1785,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       forceRemoteSync: input.forceRemoteSync === true,
     });
     if (!input.forceReload) {
-      const cached = this.pluginsCache.get(cacheKey);
+      const cached = getRecentCacheEntry(this.pluginsCache, cacheKey);
       if (cached) {
         return {
           ...cached,
@@ -1740,7 +1804,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.pluginsCache.set(cacheKey, result);
+    setRecentCacheEntry(this.pluginsCache, cacheKey, result);
     return result;
   }
 
@@ -1751,7 +1815,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       marketplacePath,
       pluginName,
     });
-    const cached = this.pluginDetailCache.get(cacheKey);
+    const cached = getRecentCacheEntry(this.pluginDetailCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -1769,13 +1833,13 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.pluginDetailCache.set(cacheKey, result);
+    setRecentCacheEntry(this.pluginDetailCache, cacheKey, result);
     return result;
   }
 
   async listModels(threadId?: string): Promise<ProviderListModelsResult> {
     const cacheKey = threadId?.trim() || "__default__";
-    const cached = this.modelCache.get(cacheKey);
+    const cached = getRecentCacheEntry(this.modelCache, cacheKey);
     if (cached) {
       return {
         ...cached,
@@ -1795,7 +1859,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       source: "codex-app-server",
       cached: false,
     };
-    this.modelCache.set(cacheKey, result);
+    setRecentCacheEntry(this.modelCache, cacheKey, result);
     return result;
   }
 
@@ -1928,11 +1992,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       binaryPath: "codex",
       cwd: normalizedCwd,
     });
-    const child = spawn("codex", ["app-server"], {
+    const child = spawnCodexAppServer({
+      binaryPath: "codex",
       cwd: normalizedCwd,
       env: buildCodexProcessEnv(),
-      stdio: ["pipe", "pipe", "pipe"],
-      shell: process.platform === "win32",
     });
     const output = readline.createInterface({ input: child.stdout });
     const context: CodexSessionContext = {
@@ -1969,6 +2032,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       await this.sendRequest(context, "initialize", buildCodexInitializeParams());
       this.writeMessage(context, { method: "initialized" });
+      await this.registerSynaraSkillsRoot(context);
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
         context.account = readCodexAccountSnapshot(accountReadResponse);
@@ -2209,7 +2273,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         context.reviewTurnIds.has(context.session.activeTurnId)
       ) {
         context.reviewTurnIds.add(turnId);
-        console.log("[codex-review] extending tracked review turn set on turn/started", {
+        log.info("[codex-review] extending tracked review turn set on turn/started", {
           threadId: context.session.threadId,
           previousTurnId: context.session.activeTurnId,
           nextTurnId: turnId,
@@ -2272,7 +2336,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const activeTurnTracked =
         context.session.activeTurnId !== undefined &&
         context.reviewTurnIds.has(context.session.activeTurnId);
-      console.log("[codex-review] exitedReviewMode notification", {
+      log.info("[codex-review] exitedReviewMode notification", {
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
         activeTurnId: context.session.activeTurnId ?? null,
@@ -2286,7 +2350,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         !reviewTurnTracked &&
         !activeTurnTracked
       ) {
-        console.log("[codex-review] exitedReviewMode ignored due to turn mismatch", {
+        log.info("[codex-review] exitedReviewMode ignored due to turn mismatch", {
           threadId: context.session.threadId,
           reviewTurnId,
           activeTurnId: context.session.activeTurnId,
@@ -2297,7 +2361,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       // before the terminal `turn/completed` notification arrives. If that
       // completion never shows up, settle the session here instead of leaving
       // native review stuck in "running" forever.
-      console.log("[codex-review] settling review from exitedReviewMode notification", {
+      log.info("[codex-review] settling review from exitedReviewMode notification", {
         threadId: context.session.threadId,
         reviewTurnId: reviewTurnId ?? null,
       });
@@ -3304,16 +3368,22 @@ function assertSupportedCodexCliVersion(input: {
   readonly cwd: string;
   readonly homePath?: string;
 }): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
+  const env = buildCodexProcessEnv({
+    ...(input.homePath ? { homePath: input.homePath } : {}),
+  });
+  const prepared = prepareWindowsSafeProcess(input.binaryPath, ["--version"], {
     cwd: input.cwd,
-    env: buildCodexProcessEnv({
-      ...(input.homePath ? { homePath: input.homePath } : {}),
-    }),
+    env,
+  });
+  const result = spawnSync(prepared.command, prepared.args, {
+    cwd: input.cwd,
+    env,
     encoding: "utf8",
-    shell: process.platform === "win32",
+    shell: prepared.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
+    windowsHide: prepared.windowsHide,
   });
 
   if (result.error) {

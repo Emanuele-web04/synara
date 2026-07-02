@@ -6,6 +6,8 @@ import type {
 } from "@t3tools/contracts";
 import { summarizeToolRawOutput } from "@t3tools/shared/toolOutputSummary";
 
+import { computeUsagePercent, nonNegativeInteger, positiveInteger } from "../tokenUsage.ts";
+
 type AcpTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -197,34 +199,16 @@ function normalizeToolCallStatus(
   }
 }
 
-function asNonNegativeInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
-}
-
-function asPositiveInt(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
-}
-
-function computeUsagePercent(
-  usedTokens: number,
-  maxTokens: number | undefined,
-): number | undefined {
-  if (maxTokens === undefined) {
-    return undefined;
-  }
-  return Math.min(100, Math.max(0, (usedTokens / maxTokens) * 100));
-}
-
 // Converts ACP's unstable usage updates into Synara's context-window snapshot shape.
 function tokenUsageSnapshotFromAcpUsageUpdate(input: {
   readonly size: unknown;
   readonly used: unknown;
 }): ThreadTokenUsageSnapshot | undefined {
-  const usedTokens = asNonNegativeInt(input.used);
+  const usedTokens = nonNegativeInteger(input.used);
   if (usedTokens === undefined) {
     return undefined;
   }
-  const maxTokens = asPositiveInt(input.size);
+  const maxTokens = positiveInteger(input.size);
   const usedPercent = computeUsagePercent(usedTokens, maxTokens);
   return {
     usedTokens,

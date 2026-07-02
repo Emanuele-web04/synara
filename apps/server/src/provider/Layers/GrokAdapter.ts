@@ -21,6 +21,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -43,6 +44,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
+import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
 import {
   ProviderAdapterRequestError,
@@ -75,6 +77,10 @@ import {
 } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
+  forkAcpTurnIdleWatchdog,
+  resolveAcpTurnIdleTimeoutMs,
+} from "../acp/AcpTurnIdleWatchdog.ts";
+import {
   applyGrokAcpModelSelection,
   getGrokApiKeyEnv,
   makeGrokAcpRuntime,
@@ -93,6 +99,15 @@ const DPCODE_GROK_ACP_DEBUG_ENV = "DPCODE_GROK_ACP_DEBUG";
 const LEGACY_GROK_ACP_DEBUG_ENV = "DP_GROK_ACP_DEBUG";
 const GROK_RESUME_REPLAY_QUIET_MS = 350;
 const GROK_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
+// Backstop for an alive-but-silent grok child: if a turn produces no ACP
+// activity for this long, force-fail it instead of showing "Working" forever.
+// Generous by design so legitimate long, quiet tool runs are not killed;
+// override with SYNARA_GROK_TURN_IDLE_TIMEOUT_MS when a workload needs longer.
+const GROK_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
+  envVar: "SYNARA_GROK_TURN_IDLE_TIMEOUT_MS",
+  defaultMs: 600_000,
+});
+const GROK_TURN_WATCHDOG_INTERVAL_MS = 15_000;
 const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
@@ -248,6 +263,9 @@ interface GrokSessionContext {
   readonly activeAssistantItemsWithContent: Set<string>;
   activeTurnFailedToolDetail: string | undefined;
   activePromptFiber: Fiber.Fiber<void, never> | undefined;
+  // Epoch-ms of the last inbound ACP activity for the active turn; drives the
+  // idle-progress watchdog that force-fails a silently hung turn.
+  lastTurnActivityAt: number | undefined;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
   latestSessionCostUsd: number | undefined;
@@ -1086,6 +1104,7 @@ export function makeGrokAdapter(
             activeAssistantItemsWithContent: new Set(),
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
+            lastTurnActivityAt: undefined,
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             latestSessionCostUsd: undefined,
@@ -1095,6 +1114,9 @@ export function makeGrokAdapter(
           const notificationFiber = yield* Stream.runDrain(
             Stream.mapEffect(acp.getEvents(), (event) =>
               Effect.gen(function* () {
+                // Any inbound ACP event proves the child is alive and making
+                // progress; reset the idle-progress watchdog clock.
+                ctx.lastTurnActivityAt = Date.now();
                 switch (event._tag) {
                   case "ModeChanged":
                     return;
@@ -1262,6 +1284,52 @@ export function makeGrokAdapter(
         }).pipe(Effect.scoped),
       );
 
+    // Idle-progress watchdog escape hatch: force-fail a turn whose grok child
+    // is alive but has gone completely silent. Mirrors the prompt-fiber
+    // onFailure branch and stays idempotent via clearGrokActiveTurn, so it is a
+    // no-op if the turn settled normally first (whichever fires first wins).
+    const failGrokTurnAsTimedOut = (ctx: GrokSessionContext, turnId: TurnId, idleMs: number) =>
+      Effect.gen(function* () {
+        const promptFiber = ctx.activePromptFiber;
+        if (!clearGrokActiveTurn(ctx, turnId)) {
+          return;
+        }
+        const completedCost = finalizeGrokActiveTurnCost(ctx);
+        const idleSeconds = Math.round(idleMs / 1000);
+        const detail = `Grok stopped responding (no activity for ${idleSeconds}s); the turn was timed out.`;
+        ctx.turns.push({ id: turnId, items: [{ prompt: turnId, timedOut: true, idleMs }] });
+        ctx.session = {
+          ...ctx.session,
+          status: "error",
+          updatedAt: yield* nowIso,
+          lastError: detail,
+        };
+        yield* Effect.logWarning("grok.acp.turn_idle_timeout", {
+          threadId: ctx.threadId,
+          turnId,
+          idleMs,
+        });
+        yield* offerRuntimeEvent({
+          type: "turn.completed",
+          ...(yield* makeEventStamp()),
+          provider: PROVIDER,
+          threadId: ctx.threadId,
+          turnId,
+          payload: {
+            state: "failed",
+            stopReason: null,
+            errorMessage: detail,
+            ...completedCost,
+          },
+        });
+        // Best-effort: tell the child to abandon the turn, then unwind the
+        // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
+        yield* Effect.ignore(ctx.acp.cancel);
+        if (promptFiber) {
+          yield* Fiber.interrupt(promptFiber);
+        }
+      });
+
     const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
@@ -1287,15 +1355,23 @@ export function makeGrokAdapter(
             mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
         });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
-        if (input.input?.trim()) {
+        const promptText = appendFileAttachmentsPromptBlock({
+          text: input.input?.trim()
+            ? withGrokPlanModePrompt({
+                text: input.input.trim(),
+                ...(input.interactionMode !== undefined
+                  ? { interactionMode: input.interactionMode }
+                  : {}),
+              })
+            : undefined,
+          attachments: input.attachments,
+          attachmentsDir: serverConfig.attachmentsDir,
+          include: "all-files",
+        });
+        if (promptText) {
           promptParts.push({
             type: "text",
-            text: withGrokPlanModePrompt({
-              text: input.input.trim(),
-              ...(input.interactionMode !== undefined
-                ? { interactionMode: input.interactionMode }
-                : {}),
-            }),
+            text: promptText,
           });
         }
         if (input.attachments && input.attachments.length > 0) {
@@ -1344,6 +1420,7 @@ export function makeGrokAdapter(
         ctx.activeTurnFailedToolDetail = undefined;
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
+        ctx.lastTurnActivityAt = Date.now();
         const { lastError: _lastError, ...sessionWithoutLastError } = ctx.session;
         ctx.session = {
           ...sessionWithoutLastError,
@@ -1474,6 +1551,22 @@ export function makeGrokAdapter(
         );
         ctx.activePromptFiber = yield* runPrompt;
 
+        // Backstop the forked prompt: if the child goes silent, fail the turn
+        // instead of leaving it "Working" forever. Self-terminates when the
+        // turn settles; pauses while a human approval is pending.
+        yield* forkAcpTurnIdleWatchdog({
+          idleTimeoutMs: GROK_TURN_IDLE_TIMEOUT_MS,
+          checkIntervalMs: GROK_TURN_WATCHDOG_INTERVAL_MS,
+          scope: ctx.scope,
+          isTurnActive: () => ctx.activeTurnId === turnId && !ctx.stopped,
+          isAwaitingHuman: () => ctx.pendingApprovals.size > 0 || ctx.pendingUserInputs.size > 0,
+          lastActivityAt: () => ctx.lastTurnActivityAt ?? Date.now(),
+          touchActivity: () => {
+            ctx.lastTurnActivityAt = Date.now();
+          },
+          onIdleTimeout: (idleMs) => failGrokTurnAsTimedOut(ctx, turnId, idleMs),
+        });
+
         return {
           threadId: input.threadId,
           turnId,
@@ -1585,9 +1678,10 @@ export function makeGrokAdapter(
         let cliError: unknown;
         let apiError: ProviderAdapterRequestError | undefined;
         const cliModels = yield* Effect.gen(function* () {
+          const prepared = prepareWindowsSafeProcess(binaryPath, ["models"], { env: process.env });
           const child = yield* childProcessSpawner.spawn(
-            ChildProcess.make(binaryPath, ["models"], {
-              shell: process.platform === "win32",
+            ChildProcess.make(prepared.command, prepared.args, {
+              shell: prepared.shell,
               env: process.env,
             }),
           );

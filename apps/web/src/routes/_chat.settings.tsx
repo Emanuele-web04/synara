@@ -13,7 +13,16 @@ import {
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { pluralize } from "@t3tools/shared/text";
+import {
+  type ReactNode,
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   closestCenter,
   DndContext,
@@ -32,6 +41,8 @@ import { restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
   type AppSettings,
+  DEFAULT_UI_DENSITY,
+  type UiDensity,
   MAX_CHAT_FONT_SIZE_PX,
   MAX_TERMINAL_FONT_SIZE_PX,
   getCustomModelsForProvider,
@@ -70,28 +81,38 @@ import { Select, SelectItem, SelectTrigger, SelectValue } from "../components/ui
 import { Switch } from "../components/ui/switch";
 import { toastManager } from "../components/ui/toast";
 import { ThemePackEditor } from "../components/ThemePackEditor";
+import { DebouncedSettingTextInput } from "../components/settings/DebouncedSettingTextInput";
 import {
   SettingsCard,
+  SettingsListRow,
   SettingsRow,
   SettingsSection,
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
+import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { ProfileSettingsPanel } from "../components/settings/ProfileSettingsPanel";
+import { KeyboardShortcutsSettingsPanel } from "../components/settings/KeyboardShortcutsSettingsPanel";
+import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
   CHAT_MAIN_VIEWPORT_SHELL_CLASS_NAME,
-  CHAT_ROUTE_INSET_SHELL_CLASS_NAME,
 } from "../components/chat/composerPickerStyles";
 import {
   CHAT_SURFACE_HEADER_HEIGHT_CLASS,
   CHAT_SURFACE_HEADER_PADDING_X_CLASS,
 } from "../components/chat/chatHeaderControls";
 import { SidebarHeaderNavigationControls } from "../components/SidebarHeaderNavigationControls";
-import { SidebarInset } from "../components/ui/sidebar";
+import { RouteInsetSurface } from "../components/RouteInsetSurface";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
+import { isUiDensity } from "../lib/appDensity";
 import { CentralIcon } from "../lib/central-icons";
 import { gitRemoveWorktreeMutationOptions } from "../lib/gitReactQuery";
+import {
+  deleteArchivedThreadFromClient,
+  deleteArchivedThreadsFromClient,
+} from "../lib/archivedThreadDelete";
 import {
   ArchiveIcon,
   ChevronDownIcon,
@@ -108,19 +129,27 @@ import {
 import {
   serverConfigQueryOptions,
   serverQueryKeys,
+  serverSettingsQueryOptions,
   serverWorktreesQueryOptions,
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
-import { newCommandId } from "../lib/utils";
+import { unarchiveThreadFromClient } from "../lib/threadArchive";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   buildNotificationSettingsSupportText,
   readBrowserNotificationPermissionState,
   requestBrowserNotificationPermission,
 } from "../notifications/taskCompletion";
-import { normalizeSettingsSection, SETTINGS_NAV_ITEMS } from "../settingsNavigation";
 import {
+  normalizeSettingsSection,
+  SETTINGS_NAV_ITEMS,
+  SETTINGS_TARGETS,
+} from "../settingsNavigation";
+import {
+  SETTINGS_CARD_ROW_CLASS_NAME,
+  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
   SETTINGS_CARD_ROW_DIVIDER_CLASS_NAME,
+  SETTINGS_CARD_ROW_TITLE_CLASS_NAME,
   SETTINGS_EMPTY_STATE_CLASS_NAME,
   SETTINGS_INSET_LIST_CLASS_NAME,
   SETTINGS_PAGE_BACKGROUND_CLASS_NAME,
@@ -130,12 +159,38 @@ import {
 } from "../settingsPanelStyles";
 import { useStore } from "../store";
 import ReleaseHistoryDialog from "../components/ReleaseHistoryDialog";
-import { createAllThreadsSelector } from "../storeSelectors";
-import { formatRelativeTime } from "../components/Sidebar";
+import { createAllThreadsMessagelessSelector, createThreadShellsSelector } from "../storeSelectors";
+import { formatRelativeTime } from "../lib/relativeTime";
 import { formatWorktreePathForDisplay } from "../worktreeCleanup";
 import { sameProviderOrder } from "../providerOrdering";
+import {
+  getVisibleProviderUpdateStatuses,
+  shouldShowProviderUpdateStatus,
+} from "../providerUpdates";
 
 // ── Settings taxonomy ──────────────────────────────────────────────────────
+
+const UI_DENSITY_OPTIONS = [
+  {
+    value: "compact",
+    label: "Compact",
+    description: "Tighter spacing in the sidebar, composer, and settings rows.",
+  },
+  {
+    value: "comfortable",
+    label: "Comfortable",
+    description: "Balanced spacing for everyday use.",
+  },
+  {
+    value: "spacious",
+    label: "Spacious",
+    description: "More breathing room across the main workspace surfaces.",
+  },
+] as const satisfies ReadonlyArray<{
+  value: UiDensity;
+  label: string;
+  description: string;
+}>;
 
 const THEME_OPTIONS = [
   {
@@ -343,10 +398,11 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
       { label: "Config", href: "https://docs.cursor.com/en/cli/overview" },
     ],
     binaryPathKey: "cursorBinaryPath",
-    binaryPlaceholder: "Cursor Agent binary path",
+    binaryPlaceholder: "Cursor Agent or Cursor CLI path",
     binaryDescription: (
       <>
-        Leave blank to use <code>cursor-agent</code> from your PATH.
+        Leave blank to use <code>cursor-agent</code> from your PATH. Cursor editor CLI paths are
+        accepted too.
       </>
     ),
     apiEndpointKey: "cursorApiEndpoint",
@@ -549,6 +605,24 @@ type BooleanSettingKey = {
 
 // ── Route screen ───────────────────────────────────────────────────────────
 
+// Scroll a deep-linked settings section into view when it becomes the active `?target=…`.
+// `retriggerKey` lets a panel re-attempt after late-loading data mounts the target element.
+function useSettingsTargetScroll(
+  active: boolean,
+  ref: RefObject<HTMLElement | null>,
+  retriggerKey?: unknown,
+): void {
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      ref.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [active, ref, retriggerKey]);
+}
+
 function SettingsRouteView() {
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
@@ -560,19 +634,31 @@ function SettingsRouteView() {
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const serverWorktreesQuery = useQuery(serverWorktreesQueryOptions());
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const removeDeletedThreadFromClientState = useStore(
+    (store) => store.removeDeletedThreadFromClientState,
+  );
+  const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerReadModel = useStore((store) => store.syncServerReadModel);
-  const threads = useStore(useMemo(() => createAllThreadsSelector(), []));
+  // Shell-level subscription on purpose: the full-thread selector invalidates on every
+  // streaming message/activity tick, which would re-render this whole route while a
+  // turn is running. Settings only needs thread metadata (and message emptiness below).
+  const threadShells = useStore(useMemo(() => createThreadShellsSelector(), []));
+  const allThreadsMessageless = useStore(useMemo(() => createAllThreadsMessagelessSelector(), []));
   const projects = useStore((store) => store.projects);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const archivedThreads = threads.filter((thread) => thread.archivedAt != null);
+  const archivedThreads = useMemo(
+    () => threadShells.filter((thread) => thread.archivedAt != null),
+    [threadShells],
+  );
   const shouldOfferRecoveryTools = useMemo(() => {
     if (!threadsHydrated || projects.length === 0) {
       return false;
     }
-    return threads.length === 0 || threads.every((thread) => thread.messages.length === 0);
-  }, [projects.length, threads, threadsHydrated]);
+    return threadShells.length === 0 || allThreadsMessageless;
+  }, [allThreadsMessageless, projects.length, threadShells.length, threadsHydrated]);
 
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [isRepairingLocalState, setIsRepairingLocalState] = useState(false);
@@ -581,6 +667,7 @@ function SettingsRouteView() {
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
   const providerUpdatesRef = useRef<HTMLDivElement | null>(null);
   const providerInstallsRef = useRef<HTMLDivElement | null>(null);
+  const environmentPanelRef = useRef<HTMLDivElement | null>(null);
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
@@ -679,67 +766,116 @@ function SettingsRouteView() {
       new Map((serverConfigQuery.data?.providers ?? []).map((status) => [status.provider, status])),
     [serverConfigQuery.data?.providers],
   );
-  const outdatedProviderCount = useMemo(
+  const providerUpdateServerSettings = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ).length,
-    [serverConfigQuery.data?.providers],
+      serverSettingsQuery.data
+        ? {
+            ...serverSettingsQuery.data,
+            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+          }
+        : null,
+    [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
   );
   const outdatedProviderStatuses = useMemo(
     () =>
-      (serverConfigQuery.data?.providers ?? []).filter(
-        (status) => status.versionAdvisory?.status === "behind_latest",
-      ),
-    [serverConfigQuery.data?.providers],
+      getVisibleProviderUpdateStatuses({
+        providers: serverConfigQuery.data?.providers ?? [],
+        hiddenProviders: settings.hiddenProviders,
+        serverSettings: providerUpdateServerSettings,
+      }),
+    [providerUpdateServerSettings, serverConfigQuery.data?.providers, settings.hiddenProviders],
   );
-  const shouldFocusProviderUpdates =
-    activeSection === "providers" && settingsTarget === "provider-updates";
+  const outdatedProviderCount = outdatedProviderStatuses.length;
+  useSettingsTargetScroll(
+    activeSection === "providers" && settingsTarget === SETTINGS_TARGETS.providerUpdates,
+    providerUpdatesRef,
+    serverConfigQuery.data?.providers,
+  );
 
+  // Deep-link target for the chat Environment panel's gear button (see EnvironmentPanel).
+  useSettingsTargetScroll(
+    activeSection === "general" && settingsTarget === SETTINGS_TARGETS.environmentPanel,
+    environmentPanelRef,
+  );
+
+  // Sidebar search deep-links to an individual row via its `settingRowAnchorId`. The active
+  // panel renders synchronously with this section change, so scroll once the row has mounted.
   useEffect(() => {
-    if (!shouldFocusProviderUpdates) {
+    if (!settingsTarget || !settingsTarget.startsWith("setting-")) {
       return;
     }
-
     const frame = window.requestAnimationFrame(() => {
-      providerUpdatesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+      document
+        .getElementById(settingsTarget)
+        ?.scrollIntoView({ block: "start", behavior: "smooth" });
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [serverConfigQuery.data?.providers, shouldFocusProviderUpdates]);
-  const managedWorktrees = serverWorktreesQuery.data?.worktrees ?? [];
-  const worktreesByWorkspaceRoot = managedWorktrees.reduce<
-    Array<{
+  }, [activeSection, settingsTarget]);
+  const managedWorktrees = serverWorktreesQuery.data?.worktrees;
+  const worktreesByWorkspaceRoot = useMemo(() => {
+    type WorktreeGroup = {
       workspaceRoot: string;
       worktrees: Array<{
         path: string;
-        linkedThreads: typeof threads;
+        linkedThreads: typeof threadShells;
       }>;
-    }>
-  >((groups, worktree) => {
-    const linkedThreads = threads.filter((thread) => {
-      const candidatePaths = [
-        normalizeManagedWorktreePath(thread.worktreePath),
-        normalizeManagedWorktreePath(thread.associatedWorktreePath),
-      ];
-      return candidatePaths.includes(worktree.path);
-    });
-    const existingGroup = groups.find((group) => group.workspaceRoot === worktree.workspaceRoot);
-    const nextWorktree = {
-      path: worktree.path,
-      linkedThreads,
     };
-    if (existingGroup) {
-      existingGroup.worktrees.push(nextWorktree);
-    } else {
-      groups.push({
-        workspaceRoot: worktree.workspaceRoot,
-        worktrees: [nextWorktree],
+    // Map keeps grouping O(worktrees) instead of the previous O(worktrees²) `groups.find`,
+    // while `groups` preserves the original first-seen workspace-root order.
+    const groups: WorktreeGroup[] = [];
+    const groupByRoot = new Map<string, WorktreeGroup>();
+    for (const worktree of managedWorktrees ?? []) {
+      const linkedThreads = threadShells.filter((thread) => {
+        const candidatePaths = [
+          normalizeManagedWorktreePath(thread.worktreePath),
+          normalizeManagedWorktreePath(thread.associatedWorktreePath),
+        ];
+        return candidatePaths.includes(worktree.path);
       });
+      const nextWorktree = { path: worktree.path, linkedThreads };
+      const existingGroup = groupByRoot.get(worktree.workspaceRoot);
+      if (existingGroup) {
+        existingGroup.worktrees.push(nextWorktree);
+      } else {
+        const group: WorktreeGroup = {
+          workspaceRoot: worktree.workspaceRoot,
+          worktrees: [nextWorktree],
+        };
+        groups.push(group);
+        groupByRoot.set(worktree.workspaceRoot, group);
+      }
     }
     return groups;
-  }, []);
+  }, [managedWorktrees, threadShells]);
 
-  const gitTextGenerationModelOptions = getGitTextGenerationModelOptions(settings);
+  // Builds provider model-option arrays; only the Models panel reads it. Memoize on the
+  // narrow inputs the helper actually uses (destructured so exhaustive-deps stays exact) so
+  // typing in any other settings field — every keystroke re-renders this monolithic route —
+  // doesn't rebuild these lists.
+  const {
+    customCodexModels,
+    customKiloModels,
+    customOpenCodeModels,
+    textGenerationModel,
+    textGenerationProvider,
+  } = settings;
+  const gitTextGenerationModelOptions = useMemo(
+    () =>
+      getGitTextGenerationModelOptions({
+        customCodexModels,
+        customKiloModels,
+        customOpenCodeModels,
+        textGenerationModel,
+        textGenerationProvider,
+      }),
+    [
+      customCodexModels,
+      customKiloModels,
+      customOpenCodeModels,
+      textGenerationModel,
+      textGenerationProvider,
+    ],
+  );
   const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
   const currentGitTextGenerationModel =
     settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
@@ -770,13 +906,17 @@ function SettingsRouteView() {
     settings.customKiloModels.length +
     settings.customOpenCodeModels.length +
     settings.customPiModels.length;
-  const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
-    getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
-      key: `${providerSettings.provider}:${slug}`,
-      provider: providerSettings.provider,
-      providerTitle: providerSettings.title,
-      slug,
-    })),
+  const savedCustomModelRows = useMemo(
+    () =>
+      MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
+        getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
+          key: `${providerSettings.provider}:${slug}`,
+          provider: providerSettings.provider,
+          providerTitle: providerSettings.title,
+          slug,
+        })),
+      ),
+    [settings],
   );
   const visibleCustomModelRows = showAllCustomModels
     ? savedCustomModelRows
@@ -813,6 +953,7 @@ function SettingsRouteView() {
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
+    ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
     ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
     ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
     ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
@@ -831,10 +972,10 @@ function SettingsRouteView() {
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
-    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
-    ...(settings.enableComposerSuggestions !== defaults.enableComposerSuggestions
-      ? ["Prompt suggestions"]
+    ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
+      ? ["Provider update checks"]
       : []),
+    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
       ? ["Delete confirmation"]
       : []),
@@ -1193,7 +1334,7 @@ function SettingsRouteView() {
           ? [
               `Delete worktree "${displayName}"?`,
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived conversation${linkedConversationCount === 1 ? " is" : "s are"} linked to this worktree.`,
+              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
               linkedArchivedThreadIds.length > 0
                 ? "Archived conversations will be deleted first."
                 : "Deleting it can break reopening those chats in the same workspace.",
@@ -1209,13 +1350,11 @@ function SettingsRouteView() {
       }
 
       try {
-        for (const archivedThreadId of linkedArchivedThreadIds) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.delete",
-            commandId: newCommandId(),
-            threadId: archivedThreadId,
-          });
-        }
+        await deleteArchivedThreadsFromClient({
+          api: api.orchestration,
+          threadIds: linkedArchivedThreadIds,
+          removeDeletedThreadFromClientState,
+        });
 
         await removeWorktreeMutation.mutateAsync({
           cwd: input.workspaceRoot,
@@ -1230,7 +1369,7 @@ function SettingsRouteView() {
           title: "Worktree deleted",
           description:
             linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived conversation${linkedArchivedThreadIds.length === 1 ? "" : "s"} were deleted.`
+              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
               : `${displayName} was removed.`,
         });
       } catch (error) {
@@ -1241,18 +1380,14 @@ function SettingsRouteView() {
         });
       }
     },
-    [queryClient, removeWorktreeMutation],
+    [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
   );
 
   const unarchiveThread = useCallback(async (threadId: ThreadId) => {
     const api = readNativeApi();
     if (!api) return;
     try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.unarchive",
-        commandId: newCommandId(),
-        threadId,
-      });
+      await unarchiveThreadFromClient(api.orchestration, threadId);
       toastManager.add({
         type: "success",
         title: "Thread restored",
@@ -1267,34 +1402,37 @@ function SettingsRouteView() {
     }
   }, []);
 
-  const deleteArchivedThread = useCallback(async (threadId: ThreadId, threadTitle: string) => {
-    const api = readNativeApi();
-    if (!api) return;
+  const deleteArchivedThread = useCallback(
+    async (threadId: ThreadId, threadTitle: string) => {
+      const api = readNativeApi();
+      if (!api) return;
 
-    const confirmed = await api.dialogs.confirm(
-      `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
-    );
-    if (!confirmed) return;
+      const confirmed = await api.dialogs.confirm(
+        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+      );
+      if (!confirmed) return;
 
-    try {
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
-      toastManager.add({
-        type: "success",
-        title: "Thread deleted",
-        description: "The archived thread has been permanently removed.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not delete thread",
-        description: error instanceof Error ? error.message : "Unable to delete the thread.",
-      });
-    }
-  }, []);
+      try {
+        await deleteArchivedThreadFromClient({
+          api: api.orchestration,
+          threadId,
+          removeDeletedThreadFromClientState,
+        });
+        toastManager.add({
+          type: "success",
+          title: "Thread deleted",
+          description: "The archived thread has been permanently removed.",
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not delete thread",
+          description: error instanceof Error ? error.message : "Unable to delete the thread.",
+        });
+      }
+    },
+    [removeDeletedThreadFromClientState],
+  );
 
   const handleArchivedThreadContextMenu = useCallback(
     async (threadId: ThreadId, threadTitle: string, position: { x: number; y: number }) => {
@@ -1538,6 +1676,77 @@ function SettingsRouteView() {
           ariaLabel: "Show the Workspace section in the sidebar",
         })}
       </SettingsSection>
+
+      <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
+        <SettingsSection title="Environment panel">
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentUsage",
+            title: "Usage",
+            description: "Show the provider usage row in the chat Environment panel.",
+            resetLabel: "usage section",
+            ariaLabel: "Show the Usage section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRepository",
+            title: "Repository",
+            description:
+              "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
+            resetLabel: "repository section",
+            ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentEditor",
+            title: "Editor",
+            description:
+              "Show the Editor section (in-app editor view and Open in editor picker) in the chat Environment panel.",
+            resetLabel: "editor section",
+            ariaLabel: "Show the Editor section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentRecap",
+            title: "Recap",
+            description: "Show the auto-generated chat recap in the Environment panel.",
+            resetLabel: "recap section",
+            ariaLabel: "Show the Recap section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPinned",
+            title: "Pinned messages",
+            description: "Show the pinned-messages checklist in the Environment panel.",
+            resetLabel: "pinned messages section",
+            ariaLabel: "Show the Pinned messages section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentMarkers",
+            title: "Text markers",
+            description:
+              "Show highlighted and underlined transcript text in the Environment panel.",
+            resetLabel: "text markers section",
+            ariaLabel: "Show the Text markers section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentInstructions",
+            title: "Project instructions",
+            description: "Show project-level instructions in the Environment panel.",
+            resetLabel: "project instructions section",
+            ariaLabel: "Show the Project instructions section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentNotepad",
+            title: "Notepad",
+            description: "Show the per-thread notepad in the Environment panel.",
+            resetLabel: "notepad section",
+            ariaLabel: "Show the Notepad section in the Environment panel",
+          })}
+        </SettingsSection>
+      </div>
     </div>
   );
 
@@ -1584,6 +1793,36 @@ function SettingsRouteView() {
 
         <SettingsCard>
           <SettingsRow
+            title="UI density"
+            description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+            resetAction={
+              settings.uiDensity !== defaults.uiDensity ? (
+                <SettingResetButton
+                  label="UI density"
+                  onClick={() =>
+                    updateSettings({
+                      uiDensity: DEFAULT_UI_DENSITY,
+                    })
+                  }
+                />
+              ) : null
+            }
+            control={
+              <SettingsSegmentedControl
+                value={settings.uiDensity}
+                onValueChange={(value) => {
+                  if (!isUiDensity(value)) {
+                    return;
+                  }
+                  updateSettings({ uiDensity: value });
+                }}
+                ariaLabel="UI density"
+                options={UI_DENSITY_OPTIONS}
+              />
+            }
+          />
+
+          <SettingsRow
             title="Base font size"
             description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
             resetAction={
@@ -1602,10 +1841,12 @@ function SettingsRouteView() {
               <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <Input
                   type="number"
+                  size="sm"
                   min={MIN_CHAT_FONT_SIZE_PX}
                   max={MAX_CHAT_FONT_SIZE_PX}
                   step={1}
                   inputMode="numeric"
+                  variant="soft"
                   className="w-full text-right sm:w-20"
                   value={String(settings.chatFontSizePx)}
                   onChange={(event) => {
@@ -1641,10 +1882,12 @@ function SettingsRouteView() {
               <div className="flex w-full items-center justify-end gap-2 sm:w-auto">
                 <Input
                   type="number"
+                  size="sm"
                   min={MIN_TERMINAL_FONT_SIZE_PX}
                   max={MAX_TERMINAL_FONT_SIZE_PX}
                   step={1}
                   inputMode="numeric"
+                  variant="soft"
                   className="w-full text-right sm:w-20"
                   value={String(settings.terminalFontSizePx)}
                   onChange={(event) => {
@@ -1690,6 +1933,8 @@ function SettingsRouteView() {
                   }}
                 >
                   <AutocompleteInput
+                    size="sm"
+                    variant="soft"
                     showTrigger
                     showClear={settings.terminalFontFamily.length > 0}
                     spellCheck={false}
@@ -1850,14 +2095,6 @@ function SettingsRouteView() {
           resetLabel: "diff line wrapping",
           ariaLabel: "Wrap diff lines by default",
         })}
-
-        {renderBooleanSettingRow({
-          settingKey: "enableComposerSuggestions",
-          title: "Prompt suggestions",
-          description: "Show suggested prompts under the composer when starting a new thread.",
-          resetLabel: "prompt suggestions",
-          ariaLabel: "Show composer prompt suggestions",
-        })}
       </SettingsSection>
 
       <SettingsSection title="Safety confirmations">
@@ -1888,116 +2125,129 @@ function SettingsRouteView() {
     </div>
   );
 
-  const renderWorktreesPanel = () => (
-    <div className="space-y-6">
-      <SettingsSection title="Managed worktrees">
-        <div className="space-y-4">
-          {serverWorktreesQuery.isLoading ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              Loading managed worktrees...
-            </div>
-          ) : serverWorktreesQuery.isError ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
-              )}
-            >
-              {serverWorktreesQuery.error instanceof Error
-                ? serverWorktreesQuery.error.message
-                : "Unable to load worktrees."}
-            </div>
-          ) : worktreesByWorkspaceRoot.length === 0 ? (
-            <div
-              className={cn(
-                SETTINGS_EMPTY_STATE_CLASS_NAME,
-                "px-4 py-6 text-sm text-muted-foreground",
-              )}
-            >
-              No app-managed worktrees found yet.
-            </div>
-          ) : (
-            worktreesByWorkspaceRoot.map((group) => (
-              <section key={group.workspaceRoot} className="space-y-2">
-                <h3 className="px-1 font-mono text-[11px] text-muted-foreground">
-                  {group.workspaceRoot}
-                </h3>
+  const renderWorktreesPanel = () => {
+    if (serverWorktreesQuery.isLoading) {
+      return (
+        <div
+          className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
+        >
+          Loading managed worktrees...
+        </div>
+      );
+    }
+    if (serverWorktreesQuery.isError) {
+      return (
+        <div
+          className={cn(
+            SETTINGS_EMPTY_STATE_CLASS_NAME,
+            "border-destructive/30 bg-destructive/5 px-4 py-6 text-sm text-destructive",
+          )}
+        >
+          {serverWorktreesQuery.error instanceof Error
+            ? serverWorktreesQuery.error.message
+            : "Unable to load worktrees."}
+        </div>
+      );
+    }
+    if (worktreesByWorkspaceRoot.length === 0) {
+      return (
+        <div
+          className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
+        >
+          No app-managed worktrees found yet.
+        </div>
+      );
+    }
 
-                <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                  {group.worktrees.map((worktree, index) => {
-                    const deleteDisabled = removeWorktreeMutation.isPending;
-                    return (
-                      <div
-                        key={worktree.path}
-                        className={cn(
-                          "flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:justify-between",
-                          index > 0 && "border-t border-[color:var(--color-border)]",
-                        )}
-                      >
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="space-y-0.5">
-                            <div className="text-sm font-medium text-foreground">Worktree</div>
-                            <div className="font-mono text-[11px] text-muted-foreground">
-                              {worktree.path}
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                              Conversations
-                            </div>
-                            {worktree.linkedThreads.length > 0 ? (
-                              <div className="space-y-1">
-                                {worktree.linkedThreads.map((thread) => (
-                                  <div key={thread.id} className="text-sm text-foreground">
-                                    {thread.title}
-                                  </div>
-                                ))}
-                              </div>
-                            ) : (
-                              <div className="text-sm text-muted-foreground">
-                                No conversations linked to this worktree.
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <Button
-                            size="xs"
-                            variant="destructive"
-                            disabled={deleteDisabled}
-                            onClick={() =>
-                              void deleteManagedWorktree({
-                                workspaceRoot: group.workspaceRoot,
-                                worktreePath: worktree.path,
-                              })
-                            }
-                          >
-                            Delete
-                          </Button>
-                          {worktree.linkedThreads.length > 0 ? (
-                            <p className="max-w-40 text-right text-[11px] text-muted-foreground">
-                              Linked conversations exist. Deleting will ask for confirmation.
-                            </p>
-                          ) : null}
+    // Each workspace root is a standard settings card; worktree rows reuse the
+    // same row chrome/typography as every other settings list (separators come
+    // from the card's `divide-y`), with their richer body kept top-aligned.
+    return (
+      <div className="space-y-6">
+        {worktreesByWorkspaceRoot.map((group) => (
+          <SettingsSection key={group.workspaceRoot} title={group.workspaceRoot}>
+            {group.worktrees.map((worktree) => {
+              const deleteDisabled = removeWorktreeMutation.isPending;
+              return (
+                <div
+                  key={worktree.path}
+                  className={SETTINGS_CARD_ROW_CLASS_NAME}
+                  data-slot="settings-row"
+                >
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 flex-1 space-y-2">
+                      <div className="space-y-0.5">
+                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Worktree</div>
+                        <div
+                          className={cn(
+                            SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                            "truncate font-mono",
+                          )}
+                        >
+                          {worktree.path}
                         </div>
                       </div>
-                    );
-                  })}
+
+                      <div className="space-y-1">
+                        <div className="text-[11px] font-medium text-muted-foreground">
+                          Conversations
+                        </div>
+                        {worktree.linkedThreads.length > 0 ? (
+                          <div className="space-y-1">
+                            {worktree.linkedThreads.map((thread) => (
+                              <div
+                                key={thread.id}
+                                className={cn(
+                                  SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                                  "text-foreground",
+                                )}
+                              >
+                                {thread.title}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
+                            No conversations linked to this worktree.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex w-full shrink-0 flex-col items-end gap-2 sm:w-auto">
+                      <Button
+                        size="xs"
+                        variant="destructive"
+                        disabled={deleteDisabled}
+                        onClick={() =>
+                          void deleteManagedWorktree({
+                            workspaceRoot: group.workspaceRoot,
+                            worktreePath: worktree.path,
+                          })
+                        }
+                      >
+                        Delete
+                      </Button>
+                      {worktree.linkedThreads.length > 0 ? (
+                        <p
+                          className={cn(
+                            SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
+                            "max-w-40 text-right",
+                          )}
+                        >
+                          Linked conversations exist. Deleting will ask for confirmation.
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
                 </div>
-              </section>
-            ))
-          )}
-        </div>
-      </SettingsSection>
-    </div>
-  );
+              );
+            })}
+          </SettingsSection>
+        ))}
+      </div>
+    );
+  };
 
   const renderArchivedPanel = () => {
     const archivedGroups = [
@@ -2031,72 +2281,64 @@ function SettingsRouteView() {
       })(),
     ].filter((group) => group.threads.length > 0);
 
+    if (archivedGroups.length === 0) {
+      return (
+        <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
+          <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
+            <ArchiveIcon className="size-5" />
+          </div>
+          <div className="text-sm font-medium text-foreground">No archived threads</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            Archived threads will appear here and can be restored to the sidebar.
+          </div>
+        </div>
+      );
+    }
+
+    // Each project group is a standard settings card (label + bordered list); the
+    // thread rows reuse the same row/typography tokens as every other settings row,
+    // and the card's own `divide-y` draws the separators.
     return (
       <div className="space-y-6">
-        {archivedGroups.length === 0 ? (
-          <SettingsSection title="Archived threads">
-            <div className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-5 py-10 text-center")}>
-              <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
-                <ArchiveIcon className="size-5" />
-              </div>
-              <div className="text-sm font-medium text-foreground">No archived threads</div>
-              <div className="mt-1 text-sm text-muted-foreground">
-                Archived threads will appear here and can be restored to the sidebar.
-              </div>
-            </div>
+        {archivedGroups.map(({ project, threads: projectThreads }) => (
+          <SettingsSection
+            key={project?.id ?? "unknown-project"}
+            title={project?.name ?? "Unknown project"}
+          >
+            {projectThreads.map((thread) => (
+              <SettingsListRow
+                key={thread.id}
+                title={thread.title}
+                description={`Archived ${formatRelativeTime(thread.archivedAt ?? thread.createdAt)}`}
+                onContextMenu={(event) => {
+                  event.preventDefault();
+                  void handleArchivedThreadContextMenu(thread.id, thread.title, {
+                    x: event.clientX,
+                    y: event.clientY,
+                  });
+                }}
+                actions={
+                  <>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => void unarchiveThread(thread.id)}
+                    >
+                      Restore
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="destructive"
+                      onClick={() => void deleteArchivedThread(thread.id, thread.title)}
+                    >
+                      Delete
+                    </Button>
+                  </>
+                }
+              />
+            ))}
           </SettingsSection>
-        ) : (
-          archivedGroups.map(({ project, threads: projectThreads }) => (
-            <SettingsSection
-              key={project?.id ?? "unknown-project"}
-              title={project?.name ?? "Unknown project"}
-            >
-              <div className={SETTINGS_INSET_LIST_CLASS_NAME}>
-                {projectThreads.map((thread, index) => (
-                  <div
-                    key={thread.id}
-                    className={cn(
-                      "flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-center sm:justify-between",
-                      index > 0 && "border-t border-[color:var(--color-border)]",
-                    )}
-                    onContextMenu={(event) => {
-                      event.preventDefault();
-                      void handleArchivedThreadContextMenu(thread.id, thread.title, {
-                        x: event.clientX,
-                        y: event.clientY,
-                      });
-                    }}
-                  >
-                    <div className="min-w-0 flex-1 space-y-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {thread.title}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Archived {formatRelativeTime(thread.archivedAt ?? thread.createdAt)}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Button
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void unarchiveThread(thread.id)}
-                      >
-                        Restore
-                      </Button>
-                      <Button
-                        size="xs"
-                        variant="destructive"
-                        onClick={() => void deleteArchivedThread(thread.id, thread.title)}
-                      >
-                        Delete
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </SettingsSection>
-          ))
-        )}
+        ))}
       </div>
     );
   };
@@ -2219,6 +2461,8 @@ function SettingsRouteView() {
               </Select>
               <Input
                 id="custom-model-slug"
+                size="sm"
+                variant="soft"
                 value={selectedCustomModelInput}
                 onChange={(event) => {
                   const value = event.target.value;
@@ -2305,7 +2549,7 @@ function SettingsRouteView() {
           description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} provider${hiddenProviderCount === 1 ? "" : "s"} hidden`
+              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
               : isProviderOrderDirty
                 ? "Custom order"
                 : "All providers visible"
@@ -2361,19 +2605,36 @@ function SettingsRouteView() {
   );
 
   const renderProviderUpdatesSection = () => (
-    <div ref={providerUpdatesRef} id="provider-updates">
+    <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
       <SettingsSection title="Updates">
+        {renderBooleanSettingRow({
+          settingKey: "enableProviderUpdateChecks",
+          title: "Automatic CLI update checks",
+          description:
+            "Check Codex, Claude, and other provider CLIs for newer versions in the background.",
+          resetLabel: "CLI update checks",
+          ariaLabel: "Automatic CLI update checks",
+        })}
+
         <SettingsRow
           title="Provider updates"
-          description="Update installed provider tools that Synara can safely update."
+          description="Review installed provider tools that Synara can safely update."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
         >
-          {outdatedProviderStatuses.length > 0 ? (
-            <div className={cn("mt-4", SETTINGS_INSET_LIST_CLASS_NAME)}>
+          {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
+            <div
+              className={cn(
+                "mt-4",
+                SETTINGS_INSET_LIST_CLASS_NAME,
+                "divide-y divide-[color:var(--color-border)]",
+              )}
+            >
               {outdatedProviderStatuses.map((providerStatus) => {
                 const updateAdvisory = providerStatus.versionAdvisory;
                 const updateState = providerStatus.updateState?.status;
@@ -2386,46 +2647,36 @@ function SettingsRouteView() {
                 const updateLabel = providerUpdateStatusLabel(providerStatus);
 
                 return (
-                  <div
+                  <SettingsListRow
                     key={providerStatus.provider}
-                    className="flex min-h-11 items-center gap-3 border-t border-[color:var(--color-border)] px-3 py-2 first:border-t-0"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
-                      </div>
-                      {updateLabel ? (
-                        <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
-                          {updateLabel}
-                        </div>
-                      ) : null}
-                    </div>
-                    {updateAdvisory?.canUpdate ? (
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        disabled={!canUpdateProvider}
-                        title={
-                          updateAdvisory.updateCommand
-                            ? `Run ${updateAdvisory.updateCommand}`
-                            : undefined
-                        }
-                        onClick={() => void runProviderUpdate(providerStatus.provider)}
-                      >
-                        {isProviderUpdateActive ? (
-                          <Loader2Icon className="size-3.5 animate-spin" />
-                        ) : (
-                          <DownloadIcon className="size-3.5" />
-                        )}
-                        {isProviderUpdateActive ? "Updating" : "Update"}
-                      </Button>
-                    ) : (
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        Manual update
-                      </span>
-                    )}
-                  </div>
+                    title={PROVIDER_DISPLAY_NAMES[providerStatus.provider]}
+                    description={updateLabel || undefined}
+                    actions={
+                      updateAdvisory?.canUpdate ? (
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          disabled={!canUpdateProvider}
+                          title={
+                            updateAdvisory.updateCommand
+                              ? `Run ${updateAdvisory.updateCommand}`
+                              : undefined
+                          }
+                          onClick={() => void runProviderUpdate(providerStatus.provider)}
+                        >
+                          {isProviderUpdateActive ? (
+                            <Loader2Icon className="size-3.5 animate-spin" />
+                          ) : (
+                            <DownloadIcon className="size-3.5" />
+                          )}
+                          {isProviderUpdateActive ? "Updating" : "Update"}
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">Manual update</span>
+                      )
+                    }
+                  />
                 );
               })}
             </div>
@@ -2436,15 +2687,17 @@ function SettingsRouteView() {
   );
 
   const renderProviderInstallsSection = () => (
-    <div ref={providerInstallsRef} id="provider-installs">
+    <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
       <SettingsSection title="Provider tools">
         <SettingsRow
           title="Installed CLIs"
           description="Review provider versions and update tools. Open a row only when you need binary overrides."
           status={
-            outdatedProviderCount > 0
-              ? `${outdatedProviderCount} update${outdatedProviderCount === 1 ? "" : "s"} available`
-              : "No provider updates detected"
+            !settings.enableProviderUpdateChecks
+              ? "Automatic checks off"
+              : outdatedProviderCount > 0
+                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
+                : "No provider updates detected"
           }
           resetAction={
             isInstallSettingsDirty ? (
@@ -2531,8 +2784,25 @@ function SettingsRouteView() {
                                 ? piBinaryPath
                                 : codexBinaryPath;
                 const providerStatus = providerStatusByProvider.get(providerSettings.provider);
+                const showProviderUpdateStatus = providerStatus
+                  ? shouldShowProviderUpdateStatus({
+                      provider: providerStatus,
+                      hiddenProviderSet,
+                      serverSettings: providerUpdateServerSettings,
+                    })
+                  : false;
+                const providerUpdateSuppressed =
+                  providerStatus?.versionAdvisory?.status === "behind_latest" &&
+                  !showProviderUpdateStatus;
+                const currentProviderVersion = formatProviderVersion(providerStatus?.version);
                 const providerUpdateLabel = providerStatus
-                  ? providerUpdateStatusLabel(providerStatus)
+                  ? !settings.enableProviderUpdateChecks
+                    ? currentProviderVersion
+                      ? `Current ${currentProviderVersion}`
+                      : null
+                    : providerUpdateSuppressed
+                      ? null
+                      : providerUpdateStatusLabel(providerStatus)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -2541,9 +2811,14 @@ function SettingsRouteView() {
                   providerUpdateState === "running" ||
                   updatingProviders.has(providerSettings.provider);
                 const canUpdateProvider =
+                  showProviderUpdateStatus &&
                   updateAdvisory?.status === "behind_latest" &&
                   updateAdvisory.canUpdate &&
                   !isProviderUpdateActive;
+                const shouldShowProviderUpdateButton =
+                  showProviderUpdateStatus &&
+                  updateAdvisory?.status === "behind_latest" &&
+                  updateAdvisory.canUpdate;
 
                 return (
                   <Collapsible
@@ -2595,7 +2870,7 @@ function SettingsRouteView() {
                             )}
                           />
                         </button>
-                        {updateAdvisory?.status === "behind_latest" && updateAdvisory.canUpdate ? (
+                        {shouldShowProviderUpdateButton ? (
                           <Button
                             type="button"
                             size="xs"
@@ -2625,7 +2900,8 @@ function SettingsRouteView() {
                         <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                           <div className="space-y-3">
                             <ProviderDocsLinks docs={providerSettings.docs} />
-                            {updateAdvisory?.status === "behind_latest" ? (
+                            {showProviderUpdateStatus &&
+                            updateAdvisory?.status === "behind_latest" ? (
                               <div className="text-xs text-muted-foreground">
                                 {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                                   <>
@@ -2647,28 +2923,30 @@ function SettingsRouteView() {
                               <span className="block text-xs font-medium text-foreground">
                                 {providerSettings.title} binary path
                               </span>
-                              <Input
+                              <DebouncedSettingTextInput
                                 id={`provider-install-${providerSettings.binaryPathKey}`}
+                                size="sm"
+                                variant="soft"
                                 className="mt-1"
                                 value={binaryPathValue}
-                                onChange={(event) =>
+                                onCommit={(nextValue) =>
                                   updateSettings(
                                     providerSettings.binaryPathKey === "claudeBinaryPath"
-                                      ? { claudeBinaryPath: event.target.value }
+                                      ? { claudeBinaryPath: nextValue }
                                       : providerSettings.binaryPathKey === "cursorBinaryPath"
-                                        ? { cursorBinaryPath: event.target.value }
+                                        ? { cursorBinaryPath: nextValue }
                                         : providerSettings.binaryPathKey === "geminiBinaryPath"
-                                          ? { geminiBinaryPath: event.target.value }
+                                          ? { geminiBinaryPath: nextValue }
                                           : providerSettings.binaryPathKey === "grokBinaryPath"
-                                            ? { grokBinaryPath: event.target.value }
+                                            ? { grokBinaryPath: nextValue }
                                             : providerSettings.binaryPathKey === "kiloBinaryPath"
-                                              ? { kiloBinaryPath: event.target.value }
+                                              ? { kiloBinaryPath: nextValue }
                                               : providerSettings.binaryPathKey ===
                                                   "openCodeBinaryPath"
-                                                ? { openCodeBinaryPath: event.target.value }
+                                                ? { openCodeBinaryPath: nextValue }
                                                 : providerSettings.binaryPathKey === "piBinaryPath"
-                                                  ? { piBinaryPath: event.target.value }
-                                                  : { codexBinaryPath: event.target.value },
+                                                  ? { piBinaryPath: nextValue }
+                                                  : { codexBinaryPath: nextValue },
                                   )
                                 }
                                 placeholder={providerSettings.binaryPlaceholder}
@@ -2687,13 +2965,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   CODEX_HOME path
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.homePathKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={codexHomePath}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      codexHomePath: event.target.value,
+                                      codexHomePath: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.homePlaceholder}
@@ -2715,13 +2995,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   Pi agent directory
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.agentDirKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={piAgentDir}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      piAgentDir: event.target.value,
+                                      piAgentDir: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.agentDirPlaceholder}
@@ -2743,13 +3025,15 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   Cursor API endpoint
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.apiEndpointKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={cursorApiEndpoint}
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings({
-                                      cursorApiEndpoint: event.target.value,
+                                      cursorApiEndpoint: nextValue,
                                     })
                                   }
                                   placeholder={providerSettings.apiEndpointPlaceholder}
@@ -2771,19 +3055,21 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   {providerSettings.title} server URL
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverUrlKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={
                                     providerSettings.serverUrlKey === "kiloServerUrl"
                                       ? kiloServerUrl
                                       : openCodeServerUrl
                                   }
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverUrlKey === "kiloServerUrl"
-                                        ? { kiloServerUrl: event.target.value }
-                                        : { openCodeServerUrl: event.target.value },
+                                        ? { kiloServerUrl: nextValue }
+                                        : { openCodeServerUrl: nextValue },
                                     )
                                   }
                                   placeholder={providerSettings.serverUrlPlaceholder}
@@ -2805,19 +3091,21 @@ function SettingsRouteView() {
                                 <span className="block text-xs font-medium text-foreground">
                                   {providerSettings.title} server password
                                 </span>
-                                <Input
+                                <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverPasswordKey}`}
+                                  size="sm"
+                                  variant="soft"
                                   className="mt-1"
                                   value={
                                     providerSettings.serverPasswordKey === "kiloServerPassword"
                                       ? kiloServerPassword
                                       : openCodeServerPassword
                                   }
-                                  onChange={(event) =>
+                                  onCommit={(nextValue) =>
                                     updateSettings(
                                       providerSettings.serverPasswordKey === "kiloServerPassword"
-                                        ? { kiloServerPassword: event.target.value }
-                                        : { openCodeServerPassword: event.target.value },
+                                        ? { kiloServerPassword: nextValue }
+                                        : { openCodeServerPassword: nextValue },
                                     )
                                   }
                                   placeholder={providerSettings.serverPasswordPlaceholder}
@@ -2980,6 +3268,8 @@ function SettingsRouteView() {
         return renderNotificationsPanel();
       case "behavior":
         return renderBehaviorPanel();
+      case "shortcuts":
+        return <KeyboardShortcutsSettingsPanel />;
       case "worktrees":
         return renderWorktreesPanel();
       case "archived":
@@ -2988,6 +3278,12 @@ function SettingsRouteView() {
         return renderModelsPanel();
       case "providers":
         return renderProvidersPanel();
+      case "profile":
+        return <ProfileSettingsPanel />;
+      case "skills":
+        return <SkillsSettingsPanel />;
+      case "usage":
+        return <ProviderUsageSettingsPanel />;
       case "advanced":
         return renderAdvancedPanel();
       default:
@@ -3003,21 +3299,20 @@ function SettingsRouteView() {
         CHAT_CONTENT_CARD_CLASS_NAME,
       )}
     >
-      <SidebarInset
-        className={CHAT_ROUTE_INSET_SHELL_CLASS_NAME}
-        surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}
-      >
+      <RouteInsetSurface surfaceClassName={SETTINGS_PAGE_BACKGROUND_CLASS_NAME}>
         {/* Companion sidebar trigger so settings is reachable-and-exitable even when the
           sidebar is collapsed (web/mobile have no global Back arrow). Pinned to the
           card's top-left — at the same header height + traffic-light gutter as the
           chat/workspace headers — so the collapsed-state toggle sits by the traffic
           lights instead of floating in the centered settings body. It renders nothing
           while the sidebar is open (SidebarHeaderNavigationControls returns null), so it
-          adds no chrome in the common (open) state and never shifts the centered content
-          (hence absolute, not a layout-occupying header row). */}
+          adds no navigation chrome in the common (open) state and never shifts the centered
+          content (hence absolute, not a layout-occupying header row). The strip stays a
+          drag-region so the Windows frameless window can be moved by its top edge; the
+          caption buttons themselves are a separate fixed cluster (see root route). */}
         <div
           className={cn(
-            "pointer-events-none absolute inset-x-0 top-0 z-10 flex items-center",
+            "drag-region absolute inset-x-0 top-0 z-10 flex items-center",
             CHAT_SURFACE_HEADER_PADDING_X_CLASS,
             CHAT_SURFACE_HEADER_HEIGHT_CLASS,
             desktopTopBarTrafficLightGutterClassName,
@@ -3029,30 +3324,37 @@ function SettingsRouteView() {
         </div>
         <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col">
           <div className="flex-1 overflow-y-auto">
-            <div className="mx-auto w-full max-w-2xl px-6 py-8">
-              <div className="mb-8 flex items-start justify-between gap-4">
-                <div className="min-w-0">
-                  <h1 className="text-xl font-medium tracking-tight text-foreground">
-                    {activeSectionItem.label}
-                  </h1>
-                  <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                    {activeSectionItem.description}
-                  </p>
+            {activeSection === "profile" ? (
+              // Profile is a self-contained dashboard: it owns its own header (avatar,
+              // name, share) so it skips the section title bar, and gets a slightly wider
+              // pane than the form sections to fit the heatmap + two-column layout.
+              <div className="mx-auto w-full max-w-3xl px-6 py-8">{renderActivePanel()}</div>
+            ) : (
+              <div className="mx-auto w-full max-w-2xl px-6 py-8">
+                <div className="mb-8 flex items-start justify-between gap-4">
+                  <div className="min-w-0">
+                    <h1 className="text-xl font-medium tracking-tight text-foreground">
+                      {activeSectionItem.label}
+                    </h1>
+                    <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                      {activeSectionItem.description}
+                    </p>
+                  </div>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    className="shrink-0"
+                    disabled={changedSettingLabels.length === 0}
+                    onClick={() => void restoreDefaults()}
+                  >
+                    <RotateCcwIcon className="size-3.5" />
+                    Restore defaults
+                  </Button>
                 </div>
-                <Button
-                  size="xs"
-                  variant="outline"
-                  className="shrink-0"
-                  disabled={changedSettingLabels.length === 0}
-                  onClick={() => void restoreDefaults()}
-                >
-                  <RotateCcwIcon className="size-3.5" />
-                  Restore defaults
-                </Button>
-              </div>
 
-              {renderActivePanel()}
-            </div>
+                {renderActivePanel()}
+              </div>
+            )}
           </div>
         </div>
         {/* Mounted at the route level (outside the scrollable panel) so the
@@ -3063,7 +3365,7 @@ function SettingsRouteView() {
           onOpenChange={setReleaseHistoryOpen}
           defaultExpandedVersion={APP_VERSION}
         />
-      </SidebarInset>
+      </RouteInsetSurface>
     </div>
   );
 }

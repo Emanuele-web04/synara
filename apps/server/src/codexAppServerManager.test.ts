@@ -24,12 +24,12 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
   CodexAppServerManager,
   classifyCodexStderrLine,
-  ensureIsolatedScratchWorkspace,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import { ensureIsolatedScratchWorkspace } from "./scratchWorkspaces";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const fullAccessTurnOverrides = {
@@ -507,6 +507,35 @@ describe("buildCodexProcessEnv", () => {
       expect(env.CODEX_HOME).toBe(overlayHome);
       expect(lstatSync(overlayMemoryPath).isSymbolicLink()).toBe(true);
       expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+      rmSync(runtimeHome, { recursive: true, force: true });
+    }
+  });
+
+  it("repairs stale auth.json files in Synara's Codex home overlay", () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), "t3-codex-env-"));
+    const runtimeHome = mkdtempSync(path.join(os.tmpdir(), "t3-runtime-home-"));
+    try {
+      const sourceAuthPath = path.join(tempDir, "auth.json");
+      writeFileSync(path.join(tempDir, "config.toml"), 'model = "gpt-5.5"', "utf8");
+      writeFileSync(sourceAuthPath, '{"tokens":{"access_token":"fresh"}}', "utf8");
+
+      const overlayHome = path.join(runtimeHome, "codex-home-overlay");
+      const overlayAuthPath = path.join(overlayHome, "auth.json");
+      mkdirSync(overlayHome, { recursive: true });
+      writeFileSync(overlayAuthPath, '{"tokens":{"access_token":"stale"}}', "utf8");
+
+      const env = buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+
+      expect(env.CODEX_HOME).toBe(overlayHome);
+      expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
+      expect(readlinkSync(overlayAuthPath)).toBe(sourceAuthPath);
+      expect(readFileSync(overlayAuthPath, "utf8")).toContain("fresh");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });

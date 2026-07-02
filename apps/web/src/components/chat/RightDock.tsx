@@ -33,16 +33,19 @@ import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
 import {
   CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
   DOCK_HEADER_ICON_BUTTON_CLASS,
-  SurfaceChipIcon,
   SurfaceTabChip,
 } from "./chatHeaderControls";
-import { getRightDockPaneMeta, resolveRightDockPaneLabel } from "./rightDockPaneMeta";
+import {
+  getRightDockPaneMeta,
+  resolveRightDockPaneIcon,
+  resolveRightDockPaneLabel,
+} from "./rightDockPaneMeta";
+import { useDesktopTopBarWindowControlsGutterClassName } from "~/hooks/useDesktopTopBarGutter";
 
 interface RightDockProps {
   state: RightDockThreadState;
   minWidth: number;
   defaultWidth: string;
-  storageKey: string;
   shouldAcceptWidth: (context: { nextWidth: number; wrapper: HTMLElement }) => boolean;
   paneLabelOverrides?: Record<string, string | undefined>;
   addMenuKinds: readonly RightDockPaneKind[];
@@ -66,14 +69,13 @@ function RightDockTab(props: {
   onSelect: () => void;
   onClose: () => void;
 }) {
-  const { Icon } = getRightDockPaneMeta(props.pane.kind);
   return (
     <SurfaceTabChip
       active={props.active}
       title={props.label}
       label={props.label}
       labelClassName="max-w-[10rem]"
-      icon={<SurfaceChipIcon icon={Icon} />}
+      icon={resolveRightDockPaneIcon(props.pane)}
       closeLabel={`Close ${props.label}`}
       onSelect={props.onSelect}
       onClose={props.onClose}
@@ -104,8 +106,33 @@ function useKeepMountedPaneIds(
 export function RightDock(props: RightDockProps) {
   const activePane = resolveActivePane(props.state);
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
+  // The dock is the right-most surface when open, so its header sits under the
+  // fixed Windows caption cluster — reserve the same gutter the chat header uses.
+  const desktopTopBarWindowControlsGutterClassName =
+    useDesktopTopBarWindowControlsGutterClassName();
 
   const keepMountedPaneIds = useKeepMountedPaneIds(props.state.panes, activePane);
+  // The dock must open as an exact 50/50 split of the chat shell. The CSS
+  // default can only approximate half (it cannot observe the resizable left
+  // sidebar), so on every open we measure the shell row hosting chat + dock and
+  // pin the dock width to exactly half of it. Mid-session drags still resize
+  // freely; the next open re-centers the split.
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const minWidth = props.minWidth;
+  useEffect(() => {
+    if (!props.state.open) {
+      return;
+    }
+    const wrapper = contentRef.current?.closest<HTMLElement>("[data-slot='sidebar-wrapper']");
+    const shell = wrapper?.parentElement;
+    if (!wrapper || !shell) {
+      return;
+    }
+    const halfWidth = Math.round(shell.getBoundingClientRect().width / 2);
+    if (halfWidth > 0) {
+      wrapper.style.setProperty("--sidebar-width", `${Math.max(minWidth, halfWidth)}px`);
+    }
+  }, [props.state.open, minWidth]);
   const renderedPanes = props.state.panes.filter(
     (pane) => pane.id === activePane?.id || keepMountedPaneIds.has(pane.id),
   );
@@ -150,18 +177,26 @@ export function RightDock(props: RightDockProps) {
       <Sidebar
         side="right"
         collapsible="offcanvas"
-        className={cn("border-l border-sidebar-border text-foreground", chromeMotionClass)}
+        className={cn(
+          "border-l border-[var(--app-surface-divider)] text-foreground",
+          chromeMotionClass,
+        )}
         innerClassName={CHAT_BACKGROUND_CLASS_NAME}
         gapClassName={chromeMotionClass}
         transparentSurface
         resizable={{
           minWidth: props.minWidth,
           shouldAcceptWidth: props.shouldAcceptWidth,
-          storageKey: props.storageKey,
         }}
       >
-        <div className="flex h-full min-h-0 w-full flex-col">
-          <div className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-1.5")}>
+        <div ref={contentRef} className="flex h-full min-h-0 w-full flex-col">
+          <div
+            className={cn(
+              CHAT_SURFACE_HEADER_ROW_CLASS_NAME,
+              "gap-1 px-1.5",
+              desktopTopBarWindowControlsGutterClassName,
+            )}
+          >
             <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
               {props.state.panes.map((pane) => (
                 <RightDockTab

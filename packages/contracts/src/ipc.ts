@@ -12,11 +12,29 @@ import type {
   AuthWebSocketTokenResult,
 } from "./auth";
 import type {
+  AutomationCancelRunInput,
+  AutomationCancelRunResult,
+  AutomationArchiveRunInput,
+  AutomationCreateInput,
+  AutomationDefinition,
+  AutomationDeleteInput,
+  AutomationListInput,
+  AutomationListResult,
+  AutomationMarkRunReadInput,
+  AutomationRunActionResult,
+  AutomationRunNowInput,
+  AutomationRunNowResult,
+  AutomationStreamEvent,
+  AutomationUpdateInput,
+} from "./automation";
+import type {
   GitCheckoutInput,
   GitActionProgressEvent,
   GitCreateBranchInput,
   GitCreateDetachedWorktreeInput,
   GitCreateDetachedWorktreeResult,
+  GitHubRepositoryInput,
+  GitHubRepositoryResult,
   GitHandoffThreadInput,
   GitHandoffThreadResult,
   GitPreparePullRequestThreadInput,
@@ -54,12 +72,24 @@ import type {
   ProjectApplyStyleEditResult,
   ProjectApplyTextEditInput,
   ProjectApplyTextEditResult,
+  ProjectCreateLocalFilePreviewGrantInput,
+  ProjectCreateLocalFilePreviewGrantResult,
+  ProjectDevServerEvent,
+  ProjectDiscoverScriptsInput,
+  ProjectDiscoverScriptsResult,
+  ProjectListDevServersResult,
   ProjectListDirectoriesInput,
   ProjectListDirectoriesResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
+  ProjectRunDevServerInput,
+  ProjectRunDevServerResult,
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectSearchLocalEntriesInput,
   ProjectSearchLocalEntriesResult,
+  ProjectStopDevServerInput,
+  ProjectStopDevServerResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
@@ -67,14 +97,23 @@ import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
+  ServerGenerateAutomationIntentInput,
+  ServerGenerateAutomationIntentResult,
+  ServerGenerateThreadRecapInput,
+  ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
   ServerGetProviderUsageSnapshotResult,
+  ServerListProviderUsageInput,
+  ServerListProviderUsageResult,
   ServerGetSettingsResult,
+  ServerListLocalServersResult,
   ServerListWorktreesResult,
   ServerProviderUpdateInput,
   ServerProviderUpdateResult,
   ServerRefreshProvidersResult,
+  ServerStopLocalServerInput,
+  ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
   ServerUpsertKeybindingInput,
@@ -123,6 +162,8 @@ import type {
   ProviderListPluginsResult,
   ProviderListSkillsInput,
   ProviderListSkillsResult,
+  ProviderSkillsCatalogInput,
+  ProviderSkillsCatalogResult,
   ProviderReadPluginInput,
   ProviderReadPluginResult,
 } from "./providerDiscovery";
@@ -135,6 +176,12 @@ import type {
   PreviewStopAllInput,
   PreviewStopAllResult,
 } from "./preview";
+import type {
+  StatsGetProfileStatsInput,
+  StatsGetProfileStatsResult,
+  StatsGetProfileTokenStatsInput,
+  StatsGetProfileTokenStatsResult,
+} from "./stats";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -265,6 +312,10 @@ export interface BrowserAttachWebviewInput extends BrowserTabInput {
   webContentsId: number;
 }
 
+export interface BrowserDetachWebviewInput extends BrowserTabInput {
+  webContentsId: number;
+}
+
 export interface BrowserCaptureScreenshotResult {
   name: string;
   mimeType: "image/png";
@@ -277,11 +328,23 @@ export interface BrowserExecuteCdpInput extends BrowserTabInput {
   params?: Record<string, unknown>;
 }
 
+// Pushed from the desktop main process when the in-app browser copy-link chord fires
+// while the native page (not the React chrome) holds keyboard focus.
+export interface BrowserCopyLinkEvent {
+  threadId: ThreadId;
+  url: string;
+}
+
 export interface DesktopNotificationInput {
   title: string;
   body?: string;
   silent?: boolean;
   threadId?: ThreadId;
+}
+
+export interface DesktopWindowState {
+  isMaximized: boolean;
+  isFullscreen: boolean;
 }
 
 export interface DesktopBridge {
@@ -302,6 +365,16 @@ export interface DesktopBridge {
   showInFolder: (path: string) => Promise<void>;
   shell?: {
     showInFolder: (path: string) => Promise<void>;
+  };
+  clipboard?: {
+    writeImagePngDataUrl: (dataUrl: string) => Promise<boolean>;
+  };
+  windowControls?: {
+    minimize: () => Promise<void>;
+    toggleMaximize: () => Promise<DesktopWindowState>;
+    close: () => Promise<void>;
+    getState: () => Promise<DesktopWindowState>;
+    onState: (listener: (state: DesktopWindowState) => void) => () => void;
   };
   onMenuAction: (listener: (action: string) => void) => () => void;
   /** Current `webContents` page zoom (1 = 100%). Used to keep macOS traffic-light gutter aligned. */
@@ -329,6 +402,8 @@ export interface DesktopBridge {
     listStates: () => Promise<ThreadBrowserState[]>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
+    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
+    copyLink: (input: BrowserTabInput) => Promise<void>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
@@ -344,6 +419,7 @@ export interface DesktopBridge {
     onState: (listener: (state: ThreadBrowserState) => void) => () => void;
     onEditorShortcut: (listener: (event: BrowserEditorShortcutEvent) => void) => () => void;
     onBrowserUseOpenPanelRequest: (listener: () => void) => () => void;
+    onBrowserCopyLink: (listener: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }
 
@@ -376,14 +452,23 @@ export interface NativeApi {
     onState: (callback: (event: PreviewRuntimeEvent) => void) => () => void;
   };
   projects: {
+    discoverScripts: (input: ProjectDiscoverScriptsInput) => Promise<ProjectDiscoverScriptsResult>;
     listDirectories: (input: ProjectListDirectoriesInput) => Promise<ProjectListDirectoriesResult>;
     searchEntries: (input: ProjectSearchEntriesInput) => Promise<ProjectSearchEntriesResult>;
     searchLocalEntries: (
       input: ProjectSearchLocalEntriesInput,
     ) => Promise<ProjectSearchLocalEntriesResult>;
+    readFile: (input: ProjectReadFileInput) => Promise<ProjectReadFileResult>;
+    createLocalFilePreviewGrant: (
+      input: ProjectCreateLocalFilePreviewGrantInput,
+    ) => Promise<ProjectCreateLocalFilePreviewGrantResult>;
     writeFile: (input: ProjectWriteFileInput) => Promise<ProjectWriteFileResult>;
     applyTextEdit: (input: ProjectApplyTextEditInput) => Promise<ProjectApplyTextEditResult>;
     applyStyleEdit: (input: ProjectApplyStyleEditInput) => Promise<ProjectApplyStyleEditResult>;
+    runDevServer: (input: ProjectRunDevServerInput) => Promise<ProjectRunDevServerResult>;
+    stopDevServer: (input: ProjectStopDevServerInput) => Promise<ProjectStopDevServerResult>;
+    listDevServers: () => Promise<ProjectListDevServersResult>;
+    onDevServerEvent: (callback: (event: ProjectDevServerEvent) => void) => () => void;
   };
   filesystem: {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
@@ -395,6 +480,7 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
+    githubRepository: (input: GitHubRepositoryInput) => Promise<GitHubRepositoryResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     createDetachedWorktree: (
@@ -451,14 +537,31 @@ export interface NativeApi {
     refreshProviders: () => Promise<ServerRefreshProvidersResult>;
     updateProvider: (input: ServerProviderUpdateInput) => Promise<ServerProviderUpdateResult>;
     listWorktrees: () => Promise<ServerListWorktreesResult>;
+    listLocalServers: () => Promise<ServerListLocalServersResult>;
+    stopLocalServer: (input: ServerStopLocalServerInput) => Promise<ServerStopLocalServerResult>;
     getProviderUsageSnapshot: (
       input: ServerGetProviderUsageSnapshotInput,
     ) => Promise<ServerGetProviderUsageSnapshotResult>;
+    listProviderUsage: (
+      input: ServerListProviderUsageInput,
+    ) => Promise<ServerListProviderUsageResult>;
     getDiagnostics: () => Promise<ServerDiagnosticsResult>;
+    generateThreadRecap: (
+      input: ServerGenerateThreadRecapInput,
+    ) => Promise<ServerGenerateThreadRecapResult>;
+    generateAutomationIntent: (
+      input: ServerGenerateAutomationIntentInput,
+    ) => Promise<ServerGenerateAutomationIntentResult>;
     transcribeVoice: (
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+  };
+  stats: {
+    getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;
+    getProfileTokenStats: (
+      input: StatsGetProfileTokenStatsInput,
+    ) => Promise<StatsGetProfileTokenStatsResult>;
   };
   provider: {
     getComposerCapabilities: (
@@ -467,6 +570,7 @@ export interface NativeApi {
     compactThread: (input: ProviderCompactThreadInput) => Promise<void>;
     listCommands: (input: ProviderListCommandsInput) => Promise<ProviderListCommandsResult>;
     listSkills: (input: ProviderListSkillsInput) => Promise<ProviderListSkillsResult>;
+    listSkillsCatalog: (input: ProviderSkillsCatalogInput) => Promise<ProviderSkillsCatalogResult>;
     listPlugins: (input: ProviderListPluginsInput) => Promise<ProviderListPluginsResult>;
     readPlugin: (input: ProviderReadPluginInput) => Promise<ProviderReadPluginResult>;
     listModels: (input: ProviderListModelsInput) => Promise<ProviderListModelsResult>;
@@ -493,6 +597,17 @@ export interface NativeApi {
     onShellEvent: (callback: (event: OrchestrationShellStreamItem) => void) => () => void;
     onThreadEvent: (callback: (event: OrchestrationThreadStreamItem) => void) => () => void;
   };
+  automation: {
+    list: (input?: AutomationListInput) => Promise<AutomationListResult>;
+    create: (input: AutomationCreateInput) => Promise<AutomationDefinition>;
+    update: (input: AutomationUpdateInput) => Promise<AutomationDefinition>;
+    delete: (input: AutomationDeleteInput) => Promise<void>;
+    runNow: (input: AutomationRunNowInput) => Promise<AutomationRunNowResult>;
+    cancelRun: (input: AutomationCancelRunInput) => Promise<AutomationCancelRunResult>;
+    markRunRead: (input: AutomationMarkRunReadInput) => Promise<AutomationRunActionResult>;
+    archiveRun: (input: AutomationArchiveRunInput) => Promise<AutomationRunActionResult>;
+    onEvent: (callback: (event: AutomationStreamEvent) => void) => () => void;
+  };
   browser: {
     open: (input: BrowserOpenInput) => Promise<ThreadBrowserState>;
     close: (input: BrowserThreadInput) => Promise<ThreadBrowserState>;
@@ -501,6 +616,8 @@ export interface NativeApi {
     listStates: () => Promise<ThreadBrowserState[]>;
     setPanelBounds: (input: BrowserSetPanelBoundsInput) => Promise<void>;
     attachWebview: (input: BrowserAttachWebviewInput) => Promise<ThreadBrowserState>;
+    detachWebview: (input: BrowserDetachWebviewInput) => Promise<void>;
+    copyLink: (input: BrowserTabInput) => Promise<void>;
     copyScreenshotToClipboard: (input: BrowserTabInput) => Promise<void>;
     captureScreenshot: (input: BrowserTabInput) => Promise<BrowserCaptureScreenshotResult>;
     executeCdp: (input: BrowserExecuteCdpInput) => Promise<unknown>;
@@ -515,5 +632,6 @@ export interface NativeApi {
     setEditorShortcutsEnabled: (input: BrowserEditorShortcutsInput) => Promise<void>;
     onState: (callback: (state: ThreadBrowserState) => void) => () => void;
     onEditorShortcut: (callback: (event: BrowserEditorShortcutEvent) => void) => () => void;
+    onCopyLink: (callback: (event: BrowserCopyLinkEvent) => void) => () => void;
   };
 }

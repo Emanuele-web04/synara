@@ -5,6 +5,9 @@ import type { ServerSettingsError } from "@t3tools/contracts";
 import { Effect, Exit, FileSystem, Layer, Path, Schema, Scope, ServiceMap } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 
+import { AutomationRunReactor } from "./automation/Services/AutomationRunReactor";
+import { AutomationScheduler } from "./automation/Services/AutomationScheduler";
+import { AutomationService } from "./automation/Services/AutomationService";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -15,8 +18,11 @@ import { ServerConfig } from "./config";
 import { patchBunWebSocketCloseEventCompatibility } from "./bunWebSocketCompatibility";
 import { makeEffectHttpRouteLayer } from "./http";
 import { Keybindings } from "./keybindings";
+import { OrchestrationEngineService } from "./orchestration/Services/OrchestrationEngine";
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
+import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -33,8 +39,13 @@ export interface ServerShape {
     | FileSystem.FileSystem
     | Path.Path
     | Keybindings
+    | AutomationRunReactor
+    | AutomationScheduler
+    | AutomationService
     | ServerLifecycleEvents
+    | OrchestrationEngineService
     | OrchestrationReactor
+    | ProjectionSnapshotQuery
     | ProviderSessionReaper
     | ServerRuntimeStartup
     | ServerSettingsService
@@ -55,6 +66,8 @@ export class ServerLifecycleError extends Schema.TaggedErrorClass<ServerLifecycl
 
 export const createEffectServer = Effect.fn(function* () {
   const config = yield* ServerConfig;
+  const automationRunReactor = yield* AutomationRunReactor;
+  const automationScheduler = yield* AutomationScheduler;
   const keybindings = yield* Keybindings;
   const lifecycleEvents = yield* ServerLifecycleEvents;
   const orchestrationReactor = yield* OrchestrationReactor;
@@ -117,10 +130,16 @@ export const createEffectServer = Effect.fn(function* () {
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
   yield* Scope.provide(orchestrationReactor.start, subscriptionsScope);
+  yield* Scope.provide(automationScheduler.start(), subscriptionsScope);
+  yield* Scope.provide(automationRunReactor.start(), subscriptionsScope);
   yield* Scope.provide(threadDeletionReactor.start(), subscriptionsScope);
   yield* Scope.provide(providerSessionReaper.start(), subscriptionsScope);
   yield* readiness.markOrchestrationSubscriptionsReady;
   yield* readiness.markTerminalSubscriptionsReady;
+  // Heal turns orphaned by the previous process exit (their in-memory runtimes
+  // died, so they can never complete on their own) before clients can observe
+  // the stale "Working" state.
+  yield* reconcileRestartStuckTurns;
   yield* runtimeStartup.markCommandReady;
 
   yield* lifecycleEvents.publish({
@@ -128,6 +147,7 @@ export const createEffectServer = Effect.fn(function* () {
     payload: {
       cwd: config.cwd,
       homeDir: config.homeDir,
+      chatWorkspaceRoot: config.chatWorkspaceRoot,
       projectName: config.cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? config.cwd,
     },
   });

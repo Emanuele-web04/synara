@@ -1,4 +1,5 @@
 import type http from "node:http";
+import nodePath from "node:path";
 
 import Mime from "@effect/platform-node/Mime";
 import {
@@ -7,6 +8,7 @@ import {
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
 } from "@t3tools/contracts";
+import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -23,18 +25,123 @@ import type { SessionCredentialServiceShape } from "./auth/Services/SessionCrede
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
 import { ServerConfig, type ServerConfigShape } from "./config";
-import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalImageFile } from "./localImageFiles.ts";
+import { resolveCachedEditorIcon } from "./editorAppIcons";
+import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import type { ServerReadiness } from "./server/readiness";
+import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
+import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
+const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
+const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
+const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
 );
 const decodeRevokePairingLinkInput = Schema.decodeUnknownEffect(AuthRevokePairingLinkInput);
 const decodeRevokeClientSessionInput = Schema.decodeUnknownEffect(AuthRevokeClientSessionInput);
+
+function resolveEditorIconCacheDir(config: ServerConfigShape): string {
+  return nodePath.join(config.stateDir, "app-icons");
+}
+
+function resolveEditorIconEnv(config: ServerConfigShape): NodeJS.ProcessEnv {
+  return { ...process.env, HOME: config.homeDir };
+}
+
+interface HttpPayload {
+  readonly statusCode: number;
+  readonly contentType: string;
+  readonly headers?: Record<string, string>;
+  readonly body: string | Uint8Array;
+}
+
+// Shared by the Effect route and the legacy request listener so editor-icon
+// behavior cannot drift between the two HTTP stacks.
+const resolveEditorIconHttpPayload = Effect.fn(function* (input: {
+  readonly url: URL;
+  readonly serverConfig: ServerConfigShape;
+  readonly fileSystem: FileSystem.FileSystem;
+}) {
+  const editorId = input.url.searchParams.get("id");
+  if (!editorId) {
+    return {
+      statusCode: 400,
+      contentType: "text/plain",
+      body: "Missing id parameter",
+    } satisfies HttpPayload;
+  }
+
+  const icon = yield* Effect.promise(() =>
+    resolveCachedEditorIcon({
+      editorId,
+      cacheDir: resolveEditorIconCacheDir(input.serverConfig),
+      env: resolveEditorIconEnv(input.serverConfig),
+    }),
+  );
+  if (!icon) {
+    return {
+      statusCode: 404,
+      contentType: "text/plain",
+      body: "Not Found",
+    } satisfies HttpPayload;
+  }
+
+  const data = yield* input.fileSystem
+    .readFile(icon.path)
+    .pipe(Effect.catch(() => Effect.succeed(null)));
+  if (!data) {
+    return {
+      statusCode: 404,
+      contentType: "text/plain",
+      body: "Not Found",
+    } satisfies HttpPayload;
+  }
+
+  return {
+    statusCode: 200,
+    contentType: icon.contentType,
+    headers: { "Cache-Control": EDITOR_ICON_CACHE_CONTROL_SUCCESS },
+    body: data,
+  } satisfies HttpPayload;
+});
+
+function toEffectHttpResponse(payload: HttpPayload) {
+  if (typeof payload.body === "string") {
+    return HttpServerResponse.text(payload.body, {
+      status: payload.statusCode,
+      contentType: payload.contentType,
+      ...(payload.headers ? { headers: payload.headers } : {}),
+    });
+  }
+
+  return HttpServerResponse.uint8Array(payload.body, {
+    status: payload.statusCode,
+    contentType: payload.contentType,
+    ...(payload.headers ? { headers: payload.headers } : {}),
+  });
+}
+
+function localPreviewCorsHeaders(input: {
+  readonly config: ServerConfigShape;
+  readonly request: HttpServerRequest.HttpServerRequest;
+  readonly url: URL;
+}): Record<string, string> {
+  const origin = normalizeCorsOrigin(input.request.headers.origin);
+  if (
+    !origin ||
+    !isTrustedAppOrigin({ origin, requestOrigin: input.url.origin, config: input.config })
+  ) {
+    return {};
+  }
+  return {
+    "Access-Control-Allow-Origin": origin,
+    Vary: "Origin",
+  };
+}
 
 export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
   return Layer.mergeAll(
@@ -59,6 +166,8 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     ),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    siteFaviconEffectRouteLayer,
+    editorIconEffectRouteLayer,
     localImageEffectRouteLayer,
     attachmentsEffectRouteLayer,
     staticAndDevEffectRouteLayer,
@@ -298,6 +407,89 @@ const projectFaviconEffectRouteLayer = HttpRouter.add(
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 
+// Resolves a real website favicon by domain (cached server-side, deduped by host)
+// so the UI can replace generic globe icons. Mirrors project-favicon's auth +
+// SVG-fallback shape; the actual fetch/cache logic lives in siteFaviconCache.ts.
+const siteFaviconEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/site-favicon",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    // Loaded via <img> tags, which cannot attach Authorization headers — accept the
+    // same startup-token rule the local-image/attachments routes use so favicons
+    // load in local dev without a session cookie.
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    const domainParam = url.searchParams.get("domain") ?? url.searchParams.get("url");
+    if (!domainParam) return HttpServerResponse.text("Missing domain parameter", { status: 400 });
+    const host = tryParseHost(domainParam);
+    if (!host) return HttpServerResponse.text("Invalid domain", { status: 400 });
+
+    const favicon = yield* Effect.promise(() => resolveFavicon(host));
+    if (!favicon.bytes) {
+      return HttpServerResponse.text(FALLBACK_SITE_FAVICON_SVG, {
+        status: 200,
+        contentType: "image/svg+xml",
+        headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_FALLBACK },
+      });
+    }
+    return HttpServerResponse.uint8Array(favicon.bytes, {
+      status: 200,
+      contentType: favicon.contentType ?? "image/x-icon",
+      headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS },
+    });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+const editorIconEffectRouteLayer = HttpRouter.add(
+  "GET",
+  EDITOR_ICON_ROUTE_PATH,
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    const payload = yield* resolveEditorIconHttpPayload({
+      url,
+      serverConfig: config,
+      fileSystem,
+    });
+    return toEffectHttpResponse(payload);
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+// Streams a disk file as the response body instead of buffering it in memory:
+// preview files can be large (PDFs especially), and a full-file buffer per
+// request is an easy way to balloon server memory under concurrent loads.
+// Callers must have stat'ed the file already — an unreadable file after that
+// point aborts the connection mid-stream, which clients surface as a failed
+// load (the same outcome the buffered 404 produced, minus the status code).
+function streamedFileResponse(input: {
+  readonly fileSystem: FileSystem.FileSystem;
+  readonly path: string;
+  readonly sizeBytes: number;
+  readonly headers: Record<string, string>;
+}): HttpServerResponse.HttpServerResponse {
+  return HttpServerResponse.stream(input.fileSystem.stream(input.path), {
+    status: 200,
+    contentType: Mime.getType(input.path) ?? "application/octet-stream",
+    contentLength: input.sizeBytes,
+    headers: input.headers,
+  });
+}
+
 export const localImageEffectRouteLayer = HttpRouter.add(
   "GET",
   LOCAL_IMAGE_ROUTE_PATH,
@@ -311,34 +503,37 @@ export const localImageEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
-    const imageFile = yield* Effect.promise(() =>
-      resolveAllowedLocalImageFile({
+    const previewFile = yield* Effect.promise(() =>
+      resolveAllowedLocalPreviewFile({
         requestedPath: url.searchParams.get("path"),
         cwd: url.searchParams.get("cwd"),
+        allowAbsoluteLocalPreviewFile: true,
+        previewGrant: url.searchParams.get("grant"),
       }).catch(() => null),
     );
-    if (!imageFile) {
+    if (!previewFile) {
       return HttpServerResponse.text("Not Found", { status: 404 });
     }
 
-    // Read the bytes ourselves (mirrors the static-asset route) instead of relying on
-    // HttpServerResponse.file, which depends on Etag.Generator/Path services and was
-    // failing with a 500 on the local-image preview/download path.
+    // Stream (don't use HttpServerResponse.file, which depends on
+    // Etag.Generator/Path services and was failing with a 500 here).
     const fileSystem = yield* FileSystem.FileSystem;
-    const data = yield* fileSystem
-      .readFile(imageFile.path)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
     const isDownload = url.searchParams.get("download") === "1";
-    const safeFileName = imageFile.fileName.replaceAll('"', "");
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(imageFile.path) ?? "application/octet-stream",
+    const safeFileName = previewFile.fileName.replaceAll('"', "");
+    return streamedFileResponse({
+      fileSystem,
+      path: previewFile.path,
+      sizeBytes: previewFile.sizeBytes,
       headers: {
         "Cache-Control": "private, max-age=60",
+        // The PDF viewer fetches bytes from either the desktop app origin or
+        // the configured Vite dev origin. Reflect only those trusted origins:
+        // auth-token-less local servers must not expose workspace files to any
+        // random web page that can guess path/cwd query params.
+        ...localPreviewCorsHeaders({ config, request, url }),
+        // PDFs render in an unsandboxed same-origin iframe; never let the
+        // browser second-guess the declared content type.
+        "X-Content-Type-Options": "nosniff",
         ...(isDownload ? { "Content-Disposition": `attachment; filename="${safeFileName}"` } : {}),
       },
     });
@@ -393,16 +588,10 @@ export const attachmentsEffectRouteLayer = HttpRouter.add(
 
     // Mirror local-image serving instead of using HttpServerResponse.file; the Effect
     // route stack used by the desktop server can miss that helper's file services.
-    const data = yield* fileSystem
-      .readFile(filePath)
-      .pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!data) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    return HttpServerResponse.uint8Array(data, {
-      status: 200,
-      contentType: Mime.getType(filePath) ?? "application/octet-stream",
+    return streamedFileResponse({
+      fileSystem,
+      path: filePath,
+      sizeBytes: Number(fileInfo.size),
       headers: { "Cache-Control": "public, max-age=31536000, immutable" },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
@@ -485,6 +674,8 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
 
 const FALLBACK_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
 
+const FALLBACK_SITE_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="site-favicon"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20M12 2a14.5 14.5 0 0 1 0 20M2 12h20"/></svg>`;
+
 type Respond = (
   statusCode: number,
   headers: Record<string, string | Array<string>>,
@@ -550,6 +741,16 @@ export function createHttpRequestHandler({
             respond,
             fileSystem,
             projectFaviconResolver,
+          });
+          return;
+        }
+
+        if (url.pathname === EDITOR_ICON_ROUTE_PATH) {
+          yield* serveEditorIcon({
+            url,
+            respond,
+            serverConfig,
+            fileSystem,
           });
           return;
         }
@@ -655,6 +856,25 @@ const serveProjectFavicon = Effect.fn(function* (input: {
       "Cache-Control": "public, max-age=3600",
     },
     data,
+  );
+});
+
+const serveEditorIcon = Effect.fn(function* (input: {
+  readonly url: URL;
+  readonly respond: Respond;
+  readonly serverConfig: ServerConfigShape;
+  readonly fileSystem: FileSystem.FileSystem;
+}) {
+  if (!isLegacyTokenAuthorized({ config: input.serverConfig, url: input.url })) {
+    input.respond(401, { "Content-Type": "text/plain" }, "Unauthorized");
+    return;
+  }
+
+  const payload = yield* resolveEditorIconHttpPayload(input);
+  input.respond(
+    payload.statusCode,
+    { "Content-Type": payload.contentType, ...(payload.headers ?? {}) },
+    payload.body,
   );
 });
 

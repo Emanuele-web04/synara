@@ -16,11 +16,10 @@ import {
   type TerminalEvent,
   type TerminalSessionSnapshot,
 } from "@t3tools/contracts";
+import { describeErrorMessage } from "@t3tools/shared/errorMessages";
 import {
   consumeTerminalIdentityInput,
-  deriveTerminalOutputIdentity,
   deriveTerminalProcessIdentity,
-  deriveTerminalTitleSignalIdentity,
   terminalCliKindFromValue,
   T3CODE_TERMINAL_HOOK_OSC_PREFIX,
   T3CODE_TERMINAL_CLI_KIND_ENV_KEY,
@@ -87,7 +86,41 @@ const DEFAULT_OPEN_ROWS = 30;
 const PROVIDER_INPUT_ACTIVITY_GRACE_MS = 120_000;
 const PROVIDER_OUTPUT_ACTIVITY_GRACE_MS = 30_000;
 const POSIX_TREE_WALK_MAX_VISITED = 256;
-const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
+const TERMINAL_ENV_BLOCKLIST = new Set([
+  "PORT",
+  "ELECTRON_RENDERER_PORT",
+  "ELECTRON_RUN_AS_NODE",
+  // Host-terminal identity must not leak into the PTY: sessions render in the
+  // app's xterm.js surface, not in whichever emulator launched this server.
+  // An inherited TERM like "xterm-ghostty" (plus its TERMINFO pointers) makes
+  // spawned shells use wrong/missing terminfo — "unknown terminal type"
+  // errors and garbled line-editor redraw.
+  "TERM",
+  "TERMINFO",
+  "TERMINFO_DIRS",
+  "TERM_PROGRAM",
+  "TERM_PROGRAM_VERSION",
+  "TERM_SESSION_ID",
+  "GHOSTTY_RESOURCES_DIR",
+  "GHOSTTY_BIN_DIR",
+  "ITERM_PROFILE",
+  "ITERM_SESSION_ID",
+  "KITTY_WINDOW_ID",
+  "KITTY_PID",
+  "KITTY_INSTALLATION_DIR",
+  "WEZTERM_EXECUTABLE",
+  "WEZTERM_CONFIG_FILE",
+  "WEZTERM_PANE",
+  "WEZTERM_UNIX_SOCKET",
+  "ALACRITTY_SOCKET",
+  "ALACRITTY_WINDOW_ID",
+]);
+
+// What the app's embedded xterm.js surface actually implements; mirrors the
+// `name` passed to the PTY adapters (node-pty only uses `name` when the env
+// carries no TERM of its own, so we pin it explicitly).
+const TERMINAL_SPAWN_TERM =
+  globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color";
 const MANAGED_TERMINAL_WRAPPER_DIRNAME = "_managed-bin";
 const MANAGED_TERMINAL_ZSH_DIRNAME = "_managed-zsh";
 
@@ -109,6 +142,13 @@ export interface TerminalSubprocessActivity {
 type TerminalSubprocessChecker = (
   terminalPid: number,
 ) => Promise<boolean | TerminalSubprocessActivity>;
+
+function terminalErrorFromCause(fallbackMessage: string, cause: unknown): TerminalError {
+  return new TerminalError({
+    message: describeErrorMessage(cause, fallbackMessage),
+    cause,
+  });
+}
 
 function normalizeSubprocessActivity(
   result: boolean | TerminalSubprocessActivity,
@@ -147,19 +187,30 @@ function normalizeProviderOutputSignature(visibleText: string): string {
     .slice(-256);
 }
 
+const WINDOWS_DEFAULT_TERMINAL_SHELL = "powershell.exe";
+
+type ShellResolutionOptions = {
+  platform?: NodeJS.Platform;
+  envShell?: string;
+  envComSpec?: string;
+};
+
 function defaultShellResolver(): string {
   if (process.platform === "win32") {
-    return process.env.ComSpec ?? "cmd.exe";
+    return WINDOWS_DEFAULT_TERMINAL_SHELL;
   }
   return process.env.SHELL ?? "bash";
 }
 
-function normalizeShellCommand(value: string | undefined): string | null {
+function normalizeShellCommand(
+  value: string | undefined,
+  platform: NodeJS.Platform = process.platform,
+): string | null {
   if (!value) return null;
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return trimmed;
   }
 
@@ -168,11 +219,14 @@ function normalizeShellCommand(value: string | undefined): string | null {
   return firstToken.replace(/^['"]|['"]$/g, "");
 }
 
-function shellCandidateFromCommand(command: string | null): ShellCandidate | null {
+function shellCandidateFromCommand(
+  command: string | null,
+  platform: NodeJS.Platform = process.platform,
+): ShellCandidate | null {
   if (!command || command.length === 0) return null;
   const shellName = path.basename(command).toLowerCase();
-  if (process.platform !== "win32" && shellName === "zsh") {
-    return { shell: command, args: ["-o", "nopromptsp"] };
+  if (platform !== "win32" && shellName === "zsh") {
+    return { shell: command, args: ["-l", "-o", "nopromptsp"] };
   }
   return { shell: command };
 }
@@ -195,29 +249,44 @@ function uniqueShellCandidates(candidates: Array<ShellCandidate | null>): ShellC
   return ordered;
 }
 
-function resolveShellCandidates(shellResolver: () => string): ShellCandidate[] {
-  const requested = shellCandidateFromCommand(normalizeShellCommand(shellResolver()));
+function resolveShellCandidates(
+  shellResolver: () => string,
+  options: ShellResolutionOptions = {},
+): ShellCandidate[] {
+  const platform = options.platform ?? process.platform;
+  const requested = shellCandidateFromCommand(
+    normalizeShellCommand(shellResolver(), platform),
+    platform,
+  );
 
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     return uniqueShellCandidates([
       requested,
-      shellCandidateFromCommand(process.env.ComSpec ?? null),
-      shellCandidateFromCommand("powershell.exe"),
-      shellCandidateFromCommand("cmd.exe"),
+      shellCandidateFromCommand(options.envComSpec ?? process.env.ComSpec ?? null, platform),
+      shellCandidateFromCommand(WINDOWS_DEFAULT_TERMINAL_SHELL, platform),
+      shellCandidateFromCommand("cmd.exe", platform),
     ]);
   }
 
   return uniqueShellCandidates([
     requested,
-    shellCandidateFromCommand(normalizeShellCommand(process.env.SHELL)),
-    shellCandidateFromCommand("/bin/zsh"),
-    shellCandidateFromCommand("/bin/bash"),
-    shellCandidateFromCommand("/bin/sh"),
-    shellCandidateFromCommand("zsh"),
-    shellCandidateFromCommand("bash"),
-    shellCandidateFromCommand("sh"),
+    shellCandidateFromCommand(
+      normalizeShellCommand(options.envShell ?? process.env.SHELL, platform),
+      platform,
+    ),
+    shellCandidateFromCommand("/bin/zsh", platform),
+    shellCandidateFromCommand("/bin/bash", platform),
+    shellCandidateFromCommand("/bin/sh", platform),
+    shellCandidateFromCommand("zsh", platform),
+    shellCandidateFromCommand("bash", platform),
+    shellCandidateFromCommand("sh", platform),
   ]);
 }
+
+export const __terminalManagerShellTesting = {
+  resolveShellCandidates,
+  windowsDefaultTerminalShell: WINDOWS_DEFAULT_TERMINAL_SHELL,
+};
 
 function isRetryableShellSpawnError(error: unknown): boolean {
   const queue: unknown[] = [error];
@@ -809,6 +878,9 @@ function createTerminalSpawnEnv(
     if (shouldExcludeTerminalEnvKey(key)) continue;
     spawnEnv[key] = value;
   }
+  // Pin TERM to the embedded renderer's capabilities; a caller-provided
+  // runtimeEnv may still override it deliberately below.
+  spawnEnv.TERM = TERMINAL_SPAWN_TERM;
   if (runtimeEnv) {
     for (const [key, value] of Object.entries(runtimeEnv)) {
       spawnEnv[key] = value;
@@ -841,6 +913,7 @@ function resetSessionHistory(session: TerminalSessionState): void {
   session.managedAgentRunning = false;
   session.managedAgentState = null;
   session.managedAgentObserved = false;
+  session.providerDescendantObserved = false;
 }
 
 function deriveActivityAgentState(session: TerminalSessionState): TerminalActivityState | null {
@@ -1003,6 +1076,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          providerDescendantObserved: false,
           managedAgentRunning: false,
           managedAgentState: null,
           managedAgentObserved: false,
@@ -1012,6 +1086,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          streamOutput: input.streamOutput ?? true,
           outputPaused: false,
           outputBufferPauseRequested: false,
           outputAckPauseRequested: false,
@@ -1028,6 +1103,11 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         return this.snapshot(session);
       }
 
+      // A re-open may flip headless mode (e.g. a viewer attaching later); honor it
+      // when explicitly provided, otherwise keep the session's current mode.
+      if (input.streamOutput !== undefined) {
+        existing.streamOutput = input.streamOutput;
+      }
       const nextRuntimeEnv = normalizedRuntimeEnv(input.env);
       const currentRuntimeEnv = existing.runtimeEnv;
       const targetCols = input.cols ?? existing.cols;
@@ -1035,7 +1115,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       const runtimeEnvChanged =
         JSON.stringify(currentRuntimeEnv) !== JSON.stringify(nextRuntimeEnv);
 
-      if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+      if (existing.process) {
+        // A renderer reattach/reconcile is not an explicit restart; keep the live
+        // PTY's original cwd/env so UI drift cannot SIGTERM a running agent.
+        if (existing.cwd !== input.cwd || runtimeEnvChanged) {
+          this.logger.warn("ignoring terminal open cwd/env change for running session", {
+            threadId: existing.threadId,
+            terminalId: existing.terminalId,
+            currentCwd: existing.cwd,
+            requestedCwd: input.cwd,
+            runtimeEnvChanged,
+          });
+        }
+      } else if (existing.cwd !== input.cwd || runtimeEnvChanged) {
         this.stopProcess(existing);
         existing.cwd = input.cwd;
         existing.runtimeEnv = nextRuntimeEnv;
@@ -1053,7 +1145,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           existing.terminalId,
           existing.history.toString(),
         );
-      } else if (currentRuntimeEnv !== nextRuntimeEnv) {
+      } else if (runtimeEnvChanged) {
         existing.runtimeEnv = nextRuntimeEnv;
       }
 
@@ -1099,8 +1191,12 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     }
     const nextIdentityState = consumeTerminalIdentityInput(session.pendingInputBuffer, input.data);
     session.pendingInputBuffer = nextIdentityState.buffer;
-    if (nextIdentityState.identity?.cliKind && session.detectedCliKind === null) {
+    if (
+      nextIdentityState.identity &&
+      nextIdentityState.identity.cliKind !== session.detectedCliKind
+    ) {
       session.detectedCliKind = nextIdentityState.identity.cliKind;
+      session.providerDescendantObserved = false;
       this.emitActivityEvent(session);
     }
     const submittedPrompt = input.data.includes("\r") || input.data.includes("\n");
@@ -1189,6 +1285,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           unsubscribeExit: null,
           hasRunningSubprocess: false,
           detectedCliKind: cliKindFromRuntimeEnv(normalizedRuntimeEnv(input.env)),
+          providerDescendantObserved: false,
           managedAgentRunning: false,
           managedAgentState: null,
           managedAgentObserved: false,
@@ -1198,6 +1295,9 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           pendingOutputChunks: [],
           pendingOutputLength: 0,
           outputFlushTimer: null,
+          // Restart has no headless mode of its own; fresh sessions stream normally
+          // and existing sessions (below) keep whatever mode they were opened with.
+          streamOutput: true,
           outputPaused: false,
           outputBufferPauseRequested: false,
           outputAckPauseRequested: false,
@@ -1296,6 +1396,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.exitSignal = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = cliKindFromRuntimeEnv(session.runtimeEnv);
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -1360,8 +1461,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       }
 
       if (!ptyProcess) {
-        const detail =
-          lastSpawnError instanceof Error ? lastSpawnError.message : "Terminal start failed";
+        const detail = describeErrorMessage(lastSpawnError, "Terminal start failed");
         const tried =
           shellCandidates.length > 0
             ? ` Tried shells: ${shellCandidates.map((candidate) => formatShellCandidate(candidate)).join(", ")}.`
@@ -1400,13 +1500,14 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.process = null;
       session.hasRunningSubprocess = false;
       session.detectedCliKind = null;
+      session.providerDescendantObserved = false;
       session.managedAgentRunning = false;
       session.managedAgentState = null;
       session.managedAgentObserved = false;
       session.updatedAt = new Date().toISOString();
       this.evictInactiveSessionsIfNeeded();
       this.updateSubprocessPollingState();
-      const message = error instanceof Error ? error.message : "Terminal start failed";
+      const message = describeErrorMessage(error, "Terminal start failed");
       this.emitEvent({
         type: "error",
         threadId: session.threadId,
@@ -1467,25 +1568,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
       session.managedAgentObserved = true;
       const nextManagedAgentRunning = latestHookEvent !== "Stop";
       const nextManagedAgentState = agentStateFromHookEvent(latestHookEvent);
+      const nextDetectedCliKind = latestHookEvent === "Stop" ? null : session.detectedCliKind;
+      const nextProviderDescendantObserved =
+        latestHookEvent === "Stop" ? false : session.providerDescendantObserved;
       if (
         session.managedAgentRunning !== nextManagedAgentRunning ||
-        session.managedAgentState !== nextManagedAgentState
+        session.managedAgentState !== nextManagedAgentState ||
+        session.detectedCliKind !== nextDetectedCliKind ||
+        session.providerDescendantObserved !== nextProviderDescendantObserved
       ) {
         session.managedAgentRunning = nextManagedAgentRunning;
         session.managedAgentState = nextManagedAgentState;
+        session.detectedCliKind = nextDetectedCliKind;
+        session.providerDescendantObserved = nextProviderDescendantObserved;
         session.hasRunningSubprocess = nextManagedAgentRunning;
         this.emitActivityEvent(session);
       }
-    }
-    const titleSignalCliKind =
-      sanitized.titleSignals
-        .map((titleSignal) => deriveTerminalTitleSignalIdentity(titleSignal)?.cliKind ?? null)
-        .find((cliKind): cliKind is TerminalCliKind => cliKind !== null) ?? null;
-    const outputCliKind = deriveTerminalOutputIdentity(sanitized.visibleText)?.cliKind ?? null;
-    const detectedCliKind = outputCliKind ?? titleSignalCliKind;
-    if (detectedCliKind && session.detectedCliKind === null) {
-      session.detectedCliKind = detectedCliKind;
-      this.emitActivityEvent(session);
     }
     if (sanitized.visibleText.length > 0) {
       session.history.append(sanitized.visibleText);
@@ -1523,14 +1621,19 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     // taken right after a flush reflects this output.
     this.processOutputBatch(session, data);
 
-    this.emitEvent({
-      type: "output",
-      threadId: session.threadId,
-      terminalId: session.terminalId,
-      createdAt: new Date().toISOString(),
-      data,
-      byteLength,
-    });
+    // Headless sessions (e.g. dev servers) still drain the PTY and maintain
+    // history above, but skip the live broadcast so unviewed background output
+    // never reaches the WebSocket fanout.
+    if (session.streamOutput) {
+      this.emitEvent({
+        type: "output",
+        threadId: session.threadId,
+        terminalId: session.terminalId,
+        createdAt: new Date().toISOString(),
+        data,
+        byteLength,
+      });
+    }
     if (session.outputAckObserved) {
       session.outputUnackedBytes += byteLength;
       if (session.outputUnackedBytes >= OUTPUT_ACK_HIGH_WATERMARK) {
@@ -1675,6 +1778,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -1710,6 +1814,7 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
     session.pid = null;
     session.hasRunningSubprocess = false;
     session.detectedCliKind = null;
+    session.providerDescendantObserved = false;
     session.managedAgentRunning = false;
     session.managedAgentState = null;
     session.managedAgentObserved = false;
@@ -2136,13 +2241,22 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
         runningSessions.map(async (session) => {
           const terminalPid = session.pid;
           let hasRunningSubprocess = false;
-          let terminalCliKind: TerminalCliKind | null = null;
+          let shouldClearDetectedCliKind = false;
           try {
             const subprocessActivity =
               sharedChildrenMap !== null
                 ? inspectSubprocessActivity(terminalPid, sharedChildrenMap)
                 : normalizeSubprocessActivity(await this.subprocessChecker(terminalPid));
-            terminalCliKind = subprocessActivity.cliKind ?? session.detectedCliKind;
+            const providerDescendantObserved =
+              session.providerDescendantObserved ||
+              (session.detectedCliKind !== null && subprocessActivity.hasProviderDescendant);
+            // Process-tree provider matches affect busy-state only. Branding follows explicit
+            // env/input/hook signals so dev servers that spawn agents stay generic.
+            shouldClearDetectedCliKind =
+              session.detectedCliKind !== null &&
+              !subprocessActivity.hasProviderDescendant &&
+              (providerDescendantObserved || !isProviderSessionBusy(session, Date.now()));
+            session.providerDescendantObserved = providerDescendantObserved;
             if (session.managedAgentObserved) {
               // Hooks have fired — trust them as the sole source of truth (superset model).
               // Only override with non-provider subprocesses (e.g. user spawned a build).
@@ -2169,15 +2283,23 @@ export class TerminalManagerRuntime extends EventEmitter<TerminalManagerEvents> 
           if (!liveSession || liveSession.status !== "running" || liveSession.pid !== terminalPid) {
             return;
           }
+          const nextDetectedCliKind =
+            shouldClearDetectedCliKind && liveSession.detectedCliKind === session.detectedCliKind
+              ? null
+              : liveSession.detectedCliKind;
+          const nextProviderDescendantObserved =
+            nextDetectedCliKind === null ? false : session.providerDescendantObserved;
           if (
             liveSession.hasRunningSubprocess === hasRunningSubprocess &&
-            liveSession.detectedCliKind === terminalCliKind
+            liveSession.detectedCliKind === nextDetectedCliKind &&
+            liveSession.providerDescendantObserved === nextProviderDescendantObserved
           ) {
             return;
           }
 
           liveSession.hasRunningSubprocess = hasRunningSubprocess;
-          liveSession.detectedCliKind = terminalCliKind;
+          liveSession.detectedCliKind = nextDetectedCliKind;
+          liveSession.providerDescendantObserved = nextProviderDescendantObserved;
           liveSession.updatedAt = new Date().toISOString();
           this.emitActivityEvent(liveSession);
         }),
@@ -2338,38 +2460,37 @@ export const TerminalManagerLive = Layer.effect(
       open: (input) =>
         Effect.tryPromise({
           try: () => runtime.open(input),
-          catch: (cause) => new TerminalError({ message: "Failed to open terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to open terminal", cause),
         }),
       write: (input) =>
         Effect.tryPromise({
           try: () => runtime.write(input),
-          catch: (cause) => new TerminalError({ message: "Failed to write to terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to write to terminal", cause),
         }),
       ackOutput: (input) =>
         Effect.tryPromise({
           try: () => runtime.ackOutput(input),
-          catch: (cause) =>
-            new TerminalError({ message: "Failed to acknowledge terminal output", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to acknowledge terminal output", cause),
         }),
       resize: (input) =>
         Effect.tryPromise({
           try: () => runtime.resize(input),
-          catch: (cause) => new TerminalError({ message: "Failed to resize terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to resize terminal", cause),
         }),
       clear: (input) =>
         Effect.tryPromise({
           try: () => runtime.clear(input),
-          catch: (cause) => new TerminalError({ message: "Failed to clear terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to clear terminal", cause),
         }),
       restart: (input) =>
         Effect.tryPromise({
           try: () => runtime.restart(input),
-          catch: (cause) => new TerminalError({ message: "Failed to restart terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to restart terminal", cause),
         }),
       close: (input) =>
         Effect.tryPromise({
           try: () => runtime.close(input),
-          catch: (cause) => new TerminalError({ message: "Failed to close terminal", cause }),
+          catch: (cause) => terminalErrorFromCause("Failed to close terminal", cause),
         }),
       subscribe: (listener) =>
         Effect.sync(() => {

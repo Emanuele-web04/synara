@@ -9,6 +9,8 @@ import type {
   BrowserAttachWebviewInput,
   BrowserCaptureScreenshotResult,
   BrowserEditorShortcutsInput,
+  BrowserCopyLinkEvent,
+  BrowserDetachWebviewInput,
   BrowserExecuteCdpInput,
   BrowserNavigateInput,
   BrowserNewTabInput,
@@ -30,7 +32,10 @@ export const BROWSER_IPC_CHANNELS = {
   listStates: "desktop:browser-list-states",
   setBounds: "desktop:browser-set-bounds",
   attachWebview: "desktop:browser-attach-webview",
+  detachWebview: "desktop:browser-detach-webview",
   requestOpenPanel: "desktop:browser-use-request-open-panel",
+  copyLink: "desktop:browser-copy-link",
+  requestCopyLink: "desktop:browser-request-copy-link",
   copyScreenshotToClipboard: "desktop:browser-copy-screenshot-to-clipboard",
   captureScreenshot: "desktop:browser-capture-screenshot",
   executeCdp: "desktop:browser-execute-cdp",
@@ -52,6 +57,15 @@ export function sendBrowserState(
   state: ThreadBrowserState,
 ): void {
   webContents?.send(BROWSER_IPC_CHANNELS.state, state);
+}
+
+// Notifies the renderer that the native browser page handled the copy-link chord so the
+// shell can surface the confirmation toast (the URL is already on the clipboard).
+export function sendBrowserCopyLink(
+  webContents: WebContents | null | undefined,
+  event: BrowserCopyLinkEvent,
+): void {
+  webContents?.send(BROWSER_IPC_CHANNELS.copyLink, event);
 }
 
 // Registers the desktop browser bridge in one place so main.ts stays focused on app boot.
@@ -94,6 +108,14 @@ export function registerBrowserIpcHandlers(
     async (_event, input: BrowserAttachWebviewInput) => browserManager.attachWebview(input),
   );
 
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.detachWebview);
+  ipcMain.handle(
+    BROWSER_IPC_CHANNELS.detachWebview,
+    async (_event, input: BrowserDetachWebviewInput) => {
+      browserManager.detachWebview(input);
+    },
+  );
+
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.captureScreenshot);
   ipcMain.handle(
     BROWSER_IPC_CHANNELS.captureScreenshot,
@@ -108,6 +130,11 @@ export function registerBrowserIpcHandlers(
       await browserManager.copyScreenshotToClipboard(input);
     },
   );
+
+  ipcMain.removeHandler(BROWSER_IPC_CHANNELS.requestCopyLink);
+  ipcMain.handle(BROWSER_IPC_CHANNELS.requestCopyLink, async (_event, input: BrowserTabInput) => {
+    browserManager.copyLink(input);
+  });
 
   ipcMain.removeHandler(BROWSER_IPC_CHANNELS.executeCdp);
   ipcMain.handle(BROWSER_IPC_CHANNELS.executeCdp, async (_event, input: BrowserExecuteCdpInput) =>

@@ -36,12 +36,14 @@ interface UseTranscriptAssistantSelectionActionOptions {
   threadId: string;
   enabled: boolean;
   composerImagesRef: MutableRefObject<ReadonlyArray<unknown>>;
+  composerFilesRef: MutableRefObject<ReadonlyArray<unknown>>;
   composerAssistantSelectionsRef: MutableRefObject<
     ReadonlyArray<ComposerAssistantSelectionAttachment>
   >;
   addComposerAssistantSelectionToDraft: (
     selection: ComposerAssistantSelectionAttachment,
   ) => boolean;
+  canReferenceAssistantSelection?: (selection: TranscriptAssistantSelection) => boolean;
   scheduleComposerFocus: () => void;
   onMessagesClickCaptureBase: MouseEventHandler<HTMLDivElement>;
   onMessagesPointerDownBase: PointerEventHandler<HTMLDivElement>;
@@ -61,8 +63,10 @@ export function useTranscriptAssistantSelectionAction(
     threadId,
     enabled,
     composerImagesRef,
+    composerFilesRef,
     composerAssistantSelectionsRef,
     addComposerAssistantSelectionToDraft,
+    canReferenceAssistantSelection,
     scheduleComposerFocus,
     onMessagesClickCaptureBase,
     onMessagesPointerDownBase,
@@ -160,20 +164,12 @@ export function useTranscriptAssistantSelectionAction(
         }
 
         const selectionState = readTranscriptAssistantSelection({ container });
-        if (!selectionState) {
-          setPendingTranscriptSelectionAction(null);
-          return;
-        }
-
         if (
-          composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
-          PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+          !selectionState ||
+          (canReferenceAssistantSelection &&
+            !canReferenceAssistantSelection(selectionState.selection))
         ) {
           setPendingTranscriptSelectionAction(null);
-          toastManager.add({
-            type: "warning",
-            title: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
-          });
           return;
         }
 
@@ -189,7 +185,7 @@ export function useTranscriptAssistantSelectionAction(
         });
       });
     },
-    [enabled, composerImagesRef, composerAssistantSelectionsRef],
+    [canReferenceAssistantSelection, enabled],
   );
 
   const commitTranscriptAssistantSelection = useCallback(() => {
@@ -199,7 +195,18 @@ export function useTranscriptAssistantSelectionAction(
     }
 
     if (
-      composerImagesRef.current.length + composerAssistantSelectionsRef.current.length >=
+      canReferenceAssistantSelection &&
+      !canReferenceAssistantSelection(pendingSelection.selection)
+    ) {
+      setPendingTranscriptSelectionAction(null);
+      window.getSelection()?.removeAllRanges();
+      return;
+    }
+
+    if (
+      composerImagesRef.current.length +
+        composerFilesRef.current.length +
+        composerAssistantSelectionsRef.current.length >=
       PROVIDER_SEND_TURN_MAX_ATTACHMENTS
     ) {
       setPendingTranscriptSelectionAction(null);
@@ -230,7 +237,9 @@ export function useTranscriptAssistantSelectionAction(
     }
   }, [
     addComposerAssistantSelectionToDraft,
+    canReferenceAssistantSelection,
     composerAssistantSelectionsRef,
+    composerFilesRef,
     composerImagesRef,
     pendingTranscriptSelectionAction,
     scheduleComposerFocus,
@@ -278,6 +287,7 @@ export function useTranscriptAssistantSelectionAction(
   return {
     pendingTranscriptSelectionAction,
     commitTranscriptAssistantSelection,
+    dismissTranscriptSelectionAction,
     onMessagesClickCapture,
     onMessagesMouseUp,
     onMessagesPointerCancel,

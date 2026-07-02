@@ -1,4 +1,5 @@
 import { type ChildProcess as ChildProcessHandle, spawn, spawnSync } from "node:child_process";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 export interface ProcessRunOptions {
   cwd?: string | undefined;
@@ -80,11 +81,8 @@ function normalizeBufferError(
 
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
-/**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
- */
+// Windows `.cmd` shims may run under an explicit cmd.exe wrapper; taskkill keeps
+// timeout/cancel paths from leaving the real command behind.
 function killChild(child: ChildProcessHandle, signal: NodeJS.Signals = "SIGTERM"): void {
   if (process.platform === "win32" && child.pid !== undefined) {
     try {
@@ -135,11 +133,16 @@ export async function runProcess(
   const outputMode = options.outputMode ?? "error";
 
   return new Promise<ProcessRunResult>((resolve, reject) => {
-    const child = spawn(command, args, {
+    const prepared = prepareWindowsSafeProcess(command, args, {
+      cwd: options.cwd,
+      env: options.env,
+    });
+    const child = spawn(prepared.command, prepared.args, {
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: process.platform === "win32",
+      shell: prepared.shell,
+      windowsHide: prepared.windowsHide,
     });
 
     let stdout = "";

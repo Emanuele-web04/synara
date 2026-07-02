@@ -5,6 +5,8 @@ import type {
   ProjectApplyStyleEditResult,
   ProjectApplyTextEditInput,
   ProjectApplyTextEditResult,
+  ProjectReadFileInput,
+  ProjectReadFileResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "@t3tools/contracts";
@@ -26,6 +28,12 @@ export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceF
 }
 
 export interface WorkspaceFileSystemShape {
+  readonly readFile: (
+    input: ProjectReadFileInput,
+  ) => Effect.Effect<
+    ProjectReadFileResult,
+    WorkspaceFileSystemError | WorkspacePathOutsideRootError
+  >;
   readonly writeFile: (
     input: ProjectWriteFileInput,
   ) => Effect.Effect<

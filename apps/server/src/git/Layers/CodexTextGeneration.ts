@@ -7,6 +7,7 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
 import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { buildCodexProcessEnv } from "../../codexProcessEnv.ts";
@@ -20,17 +21,23 @@ import {
   type DiffSummaryGenerationResult,
   type PrContentGenerationResult,
   type ThreadTitleGenerationResult,
+  type ThreadRecapGenerationResult,
+  type TextGenerationOperation,
   type TextGenerationShape,
   TextGeneration,
 } from "../Services/TextGeneration.ts";
 import {
   buildBranchNamePrompt,
+  buildAutomationIntentPrompt,
+  buildAutomationCompletionEvaluationPrompt,
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeThreadRecap,
   sanitizePrTitle,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
@@ -164,12 +171,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
   const prepareIsolatedCodexHome = (
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    operation: TextGenerationOperation,
     sourceHomePath?: string,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
@@ -233,12 +235,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
 
   const materializeImageAttachments = (
-    _operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle",
+    _operation: TextGenerationOperation,
     attachments: BranchNameGenerationInput["attachments"],
   ): Effect.Effect<MaterializedImageAttachments, TextGenerationError> =>
     Effect.gen(function* () {
@@ -282,12 +279,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     modelSelection,
     providerOptions,
   }: {
-    operation:
-      | "generateCommitMessage"
-      | "generatePrContent"
-      | "generateDiffSummary"
-      | "generateBranchName"
-      | "generateThreadTitle";
+    operation: TextGenerationOperation;
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -310,36 +302,35 @@ const makeCodexTextGeneration = Effect.gen(function* () {
       const isolatedCodexHome = yield* prepareIsolatedCodexHome(operation, resolvedCodexHomePath);
 
       const runCodexCommand = Effect.gen(function* () {
-        const command = ChildProcess.make(
-          codexBinaryPath,
-          [
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "--config",
-            'approval_policy="never"',
-            "-s",
-            "read-only",
-            "--model",
-            resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
-            "--config",
-            `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
-            "--output-schema",
-            schemaPath,
-            "--output-last-message",
-            outputPath,
-            ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
-            "-",
-          ],
-          {
-            cwd,
-            env: buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath }),
-            shell: process.platform === "win32",
-            stdin: {
-              stream: Stream.make(new TextEncoder().encode(prompt)),
-            },
+        const env = buildCodexProcessEnv({ homePath: isolatedCodexHome.homePath });
+        const args = [
+          "exec",
+          "--ephemeral",
+          "--skip-git-repo-check",
+          "--config",
+          'approval_policy="never"',
+          "-s",
+          "read-only",
+          "--model",
+          resolveCodexModel(model, modelSelection) ?? DEFAULT_GIT_TEXT_GENERATION_MODEL,
+          "--config",
+          `model_reasoning_effort="${CODEX_REASONING_EFFORT}"`,
+          "--output-schema",
+          schemaPath,
+          "--output-last-message",
+          outputPath,
+          ...imagePaths.flatMap((imagePath) => ["--image", imagePath]),
+          "-",
+        ];
+        const prepared = prepareWindowsSafeProcess(codexBinaryPath, args, { cwd, env });
+        const command = ChildProcess.make(prepared.command, prepared.args, {
+          cwd,
+          env,
+          shell: prepared.shell,
+          stdin: {
+            stream: Stream.make(new TextEncoder().encode(prompt)),
           },
-        );
+        });
 
         const child = yield* commandSpawner
           .spawn(command)
@@ -578,12 +569,77 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
   };
 
+  const generateThreadRecap: TextGenerationShape["generateThreadRecap"] = (input) => {
+    const { prompt, outputSchemaJson } = buildThreadRecapPrompt({
+      ...(input.previousRecap ? { previousRecap: input.previousRecap } : {}),
+      newMaterial: input.newMaterial,
+      ...(input.currentState ? { currentState: input.currentState } : {}),
+    });
+
+    return runCodexJson({
+      operation: "generateThreadRecap",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            recap: sanitizeThreadRecap(generated.recap, input.previousRecap),
+          }) satisfies ThreadRecapGenerationResult,
+      ),
+    );
+  };
+
+  const generateAutomationIntent: TextGenerationShape["generateAutomationIntent"] = (input) => {
+    const { prompt, outputSchemaJson } = buildAutomationIntentPrompt({
+      message: input.message,
+      ...(input.defaultMode ? { defaultMode: input.defaultMode } : {}),
+      nowIso: input.nowIso,
+    });
+
+    return runCodexJson({
+      operation: "generateAutomationIntent",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
+  const evaluateAutomationCompletion: TextGenerationShape["evaluateAutomationCompletion"] = (
+    input,
+  ) => {
+    const { prompt, outputSchemaJson } = buildAutomationCompletionEvaluationPrompt(input);
+
+    return runCodexJson({
+      operation: "evaluateAutomationCompletion",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+  };
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateDiffSummary,
     generateBranchName,
     generateThreadTitle,
+    generateThreadRecap,
+    generateAutomationIntent,
+    evaluateAutomationCompletion,
   } satisfies TextGenerationShape;
 });
 

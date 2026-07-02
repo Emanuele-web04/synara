@@ -75,12 +75,52 @@ export function workspaceRootsEqual(
   );
 }
 
+// True when `candidate` is `ancestorRoot` itself or a path nested beneath it.
+// Comparison happens on normalized roots so trailing slashes, separator style,
+// and macOS `/private` aliasing never cause false negatives. The nesting check
+// is segment-aware, so `/a/app` is not treated as inside `/a/ap`.
+export function isWorkspaceRootWithin(
+  candidate: string,
+  ancestorRoot: string,
+  options?: NormalizeWorkspaceRootForComparisonOptions,
+): boolean {
+  const normalizedCandidate = normalizeWorkspaceRootForComparison(candidate, options);
+  const normalizedAncestor = normalizeWorkspaceRootForComparison(ancestorRoot, options);
+  if (normalizedCandidate.length === 0 || normalizedAncestor.length === 0) {
+    return false;
+  }
+  if (normalizedCandidate === normalizedAncestor) {
+    return true;
+  }
+  const prefix = normalizedAncestor.endsWith("/") ? normalizedAncestor : `${normalizedAncestor}/`;
+  return normalizedCandidate.startsWith(prefix);
+}
+
+// Per-thread scratch working directories (under the OS temp dir) used when a
+// provider session starts before any project workspace exists, e.g. a chat's
+// first turn racing its workspace provisioning.
+export const SCRATCH_WORKSPACES_DIRNAME = "synara-codex-workspaces";
+
+// True when an absolute path points inside a per-thread scratch workspace.
+// This is a string-level gate on purpose: the web client uses it to decide
+// whether an out-of-workspace file reference can still preview in-app, while
+// the server's local-preview allowlist enforces real (realpath) containment.
+export function isScratchWorkspacePath(filePath: string): boolean {
+  const normalized = filePath.trim().replace(/\\/g, "/");
+  const isAbsolute = normalized.startsWith("/") || /^[a-z]:\//i.test(normalized);
+  return isAbsolute && normalized.includes(`/${SCRATCH_WORKSPACES_DIRNAME}/`);
+}
+
 export function deriveAssociatedWorktreeMetadata(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  associatedWorktreePath?: string | null;
-  associatedWorktreeBranch?: string | null;
-  associatedWorktreeRef?: string | null;
+  // Checked with `!== undefined` below to distinguish "derive from worktreePath"
+  // (undefined) from "explicitly none" (null). The thread schema marks these
+  // Schema.optional, so the param type must admit an explicit undefined under
+  // exactOptionalPropertyTypes.
+  associatedWorktreePath?: string | null | undefined;
+  associatedWorktreeBranch?: string | null | undefined;
+  associatedWorktreeRef?: string | null | undefined;
 }): AssociatedWorktreeMetadata {
   return {
     associatedWorktreePath:
@@ -107,9 +147,10 @@ export function deriveAssociatedWorktreeMetadata(input: {
 export function deriveAssociatedWorktreeMetadataPatch(input: {
   branch?: string | null;
   worktreePath?: string | null;
-  associatedWorktreePath?: string | null;
-  associatedWorktreeBranch?: string | null;
-  associatedWorktreeRef?: string | null;
+  // Same undefined-aware semantics as deriveAssociatedWorktreeMetadata above.
+  associatedWorktreePath?: string | null | undefined;
+  associatedWorktreeBranch?: string | null | undefined;
+  associatedWorktreeRef?: string | null | undefined;
 }): AssociatedWorktreeMetadataPatch {
   const patch: AssociatedWorktreeMetadataPatch = {};
 

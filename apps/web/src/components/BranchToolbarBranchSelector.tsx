@@ -4,6 +4,7 @@
 // Note: the "Create branch" footer row uses raw <button> because it is a
 // menu-item-style affordance inside a ComboboxPopup, not a generic action.
 import type { GitBranch, GitStashInfoResult, GitStatusResult, NativeApi } from "@t3tools/contracts";
+import { pluralize } from "@t3tools/shared/text";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDownIcon, PlusIcon } from "~/lib/icons";
@@ -57,7 +58,21 @@ import {
 } from "./ui/combobox";
 import { Input } from "./ui/input";
 import { toastManager } from "./ui/toast";
+import {
+  ENVIRONMENT_ROW_CLASS_NAME,
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentRowBody,
+  EnvironmentRowChevron,
+} from "./chat/environment/EnvironmentRow";
+import { COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME } from "./chat/composerPickerStyles";
 import type { ThreadWorkspacePatch } from "../types";
+
+/**
+ * Where the selector is rendered. `toolbar` keeps the compact composer-footer pill;
+ * `panel` makes the trigger a full-width Environment panel row and drops its menu
+ * downward instead of upward.
+ */
+export type BranchSelectorVariant = "toolbar" | "panel";
 
 interface BranchToolbarBranchSelectorProps {
   activeProjectCwd: string;
@@ -66,9 +81,11 @@ interface BranchToolbarBranchSelectorProps {
   branchCwd: string | null;
   effectiveEnvMode: EnvMode;
   envLocked: boolean;
+  hasServerThread: boolean;
   onSetThreadWorkspace: (patch: ThreadWorkspacePatch) => void;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  variant?: BranchSelectorVariant;
 }
 
 type StashDiscardDialogState = {
@@ -145,10 +162,10 @@ function isGitIndexWriteError(error: unknown): boolean {
 function formatDirtyWorktreeDescription(files: string[]): string {
   const basenames = files.map((file) => file.split("/").pop() ?? file);
   if (basenames.length <= 3) {
-    return `${basenames.join(", ")} ${basenames.length === 1 ? "has" : "have"} uncommitted changes. Commit or stash before switching.`;
+    return `${basenames.join(", ")} ${pluralize(basenames.length, "has", "have")} uncommitted changes. Commit or stash before switching.`;
   }
   const remaining = basenames.length - 2;
-  return `${basenames.slice(0, 2).join(", ")} and ${remaining} other file${remaining === 1 ? "" : "s"} have uncommitted changes. Commit or stash before switching.`;
+  return `${basenames.slice(0, 2).join(", ")} and ${remaining} other ${pluralize(remaining, "file")} have uncommitted changes. Commit or stash before switching.`;
 }
 
 function handleCheckoutError(
@@ -354,10 +371,13 @@ export function BranchToolbarBranchSelector({
   branchCwd,
   effectiveEnvMode,
   envLocked,
+  hasServerThread,
   onSetThreadWorkspace,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  variant = "toolbar",
 }: BranchToolbarBranchSelectorProps) {
+  const isPanel = variant === "panel";
   const queryClient = useQueryClient();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [isCreateBranchDialogOpen, setIsCreateBranchDialogOpen] = useState(false);
@@ -429,6 +449,7 @@ export function BranchToolbarBranchSelector({
         activeWorktreePath,
         activeThreadBranch,
         currentGitBranch,
+        hasServerThread,
         isBranchActionPending,
       })
     ) {
@@ -441,6 +462,7 @@ export function BranchToolbarBranchSelector({
     activeWorktreePath,
     currentGitBranch,
     effectiveEnvMode,
+    hasServerThread,
     isBranchActionPending,
     onSetThreadWorkspace,
   ]);
@@ -786,7 +808,7 @@ export function BranchToolbarBranchSelector({
               <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] leading-4">
                 <span className="text-muted-foreground">
                   Uncommitted: {currentBranchChangeSummary.fileCount.toLocaleString()}{" "}
-                  {currentBranchChangeSummary.fileCount === 1 ? "file" : "files"}
+                  {pluralize(currentBranchChangeSummary.fileCount, "file")}
                 </span>
                 <span className="font-mono tabular-nums text-success">
                   +{currentBranchChangeSummary.insertions.toLocaleString()}
@@ -817,14 +839,28 @@ export function BranchToolbarBranchSelector({
       value={resolvedActiveBranch}
     >
       <ComboboxTrigger
-        className="inline-flex cursor-pointer items-center gap-1 rounded-md px-2 py-1 text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-[var(--color-text-foreground-secondary)] transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-[var(--color-text-foreground)] disabled:cursor-not-allowed disabled:opacity-50"
+        className={
+          isPanel
+            ? ENVIRONMENT_ROW_CLASS_NAME
+            : `${COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME} disabled:cursor-not-allowed disabled:opacity-50`
+        }
         disabled={(branchesQuery.isLoading && branches.length === 0) || isBranchActionPending}
       >
-        <CentralIcon name="branch" className="size-3.5 shrink-0" />
-        <span className="max-w-[240px] truncate">{triggerLabel}</span>
-        <ChevronDownIcon className="size-3 opacity-60" />
+        {isPanel ? (
+          <EnvironmentRowBody
+            icon={<CentralIcon name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+            label={triggerLabel}
+            trailing={<EnvironmentRowChevron />}
+          />
+        ) : (
+          <>
+            <CentralIcon name="branch" className="size-3.5 shrink-0" />
+            <span className="max-w-[240px] truncate">{triggerLabel}</span>
+            <ChevronDownIcon className="size-3 opacity-60" />
+          </>
+        )}
       </ComboboxTrigger>
-      <ComboboxPopup align="end" side="top" className="w-80">
+      <ComboboxPopup align="end" side={isPanel ? "bottom" : "top"} className="w-80">
         <div className="border-b p-1">
           <ComboboxInput
             className="rounded-xl border-[color:var(--color-border)] bg-[var(--color-background-control-opaque)] shadow-none before:hidden has-focus-visible:border-[color:var(--color-border-focus)] has-focus-visible:ring-0 [&_input]:font-sans"

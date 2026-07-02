@@ -1,4 +1,5 @@
 export * from "./auth";
+export * from "./automation";
 export * from "./baseSchemas";
 export * from "./ipc";
 export * from "./terminal";
@@ -11,6 +12,7 @@ export * from "./agentMentions";
 export * from "./ws";
 export * from "./keybindings";
 export * from "./server";
+export * from "./stats";
 export * from "./settings";
 export * from "./git";
 export * from "./orchestration";

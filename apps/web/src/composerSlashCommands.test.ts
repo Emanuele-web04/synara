@@ -22,12 +22,24 @@ describe("composerSlashCommands", () => {
   it("recognizes built-in slash commands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
   it("filters slash commands by query", () => {
     expect(filterComposerSlashCommands("rev").map((entry) => entry.command)).toEqual(["review"]);
     expect(filterComposerSlashCommands("fast").map((entry) => entry.command)).toEqual(["fast"]);
+    expect(filterComposerSlashCommands("auto").map((entry) => entry.command)).toEqual([
+      "automation",
+    ]);
+  });
+
+  it("ranks slash command name matches before description-only matches", () => {
+    expect(
+      filterComposerSlashCommands("mode", ["fast", "default", "model"]).map(
+        (entry) => entry.command,
+      ),
+    ).toEqual(["model", "fast", "default"]);
   });
 
   it("returns slash command menu titles used for display ordering", () => {
@@ -48,6 +60,10 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/side is this safe?")).toEqual({
       command: "side",
       args: "is this safe?",
+    });
+    expect(parseComposerSlashInvocation("/automation every 6h check the page")).toEqual({
+      command: "automation",
+      args: "every 6h check the page",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
@@ -216,6 +232,21 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "status")).toBe(false);
   });
 
+  it("keeps app-level /automation available even if a provider exposes a native collision", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "gemini",
+      supportsFastSlashCommand: false,
+      canOfferCompactCommand: false,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      providerNativeCommandNames: ["automation"],
+    });
+
+    expect(availableCommands).toContain("automation");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("gemini", "automation")).toBe(true);
+  });
+
   it("only exposes the app-level /side command for claude", () => {
     expect(
       getAvailableComposerSlashCommands({
@@ -226,7 +257,7 @@ describe("composerSlashCommands", () => {
         canOfferForkCommand: true,
         canOfferSideCommand: true,
       }),
-    ).toEqual(["side"]);
+    ).toEqual(["side", "automation"]);
   });
 
   it("only offers /compact when Codex compaction is available", () => {
@@ -273,6 +304,7 @@ describe("composerSlashCommands", () => {
       "side",
       "status",
       "subagents",
+      "automation",
     ]);
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "t3",
-  "version": "0.1.2",
+  "version": "0.3.7",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "start": "node dist/index.mjs",
     "prepare": "effect-language-service patch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run --maxWorkers=1 --no-file-parallelism"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.154",

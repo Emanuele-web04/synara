@@ -24,6 +24,7 @@ export function DisclosureRegion(props: {
     <div
       className={disclosureShellClassName(open, className)}
       aria-hidden={open ? undefined : true}
+      inert={!open}
     >
       <div className={DISCLOSURE_INNER_CLASS}>
         <div className={disclosureContentClassName(open, contentClassName)}>{children}</div>

@@ -7,6 +7,7 @@ import {
   createActiveThreadSnapshot,
   createFreshDraftThreadSeed,
   hasDraftContextOverrides,
+  resolveInheritedThreadContext,
   resolveTerminalThreadCreationState,
   resolveThreadBootstrapPlan,
   shouldReuseActiveDraftThread,
@@ -48,10 +49,15 @@ function makeComposerDraftState(
     prompt: "",
     images: [],
     browserContexts: [],
+    files: [],
     nonPersistedImageIds: [],
     persistedAttachments: [],
     assistantSelections: [],
     terminalContexts: [],
+    fileComments: [],
+    pastedTexts: [],
+    skills: [],
+    mentions: [],
     queuedTurns: [],
     modelSelectionByProvider: {
       claudeAgent: modelSelection("claudeAgent", "claude-opus-4-6", { effort: "max" }),
@@ -166,6 +172,65 @@ describe("threadBootstrap", () => {
     });
   });
 
+  it("lets an active draft override inherited branch and worktree context", () => {
+    expect(
+      resolveInheritedThreadContext({
+        activeThread: {
+          branch: "feature/server-thread",
+          worktreePath: "/repo/.worktrees/server-thread",
+          envMode: "worktree",
+        },
+        activeDraftThread: makeDraftThread({
+          branch: "feature/draft-thread",
+          worktreePath: "/repo/.worktrees/draft-thread",
+          envMode: "worktree",
+        }),
+      }),
+    ).toEqual({
+      branch: "feature/draft-thread",
+      worktreePath: "/repo/.worktrees/draft-thread",
+      envMode: "worktree",
+    });
+  });
+
+  it("lets a local active draft clear active thread branch and worktree context", () => {
+    expect(
+      resolveInheritedThreadContext({
+        activeThread: {
+          branch: "feature/server-thread",
+          worktreePath: "/repo/.worktrees/server-thread",
+          envMode: "worktree",
+        },
+        activeDraftThread: makeDraftThread({
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        }),
+      }),
+    ).toEqual({
+      branch: null,
+      worktreePath: null,
+      envMode: "local",
+    });
+  });
+
+  it("derives inherited environment mode from the active thread when no draft exists", () => {
+    expect(
+      resolveInheritedThreadContext({
+        activeThread: {
+          branch: "feature/server-thread",
+          worktreePath: "/repo/.worktrees/server-thread",
+          envMode: undefined,
+        },
+        activeDraftThread: null,
+      }),
+    ).toEqual({
+      branch: "feature/server-thread",
+      worktreePath: "/repo/.worktrees/server-thread",
+      envMode: "worktree",
+    });
+  });
+
   it("builds the fresh draft seed from creation inputs", () => {
     expect(
       createFreshDraftThreadSeed({
@@ -234,6 +299,44 @@ describe("threadBootstrap", () => {
       worktreePath: "/repo/.worktrees/terminal-bootstrap",
       lastKnownPr: null,
     });
+  });
+
+  it("does not inherit plan mode from the previously active thread for a fresh creation", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: {
+          projectId: PROJECT_ID,
+          modelSelection: modelSelection("codex", "gpt-5"),
+          runtimeMode: "full-access",
+          interactionMode: "plan",
+        },
+        draftComposerState: makeComposerDraftState(),
+        draftThread: null,
+        options: undefined,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.4"),
+        projectId: PROJECT_ID,
+      }).interactionMode,
+    ).toBe("default");
+  });
+
+  it("preserves explicit draft plan mode when resolving terminal creation payloads", () => {
+    expect(
+      resolveTerminalThreadCreationState({
+        activeDraftThread: null,
+        activeThread: {
+          projectId: PROJECT_ID,
+          modelSelection: modelSelection("codex", "gpt-5"),
+          runtimeMode: "full-access",
+          interactionMode: "default",
+        },
+        draftComposerState: makeComposerDraftState(),
+        draftThread: makeDraftThread({ interactionMode: "plan" }),
+        options: undefined,
+        projectDefaultModelSelection: modelSelection("codex", "gpt-5.4"),
+        projectId: PROJECT_ID,
+      }).interactionMode,
+    ).toBe("plan");
   });
 
   it("clears inherited worktree state when an explicit local env override is requested", () => {

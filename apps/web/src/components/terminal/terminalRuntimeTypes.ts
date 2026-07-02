@@ -65,7 +65,6 @@ export interface TerminalRuntimeEntry {
   fitAddon: FitAddon;
   searchAddon: SearchAddon;
   webglAddon: WebglAddon | null;
-  outputIdentityBuffer: string;
   titleInputBuffer: string;
   hasHandledExit: boolean;
   runtimeStatus: TerminalRuntimeStatus;

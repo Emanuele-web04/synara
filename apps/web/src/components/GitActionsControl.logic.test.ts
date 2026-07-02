@@ -10,6 +10,7 @@ import {
   resolveDefaultCreateBranchName,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  resolvePullActionAvailability,
   resolveQuickAction,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
@@ -427,6 +428,15 @@ describe("when: branch is behind upstream", () => {
     assert.deepInclude(quick, { kind: "run_pull", label: "Pull", disabled: false });
   });
 
+  it("resolvePullActionAvailability enables pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ behindCount: 2 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, { canRun: true, hint: null });
+  });
+
   it("buildMenuItems disables push and create PR", () => {
     const items = buildMenuItems(status({ behindCount: 1, pr: null }), false);
     assert.deepEqual(items, [
@@ -466,6 +476,32 @@ describe("when: branch has diverged from upstream", () => {
       disabled: true,
       kind: "show_hint",
       hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+
+  it("resolvePullActionAvailability blocks fast-forward pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ aheadCount: 2, behindCount: 1 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Branch has diverged from upstream. Rebase/merge first.",
+    });
+  });
+});
+
+describe("when: branch is up to date", () => {
+  it("resolvePullActionAvailability disables pull", () => {
+    const availability = resolvePullActionAvailability({
+      gitStatus: status({ aheadCount: 0, behindCount: 0 }),
+      isBusy: false,
+    });
+
+    assert.deepEqual(availability, {
+      canRun: false,
+      hint: "Branch is already up to date.",
     });
   });
 });

@@ -4,46 +4,26 @@
 // Exports: ProjectSidebarIcon
 
 import { useEffect, useState } from "react";
+
+import { resolveWsHttpUrl } from "~/lib/wsHttpUrl";
 import { FolderClosed, FolderOpen } from "./FolderClosed";
 
 const projectFaviconPresence = new Map<string, boolean>();
 
-function resolveServerHttpOrigin(): string {
-  if (typeof window === "undefined") return "";
-
-  const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
-  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
-  const wsCandidate =
-    typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0
-      ? bridgeWsUrl
-      : typeof envWsUrl === "string" && envWsUrl.length > 0
-        ? envWsUrl
-        : null;
-
-  if (!wsCandidate) return window.location.origin;
-
-  try {
-    const wsUrl = new URL(wsCandidate);
-    const protocol =
-      wsUrl.protocol === "wss:" ? "https:" : wsUrl.protocol === "ws:" ? "http:" : wsUrl.protocol;
-    return `${protocol}//${wsUrl.host}`;
-  } catch {
-    return window.location.origin;
-  }
-}
-
 function resolveProjectFaviconUrl(cwd: string): string {
-  const origin = resolveServerHttpOrigin();
-  const url =
-    origin.length > 0
-      ? new URL("/api/project-favicon", origin)
-      : new URL("/api/project-favicon", "http://localhost");
-  url.searchParams.set("cwd", cwd);
-  url.searchParams.set("fallback", "none");
-  return origin.length > 0 ? url.toString() : `${url.pathname}${url.search}`;
+  const params = new URLSearchParams({ cwd, fallback: "none" });
+  return resolveWsHttpUrl(`/api/project-favicon?${params.toString()}`);
 }
 
-export function ProjectSidebarIcon({ cwd, expanded }: { cwd: string; expanded: boolean }) {
+export function ProjectSidebarIcon({
+  cwd,
+  expanded,
+  glyphClassName = "size-4",
+}: {
+  cwd: string;
+  expanded: boolean;
+  glyphClassName?: string;
+}) {
   const faviconSrc = resolveProjectFaviconUrl(cwd);
   const [hasFavicon, setHasFavicon] = useState<boolean>(
     () => projectFaviconPresence.get(faviconSrc) === true,
@@ -87,7 +67,7 @@ export function ProjectSidebarIcon({ cwd, expanded }: { cwd: string; expanded: b
 
   return (
     <>
-      <FolderGlyph className="size-4" />
+      <FolderGlyph className={glyphClassName} />
       {hasFavicon ? (
         <img
           src={faviconSrc}

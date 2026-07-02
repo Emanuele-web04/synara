@@ -3,7 +3,9 @@ import { Effect, Layer } from "effect";
 import {
   browseWorkspaceEntries,
   clearWorkspaceIndexCache,
+  discoverProjectScripts,
   listWorkspaceDirectories,
+  resolveWorkspaceFileBySuffix,
   searchLocalEntries,
   searchWorkspaceEntries,
 } from "../../workspaceEntries";
@@ -20,6 +22,11 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
       try: () => searchWorkspaceEntries(input),
       catch: (cause) => toWorkspaceEntriesError("search workspace entries", cause),
     }),
+  discoverScripts: (input) =>
+    Effect.tryPromise({
+      try: () => discoverProjectScripts(input),
+      catch: (cause) => toWorkspaceEntriesError("discover project scripts", cause),
+    }),
   listDirectories: (input) =>
     Effect.tryPromise({
       try: () => listWorkspaceDirectories(input),
@@ -29,6 +36,11 @@ export const WorkspaceEntriesLive = Layer.succeed(WorkspaceEntries, {
     Effect.tryPromise({
       try: () => searchLocalEntries(input),
       catch: (cause) => toWorkspaceEntriesError("search local entries", cause),
+    }),
+  resolveFileBySuffix: (input) =>
+    Effect.tryPromise({
+      try: () => resolveWorkspaceFileBySuffix(input),
+      catch: (cause) => toWorkspaceEntriesError("resolve workspace file by suffix", cause),
     }),
   invalidate: (cwd) => Effect.sync(() => clearWorkspaceIndexCache(cwd)),
 });

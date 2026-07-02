@@ -1,11 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+// FILE: githubUpdateFeed.test.ts
+// Purpose: Verifies GitHub release fallback URL helpers for desktop updates.
+// Layer: Desktop update tests
 
-import {
-  buildGitHubReleaseDownloadBaseUrl,
-  pickLatestStableGitHubRelease,
-  resolveLatestStableGitHubRelease,
-  resolveGitHubUpdateSource,
-} from "./githubUpdateFeed";
+import { describe, expect, it } from "vitest";
+
+import { buildGitHubReleasesPageUrl, resolveGitHubUpdateSource } from "./githubUpdateFeed";
 
 describe("resolveGitHubUpdateSource", () => {
   it("returns null for non-github providers", () => {
@@ -28,38 +27,21 @@ describe("resolveGitHubUpdateSource", () => {
   });
 });
 
-describe("pickLatestStableGitHubRelease", () => {
-  it("chooses the highest stable semver release instead of the first entry", () => {
+describe("buildGitHubReleasesPageUrl", () => {
+  it("points the manual fallback at the latest release page by default", () => {
     expect(
-      pickLatestStableGitHubRelease([
-        { tag_name: "v0.0.30", draft: false, prerelease: false },
-        { tag_name: "v0.0.31", draft: false, prerelease: false },
-      ]),
-    ).toEqual({
-      tag: "v0.0.31",
-      version: "0.0.31",
-    });
+      buildGitHubReleasesPageUrl({
+        owner: "openai",
+        repo: "codex",
+        host: "github.com",
+        protocol: "https",
+      }),
+    ).toBe("https://github.com/openai/codex/releases/latest");
   });
 
-  it("ignores drafts, prereleases, and invalid tags", () => {
+  it("can point at a specific tag when one is known", () => {
     expect(
-      pickLatestStableGitHubRelease([
-        { tag_name: "v0.0.32-beta.1", draft: false, prerelease: true },
-        { tag_name: "build-123", draft: false, prerelease: false },
-        { tag_name: "v0.0.31", draft: true, prerelease: false },
-        { tag_name: "v0.0.30", draft: false, prerelease: false },
-      ]),
-    ).toEqual({
-      tag: "v0.0.30",
-      version: "0.0.30",
-    });
-  });
-});
-
-describe("buildGitHubReleaseDownloadBaseUrl", () => {
-  it("points generic updater traffic at the chosen release tag", () => {
-    expect(
-      buildGitHubReleaseDownloadBaseUrl(
+      buildGitHubReleasesPageUrl(
         {
           owner: "openai",
           repo: "codex",
@@ -68,36 +50,6 @@ describe("buildGitHubReleaseDownloadBaseUrl", () => {
         },
         "v0.0.31",
       ),
-    ).toBe("https://github.com/openai/codex/releases/download/v0.0.31/");
-  });
-});
-
-describe("resolveLatestStableGitHubRelease", () => {
-  it("uses the injected fetch implementation and abort signal", async () => {
-    const controller = new AbortController();
-    const fetchImpl = vi.fn<typeof fetch>(async () => {
-      return new Response(JSON.stringify([{ tag_name: "v0.1.0", draft: false }]), {
-        status: 200,
-      });
-    });
-
-    await expect(
-      resolveLatestStableGitHubRelease(
-        {
-          owner: "openai",
-          repo: "codex",
-          host: "github.com",
-          protocol: "https",
-        },
-        undefined,
-        { fetchImpl, signal: controller.signal },
-      ),
-    ).resolves.toEqual({
-      tag: "v0.1.0",
-      version: "0.1.0",
-    });
-
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
-    expect(fetchImpl.mock.calls[0]?.[1]).toMatchObject({ signal: controller.signal });
+    ).toBe("https://github.com/openai/codex/releases/tag/v0.0.31");
   });
 });

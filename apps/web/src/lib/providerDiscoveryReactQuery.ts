@@ -7,6 +7,7 @@ import type {
   ProviderListPluginsResult,
   ProviderListSkillsResult,
   ProviderReadPluginResult,
+  ProviderSkillsCatalogResult,
 } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
@@ -54,8 +55,11 @@ export const providerDiscoveryQueryKeys = {
     agentDir: string | null,
     connectionKey: string | null,
   ) => ["provider-discovery", "commands", provider, cwd, agentDir, connectionKey] as const,
-  skills: (provider: ProviderKind, cwd: string | null, query: string, agentDir: string | null) =>
-    ["provider-discovery", "skills", provider, cwd, query, agentDir] as const,
+  // The skill list is query-independent (filtering is client-side), so the key
+  // deliberately excludes the typed filter to avoid a refetch per keystroke.
+  skills: (provider: ProviderKind, cwd: string | null, agentDir: string | null) =>
+    ["provider-discovery", "skills", provider, cwd, agentDir] as const,
+  skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
     ["provider-discovery", "plugins", provider, cwd] as const,
   plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
@@ -65,8 +69,12 @@ export const providerDiscoveryQueryKeys = {
     binaryPath: string | null,
     apiEndpoint: string | null,
     agentDir: string | null,
-  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir] as const,
-  agents: (provider: ProviderKind) => ["provider-discovery", "agents", provider] as const,
+    cwd: string | null,
+  ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
+  agentsForProvider: (provider: ProviderKind) =>
+    ["provider-discovery", "agents", provider] as const,
+  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
+    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
 };
 
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
@@ -85,16 +93,10 @@ export function providerSkillsQueryOptions(input: {
   cwd: string | null;
   threadId?: string | null;
   agentDir?: string | null;
-  query: string;
   enabled?: boolean;
 }) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.skills(
-      input.provider,
-      input.cwd,
-      input.query,
-      input.agentDir ?? null,
-    ),
+    queryKey: providerDiscoveryQueryKeys.skills(input.provider, input.cwd, input.agentDir ?? null),
     queryFn: async () => {
       const api = ensureNativeApi();
       if (!input.cwd) {
@@ -110,6 +112,23 @@ export function providerSkillsQueryOptions(input: {
     enabled: (input.enabled ?? true) && input.cwd !== null,
     staleTime: 30_000,
     placeholderData: (previous) => previous ?? EMPTY_SKILLS_RESULT,
+  });
+}
+
+// Unified cross-provider skills catalog (settings page); not filtered by toggles.
+// Keep prior data during refetches so Settings does not flicker back to "Scanning..."
+// while the server refreshes filesystem discovery in the background.
+export function skillsCatalogQueryOptions(input?: { cwd?: string | null; enabled?: boolean }) {
+  const cwd = input?.cwd ?? null;
+  return queryOptions({
+    queryKey: providerDiscoveryQueryKeys.skillsCatalog(cwd),
+    queryFn: async (): Promise<ProviderSkillsCatalogResult> => {
+      const api = ensureNativeApi();
+      return api.provider.listSkillsCatalog(cwd ? { cwd } : {});
+    },
+    enabled: input?.enabled ?? true,
+    staleTime: 30_000,
+    placeholderData: (previous) => previous,
   });
 }
 
@@ -167,6 +186,7 @@ export function providerModelsQueryOptions(input: {
   binaryPath?: string | null;
   apiEndpoint?: string | null;
   agentDir?: string | null;
+  cwd?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
@@ -175,6 +195,7 @@ export function providerModelsQueryOptions(input: {
       input.binaryPath ?? null,
       input.apiEndpoint ?? null,
       input.agentDir ?? null,
+      input.cwd ?? null,
     ),
     queryFn: async () => {
       const api = ensureNativeApi();
@@ -183,6 +204,7 @@ export function providerModelsQueryOptions(input: {
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
         ...(input.apiEndpoint ? { apiEndpoint: input.apiEndpoint } : {}),
         ...(input.agentDir ? { agentDir: input.agentDir } : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
     enabled: input.enabled ?? true,
@@ -192,12 +214,25 @@ export function providerModelsQueryOptions(input: {
   });
 }
 
-export function providerAgentsQueryOptions(input: { provider: ProviderKind; enabled?: boolean }) {
+export function providerAgentsQueryOptions(input: {
+  provider: ProviderKind;
+  binaryPath?: string | null;
+  cwd?: string | null;
+  enabled?: boolean;
+}) {
   return queryOptions({
-    queryKey: providerDiscoveryQueryKeys.agents(input.provider),
+    queryKey: providerDiscoveryQueryKeys.agents(
+      input.provider,
+      input.binaryPath ?? null,
+      input.cwd ?? null,
+    ),
     queryFn: async () => {
       const api = ensureNativeApi();
-      return api.provider.listAgents({ provider: input.provider });
+      return api.provider.listAgents({
+        provider: input.provider,
+        ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+      });
     },
     enabled: input.enabled ?? true,
     staleTime: 60_000,

@@ -14,7 +14,12 @@ import serverPackageJson from "../apps/server/package.json" with { type: "json" 
 
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
-import { createDesktopPlatformBuildConfig } from "./lib/desktop-platform-build-config.ts";
+import {
+  createDesktopPlatformBuildConfig,
+  validateDesktopNativeBuildHost,
+} from "./lib/desktop-platform-build-config.ts";
+import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -29,20 +34,15 @@ const BuildArch = Schema.Literals(["arm64", "x64", "universal"]);
 const RepoRoot = Effect.service(Path.Path).pipe(
   Effect.flatMap((path) => path.fromFileUrl(new URL("..", import.meta.url))),
 );
-const DesktopAfterPackHookSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, "apps/desktop/scripts/electron-builder-after-pack.cjs"),
-);
-const ProductionMacIconComposerSource = Effect.zipWith(
-  RepoRoot,
-  Effect.service(Path.Path),
-  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconComposer),
-);
 const ProductionMacIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacIconPng),
+);
+const ProductionMacLegacyIconSource = Effect.zipWith(
+  RepoRoot,
+  Effect.service(Path.Path),
+  (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionMacLegacyIconPng),
 );
 const ProductionLinuxIconSource = Effect.zipWith(
   RepoRoot,
@@ -53,6 +53,9 @@ const ProductionWindowsIconSource = Effect.zipWith(
   RepoRoot,
   Effect.service(Path.Path),
   (repoRoot, path) => path.join(repoRoot, BRAND_ASSET_PATHS.productionWindowsIconIco),
+);
+const NodePtySmokeScript = Effect.zipWith(RepoRoot, Effect.service(Path.Path), (repoRoot, path) =>
+  path.join(repoRoot, "scripts/node-pty-smoke.mjs"),
 );
 const encodeJsonString = Schema.encodeEffect(Schema.UnknownFromJsonString);
 
@@ -221,11 +224,11 @@ const BuildEnvConfig = Config.all({
   arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
   version: Config.string("T3CODE_DESKTOP_VERSION").pipe(Config.option),
   outputDir: Config.string("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
-  skipBuild: Config.boolean("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.withDefault(false)),
-  keepStage: Config.boolean("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.withDefault(false)),
-  signed: Config.boolean("T3CODE_DESKTOP_SIGNED").pipe(Config.withDefault(false)),
-  verbose: Config.boolean("T3CODE_DESKTOP_VERBOSE").pipe(Config.withDefault(false)),
-  mockUpdates: Config.boolean("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.withDefault(false)),
+  skipBuild: Config.string("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.option),
+  keepStage: Config.string("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.option),
+  signed: Config.string("T3CODE_DESKTOP_SIGNED").pipe(Config.option),
+  verbose: Config.string("T3CODE_DESKTOP_VERBOSE").pipe(Config.option),
+  mockUpdates: Config.string("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.option),
   mockUpdateServerPort: Config.string("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
 });
 
@@ -233,6 +236,19 @@ const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
   Option.getOrElse(flag, () => envValue);
 const mergeOptions = <A>(a: Option.Option<A>, b: Option.Option<A>, defaultValue: A) =>
   Option.getOrElse(a, () => Option.getOrElse(b, () => defaultValue));
+const resolveBooleanEnv = (name: string, value: Option.Option<string>) =>
+  Effect.try({
+    try: () =>
+      Option.match(value, {
+        onNone: () => false,
+        onSome: (rawValue) => parseBooleanEnvValue(name, rawValue),
+      }),
+    catch: (cause) =>
+      new BuildScriptError({
+        message: cause instanceof Error ? cause.message : `Could not parse ${name}.`,
+        cause,
+      }),
+  });
 
 export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   input: BuildCliInput,
@@ -256,7 +272,12 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
-  const releaseDir = resolveBooleanFlag(input.mockUpdates, env.mockUpdates)
+  const envSkipBuild = yield* resolveBooleanEnv("T3CODE_DESKTOP_SKIP_BUILD", env.skipBuild);
+  const envKeepStage = yield* resolveBooleanEnv("T3CODE_DESKTOP_KEEP_STAGE", env.keepStage);
+  const envSigned = yield* resolveBooleanEnv("T3CODE_DESKTOP_SIGNED", env.signed);
+  const envVerbose = yield* resolveBooleanEnv("T3CODE_DESKTOP_VERBOSE", env.verbose);
+  const envMockUpdates = yield* resolveBooleanEnv("T3CODE_DESKTOP_MOCK_UPDATES", env.mockUpdates);
+  const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
     ? "release-mock"
     : "release";
   const outputDir = path.resolve(
@@ -264,11 +285,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mergeOptions(input.outputDir, env.outputDir, releaseDir),
   );
 
-  const skipBuild = resolveBooleanFlag(input.skipBuild, env.skipBuild);
-  const keepStage = resolveBooleanFlag(input.keepStage, env.keepStage);
-  const signed = resolveBooleanFlag(input.signed, env.signed);
-  const verbose = resolveBooleanFlag(input.verbose, env.verbose);
-  const mockUpdates = resolveBooleanFlag(input.mockUpdates, env.mockUpdates);
+  const skipBuild = resolveBooleanFlag(input.skipBuild, envSkipBuild);
+  const keepStage = resolveBooleanFlag(input.keepStage, envKeepStage);
+  const signed = resolveBooleanFlag(input.signed, envSigned);
+  const verbose = resolveBooleanFlag(input.verbose, envVerbose);
+  const mockUpdates = resolveBooleanFlag(input.mockUpdates, envMockUpdates);
   const mockUpdateServerPort = mergeOptions(
     input.mockUpdateServerPort,
     env.mockUpdateServerPort,
@@ -354,8 +375,12 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
         message: `Production macOS icon source is missing at ${modernIconSource}`,
       });
     }
-    const composerIconSource = yield* ProductionMacIconComposerSource;
-    const hasComposerIcon = yield* fs.exists(composerIconSource);
+    const legacyIconSource = yield* ProductionMacLegacyIconSource;
+    if (!(yield* fs.exists(legacyIconSource))) {
+      return yield* new BuildScriptError({
+        message: `Production legacy macOS icon source is missing at ${legacyIconSource}`,
+      });
+    }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
       prefix: "t3code-icon-build-",
@@ -363,7 +388,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
 
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
     const iconIcnsPath = path.join(stageResourcesDir, "icon.icns");
-    const iconComposerPath = path.join(stageResourcesDir, "icon.icon");
+    const dockIconPngPath = path.join(stageResourcesDir, "dock-icon.png");
 
     yield* runCommand(
       ChildProcess.make({
@@ -371,17 +396,14 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
       })`sips -z 512 512 ${modernIconSource} --out ${iconPngPath}`,
     );
 
-    yield* generateMacIconSet(modernIconSource, iconIcnsPath, tmpRoot, path, verbose);
+    // The solid ICNS is the bundle icon on every macOS release; Icon Composer glass alters the mark.
+    yield* runCommand(
+      ChildProcess.make({
+        ...commandOutputOptions(verbose),
+      })`sips -z 1024 1024 ${legacyIconSource} --out ${dockIconPngPath}`,
+    );
 
-    if (hasComposerIcon) {
-      // Replace any repo-local placeholder so the staged build always reflects the authored Icon Composer asset.
-      yield* fs.remove(iconComposerPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
-      yield* fs.copy(composerIconSource, iconComposerPath);
-    }
-
-    return {
-      hasComposerIcon,
-    } as const;
+    yield* generateMacIconSet(legacyIconSource, iconIcnsPath, tmpRoot, path, verbose);
   });
 }
 
@@ -494,6 +516,25 @@ function resolveGitHubPublishConfig():
   };
 }
 
+const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
+  stageAppDir: string,
+  verbose: boolean,
+) {
+  const smokeScript = yield* NodePtySmokeScript;
+  yield* Effect.log("[desktop-artifact] Verifying staged node-pty native PTY...");
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: stageAppDir,
+      env: {
+        ...process.env,
+        SYNARA_NODE_PTY_SMOKE_REQUIRE_ROOT: stageAppDir,
+      },
+      ...commandOutputOptions(verbose),
+      shell: process.platform === "win32",
+    })`node ${smokeScript}`,
+  );
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -501,7 +542,6 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   signed: boolean,
   mockUpdates: boolean,
   mockUpdateServerPort: string | undefined,
-  hasMacIconComposer: boolean,
 ) {
   const buildConfig: Record<string, unknown> = {
     appId: "com.t3tools.synara",
@@ -529,7 +569,6 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   const platformBuildConfigInput = {
     platform,
     target,
-    hasMacIconComposer,
     ...(windowsAzureSignOptions ? { windowsAzureSignOptions } : {}),
   } as const;
 
@@ -544,26 +583,19 @@ const assertPlatformBuildResources = Effect.fn("assertPlatformBuildResources")(f
   verbose: boolean,
 ) {
   if (platform === "mac") {
-    return yield* stageMacIcons(stageResourcesDir, verbose);
+    yield* stageMacIcons(stageResourcesDir, verbose);
+    return;
   }
 
   if (platform === "linux") {
     yield* stageLinuxIcons(stageResourcesDir);
-    return {
-      hasComposerIcon: false,
-    } as const;
+    return;
   }
 
   if (platform === "win") {
     yield* stageWindowsIcons(stageResourcesDir);
-    return {
-      hasComposerIcon: false,
-    } as const;
+    return;
   }
-
-  return {
-    hasComposerIcon: false,
-  } as const;
 });
 
 const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
@@ -577,6 +609,17 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!platformConfig) {
     return yield* new BuildScriptError({
       message: `Unsupported platform '${options.platform}'.`,
+    });
+  }
+  const nativeBuildHostIssue = validateDesktopNativeBuildHost({
+    platform: options.platform,
+    arch: options.arch,
+    hostPlatform: process.platform,
+    hostArch: process.arch,
+  });
+  if (nativeBuildHostIssue) {
+    return yield* new BuildScriptError({
+      message: nativeBuildHostIssue,
     });
   }
 
@@ -681,24 +724,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
 
-  const stagedPlatformResources = yield* assertPlatformBuildResources(
-    options.platform,
-    stageResourcesDir,
-    options.verbose,
-  );
-
-  if (options.platform === "mac" && stagedPlatformResources.hasComposerIcon) {
-    const afterPackHookSource = yield* DesktopAfterPackHookSource;
-    if (!(yield* fs.exists(afterPackHookSource))) {
-      return yield* new BuildScriptError({
-        message: `Missing electron-builder afterPack hook at ${afterPackHookSource}`,
-      });
-    }
-    yield* fs.copyFile(
-      afterPackHookSource,
-      path.join(stageAppDir, "electron-builder-after-pack.cjs"),
-    );
-  }
+  yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   yield* fs.copy(stageResourcesDir, path.join(stageAppDir, "apps/desktop/prod-resources"));
@@ -719,7 +745,6 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.signed,
       options.mockUpdates,
       options.mockUpdateServerPort,
-      stagedPlatformResources.hasComposerIcon,
     ),
     dependencies: {
       ...resolvedServerDependencies,
@@ -746,6 +771,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       shell: process.platform === "win32",
     })`bun install --production`,
   );
+
+  if (options.platform === "linux") {
+    yield* verifyStagedNodePty(stageAppDir, options.verbose);
+  }
 
   const buildEnv: NodeJS.ProcessEnv = {
     ...process.env,
@@ -792,6 +821,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     return yield* new BuildScriptError({
       message: `Build completed but dist directory was not found at ${stageDistDir}`,
     });
+  }
+
+  if (options.platform === "mac") {
+    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+    const finalizedZip = yield* Effect.tryPromise({
+      try: () =>
+        finalizeMacUpdateZip({
+          stageDistDir,
+          signed: options.signed,
+          verbose: options.verbose,
+        }),
+      catch: (cause) =>
+        new BuildScriptError({
+          message: "macOS update zip finalization failed.",
+          cause,
+        }),
+    });
+    if (finalizedZip.removedZipBlockmapPath) {
+      yield* Effect.log(
+        `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+      );
+    }
   }
 
   const stageEntries = yield* fs.readDirectory(stageDistDir);

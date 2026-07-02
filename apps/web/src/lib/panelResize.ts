@@ -7,7 +7,11 @@
 // Layer: Web panel layout utilities
 
 // Minimum width (px) the composer's left controls cluster needs before it overflows.
-const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 208;
+// Kept intentionally lean: this is only a soft buffer, since canComposerHandlePanelWidth
+// also blocks on real overflow (hasComposerOverflow / overflowsViewport). A smaller value
+// lets the right dock and split panes resize across a much wider range before the probe
+// stops the drag, while the overflow checks still prevent the composer from clipping.
+const COMPOSER_COMPACT_MIN_LEFT_CONTROLS_WIDTH_PX = 160;
 
 // Broadcast when the resize overlay is added/removed so embedded surfaces (e.g.
 // BrowserPanel's native webview) can re-sync their bounds. Shared so the event

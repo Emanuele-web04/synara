@@ -2,15 +2,17 @@ import { Schema } from "effect";
 import {
   IsoDateTime,
   NonNegativeInt,
+  PositiveInt,
   ProjectId,
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
-import { ProviderKind } from "./orchestration";
+import { ModelSelection, ProviderKind, ProviderStartOptions } from "./orchestration";
 import { ServerSettings, ServerSettingsPatch } from "./settings";
 import { ExecutionEnvironmentDescriptor } from "./environment";
+import { AutomationCompletionPolicy, AutomationMode, AutomationSchedule } from "./automation";
 
 const SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BASE64_CHARS = 14_000_000;
 
@@ -85,6 +87,7 @@ const ServerProviderStatuses = Schema.Array(ServerProviderStatus);
 export const ServerConfig = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   worktreesDir: TrimmedNonEmptyString,
   keybindingsConfigPath: TrimmedNonEmptyString,
   keybindings: ResolvedKeybindingsConfig,
@@ -122,12 +125,24 @@ export const ServerProviderUsageLine = Schema.Struct({
 });
 export type ServerProviderUsageLine = typeof ServerProviderUsageLine.Type;
 
+// Lifecycle of a live provider usage fetch. Absent status is treated as "ok" so
+// existing local-archive snapshots stay valid without setting it.
+//   ok          – fetched fresh usage from the provider backend
+//   needs-auth  – no/expired credential, or the backend rejected the token (read-only mode never refreshes)
+//   unsupported – the provider has no fetchable usage source for the current auth (e.g. API-key-only)
+//   error       – the fetch failed unexpectedly (network/parse); detail carries the reason
+export const ProviderUsageStatus = Schema.Literals(["ok", "needs-auth", "unsupported", "error"]);
+export type ProviderUsageStatus = typeof ProviderUsageStatus.Type;
+
 export const ServerProviderUsageSnapshot = Schema.Struct({
   provider: ProviderKind,
   updatedAt: IsoDateTime,
   limits: Schema.Array(ServerProviderUsageLimit),
   usageLines: Schema.Array(ServerProviderUsageLine),
   source: TrimmedNonEmptyString,
+  status: Schema.optional(ProviderUsageStatus),
+  planName: Schema.optional(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderUsageSnapshot = typeof ServerProviderUsageSnapshot.Type;
 
@@ -139,6 +154,61 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
+
+// Batch live-usage fetch for every supported provider, powering the Settings → Usage section.
+// Returns one entry per supported provider (including needs-auth/error) so the UI can render a row each.
+export const ServerListProviderUsageInput = Schema.Struct({
+  forceRefresh: Schema.optional(Schema.Boolean),
+});
+export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;
+
+export const ServerListProviderUsageResult = Schema.Array(ServerProviderUsageSnapshot);
+export type ServerListProviderUsageResult = typeof ServerListProviderUsageResult.Type;
+
+export const ServerLocalServerAddress = Schema.Struct({
+  host: TrimmedNonEmptyString,
+  port: PositiveInt,
+  family: Schema.Literals(["tcp4", "tcp6", "tcp"]),
+  url: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ServerLocalServerAddress = typeof ServerLocalServerAddress.Type;
+
+export const ServerLocalServerProcess = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  pid: PositiveInt,
+  ppid: Schema.optional(PositiveInt),
+  command: TrimmedNonEmptyString,
+  displayName: TrimmedNonEmptyString,
+  pageTitle: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  // Working directory of the listening process, when resolvable. Surfaced in the
+  // UI and used to attribute manually-started dev servers to a project by folder.
+  cwd: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(4_096))),
+  args: Schema.String.check(Schema.isMaxLength(1_000)),
+  ports: Schema.Array(PositiveInt),
+  addresses: Schema.Array(ServerLocalServerAddress),
+  isStoppable: Schema.Boolean,
+  stopDisabledReason: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerLocalServerProcess = typeof ServerLocalServerProcess.Type;
+
+export const ServerListLocalServersResult = Schema.Struct({
+  generatedAt: IsoDateTime,
+  servers: Schema.Array(ServerLocalServerProcess),
+});
+export type ServerListLocalServersResult = typeof ServerListLocalServersResult.Type;
+
+export const ServerStopLocalServerInput = Schema.Struct({
+  pid: PositiveInt,
+  port: PositiveInt,
+});
+export type ServerStopLocalServerInput = typeof ServerStopLocalServerInput.Type;
+
+export const ServerStopLocalServerResult = Schema.Struct({
+  pid: PositiveInt,
+  stopped: Schema.Boolean,
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerStopLocalServerResult = typeof ServerStopLocalServerResult.Type;
 
 export const ServerDiagnosticsMemory = Schema.Struct({
   rssBytes: NonNegativeInt,
@@ -194,6 +264,69 @@ export const ServerVoiceTranscriptionResult = Schema.Struct({
 });
 export type ServerVoiceTranscriptionResult = typeof ServerVoiceTranscriptionResult.Type;
 
+// Compact, stateless recap generation. The caller owns debounce/cache policy so
+// this endpoint never participates in the hot transcript projection path.
+export const ServerGenerateThreadRecapInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  previousRecap: Schema.optional(Schema.String.check(Schema.isMaxLength(1_000))),
+  newMaterial: Schema.String.check(Schema.isMaxLength(16_000)),
+  currentState: Schema.optional(Schema.String.check(Schema.isMaxLength(4_000))),
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
+});
+export type ServerGenerateThreadRecapInput = typeof ServerGenerateThreadRecapInput.Type;
+
+export const ServerGenerateThreadRecapResult = Schema.Struct({
+  recap: TrimmedNonEmptyString,
+});
+export type ServerGenerateThreadRecapResult = typeof ServerGenerateThreadRecapResult.Type;
+
+// Schema-validated automation intent extraction for composer-triggered creation.
+// The UI still owns confirmation/error copy; this result only describes what the model understood.
+export const ServerAutomationIntentMissingField = Schema.Literals([
+  "schedule",
+  "taskPrompt",
+  "name",
+  "mode",
+]);
+export type ServerAutomationIntentMissingField = typeof ServerAutomationIntentMissingField.Type;
+
+export const ServerGenerateAutomationIntentInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  message: TrimmedNonEmptyString.check(Schema.isMaxLength(16_000)),
+  defaultMode: Schema.optional(AutomationMode),
+  nowIso: IsoDateTime,
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
+});
+export type ServerGenerateAutomationIntentInput = typeof ServerGenerateAutomationIntentInput.Type;
+
+export const ServerGenerateAutomationIntentResult = Schema.Struct({
+  isAutomation: Schema.Boolean,
+  confidence: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)).check(
+    Schema.isLessThanOrEqualTo(1),
+  ),
+  language: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(80))),
+  name: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(160))),
+  taskPrompt: Schema.NullOr(TrimmedNonEmptyString.check(Schema.isMaxLength(64_000))),
+  schedule: Schema.NullOr(AutomationSchedule),
+  mode: Schema.NullOr(AutomationMode),
+  maxIterations: Schema.optional(Schema.NullOr(PositiveInt)).pipe(
+    Schema.withDecodingDefault(() => null),
+  ),
+  completionPolicy: Schema.optional(AutomationCompletionPolicy).pipe(
+    Schema.withDecodingDefault(() => ({ type: "none" as const })),
+  ),
+  missingFields: Schema.Array(ServerAutomationIntentMissingField),
+  needsConfirmation: Schema.Boolean,
+  reason: Schema.NullOr(Schema.String.check(Schema.isMaxLength(500))),
+});
+export type ServerGenerateAutomationIntentResult = typeof ServerGenerateAutomationIntentResult.Type;
+
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 
@@ -222,6 +355,7 @@ export type ServerSettingsUpdatedPayload = typeof ServerSettingsUpdatedPayload.T
 export const ServerLifecycleWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   homeDir: Schema.optional(TrimmedNonEmptyString),
+  chatWorkspaceRoot: Schema.optional(TrimmedNonEmptyString),
   projectName: TrimmedNonEmptyString,
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
@@ -243,12 +377,10 @@ export const ServerLifecycleStreamEvent = Schema.Union([
     type: Schema.Literal("maintenance"),
     payload: Schema.Struct({
       task: Schema.Literal("thread-retention"),
-      state: Schema.Literals(["started", "progress", "compacting", "completed", "failed"]),
+      state: Schema.Literals(["started", "progress", "completed", "failed"]),
       at: IsoDateTime,
       deletedCount: Schema.optional(Schema.Number),
-      purgedCount: Schema.optional(Schema.Number),
       totalCount: Schema.optional(Schema.Number),
-      freePageCount: Schema.optional(Schema.Number),
       error: Schema.optional(Schema.String),
     }),
   }),

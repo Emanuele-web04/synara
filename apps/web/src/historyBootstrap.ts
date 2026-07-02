@@ -1,5 +1,6 @@
 import type { ChatMessage } from "./types";
 import { stripEmbeddedAssistantSelections } from "./lib/assistantSelections";
+import { pluralize } from "@t3tools/shared/text";
 
 export interface BootstrapInputResult {
   text: string;
@@ -21,6 +22,7 @@ function messageRoleLabel(message: ChatMessage): "USER" | "ASSISTANT" {
 
 function attachmentSummary(message: ChatMessage): string | null {
   const imageAttachments = message.attachments?.filter((attachment) => attachment.type === "image");
+  const fileAttachments = message.attachments?.filter((attachment) => attachment.type === "file");
   const assistantSelections = message.attachments?.filter(
     (attachment) => attachment.type === "assistant-selection",
   );
@@ -32,7 +34,16 @@ function attachmentSummary(message: ChatMessage): string | null {
     const namesSummary = names.join(", ");
     const extraCount = count - names.length;
     const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
-    summaries.push(`[Attached image${count === 1 ? "" : "s"}: ${namesSummary}${extraSummary}]`);
+    summaries.push(`[Attached ${pluralize(count, "image")}: ${namesSummary}${extraSummary}]`);
+  }
+
+  const fileCount = fileAttachments?.length ?? 0;
+  if (fileCount > 0) {
+    const names = fileAttachments?.slice(0, 3).map((file) => file.name) ?? [];
+    const namesSummary = names.join(", ");
+    const extraCount = fileCount - names.length;
+    const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
+    summaries.push(`[Attached ${pluralize(fileCount, "file")}: ${namesSummary}${extraSummary}]`);
   }
 
   const selectionCount = assistantSelections?.length ?? 0;
@@ -44,7 +55,7 @@ function attachmentSummary(message: ChatMessage): string | null {
     const extraCount = selectionCount - previews.length;
     const extraSummary = extraCount > 0 ? ` (+${extraCount} more)` : "";
     summaries.push(
-      `[Referenced assistant selection${selectionCount === 1 ? "" : "s"}: ${previews.join(", ")}${extraSummary}]`,
+      `[Referenced assistant ${pluralize(selectionCount, "selection")}: ${previews.join(", ")}${extraSummary}]`,
     );
   }
 

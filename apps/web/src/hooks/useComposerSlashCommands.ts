@@ -303,8 +303,8 @@ export function useComposerSlashCommands(input: {
       if (!api || !activeProject || !activeThread || !isServerThread || !canOfferSideCommand) {
         toastManager.add({
           type: "warning",
-          title: "Sidechat is unavailable",
-          description: "Open a server-backed main thread before starting a sidechat.",
+          title: "Side is unavailable",
+          description: "Open a server-backed main thread before starting Side.",
         });
         return true;
       }
@@ -694,11 +694,9 @@ export function useComposerSlashCommands(input: {
         } catch (error) {
           toastManager.add({
             type: "error",
-            title: "Could not start sidechat",
+            title: "Could not start Side",
             description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating the sidechat.",
+              error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         }
         return true;
@@ -763,6 +761,26 @@ export function useComposerSlashCommands(input: {
         );
         if (wasPromptReplacementApplied(applied)) {
           editorActions.setComposerHighlightedItemId(null);
+        }
+        return;
+      }
+
+      if (item.command === "automation") {
+        const replacement = "/automation ";
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          replacement,
+        );
+        const applied = editorActions.applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          replacement,
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (wasPromptReplacementApplied(applied)) {
+          editorActions.setComposerHighlightedItemId(null);
+          editorActions.scheduleComposerFocus();
         }
         return;
       }
@@ -890,11 +908,9 @@ export function useComposerSlashCommands(input: {
         void createSidechatFromSlashCommand().catch((error) => {
           toastManager.add({
             type: "error",
-            title: "Could not start sidechat",
+            title: "Could not start Side",
             description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while creating the sidechat.",
+              error instanceof Error ? error.message : "An error occurred while creating Side.",
           });
         });
       }

@@ -46,22 +46,38 @@ export function useDockPaneRuntimeActivation(input: {
         })
       : "live";
 
-  const requestImmediateHydration = useCallback(
-    (kind?: RightDockPaneKind) => {
-      immediateHydrationKindRef.current = kind ?? "any";
-      if (activePaneKey && (!kind || input.activePane?.kind === kind)) {
-        setHydratedPaneKey(activePaneKey);
-      }
-    },
-    [activePaneKey, input.activePane],
-  );
+  // The request callbacks read the committed active pane through a ref so their
+  // identity stays stable across pane switches. Handlers built on top of them
+  // (and the workspace file opener context value) would otherwise be recreated
+  // on every dock tab change, re-rendering every context subscriber in the
+  // chat transcript. Event handlers always fire after commit, so the ref is
+  // current by the time either callback runs.
+  const activePaneRef = useRef<{ key: string | null; kind: RightDockPaneKind | null }>({
+    key: null,
+    kind: null,
+  });
+  useLayoutEffect(() => {
+    activePaneRef.current = {
+      key: activePaneKey,
+      kind: input.activePane?.kind ?? null,
+    };
+  }, [activePaneKey, input.activePane]);
+
+  const requestImmediateHydration = useCallback((kind?: RightDockPaneKind) => {
+    immediateHydrationKindRef.current = kind ?? "any";
+    const active = activePaneRef.current;
+    if (active.key && (!kind || active.kind === kind)) {
+      setHydratedPaneKey(active.key);
+    }
+  }, []);
 
   const requestActivePaneLive = useCallback(() => {
-    immediateHydrationKindRef.current = input.activePane?.kind ?? "any";
-    if (activePaneKey) {
-      setHydratedPaneKey(activePaneKey);
+    const active = activePaneRef.current;
+    immediateHydrationKindRef.current = active.kind ?? "any";
+    if (active.key) {
+      setHydratedPaneKey(active.key);
     }
-  }, [activePaneKey, input.activePane]);
+  }, []);
 
   useLayoutEffect(() => {
     if (!input.activePane || !activePaneKey) {

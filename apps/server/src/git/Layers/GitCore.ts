@@ -1382,6 +1382,27 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           behindCount = 0;
         }
 
+        // Repo-level metadata for the status panel: whether an `origin` remote is configured
+        // and whether the current branch is the repo's default branch. Resolved from the same
+        // helpers `listGitBranches` uses so the two stay consistent; each lookup degrades to a
+        // safe default on failure so it never breaks the status read. `resolvePrimaryRemoteName`
+        // returns "origin" only when that remote exists, so it doubles as the origin check.
+        const primaryRemoteName = yield* resolvePrimaryRemoteName(cwd).pipe(
+          Effect.catch(() => Effect.succeed(null)),
+        );
+        const defaultBranchName =
+          primaryRemoteName === null
+            ? null
+            : yield* resolveDefaultBranchName(cwd, primaryRemoteName).pipe(
+                Effect.catch(() => Effect.succeed(null)),
+              );
+        const repoMetadata = {
+          isRepo: true,
+          hasOriginRemote: primaryRemoteName === "origin",
+          isDefaultBranch:
+            branch !== null && defaultBranchName !== null && branch === defaultBranchName,
+        } as const;
+
         const moveAwareWorkingTree =
           hasWorkingTreeChanges &&
           untrackedFilesWithoutNumstat.size > 0 &&
@@ -1390,6 +1411,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
             : null;
         if (moveAwareWorkingTree) {
           return {
+            ...repoMetadata,
             branch,
             upstreamRef,
             upstreamBranch,
@@ -1448,6 +1470,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         }
 
         return {
+          ...repoMetadata,
           branch,
           upstreamRef,
           upstreamBranch,
@@ -2197,6 +2220,25 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         );
       });
 
+    const deleteBranch: GitCoreShape["deleteBranch"] = (input) =>
+      Effect.gen(function* () {
+        const args = ["branch", input.force ? "-D" : "-d", "--", input.branch];
+        yield* executeGit("GitCore.deleteBranch", input.cwd, args, {
+          timeoutMs: 10_000,
+          fallbackErrorMessage: "git branch delete failed",
+        }).pipe(
+          Effect.mapError((error) =>
+            createGitCommandError(
+              "GitCore.deleteBranch",
+              input.cwd,
+              args,
+              `${commandLabel(args)} failed (cwd: ${input.cwd}): ${error instanceof Error ? error.message : String(error)}`,
+              error,
+            ),
+          ),
+        );
+      });
+
     const renameBranch: GitCoreShape["renameBranch"] = (input) =>
       Effect.gen(function* () {
         if (input.oldBranch === input.newBranch) {
@@ -2602,6 +2644,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
       fetchRemoteBranch,
       setBranchUpstream,
       removeWorktree,
+      deleteBranch,
       renameBranch,
       createBranch,
       publishBranch,

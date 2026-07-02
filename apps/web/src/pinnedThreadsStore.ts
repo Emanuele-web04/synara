@@ -6,6 +6,7 @@
 import { type ThreadId } from "@t3tools/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { normalizePinnedIds, pinId, prunePinnedIds, unpinId } from "./pinning.logic";
 
 interface PinnedThreadsStoreState {
   pinnedThreadIds: ThreadId[];
@@ -17,21 +18,6 @@ interface PinnedThreadsStoreState {
 
 const PINNED_THREADS_STORAGE_KEY = "synara:pinned-threads:v1";
 
-function normalizePinnedThreadIds(threadIds: readonly ThreadId[]): ThreadId[] {
-  const seen = new Set<ThreadId>();
-  const normalized: ThreadId[] = [];
-
-  for (const threadId of threadIds) {
-    if (threadId.length === 0 || seen.has(threadId)) {
-      continue;
-    }
-    seen.add(threadId);
-    normalized.push(threadId);
-  }
-
-  return normalized;
-}
-
 export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
   persist(
     (set) => ({
@@ -39,22 +25,24 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
       pinThread: (threadId) => {
         if (threadId.length === 0) return;
         set((state) => {
-          if (state.pinnedThreadIds.includes(threadId)) {
+          const result = pinId(state.pinnedThreadIds, threadId);
+          if (!result.changed) {
             return state;
           }
           return {
-            pinnedThreadIds: [threadId, ...state.pinnedThreadIds],
+            pinnedThreadIds: result.pinnedIds,
           };
         });
       },
       unpinThread: (threadId) => {
         if (threadId.length === 0) return;
         set((state) => {
-          if (!state.pinnedThreadIds.includes(threadId)) {
+          const result = unpinId(state.pinnedThreadIds, threadId);
+          if (!result.changed) {
             return state;
           }
           return {
-            pinnedThreadIds: state.pinnedThreadIds.filter((candidate) => candidate !== threadId),
+            pinnedThreadIds: result.pinnedIds,
           };
         });
       },
@@ -62,21 +50,14 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
         if (threadId.length === 0) return;
         set((state) => {
           if (state.pinnedThreadIds.includes(threadId)) {
-            return {
-              pinnedThreadIds: state.pinnedThreadIds.filter((candidate) => candidate !== threadId),
-            };
+            return { pinnedThreadIds: unpinId(state.pinnedThreadIds, threadId).pinnedIds };
           }
-          return {
-            pinnedThreadIds: [threadId, ...state.pinnedThreadIds],
-          };
+          return { pinnedThreadIds: pinId(state.pinnedThreadIds, threadId).pinnedIds };
         });
       },
       prunePinnedThreads: (threadIds) => {
-        const allowedThreadIds = new Set(threadIds);
         set((state) => {
-          const nextPinnedThreadIds = state.pinnedThreadIds.filter((threadId) =>
-            allowedThreadIds.has(threadId),
-          );
+          const nextPinnedThreadIds = prunePinnedIds(state.pinnedThreadIds, threadIds);
           return nextPinnedThreadIds.length === state.pinnedThreadIds.length
             ? state
             : { pinnedThreadIds: nextPinnedThreadIds };
@@ -87,7 +68,7 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
       name: PINNED_THREADS_STORAGE_KEY,
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        pinnedThreadIds: normalizePinnedThreadIds(state.pinnedThreadIds),
+        pinnedThreadIds: normalizePinnedIds(state.pinnedThreadIds),
       }),
       merge: (persistedState, currentState) => {
         const candidate =
@@ -95,7 +76,7 @@ export const usePinnedThreadsStore = create<PinnedThreadsStoreState>()(
             ?.pinnedThreadIds ?? [];
         return {
           ...currentState,
-          pinnedThreadIds: normalizePinnedThreadIds(candidate),
+          pinnedThreadIds: normalizePinnedIds(candidate),
         };
       },
     },

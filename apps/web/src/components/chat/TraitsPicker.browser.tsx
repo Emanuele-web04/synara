@@ -4,6 +4,7 @@ import {
   type ModelSelection,
   ClaudeModelOptions,
   CodexModelOptions,
+  type CursorModelOptions,
   DEFAULT_MODEL_BY_PROVIDER,
   type OpenCodeModelOptions,
   type ProviderModelDescriptor,
@@ -88,10 +89,15 @@ async function mountClaudePicker(props?: {
       prompt: props?.prompt ?? "",
       images: [],
       browserContexts: [],
+      files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
       assistantSelections: [],
       terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      skills: [],
+      mentions: [],
       queuedTurns: [],
       modelSelectionByProvider: props?.skipDraftModelOptions
         ? {}
@@ -158,7 +164,7 @@ describe("TraitsPicker (Claude)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
     });
@@ -171,7 +177,7 @@ describe("TraitsPicker (Claude)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Context Window");
+      expect(text).toContain("Context");
       expect(text).toContain("200k");
       expect(text).toContain("1M");
     });
@@ -183,7 +189,7 @@ describe("TraitsPicker (Claude)", () => {
     await page.getByRole("button").click();
 
     await vi.waitFor(() => {
-      expect(document.body.textContent ?? "").not.toContain("Fast Mode");
+      expect(document.body.textContent ?? "").not.toContain("Speed");
     });
   });
 
@@ -318,10 +324,15 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
       prompt: "",
       images: [],
       browserContexts: [],
+      files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
       assistantSelections: [],
       terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      skills: [],
+      mentions: [],
       queuedTurns: [],
       modelSelectionByProvider: {
         codex: {
@@ -389,7 +400,7 @@ describe("TraitsPicker (Codex)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
     });
@@ -458,7 +469,7 @@ describe("TraitsPicker (Codex)", () => {
 
 async function mountCursorPicker(props: {
   runtimeModel: ProviderModelDescriptor;
-  options?: { fastMode?: boolean };
+  options?: CursorModelOptions;
 }) {
   const threadId = ThreadId.makeUnsafe("thread-cursor-traits");
   const host = document.createElement("div");
@@ -519,11 +530,48 @@ describe("TraitsPicker (Cursor)", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
+      expect(text).toContain("Speed");
       expect(text).toContain("Default");
       expect(text).toContain("Fast");
       expect(text).not.toMatch(/\bThinking\b/u);
       expect(text).not.toContain("Effort");
+    });
+  });
+
+  it("shows thinking, context, and effort controls together for Fable-style models", async () => {
+    await using _ = await mountCursorPicker({
+      runtimeModel: {
+        slug: "claude-fable-5",
+        name: "Fable 5",
+        supportsThinkingToggle: true,
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+          { value: "high", label: "High" },
+          { value: "xhigh", label: "Extra High" },
+          { value: "max", label: "Max" },
+        ],
+        defaultReasoningEffort: "high",
+        contextWindowOptions: [
+          { value: "300k", label: "300K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "300k",
+      },
+      options: { thinking: true, reasoningEffort: "high", contextWindow: "300k" },
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Thinking");
+      expect(text).toContain("Context");
+      expect(text).toContain("Effort");
+      expect(text).toContain("300K");
+      expect(text).toContain("1M");
+      expect(text).toContain("Extra High");
+      expect(text).toContain("Max");
     });
   });
 });
@@ -614,9 +662,14 @@ async function mountOpenCodePicker(props?: {
       prompt: "",
       images: [],
       browserContexts: [],
+      files: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
       terminalContexts: [],
+      fileComments: [],
+      pastedTexts: [],
+      skills: [],
+      mentions: [],
       queuedTurns: [],
       assistantSelections: [],
       modelSelectionByProvider: {

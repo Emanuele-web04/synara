@@ -53,4 +53,50 @@ describe("workspaceStore", () => {
 
     expect(useWorkspaceStore.getState().homeDir).toBeNull();
   });
+
+  it("keeps chat workspace root while server config is still loading", async () => {
+    installMemoryLocalStorage();
+    vi.resetModules();
+
+    const { useWorkspaceStore } = await import("./workspaceStore");
+
+    useWorkspaceStore.getState().setChatWorkspaceRoot("/Users/tester/Documents/Synara");
+    useWorkspaceStore.getState().setChatWorkspaceRoot(undefined);
+
+    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
+  });
+
+  it("updates home and chat workspace roots together from server paths", async () => {
+    installMemoryLocalStorage();
+    vi.resetModules();
+
+    const { useWorkspaceStore } = await import("./workspaceStore");
+
+    useWorkspaceStore.getState().setServerWorkspacePaths({
+      homeDir: "/Users/tester",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+    });
+
+    expect(useWorkspaceStore.getState().homeDir).toBe("/Users/tester");
+    expect(useWorkspaceStore.getState().chatWorkspaceRoot).toBe("/Users/tester/Documents/Synara");
+  });
+
+  it("persists the chat workspace root with the home directory", async () => {
+    installMemoryLocalStorage();
+    vi.resetModules();
+
+    let workspaceModule = await import("./workspaceStore");
+    workspaceModule.useWorkspaceStore.getState().setServerWorkspacePaths({
+      homeDir: "/Users/tester",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+    });
+
+    vi.resetModules();
+    workspaceModule = await import("./workspaceStore");
+
+    expect(workspaceModule.useWorkspaceStore.getState().homeDir).toBe("/Users/tester");
+    expect(workspaceModule.useWorkspaceStore.getState().chatWorkspaceRoot).toBe(
+      "/Users/tester/Documents/Synara",
+    );
+  });
 });

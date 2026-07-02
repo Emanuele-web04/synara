@@ -4,6 +4,7 @@
  * Custom nodes for the composer editor:
  * - ComposerMentionNode: File/path mentions (@path)
  * - ComposerSkillNode: Skill mentions ($skill or /skill)
+ * - ComposerSlashCommandNode: app-level slash commands (/automation)
  * - ComposerAgentMentionNode: Agent mentions (@alias(task))
  * - ComposerTerminalContextNode: Terminal context blocks
  * - ComposerBrowserContextNode: Browser editor element/drawing context blocks
@@ -21,7 +22,6 @@ import {
 } from "lexical";
 import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { RiRobot3Line } from "react-icons/ri";
 
 import {
   INLINE_TERMINAL_CONTEXT_PLACEHOLDER,
@@ -33,14 +33,20 @@ import { formatComposerMentionToken } from "~/lib/composerMentions";
 import { basenameOfPath } from "~/file-icons";
 import { createCentralIconElement } from "~/lib/central-icons";
 import {
+  COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME,
   COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_CLASS_NAME,
   COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
   COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME,
-  COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+  COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
+  formatComposerSlashCommandChipLabel,
   formatComposerSkillChipLabel,
+  resolveAgentChipColor,
 } from "../composerInlineChip";
+import { AGENT_ROBOT_ICON_NAME, ClockIcon } from "~/lib/icons";
+import type { ComposerSlashCommand } from "~/composerSlashCommands";
+import { InlineLinkChip } from "../InlineLinkChip";
 import { ComposerPendingTerminalContextChip } from "../chat/ComposerPendingTerminalContexts";
 import { createMentionChipIconElement, type MentionChipKind } from "../chat/MentionChipIcon";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -66,6 +72,15 @@ export type SerializedComposerSkillNode = Spread<
   SerializedTextNode
 >;
 
+export type SerializedComposerSlashCommandNode = Spread<
+  {
+    command: ComposerSlashCommand;
+    type: "composer-slash-command";
+    version: 1;
+  },
+  SerializedTextNode
+>;
+
 export type SerializedComposerAgentMentionNode = Spread<
   {
     alias: string;
@@ -74,6 +89,15 @@ export type SerializedComposerAgentMentionNode = Spread<
     version: 1;
   },
   SerializedTextNode
+>;
+
+export type SerializedComposerLinkNode = Spread<
+  {
+    url: string;
+    type: "composer-link";
+    version: 1;
+  },
+  SerializedLexicalNode
 >;
 
 export type SerializedComposerTerminalContextNode = Spread<
@@ -96,19 +120,25 @@ export type SerializedComposerBrowserContextNode = Spread<
 
 // ── Helper Functions ──────────────────────────────────────────────────
 
+// Shared boilerplate for the imperative Lexical chip hosts: clear prior content
+// and make the token unselectable so the caret skips over it as one unit.
+function resetInlineChipContainer(container: HTMLElement): void {
+  container.textContent = "";
+  container.style.setProperty("user-select", "none");
+  container.style.setProperty("-webkit-user-select", "none");
+}
+
 function renderMentionChipDom(
   container: HTMLElement,
   pathValue: string,
   kind: MentionChipKind,
 ): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createMentionChipIconElement(
     pathValue,
     kind,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -119,13 +149,11 @@ function renderMentionChipDom(
 }
 
 function renderSkillChipDom(container: HTMLElement, name: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
+  resetInlineChipContainer(container);
 
   const icon = createCentralIconElement(
     COMPOSER_INLINE_SKILL_CHIP_ICON_NAME,
-    COMPOSER_INLINE_CHIP_TOKEN_ICON_CLASS_NAME,
+    COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME,
   );
 
   const label = document.createElement("span");
@@ -139,41 +167,49 @@ function renderSkillChipDom(container: HTMLElement, name: string): void {
   }
 }
 
-const AGENT_ROBOT_ICON_SVG = renderToStaticMarkup(
-  <RiRobot3Line aria-hidden="true" className={COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME} />,
+const AUTOMATION_COMMAND_ICON_SVG = renderToStaticMarkup(
+  <ClockIcon aria-hidden="true" className={COMPOSER_INLINE_CHIP_INLINE_ICON_CLASS_NAME} />,
 );
 
-// Color mapping for agent aliases (Tailwind color classes)
-const DEFAULT_AGENT_COLOR = { bg: "rgb(245 158 11 / 0.15)", text: "rgb(245 158 11)" };
-const AGENT_COLOR_STYLES: Record<string, { bg: string; text: string }> = {
-  violet: { bg: "rgb(139 92 246 / 0.15)", text: "rgb(139 92 246)" },
-  fuchsia: { bg: "rgb(217 70 239 / 0.15)", text: "rgb(217 70 239)" },
-  teal: { bg: "rgb(20 184 166 / 0.15)", text: "rgb(20 184 166)" },
-  cyan: { bg: "rgb(6 182 212 / 0.15)", text: "rgb(6 182 212)" },
-  amber: DEFAULT_AGENT_COLOR,
-  orange: { bg: "rgb(249 115 22 / 0.15)", text: "rgb(249 115 22)" },
-};
-
-function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
-  container.textContent = "";
-  container.style.setProperty("user-select", "none");
-  container.style.setProperty("-webkit-user-select", "none");
-
-  // Apply color-specific styles
-  const colorStyles = AGENT_COLOR_STYLES[color] ?? DEFAULT_AGENT_COLOR;
-  container.style.backgroundColor = colorStyles.bg;
-  container.style.color = colorStyles.text;
+function renderSlashCommandChipDom(container: HTMLElement, command: ComposerSlashCommand): void {
+  resetInlineChipContainer(container);
 
   const icon = document.createElement("span");
   icon.ariaHidden = "true";
-  icon.className = COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME;
-  icon.innerHTML = AGENT_ROBOT_ICON_SVG;
+  icon.innerHTML = AUTOMATION_COMMAND_ICON_SVG;
+
+  const label = document.createElement("span");
+  label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
+  label.textContent = formatComposerSlashCommandChipLabel(command);
+
+  container.append(icon, label);
+}
+
+function renderAgentMentionChipDom(container: HTMLElement, alias: string, color: string): void {
+  resetInlineChipContainer(container);
+
+  const colorStyles = resolveAgentChipColor(color);
+  container.style.backgroundColor = colorStyles.bg;
+  container.style.color = colorStyles.text;
+
+  const icon = createCentralIconElement(
+    AGENT_ROBOT_ICON_NAME,
+    COMPOSER_INLINE_AGENT_CHIP_ICON_CLASS_NAME,
+  );
 
   const label = document.createElement("span");
   label.className = COMPOSER_INLINE_CHIP_LABEL_CLASS_NAME;
   label.textContent = `@${alias}`;
 
-  container.append(icon, label);
+  if (icon) {
+    container.append(icon, label);
+  } else {
+    container.append(label);
+  }
+}
+
+function ComposerLinkDecorator(props: { url: string }) {
+  return <InlineLinkChip url={props.url} />;
 }
 
 // ── ComposerMentionNode ───────────────────────────────────────────────
@@ -335,6 +371,83 @@ export function $createComposerSkillNode(name: string): ComposerSkillNode {
   return $applyNodeReplacement(new ComposerSkillNode(name));
 }
 
+// ── ComposerSlashCommandNode ──────────────────────────────────────────
+
+export class ComposerSlashCommandNode extends TextNode {
+  __command: ComposerSlashCommand;
+
+  static override getType(): string {
+    return "composer-slash-command";
+  }
+
+  static override clone(node: ComposerSlashCommandNode): ComposerSlashCommandNode {
+    return new ComposerSlashCommandNode(node.__command, node.__key);
+  }
+
+  static override importJSON(
+    serializedNode: SerializedComposerSlashCommandNode,
+  ): ComposerSlashCommandNode {
+    return $createComposerSlashCommandNode(serializedNode.command);
+  }
+
+  constructor(command: ComposerSlashCommand, key?: NodeKey) {
+    super(`/${command}`, key);
+    this.__command = command;
+  }
+
+  override exportJSON(): SerializedComposerSlashCommandNode {
+    return {
+      ...super.exportJSON(),
+      command: this.__command,
+      type: "composer-slash-command",
+      version: 1,
+    };
+  }
+
+  override createDOM(_config: EditorConfig): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_EDITOR_INLINE_CHIP_CLASS_NAME;
+    dom.contentEditable = "false";
+    dom.setAttribute("spellcheck", "false");
+    renderSlashCommandChipDom(dom, this.__command);
+    return dom;
+  }
+
+  override updateDOM(
+    prevNode: ComposerSlashCommandNode,
+    dom: HTMLElement,
+    _config: EditorConfig,
+  ): boolean {
+    dom.contentEditable = "false";
+    if (prevNode.__text !== this.__text || prevNode.__command !== this.__command) {
+      renderSlashCommandChipDom(dom, this.__command);
+    }
+    return false;
+  }
+
+  override canInsertTextBefore(): false {
+    return false;
+  }
+
+  override canInsertTextAfter(): true {
+    return true;
+  }
+
+  override isTextEntity(): true {
+    return true;
+  }
+
+  override isToken(): true {
+    return true;
+  }
+}
+
+export function $createComposerSlashCommandNode(
+  command: ComposerSlashCommand,
+): ComposerSlashCommandNode {
+  return $applyNodeReplacement(new ComposerSlashCommandNode(command));
+}
+
 // ── ComposerAgentMentionNode ──────────────────────────────────────────
 
 export class ComposerAgentMentionNode extends TextNode {
@@ -417,6 +530,63 @@ export function $createComposerAgentMentionNode(
   return $applyNodeReplacement(new ComposerAgentMentionNode(alias, color));
 }
 
+// ── ComposerLinkNode ──────────────────────────────────────────────────
+
+export class ComposerLinkNode extends DecoratorNode<ReactElement> {
+  __url: string;
+
+  static override getType(): string {
+    return "composer-link";
+  }
+
+  static override clone(node: ComposerLinkNode): ComposerLinkNode {
+    return new ComposerLinkNode(node.__url, node.__key);
+  }
+
+  static override importJSON(serializedNode: SerializedComposerLinkNode): ComposerLinkNode {
+    return $createComposerLinkNode(serializedNode.url);
+  }
+
+  constructor(url: string, key?: NodeKey) {
+    super(key);
+    this.__url = url;
+  }
+
+  override exportJSON(): SerializedComposerLinkNode {
+    return {
+      url: this.__url,
+      type: "composer-link",
+      version: 1,
+    };
+  }
+
+  override createDOM(): HTMLElement {
+    const dom = document.createElement("span");
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
+    return dom;
+  }
+
+  override updateDOM(): false {
+    return false;
+  }
+
+  override decorate(): ReactElement {
+    return <ComposerLinkDecorator url={this.__url} />;
+  }
+
+  override getTextContent(): string {
+    return this.__url;
+  }
+
+  override isInline(): true {
+    return true;
+  }
+}
+
+export function $createComposerLinkNode(url: string): ComposerLinkNode {
+  return $applyNodeReplacement(new ComposerLinkNode(url));
+}
+
 // ── ComposerTerminalContextNode ───────────────────────────────────────
 
 function ComposerTerminalContextDecorator(props: { context: TerminalContextDraft }) {
@@ -456,7 +626,7 @@ export class ComposerTerminalContextNode extends DecoratorNode<ReactElement> {
 
   override createDOM(): HTMLElement {
     const dom = document.createElement("span");
-    dom.className = "inline-flex align-middle leading-none";
+    dom.className = COMPOSER_INLINE_DECORATOR_HOST_CLASS_NAME;
     return dom;
   }
 
@@ -580,9 +750,11 @@ export function $createComposerBrowserContextNode(
 export type ComposerInlineTokenNode =
   | ComposerMentionNode
   | ComposerSkillNode
+  | ComposerSlashCommandNode
   | ComposerTerminalContextNode
   | ComposerBrowserContextNode
-  | ComposerAgentMentionNode;
+  | ComposerAgentMentionNode
+  | ComposerLinkNode;
 
 export function isComposerInlineTokenNode(
   candidate: unknown,
@@ -590,9 +762,11 @@ export function isComposerInlineTokenNode(
   return (
     candidate instanceof ComposerMentionNode ||
     candidate instanceof ComposerSkillNode ||
+    candidate instanceof ComposerSlashCommandNode ||
     candidate instanceof ComposerTerminalContextNode ||
     candidate instanceof ComposerBrowserContextNode ||
-    candidate instanceof ComposerAgentMentionNode
+    candidate instanceof ComposerAgentMentionNode ||
+    candidate instanceof ComposerLinkNode
   );
 }
 
@@ -600,7 +774,9 @@ export function isComposerInlineTokenNode(
 export const COMPOSER_NODE_CLASSES = [
   ComposerMentionNode,
   ComposerSkillNode,
+  ComposerSlashCommandNode,
   ComposerTerminalContextNode,
   ComposerBrowserContextNode,
   ComposerAgentMentionNode,
+  ComposerLinkNode,
 ] as const;

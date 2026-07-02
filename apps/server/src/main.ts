@@ -13,6 +13,7 @@ import { NetService } from "@t3tools/shared/Net";
 import {
   DEFAULT_PORT,
   deriveServerPaths,
+  resolveDefaultChatWorkspaceRoot,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
@@ -23,11 +24,14 @@ import { fixPath, resolveBaseDir } from "./os-jank";
 import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
+import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
+import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
@@ -167,11 +171,12 @@ const ServerConfigLive = (input: CliInput) =>
       const devUrl = Option.getOrElse(input.devUrl, () => env.devUrl);
       const configuredHome =
         Option.getOrUndefined(input.t3Home) ?? env.synaraHome ?? env.t3Home ?? env.dpcodeHome;
+      const userHomeDir = OS.homedir();
       const baseDir = yield* resolveBaseDir(configuredHome);
       // Import legacy state before runtime paths are derived under ~/.synara.
       yield* migrateLegacyHomeIfNeeded({
         baseDir,
-        homeDir: OS.homedir(),
+        homeDir: userHomeDir,
         devUrl,
       }).pipe(
         Effect.mapError(
@@ -211,7 +216,8 @@ const ServerConfigLive = (input: CliInput) =>
         mode,
         port,
         cwd: cliConfig.cwd,
-        homeDir: OS.homedir(),
+        homeDir: userHomeDir,
+        chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: userHomeDir }),
         host,
         baseDir,
         ...derivedPaths,
@@ -281,9 +287,11 @@ const makeServerProgram = (input: CliInput) =>
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
+    const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
+    yield* Effect.sync(() => startServerMemoryDiagnostics({ mode: config.mode }));
 
     if (!config.devUrl && !config.staticDir) {
       yield* Effect.logWarning(
@@ -295,12 +303,28 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     // Start the retention loop after the server is live so startup can serve
-    // existing history first, then prune inactive threads in the background.
+    // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
     yield* Effect.forkChild(recordStartupHeartbeat);
+    // Keep the macOS Claude OAuth token fresh using the same configured CLI binary
+    // that normal Claude Agent sessions use. Forked off the boot path: the
+    // keepalive is best-effort and must never block engine startup.
+    yield* Effect.forkChild(
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        yield* Effect.sync(() =>
+          startClaudeCredentialKeepalive({
+            binaryPath: settings.providers.claudeAgent.binaryPath,
+            homeDir: config.homeDir,
+            log: (message) => Effect.runFork(Effect.logInfo(message)),
+          }),
+        );
+      }),
+    );
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =

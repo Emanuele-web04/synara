@@ -36,10 +36,12 @@ import {
   resolveDefaultBranchActionDialogCopy,
   resolveCreatePrActionAvailability,
   resolveQuickAction,
+  resolvePullActionAvailability,
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
+import { formatClockDuration } from "~/session-logic";
 import { Button } from "~/components/ui/button";
 import {
   ChatHeaderSplitDivider,
@@ -50,6 +52,13 @@ import {
   CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
   CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
 } from "./chat/chatHeaderControls";
+import {
+  ENVIRONMENT_ROW_CLASS_NAME,
+  ENVIRONMENT_ROW_ICON_CLASS_NAME,
+  EnvironmentRow,
+  EnvironmentRowBody,
+  EnvironmentRowChevron,
+} from "./chat/environment/EnvironmentRow";
 import { Checkbox } from "~/components/ui/checkbox";
 import {
   Dialog,
@@ -93,6 +102,9 @@ interface GitActionsControlProps {
   gitCwd: string | null;
   activeThreadId: ThreadId | null;
   hideQuickActionLabel?: boolean;
+  // `header` renders the split quick-action button; `panel` collapses every git
+  // action into a single "Commit and Push" Environment panel row + dropdown.
+  variant?: "header" | "panel";
 }
 
 interface PendingDefaultBranchAction {
@@ -144,13 +156,7 @@ function formatElapsedDescription(startedAtMs: number | null): string | undefine
   if (startedAtMs === null) {
     return undefined;
   }
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAtMs) / 1000));
-  if (elapsedSeconds < 60) {
-    return `Running for ${elapsedSeconds}s`;
-  }
-  const minutes = Math.floor(elapsedSeconds / 60);
-  const seconds = elapsedSeconds % 60;
-  return `Running for ${minutes}m ${seconds}s`;
+  return `Running for ${formatClockDuration(Date.now() - startedAtMs)}`;
 }
 
 function resolveProgressDescription(progress: ActiveGitActionProgress): string | undefined {
@@ -304,7 +310,9 @@ export default function GitActionsControl({
   gitCwd,
   activeThreadId,
   hideQuickActionLabel = false,
+  variant = "header",
 }: GitActionsControlProps) {
+  const isPanel = variant === "panel";
   const { settings } = useAppSettings();
   const providerOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
   const activeThread = useStore(
@@ -1086,6 +1094,10 @@ export default function GitActionsControl({
     const pushMenuItem = gitActionMenuItems.find((item) => item.id === "push");
     const prMenuItem = gitActionMenuItems.find((item) => item.id === "pr");
     const createBranchDisabled = isGitActionRunning || !gitStatusForActions;
+    const pullAvailability = resolvePullActionAvailability({
+      gitStatus: gitStatusForActions,
+      isBusy: isGitActionRunning,
+    });
 
     if (commitMenuItem) {
       items.push({
@@ -1118,6 +1130,15 @@ export default function GitActionsControl({
         onSelect: () => openDialogForMenuItem(commitPushMenuItem),
       });
     }
+
+    items.push({
+      id: "sync",
+      label: "Pull",
+      disabled: !pullAvailability.canRun,
+      disabledReason: pullAvailability.hint,
+      icon: "sync",
+      onSelect: runSyncWithRemote,
+    });
 
     if (pushMenuItem) {
       items.push({
@@ -1172,6 +1193,7 @@ export default function GitActionsControl({
     isGitActionRunning,
     openCreateBranchDialog,
     openDialogForMenuItem,
+    runSyncWithRemote,
   ]);
 
   const runDialogAction = useCallback(() => {
@@ -1221,155 +1243,70 @@ export default function GitActionsControl({
 
   if (!gitCwd) return null;
 
-  return (
-    <>
-      {!isRepo ? (
-        <Button
-          variant="chrome-outline"
-          size="xs"
-          className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME)}
-          disabled={initMutation.isPending}
-          onClick={() => initMutation.mutate()}
-        >
-          {initMutation.isPending ? "Initializing..." : "Initialize Git"}
-        </Button>
-      ) : (
-        <ChatHeaderSplitGroup label="Git actions">
-          {quickActionDisabledReason ? (
-            <Popover>
-              <PopoverTrigger
-                openOnHover
-                render={
-                  <Button
-                    aria-label={quickAction.label}
-                    aria-disabled="true"
-                    className={cn(
-                      hideQuickActionLabel
-                        ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
-                        : CHAT_HEADER_CONTROL_CLASS_NAME,
-                      CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                      CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-                      "cursor-not-allowed opacity-64",
-                    )}
-                    size={hideQuickActionLabel ? "icon-xs" : "xs"}
-                    variant="chrome-outline"
-                    title={quickAction.label}
-                  />
-                }
-              >
-                <GitQuickActionIcon quickAction={quickAction} />
-                {!hideQuickActionLabel ? (
-                  <span className="font-normal">{quickAction.label}</span>
-                ) : null}
-              </PopoverTrigger>
-              <PopoverPopup tooltipStyle side="bottom" align="start">
-                {quickActionDisabledReason}
-              </PopoverPopup>
-            </Popover>
-          ) : (
-            <Button
-              variant="chrome-outline"
-              size={hideQuickActionLabel ? "icon-xs" : "xs"}
-              className={cn(
-                hideQuickActionLabel
-                  ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
-                  : CHAT_HEADER_CONTROL_CLASS_NAME,
-                CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
-              )}
-              disabled={isGitActionRunning || quickAction.disabled}
-              aria-label={quickAction.label}
-              title={quickAction.label}
-              onClick={runQuickAction}
-            >
-              <GitQuickActionIcon quickAction={quickAction} />
-              {!hideQuickActionLabel ? (
-                <span className="font-normal">{quickAction.label}</span>
-              ) : null}
-            </Button>
-          )}
-          <ChatHeaderSplitDivider />
-          <Menu
-            onOpenChange={(open) => {
-              if (open) void invalidateGitQueries(queryClient);
-            }}
-          >
-            <MenuTrigger
-              render={
-                <Button
-                  aria-label="Git action options"
-                  size="icon-xs"
-                  variant="chrome-outline"
-                  className={cn(
-                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
-                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
-                    CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
-                  )}
-                />
-              }
-              disabled={isGitActionRunning}
-            >
-              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
-            </MenuTrigger>
-            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
-              <MenuGroup>
-                <MenuGroupLabel>Git actions</MenuGroupLabel>
-                {gitPickerMenuItems.map((item) => {
-                  const menuRow = <GitPickerMenuRow item={item} />;
-                  if (item.disabled && item.disabledReason) {
-                    return (
-                      <Popover key={item.id}>
-                        <PopoverTrigger
-                          openOnHover
-                          nativeButton={false}
-                          render={<span className="block cursor-not-allowed" />}
-                        >
-                          {menuRow}
-                        </PopoverTrigger>
-                        <PopoverPopup tooltipStyle side="left" align="center">
-                          {item.disabledReason}
-                        </PopoverPopup>
-                      </Popover>
-                    );
-                  }
-                  return <GitPickerMenuRow key={item.id} item={item} />;
-                })}
-              </MenuGroup>
-              {(gitStatusForActions?.branch === null ||
-                (gitStatusForActions &&
-                  gitStatusForActions.branch !== null &&
-                  !gitStatusForActions.hasWorkingTreeChanges &&
-                  gitStatusForActions.behindCount > 0 &&
-                  gitStatusForActions.aheadCount === 0) ||
-                isGitStatusOutOfSync ||
-                gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
-              {gitStatusForActions?.branch === null && (
-                <p className="px-3 py-1.5 text-xs text-warning">
-                  Detached HEAD: create and checkout a branch to enable push and PR actions.
-                </p>
-              )}
-              {gitStatusForActions &&
-                gitStatusForActions.branch !== null &&
-                !gitStatusForActions.hasWorkingTreeChanges &&
-                gitStatusForActions.behindCount > 0 &&
-                gitStatusForActions.aheadCount === 0 && (
-                  <p className="px-3 py-1.5 text-xs text-warning">
-                    Behind upstream. Pull/rebase first.
-                  </p>
-                )}
-              {isGitStatusOutOfSync && (
-                <p className="px-3 py-1.5 text-xs text-muted-foreground">
-                  Refreshing git status...
-                </p>
-              )}
-              {gitStatusError && (
-                <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
-              )}
-            </ComposerPickerMenuPopup>
-          </Menu>
-        </ChatHeaderSplitGroup>
-      )}
+  const hasRunnableCommitPushAction = gitActionMenuItems.some(
+    (item) => (item.id === "commit_push" || item.id === "push") && !item.disabled,
+  );
+  const shouldDimPanelCommitPushRow = isGitActionRunning || !hasRunnableCommitPushAction;
 
+  // Shared dropdown body — the picker rows plus the contextual git-status warnings.
+  // Rendered identically by the header split button and the panel "Commit and Push" row.
+  const gitMenuContent = (
+    <>
+      <MenuGroup>
+        <MenuGroupLabel>Git actions</MenuGroupLabel>
+        {gitPickerMenuItems.map((item) => {
+          const menuRow = <GitPickerMenuRow item={item} />;
+          if (item.disabled && item.disabledReason) {
+            return (
+              <Popover key={item.id}>
+                <PopoverTrigger
+                  openOnHover
+                  nativeButton={false}
+                  render={<span className="block cursor-not-allowed" />}
+                >
+                  {menuRow}
+                </PopoverTrigger>
+                <PopoverPopup tooltipStyle side="left" align="center">
+                  {item.disabledReason}
+                </PopoverPopup>
+              </Popover>
+            );
+          }
+          return <GitPickerMenuRow key={item.id} item={item} />;
+        })}
+      </MenuGroup>
+      {(gitStatusForActions?.branch === null ||
+        (gitStatusForActions &&
+          gitStatusForActions.branch !== null &&
+          !gitStatusForActions.hasWorkingTreeChanges &&
+          gitStatusForActions.behindCount > 0 &&
+          gitStatusForActions.aheadCount === 0) ||
+        isGitStatusOutOfSync ||
+        gitStatusError) && <MenuSeparator className="mx-3 mt-2" />}
+      {gitStatusForActions?.branch === null && (
+        <p className="px-3 py-1.5 text-xs text-warning">
+          Detached HEAD: create and checkout a branch to enable push and PR actions.
+        </p>
+      )}
+      {gitStatusForActions &&
+        gitStatusForActions.branch !== null &&
+        !gitStatusForActions.hasWorkingTreeChanges &&
+        gitStatusForActions.behindCount > 0 &&
+        gitStatusForActions.aheadCount === 0 && (
+          <p className="px-3 py-1.5 text-xs text-warning">Behind upstream. Pull/rebase first.</p>
+        )}
+      {isGitStatusOutOfSync && (
+        <p className="px-3 py-1.5 text-xs text-muted-foreground">Refreshing git status...</p>
+      )}
+      {gitStatusError && (
+        <p className="px-3 py-1.5 text-xs text-destructive">{gitStatusError.message}</p>
+      )}
+    </>
+  );
+
+  // The git action dialogs are identical across surfaces; only the trigger differs.
+  const gitActionDialogs = (
+    <>
       <Dialog
         open={isCommitDialogOpen}
         onOpenChange={(open) => {
@@ -1641,6 +1578,160 @@ export default function GitActionsControl({
           </DialogPanel>
         </DialogPopup>
       </Dialog>
+    </>
+  );
+
+  if (isPanel) {
+    return (
+      <>
+        {!isRepo ? (
+          <EnvironmentRow
+            icon={<GitActionGlyph name="branch" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+            label={initMutation.isPending ? "Initializing..." : "Initialize Git"}
+            disabled={initMutation.isPending}
+            onClick={() => initMutation.mutate()}
+          />
+        ) : (
+          <Menu
+            onOpenChange={(open) => {
+              if (open) void invalidateGitQueries(queryClient);
+            }}
+          >
+            <MenuTrigger
+              render={
+                <button
+                  type="button"
+                  className={cn(
+                    ENVIRONMENT_ROW_CLASS_NAME,
+                    shouldDimPanelCommitPushRow && "opacity-55",
+                  )}
+                  aria-label={
+                    shouldDimPanelCommitPushRow
+                      ? "Commit and Push unavailable; open Git actions menu"
+                      : "Commit and Push"
+                  }
+                  title={
+                    shouldDimPanelCommitPushRow
+                      ? "Commit and Push unavailable. Open for more Git actions."
+                      : "Commit and Push"
+                  }
+                />
+              }
+            >
+              <EnvironmentRowBody
+                icon={<GitActionGlyph name="push" className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
+                label="Commit and Push"
+                trailing={<EnvironmentRowChevron />}
+              />
+            </MenuTrigger>
+            <ComposerPickerMenuPopup align="start" side="bottom" className="w-60 min-w-60">
+              {gitMenuContent}
+            </ComposerPickerMenuPopup>
+          </Menu>
+        )}
+        {gitActionDialogs}
+      </>
+    );
+  }
+
+  return (
+    <>
+      {!isRepo ? (
+        <Button
+          variant="chrome-outline"
+          size="xs"
+          className={cn(CHAT_HEADER_CONTROL_CLASS_NAME, CHAT_HEADER_ICON_STRENGTH_CLASS_NAME)}
+          disabled={initMutation.isPending}
+          onClick={() => initMutation.mutate()}
+        >
+          {initMutation.isPending ? "Initializing..." : "Initialize Git"}
+        </Button>
+      ) : (
+        <ChatHeaderSplitGroup label="Git actions">
+          {quickActionDisabledReason ? (
+            <Popover>
+              <PopoverTrigger
+                openOnHover
+                render={
+                  <Button
+                    aria-label={quickAction.label}
+                    aria-disabled="true"
+                    className={cn(
+                      hideQuickActionLabel
+                        ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                        : CHAT_HEADER_CONTROL_CLASS_NAME,
+                      CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                      CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+                      "cursor-not-allowed opacity-64",
+                    )}
+                    size={hideQuickActionLabel ? "icon-xs" : "xs"}
+                    variant="chrome-outline"
+                    title={quickAction.label}
+                  />
+                }
+              >
+                <GitQuickActionIcon quickAction={quickAction} />
+                {!hideQuickActionLabel ? (
+                  <span className="font-normal">{quickAction.label}</span>
+                ) : null}
+              </PopoverTrigger>
+              <PopoverPopup tooltipStyle side="bottom" align="start">
+                {quickActionDisabledReason}
+              </PopoverPopup>
+            </Popover>
+          ) : (
+            <Button
+              variant="chrome-outline"
+              size={hideQuickActionLabel ? "icon-xs" : "xs"}
+              className={cn(
+                hideQuickActionLabel
+                  ? CHAT_HEADER_ICON_CONTROL_CLASS_NAME
+                  : CHAT_HEADER_CONTROL_CLASS_NAME,
+                CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                CHAT_HEADER_SPLIT_LEADING_CLASS_NAME,
+              )}
+              disabled={isGitActionRunning || quickAction.disabled}
+              aria-label={quickAction.label}
+              title={quickAction.label}
+              onClick={runQuickAction}
+            >
+              <GitQuickActionIcon quickAction={quickAction} />
+              {!hideQuickActionLabel ? (
+                <span className="font-normal">{quickAction.label}</span>
+              ) : null}
+            </Button>
+          )}
+          <ChatHeaderSplitDivider />
+          <Menu
+            onOpenChange={(open) => {
+              if (open) void invalidateGitQueries(queryClient);
+            }}
+          >
+            <MenuTrigger
+              render={
+                <Button
+                  aria-label="Git action options"
+                  size="icon-xs"
+                  variant="chrome-outline"
+                  className={cn(
+                    CHAT_HEADER_ICON_CONTROL_CLASS_NAME,
+                    CHAT_HEADER_ICON_STRENGTH_CLASS_NAME,
+                    CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME,
+                  )}
+                />
+              }
+              disabled={isGitActionRunning}
+            >
+              <ChevronDownIcon aria-hidden="true" className="size-3.5" />
+            </MenuTrigger>
+            <ComposerPickerMenuPopup align="end" side="bottom" className="w-50 min-w-50">
+              {gitMenuContent}
+            </ComposerPickerMenuPopup>
+          </Menu>
+        </ChatHeaderSplitGroup>
+      )}
+
+      {gitActionDialogs}
     </>
   );
 }

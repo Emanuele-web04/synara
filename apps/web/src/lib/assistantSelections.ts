@@ -10,7 +10,7 @@ import { randomUUID } from "./utils";
 const TRAILING_ASSISTANT_SELECTIONS_PATTERN =
   /\n*<assistant_selection>\n([\s\S]*?)\n<\/assistant_selection>\s*$/;
 const EMBEDDED_ASSISTANT_SELECTIONS_PATTERN =
-  /\n*<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>(?=\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*)?$)/;
+  /\n*<assistant_selection>\n[\s\S]*?\n<\/assistant_selection>(?=\n*(<terminal_context>\n[\s\S]*?\n<\/terminal_context>\s*)?(<file_comments>\n[\s\S]*?\n<\/file_comments>\s*)?(<pasted_text>\n[\s\S]*?\n<\/pasted_text>\s*)?$)/;
 const ASSISTANT_SELECTION_PREVIEW_MAX_CHARS = 44;
 
 export interface ExtractedAssistantSelections {

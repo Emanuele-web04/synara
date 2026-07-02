@@ -1,7 +1,8 @@
 // FILE: cursorSkillsDiscovery.test.ts
 // Purpose: Verifies Cursor filesystem skill discovery without starting Cursor ACP.
 // Layer: Server provider tests
-// Exports: Vitest cases for cursorSkillsDiscovery.
+// Exports: Vitest cases for cursorSkillsDiscovery (frontmatter parsing is covered
+// in skillsCatalog.test.ts where the parser now lives).
 
 import { mkdtempSync, rmSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -10,26 +11,7 @@ import * as path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { discoverCursorSkills, parseSkillFrontmatter } from "./cursorSkillsDiscovery.ts";
-
-describe("parseSkillFrontmatter", () => {
-  it("parses scalar Agent Skill metadata", () => {
-    expect(
-      parseSkillFrontmatter(`---
-name: check-code
-description: "Review recent code changes"
-disable-model-invocation: true
----
-
-# Check Code
-`),
-    ).toEqual({
-      name: "check-code",
-      description: "Review recent code changes",
-      "disable-model-invocation": true,
-    });
-  });
-});
+import { discoverCursorSkills } from "./cursorSkillsDiscovery.ts";
 
 describe("discoverCursorSkills", () => {
   it("discovers project, nested, and user Cursor skill folders", async () => {
@@ -85,6 +67,35 @@ description: Help globally
         enabled: true,
         scope: "project",
       });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the provider scope when the cwd lives under the home dir", async () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "cursor-skills-home-"));
+    const homeDir = path.join(root, "home");
+    const cwd = path.join(homeDir, "projects", "app");
+    const userSkill = path.join(homeDir, ".cursor", "skills", "global-helper");
+
+    try {
+      await mkdir(userSkill, { recursive: true });
+      await mkdir(cwd, { recursive: true });
+      await writeFile(
+        path.join(userSkill, "SKILL.md"),
+        `---
+name: global-helper
+description: Help globally
+---
+
+# Global Helper
+`,
+      );
+
+      const skills = await discoverCursorSkills({ cwd, homeDir });
+
+      expect(skills).toHaveLength(1);
+      expect(skills[0]).toMatchObject({ name: "global-helper", scope: "cursor" });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

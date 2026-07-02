@@ -1,3 +1,4 @@
+import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   Deferred,
@@ -134,6 +135,10 @@ interface AcpAssistantSegmentState {
 
 interface EnsureActiveAssistantSegmentResult {
   readonly itemId: string;
+  readonly completedEvent?: Extract<
+    AcpParsedSessionEvent,
+    { readonly _tag: "AssistantItemCompleted" }
+  >;
   readonly startedEvent?: Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>;
 }
 
@@ -200,12 +205,17 @@ const makeAcpSessionRuntime = (
         ),
       );
 
+    const env = options.spawn.env ? { ...process.env, ...options.spawn.env } : process.env;
+    const prepared = prepareWindowsSafeProcess(options.spawn.command, options.spawn.args, {
+      cwd: options.spawn.cwd,
+      env,
+    });
     const child = yield* spawner
       .spawn(
-        ChildProcess.make(options.spawn.command, [...options.spawn.args], {
+        ChildProcess.make(prepared.command, prepared.args, {
           ...(options.spawn.cwd ? { cwd: options.spawn.cwd } : {}),
-          ...(options.spawn.env ? { env: { ...process.env, ...options.spawn.env } } : {}),
-          shell: process.platform === "win32",
+          env,
+          shell: prepared.shell,
         }),
       )
       .pipe(
@@ -654,6 +664,7 @@ const handleSessionUpdate = ({
           queue,
           assistantSegmentRef,
           sessionId: params.sessionId,
+          requestedItemId: event.itemId,
         });
         yield* Queue.offer(queue, {
           ...event,
@@ -704,37 +715,58 @@ const ensureActiveAssistantSegment = ({
   queue,
   assistantSegmentRef,
   sessionId,
+  requestedItemId,
 }: {
   readonly queue: Queue.Queue<AcpParsedSessionEvent>;
   readonly assistantSegmentRef: Ref.Ref<AcpAssistantSegmentState>;
   readonly sessionId: string;
+  readonly requestedItemId?: string | undefined;
 }) =>
   Ref.modify<AcpAssistantSegmentState, EnsureActiveAssistantSegmentResult>(
     assistantSegmentRef,
     (current) => {
-      if (current.activeItemId) {
+      if (current.activeItemId && current.activeItemId === requestedItemId) {
         return [{ itemId: current.activeItemId }, current] as const;
       }
-      const itemId = assistantItemId(sessionId, current.nextSegmentIndex);
+      if (current.activeItemId && requestedItemId === undefined) {
+        return [{ itemId: current.activeItemId }, current] as const;
+      }
+      // Cursor can provide stable message ids for chunks that resume after tool calls.
+      // Keep those ids so projection appends the pieces instead of displaying broken segments.
+      const itemId = requestedItemId ?? assistantItemId(sessionId, current.nextSegmentIndex);
+      const completedEvent = current.activeItemId
+        ? ({
+            _tag: "AssistantItemCompleted",
+            itemId: current.activeItemId,
+          } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemCompleted" }>)
+        : undefined;
       return [
         {
           itemId,
+          ...(completedEvent ? { completedEvent } : {}),
           startedEvent: {
             _tag: "AssistantItemStarted",
             itemId,
           } satisfies Extract<AcpParsedSessionEvent, { readonly _tag: "AssistantItemStarted" }>,
         },
         {
-          nextSegmentIndex: current.nextSegmentIndex + 1,
+          nextSegmentIndex:
+            requestedItemId === undefined ? current.nextSegmentIndex + 1 : current.nextSegmentIndex,
           activeItemId: itemId,
         } satisfies AcpAssistantSegmentState,
       ] as const;
     },
   ).pipe(
     Effect.flatMap((result) =>
-      result.startedEvent
-        ? Queue.offer(queue, result.startedEvent).pipe(Effect.as(result.itemId))
-        : Effect.succeed(result.itemId),
+      Effect.gen(function* () {
+        if (result.completedEvent) {
+          yield* Queue.offer(queue, result.completedEvent);
+        }
+        if (result.startedEvent) {
+          yield* Queue.offer(queue, result.startedEvent);
+        }
+        return result.itemId;
+      }),
     ),
   );
 
