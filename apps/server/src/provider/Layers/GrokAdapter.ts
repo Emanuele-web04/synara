@@ -1205,7 +1205,16 @@ export function makeGrokAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
-                      if (ctx.compactingThread || isGrokContextCompactionToolCall(event.toolCall)) {
+                      // The title heuristic only applies between turns (grok-initiated
+                      // auto-compaction); a live turn's tool call may legitimately
+                      // mention "compact"/"summarize" and must render normally, and
+                      // resume replay stays suppressed like every other event.
+                      const treatAsCompaction =
+                        ctx.compactingThread ||
+                        (ctx.resumeReplayReady === undefined &&
+                          ctx.activeTurnId === undefined &&
+                          isGrokContextCompactionToolCall(event.toolCall));
+                      if (treatAsCompaction) {
                         const lifecycle =
                           event.toolCall.status === "completed" ||
                           event.toolCall.status === "failed"
@@ -1307,6 +1316,10 @@ export function makeGrokAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
+          // Config RPCs run after the consumer fork so replay emitted while they are
+          // in flight keeps draining. The session is already registered at this
+          // point, so a config failure must tear it down instead of leaking a live
+          // child that the start-scope finalizer no longer owns.
           yield* applyRequestedSessionConfiguration({
             runtime: acp,
             runtimeMode: input.runtimeMode,
@@ -1314,7 +1327,7 @@ export function makeGrokAdapter(
             modelSelection: grokModelSelection,
             mapError: ({ cause, method }) =>
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-          });
+          }).pipe(Effect.tapError(() => Effect.ignore(stopSessionInternal(ctx))));
 
           if (resumeSessionId !== undefined) {
             yield* waitForGrokResumeReplayQuiet(ctx);
@@ -1395,6 +1408,16 @@ export function makeGrokAdapter(
     const sendTurn: GrokAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        // compactThread holds the thread lock but sendTurn intentionally does not
+        // (turns are long-running); reject instead of racing a second prompt whose
+        // events the compaction suppression would silently drop.
+        if (ctx.compactingThread) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Cannot start a turn while Grok context compaction is in progress.",
+          });
+        }
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
         }
@@ -1771,9 +1794,12 @@ export function makeGrokAdapter(
           ctx.compactingThread = false;
 
           if (Exit.isFailure(compactResult)) {
-            const detail = Cause.failureOption(compactResult.cause)
-              .pipe(Option.map((error) => (error instanceof Error ? error.message : String(error))))
-              .pipe(Option.getOrElse(() => "Grok compaction failed."));
+            // Interruption (session stopping) is not a compaction failure; let it unwind.
+            if (Cause.hasInterruptsOnly(compactResult.cause)) {
+              return yield* Effect.failCause(compactResult.cause);
+            }
+            const squashed = Cause.squash(compactResult.cause);
+            const detail = squashed instanceof Error ? squashed.message : String(squashed);
             yield* emitGrokContextCompactionRuntimeEvent(ctx, {
               lifecycle: "item.completed",
               status: "failed",
@@ -1801,7 +1827,7 @@ export function makeGrokAdapter(
             threadId: ctx.threadId,
             payload: {
               state: "compacted",
-              reason: "provider.compactThread",
+              detail: { reason: "provider.compactThread" },
             },
           });
         }).pipe(
