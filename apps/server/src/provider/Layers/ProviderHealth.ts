@@ -2488,7 +2488,7 @@ export function projectProviderStatusesForSettings(
         projected.push(projectStatusForProviderInstance(visibleStatus, instance));
         continue;
       }
-      if (!instance.isDefault) {
+      if (!instance.isDefault || instances.length > 1) {
         projected.push(
           makeUncheckedProviderInstanceStatus(
             provider,

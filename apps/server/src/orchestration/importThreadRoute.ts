@@ -86,6 +86,12 @@ process.stdout.write(JSON.stringify(result ?? null));
 
 type ClaudeSessionQueryMethod = "getSessionInfo" | "getSessionMessages";
 
+export function claudeHistoricalSessionChildEnvironment(
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  return environment;
+}
+
 async function runClaudeSessionQueryInChildProcess<T>(input: {
   readonly method: ClaudeSessionQueryMethod;
   readonly sessionId: string;
@@ -110,7 +116,7 @@ async function runClaudeSessionQueryInChildProcess<T>(input: {
           JSON.stringify(input.dir ? { dir: input.dir } : null),
         ],
         {
-          env: { ...process.env, ...input.environment },
+          env: claudeHistoricalSessionChildEnvironment(input.environment),
           maxBuffer: 64 * 1024 * 1024,
         },
         (error, childStdout, childStderr) => {

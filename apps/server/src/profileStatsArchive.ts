@@ -624,7 +624,11 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
             AS totalProcessedTokens,
           CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
-          COALESCE(tm.provider, json_extract(a.payload_json, '$.provider')) AS provider,
+          COALESCE(
+            tm.provider,
+            tm.instanceId,
+            json_extract(a.payload_json, '$.provider')
+          ) AS provider,
           tm.model AS model,
           pm.dispatch_origin AS dispatchOrigin,
           a.created_at AS createdAt

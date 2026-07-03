@@ -19,7 +19,11 @@ import type { ProviderServiceShape } from "../provider/Services/ProviderService"
 import type { ServerSettingsShape } from "../serverSettings";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
-import { claudeHistoricalSessionEnvironment, makeImportThreadHandler } from "./importThreadRoute";
+import {
+  claudeHistoricalSessionChildEnvironment,
+  claudeHistoricalSessionEnvironment,
+  makeImportThreadHandler,
+} from "./importThreadRoute";
 
 const threadId = ThreadId.makeUnsafe("thread-import");
 const projectId = ProjectId.makeUnsafe("project-import");
@@ -35,6 +39,25 @@ it("expands instance Claude homes for historical-session imports", () => {
 
   assert.equal(environment?.HOME, path.join(homedir(), "claude-work"));
   assert.equal(environment?.SYNARA_CLAUDE_IMPORT_TEST, "1");
+});
+
+it("does not remerge ambient credentials into Claude import child environments", () => {
+  const original = process.env.ANTHROPIC_API_KEY;
+  process.env.ANTHROPIC_API_KEY = "ambient-key";
+  try {
+    const environment = claudeHistoricalSessionChildEnvironment({
+      HOME: "/tmp/synara-claude-import",
+    });
+
+    assert.deepEqual(environment, { HOME: "/tmp/synara-claude-import" });
+    assert.equal(environment.ANTHROPIC_API_KEY, undefined);
+  } finally {
+    if (original === undefined) {
+      delete process.env.ANTHROPIC_API_KEY;
+    } else {
+      process.env.ANTHROPIC_API_KEY = original;
+    }
+  }
 });
 
 function makeCodexThread(): OrchestrationThread {

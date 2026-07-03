@@ -119,6 +119,70 @@ export function defaultInstanceIdForProvider(provider: ProviderKind): ProviderIn
   return provider;
 }
 
+export function inferLegacyProviderKindFromInstanceId(
+  instanceId: string | null | undefined,
+): ProviderKind | undefined {
+  if (!instanceId) return undefined;
+  if (isProviderKind(instanceId)) return instanceId;
+
+  const lowerInstanceId = instanceId.toLowerCase();
+  if (lowerInstanceId.startsWith("claude")) return "claudeAgent";
+  if (lowerInstanceId.startsWith("codex")) return "codex";
+  if (lowerInstanceId.startsWith("cursor")) return "cursor";
+  if (
+    lowerInstanceId.startsWith("antigravity") ||
+    lowerInstanceId.startsWith("gemini") ||
+    lowerInstanceId.startsWith("agy")
+  )
+    return "antigravity";
+  if (lowerInstanceId.startsWith("grok")) return "grok";
+  if (lowerInstanceId.startsWith("droid")) return "droid";
+  if (
+    lowerInstanceId.startsWith("opencode") ||
+    lowerInstanceId.startsWith("open_code") ||
+    lowerInstanceId.startsWith("kilo")
+  )
+    return "opencode";
+  if (lowerInstanceId.startsWith("pi")) return "pi";
+  if (lowerInstanceId.startsWith("devin")) return "devin";
+  return undefined;
+}
+
+export function inferLegacyProviderKindFromModel(
+  model: string | null | undefined,
+): ProviderKind {
+  const lowerModel = model?.toLowerCase() ?? "";
+  if (
+    lowerModel.includes("claude") ||
+    lowerModel.includes("sonnet") ||
+    lowerModel.includes("opus") ||
+    lowerModel.includes("haiku")
+  )
+    return "claudeAgent";
+  if (lowerModel.includes("gemini") || lowerModel.includes("antigravity")) return "antigravity";
+  if (lowerModel.includes("grok")) return "grok";
+  if (lowerModel.includes("droid")) return "droid";
+  if (lowerModel.includes("devin")) return "devin";
+  if (
+    lowerModel.includes("opencode") ||
+    lowerModel.includes("open_code") ||
+    lowerModel.includes("kilo")
+  )
+    return "opencode";
+  if (lowerModel.includes("cursor")) return "cursor";
+  if (lowerModel.startsWith("pi/") || lowerModel.includes("/pi/")) return "pi";
+  return "codex";
+}
+
+export function inferLegacyProviderKindFromModelSelection(
+  selection: Pick<ModelSelection, "instanceId" | "model"> | null | undefined,
+): ProviderKind {
+  return (
+    inferLegacyProviderKindFromInstanceId(selection?.instanceId) ??
+    inferLegacyProviderKindFromModel(selection?.model)
+  );
+}
+
 export function resolveModelSelectionInstanceId(
   selection: Pick<ModelSelection, "provider" | "instanceId"> | null | undefined,
 ): ProviderInstanceId {

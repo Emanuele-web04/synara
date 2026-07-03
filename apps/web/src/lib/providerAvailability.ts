@@ -51,6 +51,10 @@ export function normalizeProviderStatusForLocalConfig(input: {
     };
   }
 
+  if (status.enabled === false) {
+    return status;
+  }
+
   const customBinaryPath = normalizeCustomBinaryPath(input.customBinaryPath);
   if (!customBinaryPath) {
     return status;
