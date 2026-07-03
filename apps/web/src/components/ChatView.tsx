@@ -21,6 +21,7 @@ import {
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
   type ProviderStartOptions,
+  type ProviderThreadGoal,
   type ProviderUserInputAnswers,
   type PinnedMessage,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
@@ -264,6 +265,7 @@ import {
   TemporaryThreadIcon,
   XIcon,
 } from "~/lib/icons";
+import { ComposerGoalChip } from "./chat/ComposerGoalChip";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
 import { Button } from "./ui/button";
@@ -538,6 +540,7 @@ const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_PROVIDER_NATIVE_COMMANDS: ProviderNativeCommandDescriptor[] = [];
 const EMPTY_PROVIDER_SKILLS: ProviderSkillDescriptor[] = [];
+const CUSTOM_GOAL_INACTIVE_STATUSES = new Set(["budget_limited", "cleared", "complete"]);
 const LOCAL_PROJECT_DRAFT_CONTEXT = {
   envMode: "local",
   worktreePath: null,
@@ -551,6 +554,69 @@ function waitForDraftProjectSyncDelay(ms: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
   });
+}
+
+type ComposerGoalDisplay = {
+  source: "codex-native" | "codex-draft" | "custom";
+  objective: string;
+  status: string;
+};
+
+type ThreadWithOptionalCustomGoal = Thread & {
+  goal?: {
+    objective?: unknown;
+    status?: unknown;
+  } | null;
+};
+
+type CustomGoalClearCommand = {
+  type: "thread.goal.clear";
+  commandId: ReturnType<typeof newCommandId>;
+  threadId: ThreadId;
+  createdAt: string;
+};
+
+function buildOptimisticCodexGoal(input: {
+  threadId: ThreadId;
+  objective: string;
+  tokenBudget?: number | null;
+}): ProviderThreadGoal {
+  const now = Date.now();
+  return {
+    threadId: input.threadId,
+    objective: input.objective,
+    status: "active",
+    tokenBudget: input.tokenBudget ?? null,
+    tokensUsed: 0,
+    timeUsedSeconds: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+function readEnabledCustomComposerGoal(
+  thread: Thread | undefined,
+  provider: ProviderKind | null,
+): ComposerGoalDisplay | null {
+  if (!thread || provider === "codex") {
+    return null;
+  }
+
+  const goal = (thread as ThreadWithOptionalCustomGoal).goal;
+  if (
+    !goal ||
+    typeof goal.objective !== "string" ||
+    typeof goal.status !== "string" ||
+    CUSTOM_GOAL_INACTIVE_STATUSES.has(goal.status)
+  ) {
+    return null;
+  }
+
+  return {
+    source: "custom",
+    objective: goal.objective,
+    status: goal.status,
+  };
 }
 
 // Waits for a project to appear in the shell snapshot before a local draft points at it.
@@ -1425,6 +1491,156 @@ export default function ChatView({
   const browserOpen = rawSearch.panel === "browser";
   const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
   const activeThreadId = activeThread?.id ?? null;
+  const activeThreadProviderForGoal = activeThread?.modelSelection.provider ?? null;
+  const activeThreadSessionStatusForGoal = activeThread?.session?.status ?? null;
+  const [nativeCodexGoal, setNativeCodexGoal] = useState<ProviderThreadGoal | null>(null);
+  const pendingOptimisticCodexGoalRef = useRef<ProviderThreadGoal | null>(null);
+  const [codexGoalDraftActive, setCodexGoalDraftActive] = useState(false);
+  const [isClearingComposerGoal, setIsClearingComposerGoal] = useState(false);
+  const activateOptimisticCodexGoal = useCallback(
+    (input: { threadId: ThreadId; objective: string; tokenBudget?: number | null }) => {
+      const objective = input.objective.trim();
+      if (!objective) {
+        return;
+      }
+      const optimisticGoal = buildOptimisticCodexGoal({
+        threadId: input.threadId,
+        objective,
+        tokenBudget: input.tokenBudget ?? null,
+      });
+      pendingOptimisticCodexGoalRef.current = optimisticGoal;
+      setNativeCodexGoal(optimisticGoal);
+    },
+    [],
+  );
+  useEffect(() => {
+    if (
+      !activeThreadId ||
+      !isServerThread ||
+      activeThreadProviderForGoal !== "codex" ||
+      activeThreadSessionStatusForGoal === "closed"
+    ) {
+      setNativeCodexGoal(null);
+      return;
+    }
+
+    const api = readNativeApi();
+    if (!api) {
+      setNativeCodexGoal(null);
+      return;
+    }
+
+    let cancelled = false;
+    void api.provider
+      .getThreadGoal({ threadId: activeThreadId })
+      .then(({ goal }) => {
+        if (!cancelled) {
+          if (goal) {
+            pendingOptimisticCodexGoalRef.current = null;
+            setNativeCodexGoal(goal);
+            return;
+          }
+          const pendingGoal = pendingOptimisticCodexGoalRef.current;
+          if (pendingGoal?.threadId === activeThreadId) {
+            setNativeCodexGoal(pendingGoal);
+            return;
+          }
+          setNativeCodexGoal(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          const pendingGoal = pendingOptimisticCodexGoalRef.current;
+          if (pendingGoal?.threadId === activeThreadId) {
+            setNativeCodexGoal(pendingGoal);
+            return;
+          }
+          setNativeCodexGoal(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeThreadId,
+    activeThreadProviderForGoal,
+    activeThreadSessionStatusForGoal,
+    isServerThread,
+  ]);
+  const enabledNativeCodexGoal =
+    nativeCodexGoal && nativeCodexGoal.status !== "complete" ? nativeCodexGoal : null;
+  const customComposerGoal = useMemo(
+    () => readEnabledCustomComposerGoal(activeThread, activeThreadProviderForGoal),
+    [activeThread, activeThreadProviderForGoal],
+  );
+  const activeComposerGoal = enabledNativeCodexGoal
+    ? ({
+        source: "codex-native",
+        objective: enabledNativeCodexGoal.objective,
+        status: enabledNativeCodexGoal.status,
+      } satisfies ComposerGoalDisplay)
+    : codexGoalDraftActive
+      ? ({
+          source: "codex-draft",
+          objective: "Next message will start a Codex goal",
+          status: "draft",
+        } satisfies ComposerGoalDisplay)
+      : customComposerGoal;
+  const handleClearComposerGoal = useCallback(async () => {
+    if (!activeThreadId || !activeComposerGoal || !isServerThread) {
+      if (activeComposerGoal?.source === "codex-draft") {
+        setCodexGoalDraftActive(false);
+      }
+      return;
+    }
+
+    if (activeComposerGoal.source === "codex-draft") {
+      setCodexGoalDraftActive(false);
+      return;
+    }
+
+    const api = readNativeApi();
+    if (!api) {
+      toastManager.add({
+        type: "warning",
+        title: "Goal could not be disabled",
+        description: "The native API is not connected.",
+      });
+      return;
+    }
+
+    setIsClearingComposerGoal(true);
+    try {
+      if (activeComposerGoal.source === "codex-native") {
+        await api.provider.clearThreadGoal({ threadId: activeThreadId });
+      } else {
+        const command = {
+          type: "thread.goal.clear",
+          commandId: newCommandId(),
+          threadId: activeThreadId,
+          createdAt: new Date().toISOString(),
+        } satisfies CustomGoalClearCommand;
+        // PR #295 adds this command to the orchestration contract. This branch can
+        // render and clear that custom goal state without vendoring the whole goal loop.
+        await api.orchestration.dispatchCommand(
+          command as unknown as Parameters<NativeApi["orchestration"]["dispatchCommand"]>[0],
+        );
+      }
+      pendingOptimisticCodexGoalRef.current = null;
+      setNativeCodexGoal(null);
+      toastManager.add({ type: "success", title: "Goal disabled" });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Goal could not be disabled",
+        description:
+          error instanceof Error ? error.message : "An error occurred while disabling the goal.",
+      });
+    } finally {
+      setIsClearingComposerGoal(false);
+    }
+  }, [activeComposerGoal, activeThreadId, isServerThread]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
@@ -1744,6 +1960,12 @@ export default function ChatView({
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? settings.defaultProvider;
+  useEffect(() => {
+    if (selectedProvider !== "codex" && codexGoalDraftActive) {
+      setCodexGoalDraftActive(false);
+      pendingOptimisticCodexGoalRef.current = null;
+    }
+  }, [codexGoalDraftActive, selectedProvider]);
   const previousSelectedProviderRef = useRef<{
     threadId: ThreadId;
     provider: ProviderKind;
@@ -6539,6 +6761,12 @@ export default function ChatView({
     const runtimeModeForSend = queuedChatTurn?.runtimeMode ?? runtimeMode;
     let interactionModeForSend = queuedChatTurn?.interactionMode ?? interactionMode;
     const envModeForSend = queuedChatTurn?.envMode ?? envMode;
+    const codexGoalForSend =
+      queuedChatTurn?.codexGoal ??
+      (queuedTurn === undefined && codexGoalDraftActive && selectedProviderForSend === "codex"
+        ? { tokenBudget: null }
+        : undefined);
+    const isCodexGoalSend = codexGoalForSend !== undefined;
     const {
       trimmedPrompt: trimmed,
       sendableTerminalContexts: sendableComposerTerminalContexts,
@@ -6626,7 +6854,7 @@ export default function ChatView({
       // Provider mentions are structured turn metadata, and automation definitions persist text only.
       selectedComposerMentionsForSend.length === 0;
     const hasPromptOnlySendableContent = hasNoStructuredComposerContext;
-    if (hasPromptOnlySendableContent) {
+    if (hasPromptOnlySendableContent && codexGoalForSend === undefined) {
       const handledSlashCommand = await handleStandaloneSlashCommand(trimmedPromptForSend);
       if (handledSlashCommand) {
         // A slash command (e.g. /clear) consumes the composer, so abandon any in-progress
@@ -6660,7 +6888,7 @@ export default function ChatView({
       return false;
     }
     if (!activeProject) return false;
-    if (queuedChatTurn === null && !isLivePlanFollowUpSubmission) {
+    if (queuedChatTurn === null && !isLivePlanFollowUpSubmission && !isCodexGoalSend) {
       const conversation = pendingAutomationConversation;
       // While gathering missing details, fold the reply into the cleaned request so it
       // re-resolves as a whole rather than parsing the bare answer (and never re-parses
@@ -6854,6 +7082,14 @@ export default function ChatView({
     }
 
     if (hasLiveTurn && dispatchMode === "queue" && queuedChatTurn === null) {
+      if (isCodexGoalSend && trimmedPromptForSend.length > 0) {
+        activateOptimisticCodexGoal({
+          threadId: activeThread.id,
+          objective: trimmedPromptForSend,
+          tokenBudget: codexGoalForSend.tokenBudget ?? null,
+        });
+        setCodexGoalDraftActive(false);
+      }
       clearComposerInput(activeThread.id);
       scheduleComposerFocus();
       const queuedImagesForPersistence = await Promise.all(
@@ -6898,6 +7134,7 @@ export default function ChatView({
           ? { providerOptionsForDispatch: providerOptionsForDispatchForSend }
           : {}),
         ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
+        ...(codexGoalForSend !== undefined ? { codexGoal: codexGoalForSend } : {}),
         runtimeMode: runtimeModeForSend,
         interactionMode: interactionModeForSend,
         envMode: envModeForSend,
@@ -7163,6 +7400,14 @@ export default function ChatView({
       setComposerHighlightedItemId(null);
       setComposerCursor(0);
       setComposerTrigger(null);
+      if (isCodexGoalSend && trimmedPromptForSend.length > 0) {
+        activateOptimisticCodexGoal({
+          threadId: threadIdForSend,
+          objective: trimmedPromptForSend,
+          tokenBudget: codexGoalForSend.tokenBudget ?? null,
+        });
+      }
+      setCodexGoalDraftActive(false);
       // A clicked submit button steals focus; return it after the controlled
       // draft reset so rapid follow-up typing lands in the composer.
       scheduleComposerFocus();
@@ -7330,6 +7575,7 @@ export default function ChatView({
         runtimeMode: nextRuntimeModeForSend,
         interactionMode: interactionModeForSend,
         ...(sourceProposedPlanForSend ? { sourceProposedPlan: sourceProposedPlanForSend } : {}),
+        ...(codexGoalForSend !== undefined ? { codexGoal: codexGoalForSend } : {}),
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
@@ -7398,6 +7644,11 @@ export default function ChatView({
         updateSelectedComposerSkills(composerSkillsSnapshot);
         updateSelectedComposerMentions(composerMentionsSnapshot);
         setComposerTrigger(detectComposerTrigger(promptForSend, promptForSend.length));
+        if (isCodexGoalSend) {
+          pendingOptimisticCodexGoalRef.current = null;
+          setNativeCodexGoal(null);
+          setCodexGoalDraftActive(true);
+        }
       }
       setThreadError(
         threadIdForSend,
@@ -8239,6 +8490,7 @@ export default function ChatView({
   const composerFooterPlanInputsKey = [
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
+    activeComposerGoal ? `${activeComposerGoal.status}:${activeComposerGoal.objective}` : "",
     Boolean(runtimeUsageContextWindow),
     useSplitComposerPickerControls,
   ].join(":");
@@ -8861,6 +9113,10 @@ export default function ChatView({
       await handleNewThread(activeProject.id, { entryPoint: "chat" });
     },
     handleInteractionModeChange,
+    onCodexGoalChanged: setNativeCodexGoal,
+    onCodexGoalDraftRequested: () => {
+      setCodexGoalDraftActive(true);
+    },
     openForkTargetPicker: () => {
       setComposerCommandPicker("fork-target");
       setComposerHighlightedItemId("fork-target:worktree");
@@ -9918,6 +10174,21 @@ export default function ChatView({
                         <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
                           Preparing worktree...
                         </span>
+                      ) : null}
+                      {!isVoiceRecording && !isVoiceTranscribing && activeComposerGoal ? (
+                        <ComposerGoalChip
+                          tooltip={
+                            activeComposerGoal.source === "codex-draft"
+                              ? "Goal mode: the next message will start a Codex goal"
+                              : `${
+                                  activeComposerGoal.source === "codex-native"
+                                    ? "Codex goal"
+                                    : "Goal"
+                                } (${activeComposerGoal.status}): ${activeComposerGoal.objective}`
+                          }
+                          disabled={isClearingComposerGoal}
+                          onClear={handleClearComposerGoal}
+                        />
                       ) : null}
                       {!isVoiceRecording &&
                       !isVoiceTranscribing &&

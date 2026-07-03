@@ -1127,6 +1127,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+        ...(command.codexGoal !== undefined ? { codexGoal: command.codexGoal } : {}),
         createdAt: command.createdAt,
       } as const;
       const activeProvider =
@@ -1201,6 +1202,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.sourceProposedPlan !== undefined
             ? { sourceProposedPlan: command.sourceProposedPlan }
             : {}),
+          ...(command.codexGoal !== undefined ? { codexGoal: command.codexGoal } : {}),
           createdAt: command.createdAt,
         },
       };

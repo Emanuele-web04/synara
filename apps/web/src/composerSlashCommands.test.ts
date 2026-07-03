@@ -14,6 +14,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommand,
   shouldHideProviderNativeCommandFromComposerMenu,
 } from "./composerSlashCommands";
 
@@ -22,6 +23,7 @@ describe("composerSlashCommands", () => {
     expect(isBuiltInComposerSlashCommand("review")).toBe(true);
     expect(isBuiltInComposerSlashCommand("fast")).toBe(true);
     expect(isBuiltInComposerSlashCommand("automation")).toBe(true);
+    expect(isBuiltInComposerSlashCommand("goal")).toBe(true);
     expect(isBuiltInComposerSlashCommand("unknown")).toBe(false);
   });
 
@@ -57,6 +59,10 @@ describe("composerSlashCommands", () => {
     expect(parseComposerSlashInvocation("/automation every 6h check the page")).toEqual({
       command: "automation",
       args: "every 6h check the page",
+    });
+    expect(parseComposerSlashInvocation("/goal finish the migration")).toEqual({
+      command: "goal",
+      args: "finish the migration",
     });
     expect(parseComposerSlashInvocation("review")).toBeNull();
   });
@@ -98,6 +104,24 @@ describe("composerSlashCommands", () => {
     expect(parseForkSlashCommandArgs("local continue here")).toEqual({
       target: null,
       invalid: true,
+    });
+  });
+
+  it("parses /goal actions", () => {
+    expect(parseGoalSlashCommand("")).toEqual({ kind: "status" });
+    expect(parseGoalSlashCommand("pause")).toEqual({ kind: "pause" });
+    expect(parseGoalSlashCommand("resume")).toEqual({ kind: "resume" });
+    expect(parseGoalSlashCommand("clear")).toEqual({ kind: "clear" });
+    expect(parseGoalSlashCommand("complete")).toEqual({ kind: "complete" });
+    expect(parseGoalSlashCommand("clear flaky tests")).toEqual({
+      kind: "create",
+      objective: "clear flaky tests",
+      tokenBudget: null,
+    });
+    expect(parseGoalSlashCommand("finish migration --budget 12000")).toEqual({
+      kind: "create",
+      objective: "finish migration",
+      tokenBudget: 12000,
     });
   });
 
@@ -225,6 +249,21 @@ describe("composerSlashCommands", () => {
     expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "status")).toBe(false);
   });
 
+  it("keeps app-level /goal available for codex even when native goal exists", () => {
+    const availableCommands = getAvailableComposerSlashCommands({
+      provider: "codex",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+      providerNativeCommandNames: ["goal"],
+    });
+
+    expect(availableCommands).toContain("goal");
+    expect(shouldHideProviderNativeCommandFromComposerMenu("codex", "goal")).toBe(true);
+  });
+
   it("keeps app-level /automation available even if a provider exposes a native collision", () => {
     const availableCommands = getAvailableComposerSlashCommands({
       provider: "gemini",
@@ -275,6 +314,17 @@ describe("composerSlashCommands", () => {
         canOfferSideCommand: true,
       }),
     ).not.toContain("compact");
+
+    expect(
+      getAvailableComposerSlashCommands({
+        provider: "codex",
+        supportsFastSlashCommand: true,
+        canOfferCompactCommand: true,
+        canOfferReviewCommand: true,
+        canOfferForkCommand: true,
+        canOfferSideCommand: true,
+      }),
+    ).toContain("goal");
   });
 
   it("exposes shared app slash commands for gemini", () => {

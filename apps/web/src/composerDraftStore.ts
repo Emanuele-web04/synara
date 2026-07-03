@@ -143,6 +143,7 @@ export interface QueuedComposerChatTurn {
   modelSelection: ModelSelection;
   providerOptionsForDispatch?: ProviderStartOptions | undefined;
   sourceProposedPlan?: NonNullable<OrchestrationLatestTurn["sourceProposedPlan"]> | undefined;
+  codexGoal?: { tokenBudget?: number | null } | undefined;
   runtimeMode: RuntimeMode;
   interactionMode: ProviderInteractionMode;
   envMode: DraftThreadEnvMode;
@@ -253,6 +254,11 @@ const PersistedQueuedComposerChatTurn = Schema.Struct({
   modelSelection: ModelSelection,
   providerOptionsForDispatch: Schema.optionalKey(ProviderStartOptions),
   sourceProposedPlan: Schema.optionalKey(PersistedSourceProposedPlanReference),
+  codexGoal: Schema.optionalKey(
+    Schema.Struct({
+      tokenBudget: Schema.optionalKey(Schema.NullOr(Schema.Number)),
+    }),
+  ),
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   envMode: DraftThreadEnvModeSchema,

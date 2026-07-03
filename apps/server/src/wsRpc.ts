@@ -1124,6 +1124,12 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.providerCompactThread]: (input) =>
           rpcEffect(providerService.compactThread(input), "Failed to compact thread"),
+        [WS_METHODS.providerThreadGoalGet]: (input) =>
+          rpcEffect(providerService.getThreadGoal(input), "Failed to get thread goal"),
+        [WS_METHODS.providerThreadGoalSet]: (input) =>
+          rpcEffect(providerService.setThreadGoal(input), "Failed to set thread goal"),
+        [WS_METHODS.providerThreadGoalClear]: (input) =>
+          rpcEffect(providerService.clearThreadGoal(input), "Failed to clear thread goal"),
         [WS_METHODS.providerListCommands]: (input) =>
           rpcEffect(providerDiscoveryService.listCommands(input), "Failed to list commands"),
         [WS_METHODS.providerListSkills]: (input) =>

@@ -1866,6 +1866,24 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         catch: (cause) => toRequestError(threadId, "thread/compact/start", cause),
       });
 
+    const getThreadGoal: NonNullable<CodexAdapterShape["getThreadGoal"]> = (threadId) =>
+      Effect.tryPromise({
+        try: () => manager.getThreadGoal(threadId),
+        catch: (cause) => toRequestError(threadId, "thread/goal/get", cause),
+      });
+
+    const setThreadGoal: NonNullable<CodexAdapterShape["setThreadGoal"]> = (input) =>
+      Effect.tryPromise({
+        try: () => manager.setThreadGoal(input),
+        catch: (cause) => toRequestError(input.threadId, "thread/goal/set", cause),
+      });
+
+    const clearThreadGoal: NonNullable<CodexAdapterShape["clearThreadGoal"]> = (threadId) =>
+      Effect.tryPromise({
+        try: () => manager.clearThreadGoal(threadId),
+        catch: (cause) => toRequestError(threadId, "thread/goal/clear", cause),
+      });
+
     const forkThread: CodexAdapterShape["forkThread"] = (input) =>
       Effect.tryPromise({
         try: () => manager.forkThread(input),
@@ -2050,6 +2068,9 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       readExternalThread,
       rollbackThread,
       compactThread,
+      getThreadGoal,
+      setThreadGoal,
+      clearThreadGoal,
       forkThread,
       respondToRequest,
       respondToUserInput,

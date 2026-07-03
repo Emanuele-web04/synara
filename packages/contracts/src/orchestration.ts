@@ -445,6 +445,10 @@ const SourceProposedPlanReference = Schema.Struct({
   planId: OrchestrationProposedPlanId,
 });
 
+const CodexGoalTurnStart = Schema.Struct({
+  tokenBudget: Schema.optional(Schema.NullOr(PositiveInt)),
+});
+
 export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
   "starting",
@@ -1059,6 +1063,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  codexGoal: Schema.optional(CodexGoalTurnStart),
   createdAt: IsoDateTime,
 });
 
@@ -1084,6 +1089,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  codexGoal: Schema.optional(CodexGoalTurnStart),
   createdAt: IsoDateTime,
 });
 
@@ -1112,6 +1118,7 @@ const ThreadDispatchQueuedTurnCommand = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  codexGoal: Schema.optional(CodexGoalTurnStart),
   createdAt: IsoDateTime,
 });
 
@@ -1601,6 +1608,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
     Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
   ),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  codexGoal: Schema.optional(CodexGoalTurnStart),
   createdAt: IsoDateTime,
 });
 

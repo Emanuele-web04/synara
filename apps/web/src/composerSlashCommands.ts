@@ -8,6 +8,10 @@ import {
 import { rankProviderDiscoveryItems } from "./lib/providerDiscovery";
 
 export { BUILT_IN_COMPOSER_SLASH_COMMANDS };
+export {
+  parseGoalSlashCommand,
+  type GoalSlashCommandAction,
+} from "@t3tools/shared/composerSlashCommands";
 
 export type ComposerSlashCommand = BuiltInComposerSlashCommand;
 
@@ -72,7 +76,10 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return command === "automation" || (provider === "codex" && command === "review");
+  return (
+    command === "automation" ||
+    (provider === "codex" && (command === "review" || command === "goal"))
+  );
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
@@ -81,7 +88,8 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
 ): boolean {
   const normalizedCommand = normalizeComposerSlashCommandName(command);
   return (
-    normalizedCommand === "automation" || (provider === "codex" && normalizedCommand === "review")
+    normalizedCommand === "automation" ||
+    (provider === "codex" && (normalizedCommand === "review" || normalizedCommand === "goal"))
   );
 }
 
@@ -167,6 +175,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "automation",
     label: "/automation",
     description: "Create a scheduled automation from this prompt",
+    source: "app",
+  },
+  goal: {
+    command: "goal",
+    label: "/goal",
+    description: "Set a persistent Codex goal for this thread",
     source: "app",
   },
 };
@@ -368,6 +382,7 @@ export function getAvailableComposerSlashCommands(input: {
           "status",
           "subagents",
           "automation",
+          ...(input.provider === "codex" ? (["goal"] as const) : []),
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it

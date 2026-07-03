@@ -33,6 +33,7 @@ import {
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import { buildStalePendingRequestFailureDetail } from "@t3tools/shared/threadSummary";
 import { resolveThreadWorkspaceState } from "@t3tools/shared/threadEnvironment";
+import { parseGoalSlashCommandPrompt } from "@t3tools/shared/composerSlashCommands";
 
 import {
   checkpointRefForThreadMessageStart,
@@ -849,6 +850,9 @@ const make = Effect.gen(function* () {
     readonly runtimeMode?: RuntimeMode;
     readonly interactionMode?: "default" | "plan";
     readonly dispatchMode?: "queue" | "steer";
+    readonly codexGoal?: {
+      readonly tokenBudget?: number | null;
+    };
     readonly createdAt: string;
   }) {
     const thread = yield* resolveThread(input.threadId);
@@ -871,13 +875,45 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
+    const selectedProvider =
+      input.modelSelection?.provider ??
+      threadModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
+    const messageTextForProvider = input.messageText;
+    const goalSlashAction = selectedProvider === "codex" ? (input.codexGoal ?? null) : null;
+    const rawGoalSlashAction =
+      selectedProvider === "codex" && goalSlashAction === null
+        ? parseGoalSlashCommandPrompt(input.messageText)
+        : null;
+    const goalObjective =
+      goalSlashAction !== null
+        ? input.messageText.trim()
+        : rawGoalSlashAction?.kind === "create"
+          ? rawGoalSlashAction.objective
+          : null;
+    const goalTokenBudget =
+      goalSlashAction !== null
+        ? (goalSlashAction.tokenBudget ?? null)
+        : rawGoalSlashAction?.kind === "create"
+          ? rawGoalSlashAction.tokenBudget
+          : null;
+    if (goalObjective) {
+      yield* providerService.setThreadGoal({
+        threadId: input.threadId,
+        objective: goalObjective,
+        status: "active",
+        ...(goalTokenBudget !== null ? { tokenBudget: goalTokenBudget } : {}),
+      });
+      return;
+    }
     const shouldBootstrapHandoff =
       thread.handoff?.bootstrapStatus === "pending" &&
       !hasNativeAssistantMessagesBefore(thread, input.messageId);
     const availableBootstrapChars = Math.max(
       0,
       PROVIDER_SEND_TURN_MAX_INPUT_CHARS -
-        input.messageText.length -
+        messageTextForProvider.length -
         HANDOFF_CONTEXT_WRAPPER_OVERHEAD,
     );
     const handoffBootstrapText =
@@ -892,11 +928,6 @@ const make = Effect.gen(function* () {
       shouldBootstrapSidechatContext && availableBootstrapChars > 0
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
-    const selectedProvider =
-      input.modelSelection?.provider ??
-      threadModelSelections.get(input.threadId)?.provider ??
-      thread.session?.providerName ??
-      thread.modelSelection.provider;
     const shouldBootstrapPriorTranscriptContext =
       (selectedProvider === "kilo" || selectedProvider === "opencode") &&
       activeSessionBeforeEnsure === undefined &&
@@ -907,8 +938,8 @@ const make = Effect.gen(function* () {
         ? buildPriorTranscriptBootstrapText(thread, input.messageId, availableBootstrapChars)
         : null;
     const boundaryMessageText = thread.sidechatSourceThreadId
-      ? wrapSidechatInput(input.messageText)
-      : input.messageText;
+      ? wrapSidechatInput(messageTextForProvider)
+      : messageTextForProvider;
     const providerInput = handoffBootstrapText
       ? `<handoff_context>\n${handoffBootstrapText}\n</handoff_context>\n\n<latest_user_message>\n${boundaryMessageText}\n</latest_user_message>`
       : sidechatBootstrapText
@@ -1479,6 +1510,7 @@ const make = Effect.gen(function* () {
       ...(event.payload.reviewTarget !== undefined
         ? { reviewTarget: event.payload.reviewTarget }
         : {}),
+      ...(event.payload.codexGoal !== undefined ? { codexGoal: event.payload.codexGoal } : {}),
       interactionMode: event.payload.interactionMode,
       dispatchMode: immediateDispatchMode,
       createdAt: event.payload.createdAt,
@@ -1557,6 +1589,7 @@ const make = Effect.gen(function* () {
           ...(nextQueuedTurn.sourceProposedPlan !== undefined
             ? { sourceProposedPlan: nextQueuedTurn.sourceProposedPlan }
             : {}),
+          ...(nextQueuedTurn.codexGoal !== undefined ? { codexGoal: nextQueuedTurn.codexGoal } : {}),
           createdAt: nextQueuedTurn.createdAt,
         })
         .pipe(

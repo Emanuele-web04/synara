@@ -5,6 +5,7 @@ import {
   type ProviderKind,
   type ProviderNativeCommandDescriptor,
   type ProviderModelOptions,
+  type ProviderThreadGoal,
   type RuntimeMode,
   type ThreadId,
 } from "@t3tools/contracts";
@@ -24,6 +25,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommand,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
 import { buildThreadHandoffImportedMessages } from "../lib/threadHandoff";
@@ -69,6 +71,8 @@ export function useComposerSlashCommands(input: {
   navigateToThread: (threadId: ThreadId, options?: { splitViewId?: SplitViewId }) => Promise<void>;
   handleClearConversation: () => Promise<void> | void;
   handleInteractionModeChange: (mode: "default" | "plan") => Promise<void> | void;
+  onCodexGoalChanged?: (goal: ProviderThreadGoal | null) => void;
+  onCodexGoalDraftRequested?: () => void;
   openForkTargetPicker: () => void;
   openReviewTargetPicker: () => void;
   setComposerDraftProviderModelOptions: (
@@ -117,6 +121,8 @@ export function useComposerSlashCommands(input: {
     navigateToThread,
     handleClearConversation,
     handleInteractionModeChange,
+    onCodexGoalChanged,
+    onCodexGoalDraftRequested,
     openForkTargetPicker,
     openReviewTargetPicker,
     setComposerDraftProviderModelOptions,
@@ -565,6 +571,129 @@ export function useComposerSlashCommands(input: {
     return false;
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
+  const handleCodexGoalSlashCommand = useCallback(
+    async (args: string): Promise<boolean> => {
+      const api = readNativeApi();
+      if (selectedProvider !== "codex") {
+        return false;
+      }
+      if (!api) {
+        editorActions.clearComposerSlashDraft();
+        toastManager.add({
+          type: "warning",
+          title: "Codex goal is unavailable",
+          description: "The native API is not connected.",
+        });
+        return true;
+      }
+      const parsed = parseGoalSlashCommand(args);
+      if (!activeThread || !isServerThread || activeThread.session?.status === "closed") {
+        if (parsed.kind === "create" && parsed.objective) {
+          return false;
+        }
+        editorActions.clearComposerSlashDraft();
+        toastManager.add({
+          type: "warning",
+          title: "Codex goal is unavailable",
+          description: "Open an active Codex-backed thread before using /goal.",
+        });
+        return true;
+      }
+
+      const threadId = activeThread.id;
+      const createdAt = new Date().toISOString();
+      editorActions.clearComposerSlashDraft();
+
+      try {
+        if (parsed.kind === "status") {
+          const { goal } = await api.provider.getThreadGoal({ threadId });
+          onCodexGoalChanged?.(goal);
+          toastManager.add({
+            type: "info",
+            title: goal ? `Goal is ${goal.status}` : "No active goal",
+            ...(goal ? { description: goal.objective } : {}),
+          });
+          return true;
+        }
+
+        if (parsed.kind === "clear") {
+          await api.provider.clearThreadGoal({ threadId });
+          onCodexGoalChanged?.(null);
+          toastManager.add({ type: "success", title: "Goal cleared" });
+          return true;
+        }
+
+        if (parsed.kind === "create") {
+          if (!parsed.objective) {
+            toastManager.add({
+              type: "warning",
+              title: "Goal needs an objective",
+              description: "Use /goal followed by what Codex should achieve.",
+            });
+            return true;
+          }
+          const { goal } = await api.provider.setThreadGoal({
+            threadId,
+            objective: parsed.objective,
+            status: "active",
+            ...(parsed.tokenBudget !== null ? { tokenBudget: parsed.tokenBudget } : {}),
+          });
+          onCodexGoalChanged?.(goal);
+          await api.orchestration.dispatchCommand({
+            type: "thread.turn.start",
+            commandId: newCommandId(),
+            threadId,
+            message: {
+              messageId: newMessageId(),
+              role: "user",
+              text: parsed.objective,
+              attachments: [],
+            },
+            modelSelection: selectedModelSelection,
+            runtimeMode,
+            interactionMode,
+            dispatchMode: "queue",
+            createdAt,
+          });
+          return true;
+        }
+
+        const status =
+          parsed.kind === "pause"
+            ? "paused"
+            : parsed.kind === "resume"
+              ? "active"
+              : "complete";
+        const { goal } = await api.provider.setThreadGoal({ threadId, status });
+        onCodexGoalChanged?.(goal.status === "complete" ? null : goal);
+        toastManager.add({
+          type: "success",
+          title: `Goal is ${goal.status}`,
+          description: goal.objective,
+        });
+        return true;
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Could not update Codex goal",
+          description:
+            error instanceof Error ? error.message : "An error occurred while updating the goal.",
+        });
+        return true;
+      }
+    },
+    [
+      activeThread,
+      editorActions,
+      interactionMode,
+      isServerThread,
+      onCodexGoalChanged,
+      runtimeMode,
+      selectedModelSelection,
+      selectedProvider,
+    ],
+  );
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -690,6 +819,9 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "goal") {
+        return handleCodexGoalSlashCommand(slashInvocation.args);
+      }
       return false;
     },
     [
@@ -699,6 +831,7 @@ export function useComposerSlashCommands(input: {
       createForkThreadFromSlashCommand,
       createSidechatFromSlashCommand,
       editorActions,
+      handleCodexGoalSlashCommand,
       handleClearConversation,
       handleInteractionModeChange,
       openForkTargetPicker,
@@ -736,8 +869,28 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
+      if (item.command === "goal") {
+        const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+          snapshot.value,
+          trigger.rangeEnd,
+          "",
+        );
+        const applied = editorActions.applyPromptReplacement(
+          trigger.rangeStart,
+          replacementRangeEnd,
+          "",
+          { expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd) },
+        );
+        if (wasPromptReplacementApplied(applied)) {
+          onCodexGoalDraftRequested?.();
+          editorActions.setComposerHighlightedItemId(null);
+          editorActions.scheduleComposerFocus();
+        }
+        return;
+      }
+
       if (item.command === "automation") {
-        const replacement = "/automation ";
+        const replacement = `/${item.command} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,
@@ -897,6 +1050,7 @@ export function useComposerSlashCommands(input: {
       editorActions,
       handleClearConversation,
       handleInteractionModeChange,
+      onCodexGoalDraftRequested,
       openForkTargetPicker,
       openReviewTargetPicker,
       selectedProvider,

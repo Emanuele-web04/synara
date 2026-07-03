@@ -100,6 +100,9 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      getThreadGoal: () => unsupported(),
+      setThreadGoal: () => unsupported(),
+      clearThreadGoal: () => unsupported(),
       streamEvents: Stream.empty,
     };
 
@@ -159,6 +162,9 @@ describe("ProviderSessionReaperLive", () => {
       getCapabilities: () => unsupported(),
       rollbackConversation: () => unsupported(),
       compactThread: () => unsupported(),
+      getThreadGoal: () => unsupported(),
+      setThreadGoal: () => unsupported(),
+      clearThreadGoal: () => unsupported(),
       streamEvents: Stream.empty,
     };
 

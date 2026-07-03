@@ -127,6 +127,61 @@ export const ProviderCompactThreadInput = Schema.Struct({
 });
 export type ProviderCompactThreadInput = typeof ProviderCompactThreadInput.Type;
 
+export const ProviderThreadGoalStatus = Schema.Literals([
+  "active",
+  "paused",
+  "blocked",
+  "usageLimited",
+  "budgetLimited",
+  "complete",
+]);
+export type ProviderThreadGoalStatus = typeof ProviderThreadGoalStatus.Type;
+
+export const ProviderThreadGoal = Schema.Struct({
+  threadId: ThreadId,
+  objective: TrimmedNonEmptyString,
+  status: ProviderThreadGoalStatus,
+  tokenBudget: Schema.NullOr(Schema.Number),
+  tokensUsed: Schema.Number,
+  timeUsedSeconds: Schema.Number,
+  createdAt: Schema.Number,
+  updatedAt: Schema.Number,
+});
+export type ProviderThreadGoal = typeof ProviderThreadGoal.Type;
+
+export const ProviderThreadGoalSetInput = Schema.Struct({
+  threadId: ThreadId,
+  objective: Schema.optional(TrimmedNonEmptyString),
+  status: Schema.optional(ProviderThreadGoalStatus),
+  tokenBudget: Schema.optional(Schema.NullOr(Schema.Number)),
+});
+export type ProviderThreadGoalSetInput = typeof ProviderThreadGoalSetInput.Type;
+
+export const ProviderThreadGoalGetInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderThreadGoalGetInput = typeof ProviderThreadGoalGetInput.Type;
+
+export const ProviderThreadGoalGetResult = Schema.Struct({
+  goal: Schema.NullOr(ProviderThreadGoal),
+});
+export type ProviderThreadGoalGetResult = typeof ProviderThreadGoalGetResult.Type;
+
+export const ProviderThreadGoalSetResult = Schema.Struct({
+  goal: ProviderThreadGoal,
+});
+export type ProviderThreadGoalSetResult = typeof ProviderThreadGoalSetResult.Type;
+
+export const ProviderThreadGoalClearInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ProviderThreadGoalClearInput = typeof ProviderThreadGoalClearInput.Type;
+
+export const ProviderThreadGoalClearResult = Schema.Struct({
+  cleared: Schema.Boolean,
+});
+export type ProviderThreadGoalClearResult = typeof ProviderThreadGoalClearResult.Type;
+
 export const ProviderRespondToRequestInput = Schema.Struct({
   threadId: ThreadId,
   requestId: ApprovalRequestId,

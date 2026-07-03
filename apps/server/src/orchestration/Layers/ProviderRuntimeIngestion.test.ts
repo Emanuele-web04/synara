@@ -85,6 +85,9 @@ function createProviderServiceHarness() {
       }),
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),
+    getThreadGoal: () => unsupported(),
+    setThreadGoal: () => unsupported(),
+    clearThreadGoal: () => unsupported(),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 
