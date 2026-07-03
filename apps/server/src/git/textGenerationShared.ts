@@ -5,6 +5,7 @@ import {
   type AutomationMode,
   type ChatAttachment,
 } from "@t3tools/contracts";
+import { MAX_CHAT_THREAD_TITLE_WORDS } from "@t3tools/shared/chatThreads";
 
 import { TextGenerationError } from "./Errors.ts";
 
@@ -542,8 +543,10 @@ export function buildThreadTitlePrompt(input: {
     "Return a JSON object with key: title.",
     "Respond with only the JSON object, no prose and no code fences.",
     "Rules:",
-    "- Summarize the user's request in 2-4 words.",
-    "- Never exceed 4 words.",
+    `- Summarize the user's request in 3-${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    `- Never exceed ${MAX_CHAT_THREAD_TITLE_WORDS} words.`,
+    "- Be specific: include distinguishing identifiers from the message when present (PR/issue numbers, branch names, file or feature names, error codes).",
+    "- Two different requests should never produce the same title if the message contains anything that tells them apart.",
     "- Use a short noun or verb phrase, not a full sentence.",
     "- Avoid quotes, markdown, emoji, and trailing punctuation.",
     "- If images are attached, use them as primary context for the title.",
@@ -564,6 +567,11 @@ export function buildThreadTitlePrompt(input: {
     outputSchemaJson: Schema.Struct({
       title: Schema.String,
     }),
-    rawTextFallback: { key: "title", maxWords: 8 } satisfies RawTextFallback,
+    // Looser than the final cap: raw (non-JSON) output is only rejected as "not a
+    // title" past this size; sanitizeGeneratedThreadTitle still trims to the cap.
+    rawTextFallback: {
+      key: "title",
+      maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
+    } satisfies RawTextFallback,
   };
 }

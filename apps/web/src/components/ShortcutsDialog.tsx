@@ -131,7 +131,7 @@ function ShortcutSection({
       <header className="flex items-baseline justify-between gap-3 px-6 pt-4 pb-2">
         <h3
           className={cn(
-            "text-[11px] font-semibold uppercase tracking-wider",
+            "text-[11px] font-semibold",
             muted ? "text-muted-foreground/70" : "text-muted-foreground",
           )}
         >

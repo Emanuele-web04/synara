@@ -38,19 +38,31 @@ export function useProviderUsageSummary(input: {
   threadRateLimits?: ReadonlyArray<ProviderRateLimit> | undefined;
   codexHomePath?: string | null;
   providerSnapshot?: ServerGetProviderUsageSnapshotResult | undefined;
+  fetchProviderData?: boolean;
 }) {
+  const shouldFetchProviderData = input.fetchProviderData ?? true;
+  const shouldFetchLiveProviderUsage =
+    shouldFetchProviderData &&
+    input.provider !== null &&
+    input.provider !== undefined &&
+    input.providerSnapshot === undefined;
+  const shouldFetchLocalProviderUsage = shouldFetchLiveProviderUsage;
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
-      enabled: input.provider !== null && input.provider !== undefined,
+      enabled: shouldFetchLiveProviderUsage,
+      provider: input.provider ?? null,
     }),
   );
   const localUsageSnapshotQuery = useQuery(
     serverProviderUsageSnapshotQueryOptions({
       provider: input.provider,
       homePath: input.provider === "codex" ? input.codexHomePath || null : null,
+      enabled: shouldFetchLocalProviderUsage,
     }),
   );
-  const openUsageSnapshotQuery = useQuery(openUsageProviderSnapshotQueryOptions(input.provider));
+  const openUsageSnapshotQuery = useQuery(
+    openUsageProviderSnapshotQueryOptions(input.provider, { enabled: shouldFetchProviderData }),
+  );
   const liveProviderSnapshot = useMemo(
     () =>
       (allProviderUsageQuery.data ?? []).find((snapshot) => snapshot.provider === input.provider),
@@ -129,8 +141,7 @@ export function useProviderUsageSummary(input: {
   );
 
   const isLoading =
-    input.provider !== null &&
-    input.provider !== undefined &&
+    shouldFetchLiveProviderUsage &&
     allProviderUsageQuery.isPending &&
     localUsageSnapshotQuery.isPending &&
     rateLimits.length === 0 &&

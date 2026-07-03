@@ -28,6 +28,7 @@ import {
   type ProviderSession,
 } from "@t3tools/contracts";
 import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
+import * as Semaphore from "effect/Semaphore";
 
 import { ProviderValidationError } from "../Errors.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
@@ -454,6 +455,65 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       );
     };
 
+    // Turn ids whose terminal runtime event has already been observed, keyed by
+    // thread. sendTurn consults this immediately before its post-dispatch
+    // "running" upsert: a turn that settles before that write lands (e.g. a
+    // pre-start cancellation) must not be re-marked as running afterwards.
+    // A single slot per thread is not enough — sendTurn is not serialized per
+    // thread, so overlapping sends can both settle pre-write and the second
+    // completion would evict the first turn's marker before its send checked
+    // it. Each thread keeps a small FIFO of recent completions instead, and
+    // each sendTurn consumes its own marker; the cap bounds markers for turns
+    // that never flow through this path.
+    const RECENTLY_COMPLETED_TURNS_PER_THREAD = 8;
+    const recentlyCompletedTurnsByThread = new Map<ThreadId, Set<string>>();
+    const recordRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): void => {
+      let turns = recentlyCompletedTurnsByThread.get(threadId);
+      if (turns === undefined) {
+        turns = new Set();
+        recentlyCompletedTurnsByThread.set(threadId, turns);
+      }
+      turns.delete(turnId);
+      turns.add(turnId);
+      while (turns.size > RECENTLY_COMPLETED_TURNS_PER_THREAD) {
+        const oldest = turns.values().next().value;
+        if (oldest === undefined) {
+          break;
+        }
+        turns.delete(oldest);
+      }
+    };
+    const consumeRecentlyCompletedTurn = (threadId: ThreadId, turnId: string): boolean => {
+      const turns = recentlyCompletedTurnsByThread.get(threadId);
+      if (turns === undefined || !turns.has(turnId)) {
+        return false;
+      }
+      turns.delete(turnId);
+      if (turns.size === 0) {
+        recentlyCompletedTurnsByThread.delete(threadId);
+      }
+      return true;
+    };
+
+    // Serializes binding writes for a thread between the runtime-event handler
+    // and sendTurn's post-dispatch write. Without it a terminal event could
+    // land between sendTurn's settled-turn check and its "running" upsert and
+    // still be overwritten. Lifecycle events are low-frequency, so a per-thread
+    // mutex adds no meaningful contention. Creation is synchronous
+    // (Semaphore.makeUnsafe), so concurrent callers cannot mint two locks.
+    const bindingWriteLocks = new Map<ThreadId, Semaphore.Semaphore>();
+    const withBindingWriteLock = <A, E, R>(
+      threadId: ThreadId,
+      effect: Effect.Effect<A, E, R>,
+    ): Effect.Effect<A, E, R> => {
+      let lock = bindingWriteLocks.get(threadId);
+      if (lock === undefined) {
+        lock = Semaphore.makeUnsafe(1);
+        bindingWriteLocks.set(threadId, lock);
+      }
+      return lock.withPermits(1)(effect);
+    };
+
     const updateSessionBindingFromRuntimeEvent = (
       event: ProviderRuntimeEvent,
     ): Effect.Effect<void> => {
@@ -472,51 +532,60 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           return Effect.void;
       }
 
-      return Effect.gen(function* () {
-        const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
-        if (!binding) {
-          return;
-        }
+      return withBindingWriteLock(
+        event.threadId,
+        Effect.gen(function* () {
+          if (
+            (event.type === "turn.completed" || event.type === "turn.aborted") &&
+            event.turnId !== undefined
+          ) {
+            recordRecentlyCompletedTurn(event.threadId, String(event.turnId));
+          }
+          const binding = Option.getOrUndefined(yield* directory.getBinding(event.threadId));
+          if (!binding) {
+            return;
+          }
 
-        const currentActiveTurnId =
-          runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null;
-        const activeTurnId =
-          event.type === "turn.started"
-            ? (event.turnId ?? null)
-            : event.type === "thread.state.changed" && event.payload.state === "compacted"
-              ? (event.turnId ?? currentActiveTurnId)
-              : event.type === "turn.completed" ||
-                  event.type === "turn.aborted" ||
-                  (event.type === "thread.state.changed" &&
-                    (event.payload.state === "archived" ||
-                      event.payload.state === "closed" ||
-                      event.payload.state === "error")) ||
-                  event.type === "session.exited" ||
-                  event.type === "runtime.error" ||
-                  (event.type === "session.state.changed" &&
-                    (event.payload.state === "ready" ||
-                      event.payload.state === "stopped" ||
-                      event.payload.state === "error"))
-                ? null
-                : currentActiveTurnId;
-        const lastError = runtimeLastErrorForEvent(event);
-        const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
+          const currentActiveTurnId =
+            runtimePayloadRecord(binding.runtimePayload).activeTurnId ?? null;
+          const activeTurnId =
+            event.type === "turn.started"
+              ? (event.turnId ?? null)
+              : event.type === "thread.state.changed" && event.payload.state === "compacted"
+                ? (event.turnId ?? currentActiveTurnId)
+                : event.type === "turn.completed" ||
+                    event.type === "turn.aborted" ||
+                    (event.type === "thread.state.changed" &&
+                      (event.payload.state === "archived" ||
+                        event.payload.state === "closed" ||
+                        event.payload.state === "error")) ||
+                    event.type === "session.exited" ||
+                    event.type === "runtime.error" ||
+                    (event.type === "session.state.changed" &&
+                      (event.payload.state === "ready" ||
+                        event.payload.state === "stopped" ||
+                        event.payload.state === "error"))
+                  ? null
+                  : currentActiveTurnId;
+          const lastError = runtimeLastErrorForEvent(event);
+          const resumeCursor = yield* refreshResumeCursorFromActiveSession(event, binding);
 
-        yield* directory.upsert({
-          threadId: event.threadId,
-          provider: binding.provider,
-          ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
-          ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
-          status: runtimeStatusForEvent(event, activeTurnId),
-          ...(resumeCursor !== undefined ? { resumeCursor } : {}),
-          runtimePayload: {
-            activeTurnId,
-            lastRuntimeEvent: event.type,
-            lastRuntimeEventAt: event.createdAt,
-            ...(lastError !== undefined ? { lastError } : {}),
-          },
-        });
-      }).pipe(
+          yield* directory.upsert({
+            threadId: event.threadId,
+            provider: binding.provider,
+            ...(binding.adapterKey !== undefined ? { adapterKey: binding.adapterKey } : {}),
+            ...(binding.runtimeMode !== undefined ? { runtimeMode: binding.runtimeMode } : {}),
+            status: runtimeStatusForEvent(event, activeTurnId),
+            ...(resumeCursor !== undefined ? { resumeCursor } : {}),
+            runtimePayload: {
+              activeTurnId,
+              lastRuntimeEvent: event.type,
+              lastRuntimeEventAt: event.createdAt,
+              ...(lastError !== undefined ? { lastError } : {}),
+            },
+          });
+        }),
+      ).pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider.session.runtime_binding_update_failed", {
             threadId: event.threadId,
@@ -855,20 +924,55 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
               allowRecovery: true,
             });
             const turn = yield* routed.adapter.sendTurn(input);
-            yield* directory.upsert({
-              threadId: input.threadId,
-              provider: routed.adapter.provider,
-              status: "running",
-              ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
-              runtimePayload: {
-                ...(input.modelSelection !== undefined
-                  ? { modelSelection: input.modelSelection }
-                  : {}),
-                activeTurnId: turn.turnId,
-                lastRuntimeEvent: "provider.sendTurn",
-                lastRuntimeEventAt: new Date().toISOString(),
-              },
-            });
+            // A turn can settle before this write lands (e.g. a pre-start
+            // cancellation completes inside the adapter fork); re-marking the
+            // thread as running then would strand it with a stale active turn.
+            // Durable metadata (model selection, resume cursor) is still
+            // persisted — status stays untouched (upsert keeps the existing
+            // value when omitted) and runtimePayload merges per key. The
+            // binding-write lock makes the check and the write atomic with the
+            // runtime-event handler, so a terminal event cannot slip between
+            // them and then be overwritten.
+            yield* withBindingWriteLock(
+              input.threadId,
+              Effect.gen(function* () {
+                if (consumeRecentlyCompletedTurn(input.threadId, String(turn.turnId))) {
+                  // On the live-fallback path the terminal event can arrive
+                  // before any directory row exists (the runtime-event handler
+                  // skips threads without a binding), and upsert defaults a
+                  // NEW row's omitted status to "running" — so a settled turn
+                  // must write an explicit terminal status when it creates the
+                  // first row. Existing rows keep their handler-written status.
+                  const existingBinding = Option.getOrUndefined(
+                    yield* directory.getBinding(input.threadId),
+                  );
+                  yield* directory.upsert({
+                    threadId: input.threadId,
+                    provider: routed.adapter.provider,
+                    ...(existingBinding === undefined ? { status: "stopped" as const } : {}),
+                    ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                    ...(input.modelSelection !== undefined
+                      ? { runtimePayload: { modelSelection: input.modelSelection } }
+                      : {}),
+                  });
+                } else {
+                  yield* directory.upsert({
+                    threadId: input.threadId,
+                    provider: routed.adapter.provider,
+                    status: "running",
+                    ...(turn.resumeCursor !== undefined ? { resumeCursor: turn.resumeCursor } : {}),
+                    runtimePayload: {
+                      ...(input.modelSelection !== undefined
+                        ? { modelSelection: input.modelSelection }
+                        : {}),
+                      activeTurnId: turn.turnId,
+                      lastRuntimeEvent: "provider.sendTurn",
+                      lastRuntimeEventAt: new Date().toISOString(),
+                    },
+                  });
+                }
+              }),
+            );
             yield* analytics.record("provider.turn.sent", {
               provider: routed.adapter.provider,
               model: input.modelSelection?.model,

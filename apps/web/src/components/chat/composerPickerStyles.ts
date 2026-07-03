@@ -20,7 +20,7 @@ export const COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME =
  * row in the empty-state footer reads as one set. Pair with a `size-3.5` leading icon and a
  * `size-3` `ChevronDownIcon` so the three triggers stay on identical icon + chevron sizes.
  */
-export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
+export const COMPOSER_TOOLBAR_PICKER_TRIGGER_CLASS_NAME = `inline-flex cursor-pointer items-center gap-1.5 rounded-md px-2 py-1 transition-colors hover:bg-[var(--color-background-elevated-secondary)] ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`;
 
 /** Caps model-provider submenu height; pairs with the list scroll class below. */
 export const COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME =
@@ -48,7 +48,7 @@ export const COMPOSER_PICKER_RADIUS_CLASS_NAME = "rounded-[0.65rem]";
 export const COMPOSER_PICKER_OPTION_RADIUS_CLASS_NAME = "rounded-[0.5rem]";
 
 /** Collapsible section headers inside model provider lists. */
-export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium uppercase tracking-[0.06em] text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
+export const COMPOSER_PICKER_MODEL_GROUP_HEADER_CLASS_NAME = `grid w-full grid-cols-[0.75rem_minmax(0,1fr)_2.5rem] items-center gap-x-1.5 ${COMPOSER_PICKER_RADIUS_CLASS_NAME} px-2 py-1 text-left text-[10px] font-medium text-muted-foreground/80 outline-none transition-colors hover:bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] focus-visible:ring-0`;
 
 /** Indents model row labels under collapsible group headers. */
 export const COMPOSER_PICKER_MODEL_ROW_LABEL_INDENT_CLASS_NAME = "pl-[1.125rem]";
@@ -144,7 +144,10 @@ export const COMPOSER_STACKED_SURFACE_BORDER_CLASS_NAME = [
  *  ring (box-shadow). Dark mode drops the border and leans on the shadow for separation. */
 export const RAISED_SURFACE_CHROME_CLASS_NAME = `border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} dark:border-0`;
 
-export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface ${RAISED_SURFACE_CHROME_CLASS_NAME} transition-colors duration-200`;
+/** Composer input shell. Like RAISED_SURFACE_CHROME but keeps a visible border in
+ *  dark mode using the same `border-border` token as the Environment panel, instead
+ *  of dropping to shadow-only separation. */
+export const COMPOSER_INPUT_SURFACE_CLASS_NAME = `chat-composer-surface border ${COMPOSER_SURFACE_BORDER_CLASS_NAME} dark:border-border ${COMPOSER_SURFACE_SHADOW_CLASS_NAME} transition-colors duration-200`;
 
 /** Active segment fill in the sidebar Threads/Workspace picker. */
 export const SIDEBAR_SEGMENTED_PICKER_ACTIVE_CLASS_NAME =
@@ -265,12 +268,6 @@ export const COMPOSER_EDITOR_PADDING_CLASS_NAME = [
 /** Bottom bar row — flush to the composer shell edges. */
 export const COMPOSER_FOOTER_ROW_CLASS_NAME = [
   "flex items-center justify-between",
-  "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
-  "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
-  "pb-[var(--app-density-composer-footer-padding,0.375rem)]",
-].join(" ");
-export const COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME = [
-  "flex items-center justify-end gap-2",
   "pl-[var(--app-density-composer-footer-padding,0.375rem)]",
   "pr-[var(--app-density-composer-footer-padding-end,0.5rem)]",
   "pb-[var(--app-density-composer-footer-padding,0.375rem)]",

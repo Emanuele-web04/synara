@@ -92,6 +92,7 @@ function TranscriptPerfHarness(props: { onTranscriptRender: () => void }) {
           hasMessages
           isRevertingCheckpoint={false}
           isWorking={false}
+          worktreeSetup={null}
           followLiveOutput={false}
           listRef={listRef}
           markdownCwd={undefined}
@@ -173,6 +174,7 @@ describe("ChatTranscriptPane", () => {
         hasMessages
         isRevertingCheckpoint={false}
         isWorking={false}
+        worktreeSetup={null}
         followLiveOutput={false}
         listRef={{ current: null }}
         markdownCwd={undefined}
@@ -230,6 +232,107 @@ describe("ChatTranscriptPane", () => {
       expect(screen.container.querySelector("button[data-scroll-anchor-ignore]")?.textContent).toBe(
         "Show less",
       );
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("keeps hidden message-trail ticks out of the tab order", async () => {
+    const host = document.createElement("div");
+    host.style.cssText = "display:flex;width:600px;height:520px;";
+    document.body.append(host);
+
+    const screen = await render(
+      <ChatTranscriptPane
+        activeThreadId="thread-hidden-trail"
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        chatFontSizePx={15}
+        emptyStateProjectName={undefined}
+        hasMessages
+        isRevertingCheckpoint={false}
+        isWorking={false}
+        worktreeSetup={null}
+        followLiveOutput={false}
+        listRef={{ current: null }}
+        markdownCwd={undefined}
+        onExpandTimelineImage={NOOP}
+        onMessagesClickCapture={NOOP}
+        onMessagesMouseUp={NOOP}
+        onMessagesPointerCancel={NOOP}
+        onMessagesPointerDown={NOOP}
+        onMessagesPointerUp={NOOP}
+        onMessagesScroll={NOOP}
+        onMessagesTouchEnd={NOOP}
+        onMessagesTouchMove={NOOP}
+        onMessagesTouchStart={NOOP}
+        onMessagesWheel={NOOP}
+        onIsAtEndChange={NOOP}
+        onOpenTurnDiff={NOOP}
+        onOpenThread={NOOP}
+        onRevertUserMessage={NOOP}
+        onScrollToBottom={NOOP}
+        resolvedTheme="dark"
+        revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
+        scrollButtonVisible={false}
+        terminalWorkspaceTerminalTabActive={false}
+        timelineEntries={[
+          {
+            id: "user-message-entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            message: {
+              id: MessageId.makeUnsafe("user-message-trail-1"),
+              role: "user",
+              text: "First turn",
+              createdAt: "2026-03-17T19:12:28.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "assistant-message-entry-1",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:29.000Z",
+            message: {
+              id: MessageId.makeUnsafe("assistant-message-trail-1"),
+              role: "assistant",
+              text: "First reply",
+              createdAt: "2026-03-17T19:12:29.000Z",
+              streaming: false,
+            },
+          },
+          {
+            id: "user-message-entry-2",
+            kind: "message",
+            createdAt: "2026-03-17T19:12:30.000Z",
+            message: {
+              id: MessageId.makeUnsafe("user-message-trail-2"),
+              role: "user",
+              text: "Second turn",
+              createdAt: "2026-03-17T19:12:30.000Z",
+              streaming: false,
+            },
+          },
+        ]}
+        timestampFormat="locale"
+        turnDiffSummaryByAssistantMessageId={EMPTY_TURN_DIFFS}
+        workspaceRoot={undefined}
+      />,
+      { container: host },
+    );
+    try {
+      await vi.waitFor(() => {
+        const trail = screen.container.querySelector('nav[aria-label="Message navigation"]');
+        expect(trail?.getAttribute("aria-hidden")).toBe("true");
+      });
+
+      const ticks = Array.from(
+        screen.container.querySelectorAll<HTMLButtonElement>(
+          'nav[aria-label="Message navigation"] button',
+        ),
+      );
+      expect(ticks).toHaveLength(2);
+      expect(ticks.every((tick) => tick.tabIndex === -1)).toBe(true);
     } finally {
       await screen.unmount();
     }

@@ -37,6 +37,8 @@ interface ProjectPickerProps {
   onSelectWorkspaceRoot?: ((workspaceRoot: string) => void) | undefined;
   onCreateProjectFromPath?: ((workspaceRoot: string) => void | Promise<void>) | undefined;
   onResetToHome?: (() => void | Promise<void>) | undefined;
+  /** Class override for the trigger button (e.g. tighter height in the composer tray). */
+  triggerClassName?: string;
 }
 
 interface ActiveFolderOption {
@@ -77,6 +79,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onSelectWorkspaceRoot,
   onCreateProjectFromPath,
   onResetToHome,
+  triggerClassName,
 }: ProjectPickerProps) {
   const projects = useStore((state) => state.projects);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
@@ -219,7 +222,9 @@ export const ProjectPicker = memo(function ProjectPicker({
   ]);
   const triggerLabel = selectedFolderOption ? (
     <span className="flex min-w-0 items-baseline gap-1.5">
-      <span className="min-w-0 truncate">{selectedFolderOption.primaryLabel}</span>
+      <span className="min-w-0 truncate text-[var(--color-text-foreground)]">
+        {selectedFolderOption.primaryLabel}
+      </span>
       {selectedFolderOption.secondaryLabel ? (
         <span className="min-w-0 truncate text-muted-foreground/60 text-xs">
           {selectedFolderOption.secondaryLabel}
@@ -406,6 +411,8 @@ export const ProjectPicker = memo(function ProjectPicker({
             }
             icon={<FolderClosed className="size-3.5" />}
             label={triggerLabel}
+            hideChevron
+            {...(triggerClassName ? { className: triggerClassName } : {})}
           />
         }
       />

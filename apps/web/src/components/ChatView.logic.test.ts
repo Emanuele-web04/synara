@@ -4,8 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
+  createWorktreeSetupSnapshot,
+  failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
+  resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -18,7 +21,9 @@ import {
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
+  resolveQueuedSteerGateTransition,
   resolveRuntimeModeAfterApprovalDecision,
+  QUEUED_STEER_GATE_TIMEOUT_MS,
   sanitizeVoiceErrorMessage,
   buildExpiredTerminalContextToastCopy,
   shouldAutoDeleteTerminalThreadOnLastClose,
@@ -28,6 +33,7 @@ import {
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
+  worktreeSetupHasError,
 } from "./ChatView.logic";
 
 describe("composer menu selection", () => {
@@ -900,10 +906,97 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
   });
 });
 
+describe("worktree setup snapshots", () => {
+  it("marks earlier steps done, the active step active, and later steps pending", () => {
+    expect(createWorktreeSetupSnapshot("prepare-thread").steps).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("starts with every step pending except the first when setup begins", () => {
+    expect(createWorktreeSetupSnapshot("create-worktree").steps.map((step) => step.status)).toEqual(
+      ["active", "pending", "pending"],
+    );
+  });
+
+  it("ends with every step done except the last when the session starts", () => {
+    expect(createWorktreeSetupSnapshot("start-session").steps.map((step) => step.status)).toEqual([
+      "done",
+      "done",
+      "active",
+    ]);
+  });
+
+  it("fails only the active step and leaves the rest untouched", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failed.steps.map((step) => step.status)).toEqual(["done", "error", "pending"]);
+    expect(worktreeSetupHasError(failed)).toBe(true);
+  });
+
+  it("returns the same snapshot when no step is active", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failWorktreeSetupSnapshot(failed)).toBe(failed);
+  });
+
+  it("reports no error for null or healthy snapshots", () => {
+    expect(worktreeSetupHasError(null)).toBe(false);
+    expect(worktreeSetupHasError(createWorktreeSetupSnapshot("create-worktree"))).toBe(false);
+  });
+
+  it("replaces a held failed setup when a fresh local dispatch starts", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup).toBeNull();
+  });
+
+  it("replaces a held failed setup when retrying worktree setup", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "create-worktree" },
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup?.steps.map((step) => step.status)).toEqual([
+      "active",
+      "pending",
+      "pending",
+    ]);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -913,7 +1006,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   };
   const firstTurnLocalDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -1081,5 +1174,91 @@ describe("resolveRuntimeModeAfterApprovalDecision", () => {
   it("leaves runtime mode untouched for one-off accept and decline decisions", () => {
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "accept")).toBeNull();
     expect(resolveRuntimeModeAfterApprovalDecision("approval-required", "decline")).toBeNull();
+  });
+});
+
+describe("resolveQueuedSteerGateTransition", () => {
+  const armedGate = { sawInterruptGap: false, gapStartedAt: null };
+  const now = 1_000_000;
+
+  it("holds without expiry while the original turn is still running", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: armedGate,
+      phase: "running",
+      sessionErrored: false,
+      now,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: false, gapStartedAt: null },
+      expiresInMs: null,
+    });
+  });
+
+  it("starts the gap timer when the interrupt lands and the phase leaves running", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: armedGate,
+      phase: "ready",
+      sessionErrored: false,
+      now,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS,
+    });
+  });
+
+  it("keeps counting down from the original gap start on re-evaluation", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "ready",
+      sessionErrored: false,
+      now: now + 5_000,
+    });
+    expect(transition).toEqual({
+      kind: "hold",
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      expiresInMs: QUEUED_STEER_GATE_TIMEOUT_MS - 5_000,
+    });
+  });
+
+  it("clears once the steered turn starts running after the gap", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "running",
+      sessionErrored: false,
+      now: now + 1_000,
+    });
+    expect(transition).toEqual({ kind: "clear" });
+  });
+
+  it("fails open when the steered turn never starts within the timeout", () => {
+    const transition = resolveQueuedSteerGateTransition({
+      gate: { sawInterruptGap: true, gapStartedAt: now },
+      phase: "ready",
+      sessionErrored: false,
+      now: now + QUEUED_STEER_GATE_TIMEOUT_MS,
+    });
+    expect(transition).toEqual({ kind: "clear" });
+  });
+
+  it("clears on session error or disconnect so the queue cannot stall", () => {
+    expect(
+      resolveQueuedSteerGateTransition({
+        gate: armedGate,
+        phase: "ready",
+        sessionErrored: true,
+        now,
+      }),
+    ).toEqual({ kind: "clear" });
+    expect(
+      resolveQueuedSteerGateTransition({
+        gate: { sawInterruptGap: true, gapStartedAt: now },
+        phase: "disconnected",
+        sessionErrored: false,
+        now,
+      }),
+    ).toEqual({ kind: "clear" });
   });
 });

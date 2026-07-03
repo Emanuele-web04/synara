@@ -5,7 +5,7 @@
 // Depends on: WorkLogEntry.toolDetails and shared dialog chrome
 
 import type { ReactNode } from "react";
-import { ChangesIcon, TerminalIcon } from "~/lib/icons";
+import { PencilIcon, TerminalIcon } from "~/lib/icons";
 import { createMarkdownCodeFence, formatShellTranscript } from "~/lib/toolCallDetailsFormatting";
 import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
@@ -20,8 +20,7 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 
-const DETAIL_HEADER_CLASS_NAME =
-  "border-b border-border/45 px-3 py-2 text-[10px] font-medium uppercase tracking-[0.14em]";
+const DETAIL_HEADER_CLASS_NAME = "border-b border-border/45 px-3 py-2 text-[10px] font-medium";
 const DETAIL_CODE_BLOCK_CLASS_NAME =
   "max-h-[min(46vh,30rem)] overflow-auto whitespace-pre-wrap break-words font-chat-code text-[11px] leading-relaxed text-foreground/88";
 const TOOL_DETAILS_MARKDOWN_CLASS_NAME =
@@ -35,7 +34,10 @@ interface ToolCallDetailsDialogProps {
 
 export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
   const details = entry?.toolDetails;
-  const Icon = details?.kind === "file-change" ? ChangesIcon : TerminalIcon;
+  // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
+  // the central pencil, commands use the terminal — so the dialog header matches
+  // the row the user clicked.
+  const Icon = details?.kind === "file-change" ? PencilIcon : TerminalIcon;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup surface="solid" className="max-h-[min(86vh,760px)] max-w-4xl gap-0 p-0">
@@ -164,9 +166,7 @@ function MarkdownToolCodeBlock(props: { language: string; children: string }) {
 function ToolDetailSection(props: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-2">
-      <h3 className="text-[11px] font-medium uppercase tracking-[0.16em] text-muted-foreground/56">
-        {props.title}
-      </h3>
+      <h3 className="text-[11px] font-medium text-muted-foreground/56">{props.title}</h3>
       {props.children}
     </section>
   );

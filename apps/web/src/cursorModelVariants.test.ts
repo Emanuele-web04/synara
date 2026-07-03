@@ -15,6 +15,7 @@ describe("normalizeCursorModelVariantBaseId", () => {
     expect(normalizeCursorModelVariantBaseId("claude-4.6-opus-max-thinking-fast")).toBe(
       "claude-opus-4-6",
     );
+    expect(normalizeCursorModelVariantBaseId("claude-5-sonnet-max-fast")).toBe("claude-sonnet-5");
   });
 });
 
@@ -133,6 +134,46 @@ describe("collapseCursorModelVariants", () => {
           { value: "max", label: "Max" },
         ],
         defaultReasoningEffort: "high",
+        contextWindowOptions: [
+          { value: "300k", label: "300K", isDefault: true },
+          { value: "1m", label: "1M" },
+        ],
+        defaultContextWindow: "300k",
+      },
+    ]);
+  });
+
+  it("restores Cursor CLI fallback context choices for Sonnet 5 variants", () => {
+    expect(
+      collapseCursorModelVariants([
+        {
+          slug: "claude-sonnet-5-xhigh",
+          name: "Sonnet 5 1M Extra High",
+          upstreamProviderId: "anthropic",
+          upstreamProviderName: "Anthropic",
+          supportedReasoningEfforts: [{ value: "xhigh", label: "Extra High" }],
+          defaultReasoningEffort: "xhigh",
+        },
+        {
+          slug: "claude-sonnet-5-max",
+          name: "Sonnet 5 1M Max",
+          upstreamProviderId: "anthropic",
+          upstreamProviderName: "Anthropic",
+          supportedReasoningEfforts: [{ value: "max", label: "Max" }],
+          defaultReasoningEffort: "max",
+        },
+      ]),
+    ).toEqual([
+      {
+        slug: "claude-sonnet-5",
+        name: "Sonnet 5",
+        upstreamProviderId: "anthropic",
+        upstreamProviderName: "Anthropic",
+        supportedReasoningEfforts: [
+          { value: "xhigh", label: "Extra High", isDefault: true },
+          { value: "max", label: "Max" },
+        ],
+        defaultReasoningEffort: "xhigh",
         contextWindowOptions: [
           { value: "300k", label: "300K", isDefault: true },
           { value: "1m", label: "1M" },

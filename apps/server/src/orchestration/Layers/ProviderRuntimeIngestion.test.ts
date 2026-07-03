@@ -3136,6 +3136,58 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBeNull();
   });
 
+  it("labels OpenCode retry warnings with a provider-specific summary and visible detail", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "runtime.warning",
+      eventId: asEventId("evt-opencode-retry-warning"),
+      provider: "opencode",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-opencode"),
+      payload: {
+        message: "Provider request failed; retrying.",
+        detail: {
+          attempt: 2,
+        },
+      },
+      raw: {
+        source: "opencode.sdk.event",
+        payload: {
+          type: "session.next.retried",
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-opencode-retry-warning",
+      ),
+    );
+
+    const warning = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-opencode-retry-warning",
+    );
+    const payload =
+      warning?.payload && typeof warning.payload === "object"
+        ? (warning.payload as Record<string, unknown>)
+        : undefined;
+    expect(warning).toMatchObject({
+      kind: "runtime.warning",
+      summary: "OpenCode retrying",
+    });
+    expect(payload).toMatchObject({
+      message: "Provider request failed; retrying.",
+      detail: "Provider request failed; retrying.",
+      nativeEventType: "session.next.retried",
+      data: {
+        attempt: 2,
+      },
+    });
+  });
+
   it("maps session/thread lifecycle and item.started into session/activity projections", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -3775,6 +3827,55 @@ describe("ProviderRuntimeIngestion", () => {
         candidate.summary === "Compacting conversation...",
     );
     expect(activity?.tone).toBe("info");
+  });
+
+  it("projects context compaction completion and failure into thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-compaction-completed"),
+      provider: "grok",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        itemType: "context_compaction",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-thread-compaction-failed"),
+      provider: "grok",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        itemType: "context_compaction",
+        status: "failed",
+        detail: "Compaction was interrupted",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.kind === "context-compaction" &&
+          activity.summary === "Context compaction failed",
+      ),
+    );
+
+    const completed = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) =>
+        candidate.kind === "context-compaction" && candidate.summary === "Context compacted",
+    );
+    expect(completed?.tone).toBe("info");
+    const failed = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) =>
+        candidate.kind === "context-compaction" &&
+        candidate.summary === "Context compaction failed",
+    );
+    expect(failed?.tone).toBe("error");
   });
 
   it("projects Codex task lifecycle chunks into thread activities", async () => {

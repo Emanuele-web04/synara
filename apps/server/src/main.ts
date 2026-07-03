@@ -25,11 +25,13 @@ import { Open } from "./open";
 import * as SqlitePersistence from "./persistence/Layers/Sqlite";
 import { makeServerProviderLayer, makeServerRuntimeServicesLayer } from "./serverLayers";
 import { startServerMemoryDiagnostics } from "./memoryDiagnostics";
+import { startClaudeCredentialKeepalive } from "./provider/claudeCredentialKeepalive";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ProviderHealthLive } from "./provider/Layers/ProviderHealth";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper";
 import { Server } from "./effectServer";
 import { ServerLoggerLive } from "./serverLogger";
+import { ServerSettingsService } from "./serverSettings";
 import { formatHostForUrl, isWildcardHost } from "./startupAccess";
 import { AnalyticsServiceLayerLive } from "./telemetry/Layers/AnalyticsService";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
@@ -285,6 +287,7 @@ const makeServerProgram = (input: CliInput) =>
     const cliConfig = yield* CliConfig;
     const { start, stopSignal } = yield* Server;
     const openDeps = yield* Open;
+    const serverSettings = yield* ServerSettingsService;
     yield* cliConfig.fixPath;
 
     const config = yield* ServerConfig;
@@ -300,12 +303,31 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
+
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     // Start the retention loop after the server is live so startup can serve
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
     yield* Effect.forkChild(recordStartupHeartbeat);
+    // Optional Claude OAuth keepalive. Disabled by default because it touches
+    // Claude Code auth data in the background; users can opt in with
+    // T3CODE_CLAUDE_KEEPALIVE=1.
+    yield* Effect.forkChild(
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        if (settings.providers.claudeAgent.enabled === false) {
+          return;
+        }
+        yield* Effect.sync(() =>
+          startClaudeCredentialKeepalive({
+            binaryPath: settings.providers.claudeAgent.binaryPath,
+            homeDir: config.homeDir,
+            log: (message) => Effect.runFork(Effect.logInfo(message)),
+          }),
+        );
+      }),
+    );
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =

@@ -3,8 +3,51 @@ import {
   deriveInlineCommandCall,
   deriveReadableCommandDisplay,
   deriveReadableToolTitle,
+  extractWebFetchUrl,
+  isInspectCommand,
   normalizeCompactToolLabel,
+  resolveCommandVisualKind,
 } from "./toolCallLabel";
+
+describe("extractWebFetchUrl", () => {
+  it("pulls the url out of a WebFetch argument summary", () => {
+    expect(
+      extractWebFetchUrl({
+        toolName: "WebFetch",
+        detail: 'WebFetch: {"url":"https://ui.shadcn.com/docs/components","prompt":"List EVER..."}',
+      }),
+    ).toBe("https://ui.shadcn.com/docs/components");
+  });
+
+  it("recognizes alternate fetch tool names and the uri field", () => {
+    expect(
+      extractWebFetchUrl({
+        toolName: "web_fetch",
+        detail: '{"uri":"https://example.com/path"}',
+      }),
+    ).toBe("https://example.com/path");
+  });
+
+  it("falls back to a bare URL token when there is no json field", () => {
+    expect(extractWebFetchUrl({ toolName: "fetch", detail: "Fetching https://example.com." })).toBe(
+      "https://example.com",
+    );
+  });
+
+  it("ignores non-fetch tools", () => {
+    expect(
+      extractWebFetchUrl({ toolName: "Read", detail: '{"url":"https://example.com"}' }),
+    ).toBeNull();
+  });
+
+  it("ignores non-http(s) and missing urls", () => {
+    expect(
+      extractWebFetchUrl({ toolName: "WebFetch", detail: '{"url":"ftp://example.com"}' }),
+    ).toBeNull();
+    expect(extractWebFetchUrl({ toolName: "WebFetch", detail: '{"prompt":"hi"}' })).toBeNull();
+    expect(extractWebFetchUrl({ toolName: "WebFetch", detail: undefined })).toBeNull();
+  });
+});
 
 describe("normalizeCompactToolLabel", () => {
   it("removes trailing completion wording", () => {
@@ -240,5 +283,44 @@ describe("deriveInlineCommandCall", () => {
     expect(deriveInlineCommandCall(`/bin/zsh -lc 'rg -n "tool call" apps/web/src'`)).toBe(
       `rg -n "tool call" apps/web/src`,
     );
+  });
+});
+
+describe("isInspectCommand", () => {
+  it("detects read-only inspection commands (read/search/find/list)", () => {
+    expect(isInspectCommand("cat package.json")).toBe(true);
+    expect(isInspectCommand("sed -n 1,40p src/app.ts")).toBe(true);
+    expect(isInspectCommand("head -n 20 README.md")).toBe(true);
+    expect(isInspectCommand(`rg -n "tool call" apps/web/src`)).toBe(true);
+    expect(isInspectCommand("grep -R foo .")).toBe(true);
+    expect(isInspectCommand("find . -name '*.ts'")).toBe(true);
+    expect(isInspectCommand("ls -la src")).toBe(true);
+    expect(isInspectCommand(`/bin/zsh -lc 'rg -n "x" src'`)).toBe(true);
+  });
+
+  it("does not treat mutating or executing commands as inspections", () => {
+    expect(isInspectCommand("git status")).toBe(false);
+    expect(isInspectCommand("node build.js")).toBe(false);
+    expect(isInspectCommand("rm -rf dist")).toBe(false);
+    expect(isInspectCommand("mkdir foo")).toBe(false);
+  });
+});
+
+describe("resolveCommandVisualKind", () => {
+  it("classifies git commands through shell and global-option wrappers", () => {
+    expect(resolveCommandVisualKind("git status --short")).toBe("git");
+    expect(resolveCommandVisualKind("git -C apps/web status --short")).toBe("git");
+    expect(resolveCommandVisualKind(`/bin/zsh -lc "cd repo && git branch -vv"`)).toBe("git");
+  });
+
+  it("classifies GitHub CLI commands through env wrappers", () => {
+    expect(resolveCommandVisualKind("gh pr view 274 --repo owner/repo")).toBe("github");
+    expect(resolveCommandVisualKind("env -u GH_TOKEN gh pr status")).toBe("github");
+    expect(resolveCommandVisualKind("hub pull-request -m test")).toBe("github");
+  });
+
+  it("keeps inspections and ordinary commands distinct", () => {
+    expect(resolveCommandVisualKind(`rg -n "tool call" apps/web/src`)).toBe("inspect");
+    expect(resolveCommandVisualKind("bun run build")).toBe("terminal");
   });
 });

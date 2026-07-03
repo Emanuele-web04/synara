@@ -137,6 +137,7 @@ function fallbackContextWindowOptionsForCursorBase(
   }
   if (
     baseSlug === "claude-fable-5" ||
+    baseSlug === "claude-sonnet-5" ||
     baseSlug === "claude-opus-4-8" ||
     baseSlug === "claude-opus-4-7"
   ) {

@@ -190,6 +190,7 @@ function RootRouteView() {
         <AnchoredToastProvider>
           <GitProgressToastPreviewDev />
           <EventRouter />
+          <ProviderStatusRefreshCoordinator />
           <GlobalShortcutsDialog />
           <GlobalWhatsNewSurface />
           <TaskCompletionNotifications />
@@ -210,6 +211,24 @@ function GitProgressToastPreviewDev() {
   return null;
 }
 
+function ProviderStatusRefreshCoordinator() {
+  const { settings } = useAppSettings();
+  const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
+  const providerUpdateChecksEnabled =
+    serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
+
+  useProviderAuthRefreshOnFocus();
+  // Provider latest-version checks are slow/network-backed, so keep this cadence
+  // coarse while still honoring the automatic update-check setting.
+  useProviderStatusRefresh({
+    enabled: providerUpdateChecksEnabled,
+    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
+    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
+  });
+
+  return null;
+}
+
 function ProviderUpdateNotifications() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -226,19 +245,10 @@ function ProviderUpdateNotifications() {
         : null,
     [serverSettingsQuery.data, settings.enableProviderUpdateChecks],
   );
-  const providerUpdateChecksEnabled =
-    serverSettingsQuery.data !== undefined && settings.enableProviderUpdateChecks;
   const [isUpdatingAll, setIsUpdatingAll] = useState(false);
   const activeToastRef = useRef<ActiveProviderUpdateToast | null>(null);
   const isUpdatingAllRef = useRef(false);
   const progressToastDismissedRef = useRef(false);
-  // Provider latest-version checks are slow/network-backed, so keep this much
-  // coarser than auth focus refreshes while still avoiding manual-only refreshes.
-  useProviderStatusRefresh({
-    enabled: providerUpdateChecksEnabled,
-    initialDelayMs: PROVIDER_UPDATE_INITIAL_REFRESH_DELAY_MS,
-    intervalMs: PROVIDER_UPDATE_REFRESH_INTERVAL_MS,
-  });
   const outdatedProviders = useMemo(
     () =>
       getVisibleProviderUpdateStatuses({
@@ -583,9 +593,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
       </div>
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
-        <p className="text-[11px] font-semibold tracking-[0.18em] text-muted-foreground uppercase">
-          {APP_DISPLAY_NAME}
-        </p>
+        <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
         <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
@@ -1430,10 +1438,6 @@ function EventRouter() {
     }
     void reconcile(subscribedThreadIds);
   }, [subscribedThreadIds]);
-
-  // Account changes made outside the app reflect without a restart by
-  // re-probing provider auth when the window regains focus (see hook).
-  useProviderAuthRefreshOnFocus();
 
   return null;
 }

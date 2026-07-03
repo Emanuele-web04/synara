@@ -653,6 +653,36 @@ function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unkno
   return payload as Record<string, unknown>;
 }
 
+function rawRuntimeEventPayload(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
+  const raw = asObject((event as { raw?: unknown }).raw);
+  return asObject(raw?.payload);
+}
+
+function runtimeWarningSummary(event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>) {
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  if (
+    (event.provider === "opencode" || event.provider === "kilo") &&
+    (nativeType === "session.next.retried" || nativeType === "session.status")
+  ) {
+    return event.provider === "opencode" ? "OpenCode retrying" : "Kilo retrying";
+  }
+  return "Runtime warning";
+}
+
+// Runtime warning rows should show the user-visible message even when raw detail is structured.
+function runtimeWarningPayload(
+  event: Extract<ProviderRuntimeEvent, { type: "runtime.warning" }>,
+): ActivityPayload {
+  const message = truncateDetail(event.payload.message);
+  const nativeType = asString(rawRuntimeEventPayload(event)?.type);
+  return toActivityPayload({
+    message,
+    detail: message,
+    ...(nativeType ? { nativeEventType: nativeType } : {}),
+    ...activityDataField(event.payload.detail),
+  });
+}
+
 function normalizeRuntimeTurnState(
   value: string | undefined,
 ): "completed" | "failed" | "interrupted" | "cancelled" {
@@ -852,11 +882,8 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "runtime.warning",
-          summary: "Runtime warning",
-          payload: toActivityPayload({
-            message: truncateDetail(event.payload.message),
-            ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
-          }),
+          summary: runtimeWarningSummary(event),
+          payload: runtimeWarningPayload(event),
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
         },
@@ -1077,6 +1104,29 @@ function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      // Providers (Grok auto-compaction, Pi compaction_end) close their
+      // compaction rows via item.completed; without this branch the earlier
+      // "Compacting conversation..." activity never resolves.
+      if (event.payload.itemType === "context_compaction") {
+        const failed = event.payload.status === "failed";
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: failed ? "error" : "info",
+            kind: "context-compaction",
+            summary: failed ? "Context compaction failed" : "Context compacted",
+            payload: toActivityPayload({
+              itemType: event.payload.itemType,
+              status: event.payload.status,
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...activityDataField(event.payload.data),
+            }),
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }

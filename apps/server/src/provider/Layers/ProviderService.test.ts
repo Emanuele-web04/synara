@@ -2450,3 +2450,44 @@ validation.layer("ProviderServiceLive validation", (it) => {
     }),
   );
 });
+
+const liveFallback = makeProviderServiceLayer();
+liveFallback.layer("ProviderServiceLive live-fallback settled turns", (it) => {
+  it.effect("persists the first binding row as stopped when the turn settles pre-write", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-live-fallback-settled");
+      const turnId = asTurnId("turn-live-fallback-settled");
+
+      // The adapter owns a live session but startSession has not persisted a
+      // binding row yet (the startup window resolveRoutableSession allows).
+      liveFallback.codex.hasSession.mockImplementation((candidate: ThreadId) =>
+        Effect.succeed(candidate === threadId),
+      );
+      liveFallback.codex.sendTurn.mockImplementationOnce((input: ProviderSendTurnInput) =>
+        Effect.gen(function* () {
+          // The terminal runtime event is fully processed before sendTurn
+          // returns, so the post-dispatch write takes the settled-turn branch.
+          liveFallback.codex.emit({
+            type: "turn.completed",
+            eventId: asEventId("evt-live-fallback-settled"),
+            provider: "codex",
+            createdAt: new Date().toISOString(),
+            threadId: input.threadId,
+            turnId,
+            payload: { state: "cancelled" },
+          });
+          yield* sleep(100);
+          return { threadId: input.threadId, turnId };
+        }),
+      );
+      yield* liveFallback.codex.waitForRuntimeSubscribers();
+
+      yield* provider.sendTurn({ threadId, input: "hello" });
+
+      const binding = Option.getOrUndefined(yield* directory.getBinding(threadId));
+      assert.equal(binding?.status, "stopped");
+    }),
+  );
+});

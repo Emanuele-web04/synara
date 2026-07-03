@@ -9,6 +9,7 @@ import {
   getDesktopUpdateButtonVariant,
   getDesktopUpdateButtonPresentation,
   getDesktopUpdateButtonTooltip,
+  getDesktopUpdateDownloadPercent,
   isDesktopUpdateButtonDisabled,
   resolveDesktopUpdateButtonAction,
   shouldHighlightDesktopUpdateError,
@@ -143,8 +144,44 @@ describe("desktop update button state", () => {
     expect(shouldShowDesktopUpdateButton(state)).toBe(true);
     expect(isDesktopUpdateButtonDisabled(state)).toBe(true);
     expect(getDesktopUpdateButtonTooltip(state)).toContain("42%");
-    expect(getDesktopUpdateButtonLabel(state)).toBe("Preparing...");
-    expect(getDesktopUpdateButtonPresentation(state).progressPercent).toBe(42);
+    expect(getDesktopUpdateButtonLabel(state)).toBe("Preparing");
+    expect(getDesktopUpdateButtonPresentation(state)).toEqual({
+      label: "Preparing",
+      secondaryLabel: null,
+    });
+    expect(getDesktopUpdateDownloadPercent(state)).toBe(42);
+  });
+
+  it("surfaces a clamped integer download percentage only while downloading", () => {
+    expect(getDesktopUpdateDownloadPercent(null)).toBeNull();
+    expect(
+      getDesktopUpdateDownloadPercent({
+        ...baseState,
+        status: "downloading",
+        downloadPercent: null,
+      }),
+    ).toBeNull();
+    expect(
+      getDesktopUpdateDownloadPercent({
+        ...baseState,
+        status: "downloading",
+        downloadPercent: 37.9,
+      }),
+    ).toBe(37);
+    expect(
+      getDesktopUpdateDownloadPercent({
+        ...baseState,
+        status: "downloading",
+        downloadPercent: 126.9,
+      }),
+    ).toBe(100);
+    expect(
+      getDesktopUpdateDownloadPercent({ ...baseState, status: "downloading", downloadPercent: -8 }),
+    ).toBe(0);
+    // Percentage stays hidden outside the active download (e.g. ready to install).
+    expect(
+      getDesktopUpdateDownloadPercent({ ...baseState, status: "downloaded", downloadPercent: 100 }),
+    ).toBeNull();
   });
 
   it("keeps update checks hidden while a check is in flight", () => {

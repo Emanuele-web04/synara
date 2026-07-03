@@ -205,4 +205,43 @@ layer("ProjectionThreadMessageRepository", (it) => {
       assert.equal(rows[0]?.dispatchMode, "steer");
     }),
   );
+
+  it.effect("round-trips and preserves the automation dispatch origin", () =>
+    Effect.gen(function* () {
+      const repository = yield* ProjectionThreadMessageRepository;
+      const threadId = ThreadId.makeUnsafe("thread-dispatch-origin");
+      const messageId = MessageId.makeUnsafe("message-dispatch-origin");
+      const createdAt = "2026-02-28T19:31:00.000Z";
+
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "kick off the review",
+        dispatchOrigin: "automation",
+        isStreaming: false,
+        source: "native",
+        createdAt,
+        updatedAt: "2026-02-28T19:31:01.000Z",
+      });
+
+      // A later streaming update omits the origin; it must not be cleared.
+      yield* repository.upsert({
+        messageId,
+        threadId,
+        turnId: null,
+        role: "user",
+        text: "kick off the review now",
+        isStreaming: false,
+        source: "native",
+        createdAt,
+        updatedAt: "2026-02-28T19:31:02.000Z",
+      });
+
+      const rows = yield* repository.listByThreadId({ threadId });
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0]?.dispatchOrigin, "automation");
+    }),
+  );
 });

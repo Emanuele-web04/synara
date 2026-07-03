@@ -40,6 +40,7 @@ import {
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnLive,
   checkpointRefForThreadTurnStart,
 } from "../../checkpointing/Utils.ts";
 import { ServerConfig } from "../../config.ts";
@@ -552,6 +553,55 @@ describe("CheckpointReactor", () => {
     expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
   });
 
+  it("recreates a missing message-start baseline before aliasing the turn-start ref", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("message-missing-baseline");
+    const turnId = asTurnId("turn-missing-baseline");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-missing-baseline-start"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "recover baseline",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    const messageStartRef = checkpointRefForThreadMessageStart(threadId, messageId);
+    await waitForGitRefExists(harness.cwd, messageStartRef);
+
+    // Simulate a missing message-start baseline when the provider's
+    // turn.started arrives, regardless of which startup path dropped it.
+    runGit(harness.cwd, ["update-ref", "-d", messageStartRef]);
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-missing-baseline-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
+    const turnStartRef = checkpointRefForThreadTurnStart(threadId, turnId);
+    await waitForGitRefExists(harness.cwd, turnStartRef);
+
+    // The reactor must re-establish the message-start baseline and alias the
+    // turn-start ref to it, not capture an independent turn-start snapshot.
+    expect(gitRefExists(harness.cwd, messageStartRef)).toBe(true);
+    expect(runGit(harness.cwd, ["rev-parse", messageStartRef]).trim()).toBe(
+      runGit(harness.cwd, ["rev-parse", turnStartRef]).trim(),
+    );
+  });
+
   it("waits briefly for the assistant message id before finalizing a completed turn checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const turnId = asTurnId("turn-assistant-race");
@@ -947,6 +997,99 @@ describe("CheckpointReactor", () => {
     expect(
       gitRefExists(harness.cwd, checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-1"), 1)),
     ).toBe(true);
+  });
+
+  it("derives a live turn-diff placeholder from git for claude file edits mid-turn", async () => {
+    const harness = await createHarness({
+      seedFilesystemCheckpoints: false,
+      providerName: "claudeAgent",
+    });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const turnId = asTurnId("turn-claude-live");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-claude-live"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "claudeAgent",
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-started-claude-live"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
+    await waitForGitRefExists(harness.cwd, checkpointRefForThreadTurnStart(threadId, turnId));
+
+    // A file edit completes while the turn is still running (no turn.completed yet).
+    fs.writeFileSync(path.join(harness.cwd, "live.txt"), "live\n", "utf8");
+    harness.provider.emit({
+      type: "item.completed",
+      eventId: EventId.makeUnsafe("evt-item-file-change-live"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      itemId: "item-file-change-1",
+      payload: { itemType: "file_change", status: "completed" },
+    });
+
+    const liveThread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.status === "missing" &&
+          checkpoint.files?.map((file) => file.path).includes("live.txt") === true,
+      ),
+    );
+    const livePlaceholder = liveThread.checkpoints.find(
+      (checkpoint) => checkpoint.status === "missing",
+    );
+    expect(livePlaceholder?.checkpointTurnCount).toBe(1);
+    const liveFile = livePlaceholder?.files?.find((file) => file.path === "live.txt") as
+      | { readonly path: string; readonly additions?: number; readonly deletions?: number }
+      | undefined;
+    expect(liveFile?.additions).toBe(1);
+    // The throwaway snapshot ref must not linger as a durable checkpoint.
+    expect(gitRefExists(harness.cwd, checkpointRefForThreadTurnLive(threadId, turnId))).toBe(false);
+
+    // The terminal turn.completed capture must overwrite the placeholder with the
+    // authoritative git checkpoint (status "ready"), keeping a single entry.
+    fs.writeFileSync(path.join(harness.cwd, "second.txt"), "second\n", "utf8");
+    harness.provider.emit({
+      type: "turn.completed",
+      eventId: EventId.makeUnsafe("evt-turn-completed-claude-live"),
+      provider: "claudeAgent",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+      payload: { state: "completed" },
+    });
+
+    const finalThread = await waitForThread(harness.engine, (entry) =>
+      entry.checkpoints.some(
+        (checkpoint) => checkpoint.checkpointTurnCount === 1 && checkpoint.status === "ready",
+      ),
+    );
+    expect(finalThread.checkpoints).toHaveLength(1);
+    expect(finalThread.checkpoints[0]?.files?.map((file) => file.path).sort()).toEqual([
+      "live.txt",
+      "second.txt",
+    ]);
   });
 
   it("appends capture failure activity when turn diff summary cannot be derived", async () => {

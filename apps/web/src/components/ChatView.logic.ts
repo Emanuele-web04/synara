@@ -20,6 +20,8 @@ import {
   type Thread,
   type ThreadPrimarySurface,
   type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStepId,
 } from "../types";
 import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
@@ -447,9 +449,51 @@ export interface PullRequestDialogState {
   key: number;
 }
 
+// Ordered client-side phases of the "New worktree" first-send setup. The
+// labels surface verbatim in the transcript's transient setup row.
+export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
+  id: WorktreeSetupStepId;
+  label: string;
+}> = [
+  { id: "create-worktree", label: "Creating branch and worktree" },
+  { id: "prepare-thread", label: "Linking thread workspace" },
+  { id: "start-session", label: "Starting session" },
+];
+
+// How long a failed setup step stays visible before the row is dismissed, so
+// the error state can paint instead of being batched away with the reset.
+export const WORKTREE_SETUP_ERROR_HOLD_MS = 1200;
+
+export function createWorktreeSetupSnapshot(
+  activeStepId: WorktreeSetupStepId,
+): WorktreeSetupSnapshot {
+  const activeIndex = WORKTREE_SETUP_STEP_DEFINITIONS.findIndex((step) => step.id === activeStepId);
+  return {
+    steps: WORKTREE_SETUP_STEP_DEFINITIONS.map((step, index) => ({
+      ...step,
+      status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
+    })),
+  };
+}
+
+export function failWorktreeSetupSnapshot(snapshot: WorktreeSetupSnapshot): WorktreeSetupSnapshot {
+  if (!snapshot.steps.some((step) => step.status === "active")) {
+    return snapshot;
+  }
+  return {
+    steps: snapshot.steps.map((step) =>
+      step.status === "active" ? { ...step, status: "error" } : step,
+    ),
+  };
+}
+
+export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): boolean {
+  return snapshot?.steps.some((step) => step.status === "error") ?? false;
+}
+
 export interface LocalDispatchSnapshot {
   startedAt: string;
-  preparingWorktree: boolean;
+  worktreeSetup: WorktreeSetupSnapshot | null;
   latestTurnTurnId: Thread["latestTurn"] extends infer T
     ? T extends { turnId: infer U }
       ? U | null
@@ -468,13 +512,15 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { preparingWorktree?: boolean },
+  options?: { worktreeSetupStepId?: WorktreeSetupStepId },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
   return {
     startedAt: new Date().toISOString(),
-    preparingWorktree: Boolean(options?.preparingWorktree),
+    worktreeSetup: options?.worktreeSetupStepId
+      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId)
+      : null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
@@ -482,6 +528,30 @@ export function createLocalDispatchSnapshot(
     sessionOrchestrationStatus: session?.orchestrationStatus ?? null,
     sessionUpdatedAt: session?.updatedAt ?? null,
   };
+}
+
+// Computes the next client-side dispatch marker while preserving in-flight setup
+// progress and dropping failed setup rows that are only being held for display.
+export function resolveNextLocalDispatchSnapshot(input: {
+  current: LocalDispatchSnapshot | null;
+  activeThread: Thread | undefined;
+  options?: { worktreeSetupStepId?: WorktreeSetupStepId };
+}): LocalDispatchSnapshot {
+  const worktreeSetupStepId = input.options?.worktreeSetupStepId;
+  if (!input.current || worktreeSetupHasError(input.current.worktreeSetup)) {
+    return createLocalDispatchSnapshot(input.activeThread, input.options);
+  }
+
+  if (!worktreeSetupStepId) {
+    return input.current;
+  }
+
+  const alreadyActive = input.current.worktreeSetup?.steps.some(
+    (step) => step.id === worktreeSetupStepId && step.status === "active",
+  );
+  return alreadyActive
+    ? input.current
+    : { ...input.current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
 }
 
 export function hasServerAcknowledgedLocalDispatch(input: {
@@ -529,6 +599,63 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   }
 
   return false;
+}
+
+/**
+ * Steering a non-Codex provider interrupts the live turn and lets the server
+ * re-dispatch the steer text as a fresh turn. Between the abort and the
+ * steered turn's start the thread briefly looks idle, which would otherwise
+ * let the queued-composer auto-dispatch race the steered turn (and fire every
+ * queued message at once). The gate holds auto-dispatch through that gap.
+ */
+export interface QueuedSteerGate {
+  /** The abort gap has been observed (phase left "running" after the steer). */
+  sawInterruptGap: boolean;
+  /** Epoch ms when the gap started; null while the original turn still runs. */
+  gapStartedAt: number | null;
+}
+
+/** Recovery bound: a healthy interrupt→steered-turn handoff takes ~1-2s. */
+export const QUEUED_STEER_GATE_TIMEOUT_MS = 15_000;
+
+export type QueuedSteerGateTransition =
+  | { kind: "clear" }
+  | { kind: "hold"; gate: QueuedSteerGate; expiresInMs: number | null };
+
+export function resolveQueuedSteerGateTransition(input: {
+  gate: QueuedSteerGate;
+  phase: SessionPhase;
+  sessionErrored: boolean;
+  now: number;
+}): QueuedSteerGateTransition {
+  if (input.phase === "disconnected" || input.sessionErrored) {
+    // The steer will not produce a follow-up turn; release the queue.
+    return { kind: "clear" };
+  }
+  if (input.phase === "running") {
+    if (input.gate.sawInterruptGap) {
+      // The steered turn is live; normal live-turn guards take over from here.
+      return { kind: "clear" };
+    }
+    // Original turn still running (interrupt not processed yet): keep holding.
+    return {
+      kind: "hold",
+      gate: { sawInterruptGap: false, gapStartedAt: null },
+      expiresInMs: null,
+    };
+  }
+  const gapStartedAt = input.gate.gapStartedAt ?? input.now;
+  const expiresInMs = QUEUED_STEER_GATE_TIMEOUT_MS - (input.now - gapStartedAt);
+  if (expiresInMs <= 0) {
+    // The steered turn never started (lost interrupt, provider failure that
+    // didn't surface as a session error). Fail open so the queue can't stall.
+    return { kind: "clear" };
+  }
+  return {
+    kind: "hold",
+    gate: { sawInterruptGap: true, gapStartedAt },
+    expiresInMs,
+  };
 }
 
 export const ACTIVE_TURN_LAYOUT_SETTLE_DELAY_MS = 180;

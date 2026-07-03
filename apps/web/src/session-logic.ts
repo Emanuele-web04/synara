@@ -77,6 +77,10 @@ export interface WorkLogEntry {
   subagents?: ReadonlyArray<WorkLogSubagent>;
   subagentAction?: WorkLogSubagentAction;
   automation?: WorkLogAutomation;
+  // Source activity kind, kept so the timeline can pick a kind-specific icon
+  // (e.g. user-input.requested -> question glyph) instead of the generic
+  // tone fallback. Same rationale as `toolName` below.
+  activityKind?: OrchestrationThreadActivity["kind"];
 }
 
 // Created-automation rows render as a dedicated card (icon + name + cadence + Open)
@@ -118,6 +122,8 @@ interface DerivedWorkLogEntry extends WorkLogEntry {
   collapseKey?: string;
   collapseCommand?: string;
   toolName?: string;
+  runtimeWarningRepeatCount?: number;
+  runtimeWarningMessage?: string;
 }
 
 export interface PendingApproval {
@@ -820,12 +826,19 @@ export function deriveWorkLogEntries(
     .filter((activity) => !isPlanBoundaryToolActivity(activity))
     .filter((activity) => !isUninformativeCommandStartActivity(activity))
     .map(toDerivedWorkLogEntry);
+  // Strip the derivation-only helpers that exist solely on DerivedWorkLogEntry.
+  // `toolName` and `activityKind` are intentionally kept: they are public
+  // WorkLogEntry fields that the timeline relies on to pick the right icon (e.g.
+  // file-read tools like Claude's `Read` -> search icon, GitHub MCP rows ->
+  // GitHub icon, user-input rows -> question / submit glyphs). Stripping
+  // `toolName` here previously made those icon checks dead code, leaving the
+  // generic wrench.
   return collapseDerivedWorkLogEntries(entries).map(
     ({
-      activityKind: _activityKind,
       collapseCommand: _collapseCommand,
       collapseKey: _collapseKey,
-      toolName: _toolName,
+      runtimeWarningMessage: _runtimeWarningMessage,
+      runtimeWarningRepeatCount: _runtimeWarningRepeatCount,
       ...entry
     }) => entry,
   );
@@ -951,6 +964,16 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const collabTaskOutputDetail = extractCollabTaskOutputDetail(payload);
   if (collabTaskOutputDetail) {
     entry.detail = collabTaskOutputDetail;
+  }
+  const runtimeWarningMessage =
+    activity.kind === "runtime.warning" &&
+    typeof payload?.message === "string" &&
+    payload.message.trim().length > 0
+      ? payload.message.trim()
+      : undefined;
+  if (runtimeWarningMessage) {
+    entry.detail = runtimeWarningMessage;
+    entry.runtimeWarningMessage = runtimeWarningMessage;
   }
   if (commandPreview.command) {
     entry.command = commandPreview.command;
@@ -1126,15 +1149,119 @@ function collapseDerivedWorkLogEntries(
   entries: ReadonlyArray<DerivedWorkLogEntry>,
 ): DerivedWorkLogEntry[] {
   const collapsed: DerivedWorkLogEntry[] = [];
+  // Tools that carry a unique tool-call id (collapseKey "tool:<id>") merge by that
+  // id regardless of position. This is what fixes providers that emit every tool's
+  // started event before any of their completed events — Claude's parallel tool
+  // calls — which the adjacency-only path below renders as a started row plus a
+  // separate completed row. The id is unique per call, so distinct calls of the
+  // same tool never merge into each other.
+  const stableToolIndexByKey = new Map<string, number>();
   for (const entry of entries) {
     const previous = collapsed.at(-1);
-    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+    if (previous && shouldCollapseRuntimeWarningEntries(previous, entry)) {
+      collapsed[collapsed.length - 1] = mergeRuntimeWarningEntries(previous, entry);
+      continue;
+    }
+    if (previous && shouldCollapseContextCompactionEntries(previous, entry)) {
       collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
       continue;
     }
+    const stableToolKey =
+      entry.collapseKey?.startsWith("tool:") &&
+      isRenderableToolLifecycleActivity(entry.activityKind)
+        ? entry.collapseKey
+        : undefined;
+    if (stableToolKey !== undefined) {
+      const existingIndex = stableToolIndexByKey.get(stableToolKey);
+      if (existingIndex !== undefined) {
+        collapsed[existingIndex] = mergeDerivedWorkLogEntries(collapsed[existingIndex]!, entry);
+        continue;
+      }
+    }
+    if (previous && shouldCollapseToolLifecycleEntries(previous, entry)) {
+      collapsed[collapsed.length - 1] = mergeDerivedWorkLogEntries(previous, entry);
+      if (stableToolKey !== undefined) {
+        stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+      }
+      continue;
+    }
     collapsed.push(entry);
+    if (stableToolKey !== undefined) {
+      stableToolIndexByKey.set(stableToolKey, collapsed.length - 1);
+    }
   }
   return collapsed;
+}
+
+function shouldCollapseRuntimeWarningEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  if (previous.activityKind !== "runtime.warning" || next.activityKind !== "runtime.warning") {
+    return false;
+  }
+  if (previous.turnId !== next.turnId) {
+    return false;
+  }
+  return (
+    normalizeWorkLogTextForComparison(previous.label) ===
+      normalizeWorkLogTextForComparison(next.label) &&
+    normalizeWorkLogTextForComparison(
+      previous.runtimeWarningMessage ?? previous.detail ?? previous.preview ?? "",
+    ) ===
+      normalizeWorkLogTextForComparison(
+        next.runtimeWarningMessage ?? next.detail ?? next.preview ?? "",
+      )
+  );
+}
+
+function mergeRuntimeWarningEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): DerivedWorkLogEntry {
+  const repeatCount = (previous.runtimeWarningRepeatCount ?? 1) + 1;
+  const runtimeWarningMessage =
+    next.runtimeWarningMessage ??
+    previous.runtimeWarningMessage ??
+    next.detail ??
+    next.preview ??
+    previous.detail ??
+    previous.preview;
+  const repeatPreview = runtimeWarningMessage
+    ? `${repeatCount} notices - ${runtimeWarningMessage}`
+    : `${repeatCount} notices`;
+  return {
+    ...previous,
+    ...next,
+    runtimeWarningRepeatCount: repeatCount,
+    ...(runtimeWarningMessage ? { runtimeWarningMessage } : {}),
+    detail: repeatPreview,
+    preview: repeatPreview,
+  };
+}
+
+// Ingestion emits compaction progress ("Compacting conversation...") and its
+// terminal row ("Context compacted" / "... failed" / "... manually") as separate
+// activities; fold the terminal row into the in-progress one so the work log
+// shows a single resolving compaction entry instead of a stale spinner row.
+const CONTEXT_COMPACTION_PROGRESS_LABEL = "Compacting conversation...";
+
+function shouldCollapseContextCompactionEntries(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  if (
+    previous.activityKind !== "context-compaction" ||
+    next.activityKind !== "context-compaction"
+  ) {
+    return false;
+  }
+  if (previous.turnId !== next.turnId) {
+    return false;
+  }
+  // Only merge into a row that is still in progress; a terminal row belongs to
+  // an earlier compaction and must not swallow the next one's progress row.
+  return previous.label === CONTEXT_COMPACTION_PROGRESS_LABEL;
 }
 
 function shouldCollapseToolLifecycleEntries(
@@ -1986,7 +2113,22 @@ function compareActivitiesByOrder(
     return lifecycleRankComparison;
   }
 
+  // Compaction progress and terminal rows can share a millisecond; keep the
+  // progress row first so the work-log collapse can fold the pair (event ids
+  // are random and would otherwise order them arbitrarily).
+  if (left.kind === "context-compaction" && right.kind === "context-compaction") {
+    const compactionRankComparison =
+      contextCompactionOrderRank(left.summary) - contextCompactionOrderRank(right.summary);
+    if (compactionRankComparison !== 0) {
+      return compactionRankComparison;
+    }
+  }
+
   return left.id.localeCompare(right.id);
+}
+
+function contextCompactionOrderRank(summary: string): number {
+  return summary === CONTEXT_COMPACTION_PROGRESS_LABEL ? 0 : 1;
 }
 
 function compareActivityLifecycleRank(kind: string): number {
