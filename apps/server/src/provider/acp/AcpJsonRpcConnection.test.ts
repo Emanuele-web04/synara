@@ -103,6 +103,46 @@ describe("AcpSessionRuntime", () => {
     ),
   );
 
+  it.effect(
+    "assigns distinct fallback assistant item ids across separate runtime instances",
+    () => {
+      const runtimeLayer = AcpSessionRuntime.layer({
+        spawn: {
+          command: bunExe,
+          args: [mockAgentPath],
+        },
+        cwd: process.cwd(),
+        resumeSessionId: "mock-session-1",
+        clientInfo: { name: "t3-test", version: "0.0.0" },
+        authMethodId: "test",
+      });
+
+      const collectFallbackAssistantItemId = Effect.gen(function* () {
+        const runtime = yield* AcpSessionRuntime;
+        yield* runtime.start();
+        const eventsFiber = yield* Stream.runCollect(Stream.take(runtime.getEvents(), 4)).pipe(
+          Effect.forkChild,
+        );
+        yield* runtime.prompt({
+          prompt: [{ type: "text", text: "hi" }],
+        });
+        const notes = Array.from(yield* Fiber.join(eventsFiber));
+        const delta = notes.find((note) => note._tag === "ContentDelta");
+        expect(delta?._tag).toBe("ContentDelta");
+        return delta?._tag === "ContentDelta" ? delta.itemId : undefined;
+      }).pipe(Effect.provide(runtimeLayer), Effect.scoped, Effect.provide(NodeServices.layer));
+
+      return Effect.gen(function* () {
+        const firstItemId = yield* collectFallbackAssistantItemId;
+        const secondItemId = yield* collectFallbackAssistantItemId;
+        const fallbackIdPattern = /^assistant:mock-session-1:[0-9a-f]{8}:segment:0$/;
+        expect(firstItemId).toMatch(fallbackIdPattern);
+        expect(secondItemId).toMatch(fallbackIdPattern);
+        expect(firstItemId).not.toBe(secondItemId);
+      });
+    },
+  );
+
   it.effect("starts a session, prompts, and emits normalized events against the mock agent", () =>
     Effect.gen(function* () {
       const runtime = yield* AcpSessionRuntime;

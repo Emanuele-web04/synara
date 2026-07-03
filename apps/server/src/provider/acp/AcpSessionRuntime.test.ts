@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { assistantItemId } from "./AcpSessionRuntime.ts";
 
 describe("assistantItemId", () => {
+  // Format contract only — distinct runtimeInstanceId wiring is covered by
+  // AcpJsonRpcConnection.test.ts ("assigns distinct fallback assistant item ids...").
   it("produces distinct ids across runtime instances with the same session id and segment index", () => {
     const sessionId = "session-1";
     const a = assistantItemId(sessionId, "aaaa1111", 0);
