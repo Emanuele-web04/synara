@@ -199,9 +199,9 @@ export const makeAgentGateway = Effect.gen(function* () {
     );
 
   // Privilege boundary shared by every tool that makes another thread execute
-  // work (sends, heartbeats): a caller must not drive a thread that runs with
-  // more privileges than the user granted the caller itself — otherwise an
-  // approval-required or worktree-isolated agent escalates by proxy.
+  // work or mutates another thread's state: a caller must not drive a thread
+  // that runs with more privileges than the user granted the caller itself —
+  // otherwise an approval-required or worktree-isolated agent escalates by proxy.
   const assertCallerMayDriveThread = (
     caller: { readonly runtimeMode: string; readonly envMode?: string | null | undefined },
     target: {
@@ -698,11 +698,13 @@ export const makeAgentGateway = Effect.gen(function* () {
         additionalProperties: false,
       },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const title = readStringArg(args, "title", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
         yield* orchestrationEngine
           .dispatch({
             type: "thread.meta.update",
@@ -737,7 +739,9 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (archived === undefined) {
           throw new ToolInputError(`Missing required argument "archived".`);
         }
+        const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
+        yield* assertCallerMayDriveThread(caller, target);
         yield* orchestrationEngine
           .dispatch({
             type: archived ? "thread.archive" : "thread.unarchive",

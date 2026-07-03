@@ -779,6 +779,33 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("rejects metadata changes when the caller cannot drive the target thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads,
+      makeThreadShell("thread-elevated", { runtimeMode: "full-access" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+
+      const rename = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_title",
+        args: { threadId: "thread-elevated", title: "Hidden work" },
+      });
+      assert.isTrue(isToolError(rename.result));
+      assert.include(toolErrorText(rename.result), "full-access");
+
+      const archive = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_set_thread_archived",
+        args: { threadId: "thread-elevated", archived: true },
+      });
+      assert.isTrue(isToolError(archive.result));
+      assert.include(toolErrorText(archive.result), "full-access");
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("reports unknown tools as invalid params", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
