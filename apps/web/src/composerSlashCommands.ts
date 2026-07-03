@@ -72,7 +72,11 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
   provider: ProviderKind,
   command: ComposerSlashCommand,
 ): boolean {
-  return command === "automation" || (provider === "codex" && command === "review");
+  return (
+    command === "automation" ||
+    command === "export" ||
+    (provider === "codex" && command === "review")
+  );
 }
 
 export function shouldHideProviderNativeCommandFromComposerMenu(
@@ -81,7 +85,9 @@ export function shouldHideProviderNativeCommandFromComposerMenu(
 ): boolean {
   const normalizedCommand = normalizeComposerSlashCommandName(command);
   return (
-    normalizedCommand === "automation" || (provider === "codex" && normalizedCommand === "review")
+    normalizedCommand === "automation" ||
+    normalizedCommand === "export" ||
+    (provider === "codex" && normalizedCommand === "review")
   );
 }
 
@@ -161,6 +167,12 @@ const COMPOSER_SLASH_COMMAND_DEFINITIONS: Record<
     command: "fast",
     label: "/fast",
     description: "Turn fast mode on or off for this thread",
+    source: "app",
+  },
+  export: {
+    command: "export",
+    label: "/export",
+    description: "Download this thread as a ZIP archive (thread.json + transcript.md)",
     source: "app",
   },
   automation: {
@@ -367,12 +379,16 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
+          "export",
           "automation",
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it
           // creates a Synara split/context clone before the provider sees the first turn.
+          // /export is app-level too — Synara owns the thread transcript, so the download
+          // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
+          "export",
           "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));
