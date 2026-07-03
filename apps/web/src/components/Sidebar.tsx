@@ -144,7 +144,11 @@ import {
   unarchiveThreadFromClient,
 } from "../lib/threadArchive";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
-import { isStudioContainerProject, prewarmStudioProject } from "../lib/studioProjects";
+import {
+  findStudioDraftThreadId,
+  isStudioContainerProject,
+  prewarmStudioProject,
+} from "../lib/studioProjects";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadEnvironmentPresentation } from "../lib/threadEnvironment";
 import { dispatchThreadRename } from "../lib/threadRename";
@@ -1295,6 +1299,9 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
+  const projectDraftThreadIdByProjectId = useComposerDraftStore(
+    (store) => store.projectDraftThreadIdByProjectId,
+  );
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
@@ -1557,6 +1564,15 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
       [sidebarThreads, studioProjectIdSet],
     );
+  const studioDraftThreadId = useMemo(
+    () =>
+      findStudioDraftThreadId({
+        studioProjectIds: studioProjectIdSet,
+        projectDraftThreadIdByProjectId,
+        draftThreadsByThreadId,
+      }),
+    [draftThreadsByThreadId, projectDraftThreadIdByProjectId, studioProjectIdSet],
+  );
   const {
     nonStudioThreads: nonStudioSidebarDisplayThreads,
     studioThreads: studioSidebarDisplayThreads,
@@ -2300,6 +2316,10 @@ export default function Sidebar() {
         return;
       }
       if (view === "studio") {
+        if (studioDraftThreadId) {
+          void handleNewStudioChat();
+          return;
+        }
         const target = resolveBackToStudioTarget();
         if (target.kind === "thread") {
           void navigate({
@@ -2311,7 +2331,7 @@ export default function Sidebar() {
           });
           return;
         }
-        void handleNewStudioChat({ fresh: true });
+        void handleNewStudioChat();
         return;
       }
 
@@ -2337,6 +2357,7 @@ export default function Sidebar() {
       resolveBackToStudioTarget,
       resolveBackToThreadsTarget,
       routeWorkspaceId,
+      studioDraftThreadId,
       workspacePages,
     ],
   );
@@ -2376,11 +2397,11 @@ export default function Sidebar() {
     prewarmHomeChatProject({ homeDir, chatWorkspaceRoot });
   }, [chatWorkspaceRoot, homeDir]);
   useEffect(() => {
-    if (!studioSectionVisible || !studioWorkspaceRoot) {
+    if (!threadsHydrated || !studioSectionVisible || !studioWorkspaceRoot) {
       return;
     }
     prewarmStudioProject({ homeDir, chatWorkspaceRoot, studioWorkspaceRoot });
-  }, [chatWorkspaceRoot, homeDir, studioSectionVisible, studioWorkspaceRoot]);
+  }, [chatWorkspaceRoot, homeDir, studioSectionVisible, studioWorkspaceRoot, threadsHydrated]);
 
   // Opens a fresh home-chat draft directly on the draft thread route so the first send
   // does not need a second route swap from "/" to "/$threadId".
@@ -4661,8 +4682,8 @@ export default function Sidebar() {
     return [...visibleThreadIdSet];
   }, [pinnedThreads, surfaceProjectSidebarDataById, surfaceProjects]);
   const visibleSidebarThreadIdSet = useMemo(
-    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds]),
-    [visibleChatThreadIds, visibleSidebarThreadIds],
+    () => new Set([...visibleSidebarThreadIds, ...visibleChatThreadIds, ...studioChatThreadIds]),
+    [studioChatThreadIds, visibleChatThreadIds, visibleSidebarThreadIds],
   );
   const visibleSidebarThreads = useMemo(
     () => sidebarDisplayThreads.filter((thread) => visibleSidebarThreadIdSet.has(thread.id)),

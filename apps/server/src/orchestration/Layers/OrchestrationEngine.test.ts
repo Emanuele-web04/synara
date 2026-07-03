@@ -1003,6 +1003,86 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("rejects duplicate Studio workspace containers", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-studio-project-create"),
+        projectId: asProjectId("project-studio"),
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/tmp/synara-studio",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-studio-project-duplicate-create"),
+          projectId: asProjectId("project-studio-duplicate"),
+          kind: "studio",
+          title: "Studio",
+          workspaceRoot: "/tmp/synara-studio",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    await system.dispose();
+  });
+
+  it("rejects moving a Studio container onto another Studio workspace root", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-studio-source-create"),
+        projectId: asProjectId("project-studio-source"),
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/tmp/synara-studio-source",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-studio-target-create"),
+        projectId: asProjectId("project-studio-target"),
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/tmp/synara-studio-target",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-studio-target-root-update"),
+          projectId: asProjectId("project-studio-target"),
+          workspaceRoot: "/tmp/synara-studio-source",
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    await system.dispose();
+  });
+
   it("rejects duplicate thread creation", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;

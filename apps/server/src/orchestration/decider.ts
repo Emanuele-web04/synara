@@ -40,6 +40,7 @@ import {
 
 const nowIso = () => new Date().toISOString();
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
+const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -226,7 +227,8 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
-      if ((command.kind ?? "project") === "project") {
+      const nextProjectKind = command.kind ?? "project";
+      if (nextProjectKind === "project") {
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -262,11 +264,24 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
+      if (nextProjectKind === "studio") {
+        const existingStudioProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: STUDIO_PROJECT_KIND_SET },
+        )[0];
+        if (existingStudioProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingStudioProject.id}' already uses workspace root '${existingStudioProject.workspaceRoot}'.`,
+          });
+        }
+      }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? "project",
+        nextKind: nextProjectKind,
         staleProjectIds: new Set(staleProjects.map((project) => project.id)),
       });
 
@@ -280,7 +295,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.created",
         payload: {
           projectId: command.projectId,
-          kind: command.kind ?? "project",
+          kind: nextProjectKind,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
@@ -299,19 +314,21 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
-      if (command.workspaceRoot !== undefined && command.kind !== "chat") {
+      const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      if (command.workspaceRoot !== undefined && nextProjectKind !== "chat") {
         yield* requireProjectWorkspaceRootAvailable({
           readModel,
           command,
           workspaceRoot: command.workspaceRoot,
           excludeProjectId: command.projectId,
+          ...(nextProjectKind === "studio" ? { kinds: STUDIO_PROJECT_KIND_SET } : {}),
         });
       }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? existingProject.kind ?? "project",
+        nextKind: nextProjectKind,
         nextDeletedAt: existingProject.deletedAt,
         wasPinned: existingProject.isPinned === true,
       });

@@ -1,5 +1,5 @@
 // FILE: _chat.studio.index.tsx
-// Purpose: Landing for the Studio surface — restore the latest Studio chat, or open a fresh one.
+// Purpose: Landing for the Studio surface — restore the latest Studio chat, or reopen its draft.
 // Layer: Routing
 // Depends on: Studio project lookup plus the Studio new-chat hook.
 //
@@ -13,8 +13,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAppSettings } from "../appSettings";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { SplashScreen } from "../components/SplashScreen";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
-import { isStudioContainerProject } from "../lib/studioProjects";
+import { findStudioDraftThreadId, isStudioContainerProject } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspaceStore } from "../workspaceStore";
 
@@ -26,6 +27,10 @@ function StudioIndexRouteView() {
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
+  const projectDraftThreadIdByProjectId = useComposerDraftStore(
+    (state) => state.projectDraftThreadIdByProjectId,
+  );
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
@@ -40,6 +45,15 @@ function StudioIndexRouteView() {
           .map((project) => project.id),
       ),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
+  const studioDraftThreadId = useMemo(
+    () =>
+      findStudioDraftThreadId({
+        studioProjectIds,
+        projectDraftThreadIdByProjectId,
+        draftThreadsByThreadId,
+      }),
+    [draftThreadsByThreadId, projectDraftThreadIdByProjectId, studioProjectIds],
   );
   // The most recent Studio chat (if any), used to restore the surface instead of always opening
   // a brand-new draft.
@@ -70,6 +84,13 @@ function StudioIndexRouteView() {
 
     void (async () => {
       try {
+        if (studioDraftThreadId) {
+          const result = await handleNewStudioChat();
+          if (!cancelled && !result.ok) {
+            setErrorMessage(result.error);
+          }
+          return;
+        }
         if (latestStudioThreadId) {
           await navigate({
             to: "/$threadId",
@@ -78,7 +99,7 @@ function StudioIndexRouteView() {
           });
           return;
         }
-        const result = await handleNewStudioChat({ fresh: true });
+        const result = await handleNewStudioChat();
         if (!cancelled && !result.ok) {
           setErrorMessage(result.error);
         }
@@ -92,7 +113,14 @@ function StudioIndexRouteView() {
     return () => {
       cancelled = true;
     };
-  }, [attempt, handleNewStudioChat, latestStudioThreadId, navigate, threadsHydrated]);
+  }, [
+    attempt,
+    handleNewStudioChat,
+    latestStudioThreadId,
+    navigate,
+    studioDraftThreadId,
+    threadsHydrated,
+  ]);
 
   return (
     <SplashScreen
