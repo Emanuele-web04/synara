@@ -744,7 +744,38 @@ describe("deriveMessagesTimelineRows", () => {
       "work:w2",
     ]);
     expect(terminal!.inlineWorkEntries).toBeUndefined();
+    // Timed from the user message, not from the last intermediate narration.
+    expect(terminal!.collapsedWorkElapsed).toBe("6.0s");
     expect(rows.some((row) => row.kind === "work")).toBe(false);
+  });
+
+  it("times the collapsed disclosure from the turn start, not the last intermediate assistant message", () => {
+    // Mirrors a provider failure + retry: the first attempt's assistant message
+    // completes 22m20s in, the retry answers 40s later. The disclosure folds
+    // the whole run, so the timer must cover it too — not just the retry tail.
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      timelineEntries: [
+        userEntry("u1", "2026-01-01T00:00:00Z"),
+        workEntry("w1", "2026-01-01T00:00:05Z", "long tool work"),
+        assistantEntry("a1", "2026-01-01T00:22:20Z", {
+          turnId: "t1",
+          text: "The provider run failed",
+          completedAt: "2026-01-01T00:22:20Z",
+        }),
+        workEntry("w2", "2026-01-01T00:22:30Z", "retry work"),
+        assistantEntry("a2", "2026-01-01T00:23:00Z", {
+          turnId: "t2",
+          text: "All done",
+          completedAt: "2026-01-01T00:23:00Z",
+        }),
+      ],
+    });
+
+    const terminal = messageRow(rows, "a2");
+    expect(terminal).toBeDefined();
+    expect(collapsedSignature(terminal!)).toEqual(["work:w1", "narration:a1", "work:w2"]);
+    expect(terminal!.collapsedWorkElapsed).toBe("23m");
   });
 
   it("keeps the live turn expanded instead of collapsing while it streams", () => {

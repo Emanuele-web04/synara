@@ -433,6 +433,14 @@ function collapseSettledTurns(
     }
   };
 
+  const earliestTimestamp = (a: string, b: string): string => {
+    const aMs = Date.parse(a);
+    const bMs = Date.parse(b);
+    if (Number.isNaN(aMs)) return b;
+    if (Number.isNaN(bMs)) return a;
+    return bMs < aMs ? b : a;
+  };
+
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
@@ -474,11 +482,19 @@ function collapseSettledTurns(
     foldIndices.reverse();
 
     const collapsedItems: CollapsedTurnItem[] = [];
+    // The disclosure folds everything back to the user boundary, so "Worked
+    // for" must start where the folded segment starts. The terminal row's own
+    // durationStart advances past intermediate *completed* assistant messages
+    // (e.g. a failed attempt before a retry), which would report only the tail
+    // of the turn instead of the full run.
+    let collapsedStart = row.durationStart;
     for (const index of foldIndices) {
       const folded = rows[index]!;
       if (folded.kind === "work") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.createdAt);
         collectWorkItems(folded.groupedEntries, collapsedItems);
       } else if (folded.kind === "message" && folded.message.role === "assistant") {
+        collapsedStart = earliestTimestamp(collapsedStart, folded.durationStart);
         if (folded.assistantTurnDiffSummary) {
           row.assistantTurnDiffSummary = mergeTurnDiffSummaries(
             folded.assistantTurnDiffSummary,
@@ -497,7 +513,7 @@ function collapseSettledTurns(
     if (row.inlineWorkEntries) collectWorkItems(row.inlineWorkEntries, collapsedItems);
 
     if (collapsedItems.length > 0) {
-      const elapsed = formatElapsed(row.durationStart, row.message.completedAt);
+      const elapsed = formatElapsed(collapsedStart, row.message.completedAt);
       row.collapsedTurnItems = collapsedItems;
       row.collapsedWorkElapsed = elapsed ?? null;
       delete row.leadingWorkEntries;
