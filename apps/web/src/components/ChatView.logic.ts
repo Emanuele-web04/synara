@@ -27,6 +27,7 @@ import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
+  deriveDisplayedUserMessageState,
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
@@ -45,6 +46,7 @@ import type { ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
+export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
@@ -101,6 +103,168 @@ export function buildComposerMenuSelectionKey(input: {
     ? `picker:${input.picker}`
     : `trigger:${input.triggerKind ?? "none"}:${input.triggerQuery}`;
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
+}
+
+export interface PromptHistoryNavigationState {
+  index: number;
+  draft: string;
+}
+
+export type PromptHistoryDirection = "older" | "newer";
+
+export interface PromptHistoryNavigationResult {
+  handled: boolean;
+  prompt: string;
+  cursor: number;
+  state: PromptHistoryNavigationState | null;
+}
+
+export function derivePromptHistoryFromMessages(
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "source" | "text">>,
+  limit: number = PROMPT_HISTORY_MAX_ENTRIES,
+): string[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const history: string[] = [];
+  for (let index = messages.length - 1; index >= 0 && history.length < limit; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user" || (message.source ?? "native") !== "native") {
+      continue;
+    }
+    const prompt = deriveDisplayedUserMessageState(message.text, {
+      hideImageOnlyBootstrapPrompt: true,
+    }).copyText.trim();
+    if (prompt.length === 0) {
+      continue;
+    }
+    history.push(prompt);
+  }
+  return history;
+}
+
+export function isComposerCursorOnFirstLine(prompt: string, cursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, cursor));
+  const firstLineEnd = prompt.indexOf("\n");
+  return firstLineEnd < 0 || boundedCursor <= firstLineEnd;
+}
+
+export function isComposerCursorOnLastLine(prompt: string, cursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, cursor));
+  const lastLineStart = prompt.lastIndexOf("\n") + 1;
+  return boundedCursor >= lastLineStart;
+}
+
+function cursorForPromptHistoryItem(prompt: string, direction: PromptHistoryDirection): number {
+  if (direction === "older") {
+    const firstLineEnd = prompt.indexOf("\n");
+    return firstLineEnd < 0 ? prompt.length : firstLineEnd;
+  }
+  return prompt.length;
+}
+
+export function resolvePromptHistoryNavigation(input: {
+  direction: PromptHistoryDirection;
+  history: readonly string[];
+  currentPrompt: string;
+  currentCursor: number;
+  selectionCollapsed: boolean;
+  state: PromptHistoryNavigationState | null;
+}): PromptHistoryNavigationResult {
+  if (!input.selectionCollapsed || input.history.length === 0) {
+    return {
+      handled: false,
+      prompt: input.currentPrompt,
+      cursor: input.currentCursor,
+      state: input.state,
+    };
+  }
+
+  if (input.direction === "older") {
+    if (!isComposerCursorOnFirstLine(input.currentPrompt, input.currentCursor)) {
+      return {
+        handled: false,
+        prompt: input.currentPrompt,
+        cursor: input.currentCursor,
+        state: input.state,
+      };
+    }
+    if (
+      input.state &&
+      input.currentPrompt !== (input.history[input.state.index] ?? input.currentPrompt)
+    ) {
+      return {
+        handled: false,
+        prompt: input.currentPrompt,
+        cursor: input.currentCursor,
+        state: input.state,
+      };
+    }
+    const nextState: PromptHistoryNavigationState = input.state
+      ? {
+          ...input.state,
+          index: Math.min(input.state.index + 1, input.history.length - 1),
+        }
+      : {
+          index: 0,
+          draft: input.currentPrompt,
+        };
+    const nextPrompt = input.history[nextState.index] ?? input.currentPrompt;
+    return {
+      handled: true,
+      prompt: nextPrompt,
+      cursor: cursorForPromptHistoryItem(nextPrompt, "older"),
+      state: nextState,
+    };
+  }
+
+  if (!input.state) {
+    return {
+      handled: false,
+      prompt: input.currentPrompt,
+      cursor: input.currentCursor,
+      state: null,
+    };
+  }
+  const cursorCanNavigateNewer =
+    isComposerCursorOnLastLine(input.currentPrompt, input.currentCursor) ||
+    isComposerCursorOnFirstLine(input.currentPrompt, input.currentCursor);
+  if (!cursorCanNavigateNewer) {
+    return {
+      handled: false,
+      prompt: input.currentPrompt,
+      cursor: input.currentCursor,
+      state: input.state,
+    };
+  }
+  if (input.currentPrompt !== (input.history[input.state.index] ?? input.currentPrompt)) {
+    return {
+      handled: false,
+      prompt: input.currentPrompt,
+      cursor: input.currentCursor,
+      state: input.state,
+    };
+  }
+  if (input.state.index > 0) {
+    const nextState = {
+      ...input.state,
+      index: input.state.index - 1,
+    };
+    const nextPrompt = input.history[nextState.index] ?? input.currentPrompt;
+    return {
+      handled: true,
+      prompt: nextPrompt,
+      cursor: cursorForPromptHistoryItem(nextPrompt, "newer"),
+      state: nextState,
+    };
+  }
+
+  return {
+    handled: true,
+    prompt: input.state.draft,
+    cursor: input.state.draft.length,
+    state: null,
+  };
 }
 
 // Default-open policy for the Environment panel; render-time visibility is resolved separately.

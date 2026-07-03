@@ -155,7 +155,9 @@ import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
+  derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -163,6 +165,7 @@ import {
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
+  resolvePromptHistoryNavigation,
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
@@ -1225,6 +1228,9 @@ export default function ChatView({
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
   const pendingComposerFocusRef = useRef(false);
+  const promptHistoryNavigationRef = useRef<PromptHistoryNavigationState | null>(null);
+  const applyingPromptHistoryNavigationRef = useRef(false);
+  const expectedPromptHistoryPromptRef = useRef<string | null>(null);
   const composerFormHeightRef = useRef(0);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
@@ -1251,6 +1257,11 @@ export default function ChatView({
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const activatedThreadIdRef = useRef<ThreadId | null>(null);
+  useEffect(() => {
+    promptHistoryNavigationRef.current = null;
+    applyingPromptHistoryNavigationRef.current = false;
+    expectedPromptHistoryPromptRef.current = null;
+  }, [threadId]);
   const setRestoredQueuedSourceProposedPlan = useCallback(
     (targetThreadId: ThreadId, source: RestoredComposerSourceProposedPlan | null) => {
       restoredQueuedSourceProposedPlanRef.current = source;
@@ -2686,6 +2697,14 @@ export default function ChatView({
     pendingAutomationConversation,
     threadId,
   ]);
+  const promptHistory = useMemo(
+    () =>
+      derivePromptHistoryFromMessages([
+        ...(activeThread?.messages ?? EMPTY_MESSAGES),
+        ...optimisticUserMessages,
+      ]),
+    [activeThread?.messages, optimisticUserMessages],
+  );
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -3664,6 +3683,7 @@ export default function ChatView({
         value: promptRef.current,
         cursor: composerCursor,
         expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+        selectionCollapsed: true,
         terminalContextIds: composerTerminalContexts.map((context) => context.id),
       };
       const insertion = insertInlineTerminalContextPlaceholder(
@@ -6012,6 +6032,9 @@ export default function ChatView({
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       setRestoredQueuedSourceProposedPlan(threadId, null);
       clearComposerDraftContent(threadId);
@@ -7222,6 +7245,9 @@ export default function ChatView({
     // Queued turns are dispatched from their captured snapshot, so this send path
     // must not clear a separate live draft the user may already be editing.
     if (queuedChatTurn === null) {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       clearComposerDraftContent(threadIdForSend, { preservePreviewUrls: true });
       if (isLivePlanFollowUpSubmission) {
@@ -8737,6 +8763,7 @@ export default function ChatView({
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   } => {
     const editorSnapshot = composerEditorRef.current?.readSnapshot();
@@ -8747,12 +8774,18 @@ export default function ChatView({
       value: promptRef.current,
       cursor: composerCursor,
       expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+      selectionCollapsed: true,
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerTerminalContexts]);
 
   const resolveActiveComposerTrigger = useCallback((): {
-    snapshot: { value: string; cursor: number; expandedCursor: number };
+    snapshot: {
+      value: string;
+      cursor: number;
+      expandedCursor: number;
+      selectionCollapsed: boolean;
+    };
     trigger: ComposerTrigger | null;
   } => {
     const snapshot = readComposerSnapshot();
@@ -9117,6 +9150,8 @@ export default function ChatView({
       terminalContextIds: string[],
     ) => {
       if (activePendingProgress?.activeQuestion && activePendingUserInput) {
+        promptHistoryNavigationRef.current = null;
+        expectedPromptHistoryPromptRef.current = null;
         onChangeActivePendingUserInputCustomAnswer(
           activePendingProgress.activeQuestion.id,
           nextPrompt,
@@ -9125,6 +9160,17 @@ export default function ChatView({
           cursorAdjacentToMention,
         );
         return;
+      }
+      const expectedPromptHistoryPrompt = expectedPromptHistoryPromptRef.current;
+      if (expectedPromptHistoryPrompt !== null) {
+        if (nextPrompt === expectedPromptHistoryPrompt) {
+          expectedPromptHistoryPromptRef.current = null;
+        } else {
+          promptHistoryNavigationRef.current = null;
+          expectedPromptHistoryPromptRef.current = null;
+        }
+      } else if (!applyingPromptHistoryNavigationRef.current) {
+        promptHistoryNavigationRef.current = null;
       }
       const restoredQueuedSource = restoredQueuedSourceProposedPlanRef.current;
       if (
@@ -9241,7 +9287,48 @@ export default function ChatView({
       }
     }
 
+    if (
+      (key === "ArrowUp" || key === "ArrowDown") &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      !activePendingProgress &&
+      !isComposerApprovalState &&
+      pendingUserInputs.length === 0
+    ) {
+      const direction = key === "ArrowUp" ? "older" : "newer";
+      const result = resolvePromptHistoryNavigation({
+        direction,
+        history: promptHistory,
+        currentPrompt: snapshot.value,
+        currentCursor: snapshot.cursor,
+        selectionCollapsed: snapshot.selectionCollapsed,
+        state: promptHistoryNavigationRef.current,
+      });
+      if (result.handled) {
+        promptHistoryNavigationRef.current = result.state;
+        applyingPromptHistoryNavigationRef.current = true;
+        expectedPromptHistoryPromptRef.current = result.prompt;
+        promptRef.current = result.prompt;
+        setPrompt(result.prompt);
+        setComposerCursor(result.cursor);
+        setComposerTrigger(
+          detectComposerTrigger(
+            result.prompt,
+            expandCollapsedComposerCursor(result.prompt, result.cursor),
+          ),
+        );
+        window.requestAnimationFrame(() => {
+          applyingPromptHistoryNavigationRef.current = false;
+        });
+        return true;
+      }
+    }
+
     if (key === "Enter" && !event.shiftKey) {
+      promptHistoryNavigationRef.current = null;
+      expectedPromptHistoryPromptRef.current = null;
       void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
       return true;
     }

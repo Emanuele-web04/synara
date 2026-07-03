@@ -5,9 +5,13 @@ import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
   createWorktreeSetupSnapshot,
+  derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  isComposerCursorOnFirstLine,
+  isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
+  resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
@@ -87,6 +91,208 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("prompt history navigation", () => {
+  it("derives newest-first native user prompts and skips imported or internal-only entries", () => {
+    const messages = [
+      {
+        role: "user",
+        text: "Imported prompt",
+        source: "fork-import",
+      },
+      {
+        role: "assistant",
+        text: "Assistant response",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "First prompt\n\n<terminal_context>\n# Terminal\noutput\n</terminal_context>",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "Second prompt",
+        source: "native",
+      },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages)).toEqual(["Second prompt", "First prompt"]);
+  });
+
+  it("limits prompt history without deduping repeated prompts", () => {
+    const messages = [
+      { role: "user", text: "one", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages, 2)).toEqual(["repeat", "repeat"]);
+  });
+
+  it("detects first and last line cursor positions", () => {
+    const prompt = "first\nmiddle\nlast";
+
+    expect(isComposerCursorOnFirstLine(prompt, 0)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 5)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 6)).toBe(false);
+
+    expect(isComposerCursorOnLastLine(prompt, 13)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, prompt.length)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, 12)).toBe(false);
+  });
+
+  it("navigates older prompts from a non-empty draft and restores the draft at the end", () => {
+    const history = ["third prompt", "second prompt", "first prompt"];
+    const first = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "draft in progress",
+      currentCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(first).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      cursor: "third prompt".length,
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const second = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: first.prompt,
+      currentCursor: first.cursor,
+      selectionCollapsed: true,
+      state: first.state,
+    });
+
+    expect(second).toMatchObject({
+      handled: true,
+      prompt: "second prompt",
+      cursor: "second prompt".length,
+      state: { index: 1, draft: "draft in progress" },
+    });
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: second.prompt,
+      currentCursor: second.prompt.length,
+      selectionCollapsed: true,
+      state: second.state,
+    });
+
+    expect(newer).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const restored = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: newer.prompt,
+      currentCursor: newer.prompt.length,
+      selectionCollapsed: true,
+      state: newer.state,
+    });
+
+    expect(restored).toEqual({
+      handled: true,
+      prompt: "draft in progress",
+      cursor: "draft in progress".length,
+      state: null,
+    });
+  });
+
+  it("places recalled multiline prompts on the eligible line for repeated navigation", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["first line\nsecond line"],
+      currentPrompt: "",
+      currentCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(older.cursor).toBe("first line".length);
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["first line\nsecond line", "older"],
+      currentPrompt: "older",
+      currentCursor: "older".length,
+      selectionCollapsed: true,
+      state: { index: 1, draft: "" },
+    });
+
+    expect(newer.prompt).toBe("first line\nsecond line");
+    expect(newer.cursor).toBe("first line\nsecond line".length);
+  });
+
+  it("can navigate newer immediately after recalling a multiline prompt with ArrowUp", () => {
+    const history = ["newer line one\nnewer line two", "older prompt"];
+    const recalled = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "",
+      currentCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(recalled.prompt).toBe("newer line one\nnewer line two");
+    expect(recalled.cursor).toBe("newer line one".length);
+
+    const restoredDraft = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: recalled.prompt,
+      currentCursor: recalled.cursor,
+      selectionCollapsed: true,
+      state: recalled.state,
+    });
+
+    expect(restoredDraft).toEqual({
+      handled: true,
+      prompt: "",
+      cursor: 0,
+      state: null,
+    });
+  });
+
+  it("does not navigate when cursor position or selection should belong to text editing", () => {
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "first\nsecond",
+        currentCursor: "first\ns".length,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "draft",
+        currentCursor: 0,
+        selectionCollapsed: false,
+        state: null,
+      }).handled,
+    ).toBe(false);
   });
 });
 
