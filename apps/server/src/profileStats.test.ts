@@ -500,6 +500,122 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("attributes provider-less custom instance selections to their session provider", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-pi-work',
+            'project-profile',
+            'Pi Work Thread',
+            '{"instanceId":"pi_work","model":"openai/gpt-5"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T10:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-pi-work',
+            'ready',
+            'pi',
+            'pi_work',
+            '2026-06-13T10:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES (
+            'event-pi-work',
+            'thread',
+            'thread-pi-work',
+            1,
+            'thread.turn-start-requested',
+            '2026-06-13T10:05:00.000Z',
+            'client',
+            '{"threadId":"thread-pi-work","modelSelection":{"instanceId":"pi_work","model":"openai/gpt-5"}}',
+            '{}'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            'activity-pi-work',
+            'thread-pi-work',
+            'turn-pi-work',
+            'info',
+            'context-window.updated',
+            'tokens updated',
+            '{"totalProcessedTokens":2500}',
+            1,
+            '2026-06-13T10:06:00.000Z'
+          )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(stats.insights.topProvider).toBe("pi");
+        expect(stats.providerModels[0]).toMatchObject({
+          provider: "pi",
+          instanceId: "pi_work",
+          model: "openai/gpt-5",
+          turnCount: 1,
+        });
+        expect(tokenStats.topProvider).toBe("pi");
+        expect(tokenStats.providers).toEqual(["pi"]);
+      }),
+    );
+  });
+
   it("reports token-based provider ranking separately from turn-count profile stats", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

@@ -1332,7 +1332,6 @@ export async function createPiModelRuntime(
     modelsPath: path.join(agentDir, "models.json"),
   });
   await applyPiRuntimeApiKeysFromEnvironment(runtime, environment);
-  signal?.throwIfAborted();
   await refreshPiOpenCodeCatalog(runtime, { signal });
   return runtime;
 }

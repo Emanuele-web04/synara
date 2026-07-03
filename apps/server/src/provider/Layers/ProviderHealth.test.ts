@@ -537,6 +537,45 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(codex?.message, "Provider is disabled in Synara settings.");
     });
 
+    it("changes projected statuses for settings-only instance updates", () => {
+      const previousStatuses = projectProviderStatusesForSettings(
+        [cachedReadyCodexStatus],
+        {
+          ...allProvidersDisabledServerSettings,
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Work Codex",
+              enabled: false,
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+      const nextStatuses = projectProviderStatusesForSettings(
+        [cachedReadyCodexStatus],
+        {
+          ...allProvidersDisabledServerSettings,
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Renamed Codex",
+              enabled: false,
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+
+      const previousWork = previousStatuses.find((status) => status.instanceId === "codex_work");
+      const nextWork = nextStatuses.find((status) => status.instanceId === "codex_work");
+      assert.strictEqual(previousWork?.displayName, "Work Codex");
+      assert.strictEqual(nextWork?.displayName, "Renamed Codex");
+      assert.strictEqual(nextWork?.available, false);
+      assert.strictEqual(nextWork?.message, "Provider is disabled in Synara settings.");
+      assert.strictEqual(providerStatusesEqual(previousStatuses, nextStatuses), false);
+    });
+
     it("suppresses cached update advisories when automatic update checks are disabled", () => {
       const statuses = projectProviderStatusesForSettings(
         [

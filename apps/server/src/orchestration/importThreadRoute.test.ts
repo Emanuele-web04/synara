@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
+import { homedir } from "node:os";
+import path from "node:path";
 import {
   DEFAULT_SERVER_SETTINGS,
   type OrchestrationCommand,
   type OrchestrationThread,
   ProjectId,
   type ProviderSession,
+  type ProviderStartOptions,
   ThreadId,
 } from "@synara/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -16,11 +19,23 @@ import type { ProviderServiceShape } from "../provider/Services/ProviderService"
 import type { ServerSettingsShape } from "../serverSettings";
 import type { OrchestrationEngineShape } from "./Services/OrchestrationEngine";
 import type { ProjectionSnapshotQueryShape } from "./Services/ProjectionSnapshotQuery";
-import { makeImportThreadHandler } from "./importThreadRoute";
+import { claudeHistoricalSessionEnvironment, makeImportThreadHandler } from "./importThreadRoute";
 
 const threadId = ThreadId.makeUnsafe("thread-import");
 const projectId = ProjectId.makeUnsafe("project-import");
 const importedAt = "2026-08-09T12:00:00.000Z";
+
+it("expands instance Claude homes for historical-session imports", () => {
+  const environment = claudeHistoricalSessionEnvironment({
+    claudeAgent: {
+      homePath: "~/claude-work",
+      environment: { SYNARA_CLAUDE_IMPORT_TEST: "1" },
+    },
+  } satisfies ProviderStartOptions);
+
+  assert.equal(environment?.HOME, path.join(homedir(), "claude-work"));
+  assert.equal(environment?.SYNARA_CLAUDE_IMPORT_TEST, "1");
+});
 
 function makeCodexThread(): OrchestrationThread {
   return {

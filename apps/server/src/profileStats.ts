@@ -732,6 +732,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             COALESCE(
               tm.provider,
               json_extract(a.payload_json, '$.provider'),
+              s.provider_name,
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
                 THEN json_extract(th.model_selection_json, '$.provider')
@@ -760,6 +761,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             a.activity_id AS activity_id
           FROM projection_thread_activities a
           JOIN projection_threads th ON th.thread_id = a.thread_id
+          LEFT JOIN projection_thread_sessions s ON s.thread_id = th.thread_id
           LEFT JOIN turn_model tm
             ON tm.thread_id = a.thread_id
            AND tm.turn_id = a.turn_id
@@ -938,24 +940,45 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
-              THEN json_extract(e.payload_json, '$.modelSelection.provider')
+              THEN COALESCE(
+                json_extract(e.payload_json, '$.modelSelection.provider'),
+                s.provider_name,
+                CASE
+                  WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                  THEN json_extract(t.model_selection_json, '$.provider')
+                END,
+                json_extract(e.payload_json, '$.modelSelection.instanceId')
+              )
               ELSE CASE
+                WHEN s.provider_name IS NOT NULL THEN s.provider_name
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
-                THEN json_extract(t.model_selection_json, '$.provider')
+                THEN COALESCE(
+                  json_extract(t.model_selection_json, '$.provider'),
+                  json_extract(t.model_selection_json, '$.instanceId')
+                )
               END
             END AS provider,
             CASE
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
               THEN COALESCE(
                 json_extract(e.payload_json, '$.modelSelection.instanceId'),
-                json_extract(e.payload_json, '$.modelSelection.provider')
+                s.provider_instance_id,
+                CASE
+                  WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
+                  THEN json_extract(t.model_selection_json, '$.instanceId')
+                END,
+                json_extract(e.payload_json, '$.modelSelection.provider'),
+                s.provider_name
               )
               ELSE CASE
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
                 THEN COALESCE(
                   json_extract(t.model_selection_json, '$.instanceId'),
-                  json_extract(t.model_selection_json, '$.provider')
+                  s.provider_instance_id,
+                  json_extract(t.model_selection_json, '$.provider'),
+                  s.provider_name
                 )
+                ELSE COALESCE(s.provider_instance_id, s.provider_name)
               END
             END AS instanceId,
             CASE
@@ -1011,6 +1034,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           FROM orchestration_events e
           JOIN projection_threads t
             ON t.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
+          LEFT JOIN projection_thread_sessions s ON s.thread_id = t.thread_id
           LEFT JOIN projection_thread_messages um
             ON um.thread_id = COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id)
            AND um.message_id = json_extract(e.payload_json, '$.messageId')
@@ -1211,7 +1235,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       for (const row of turnInsightRows) {
         const count = num(row.count);
         const provider = nonEmptyString(row.provider);
-        const instanceId = nonEmptyString(row.instanceId);
+        const instanceId = nonEmptyString(row.instanceId) ?? provider;
         const model = nonEmptyString(row.model);
         const providerModelKey = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
         const existingProviderModel = providerModelCounts.get(providerModelKey);
