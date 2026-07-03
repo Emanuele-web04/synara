@@ -1847,7 +1847,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         };
         assert.equal(startPayload.providerInstanceId, "codex_work");
         assert.deepEqual(startPayload.providerOptions, {
-          codex: { homePath: "/tmp/codex-work" },
+          codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
         });
         assert.equal(startPayload.resumeCursor, undefined);
       }
