@@ -1514,7 +1514,9 @@ function isServerSettingsPatchEmpty(patch: ServerSettingsPatch): boolean {
   return Object.keys(patch).length === 0;
 }
 
-function buildInitialServerSettingsMigrationPatch(settings: AppSettings): ServerSettingsPatch {
+export function buildInitialServerSettingsMigrationPatch(
+  settings: AppSettings,
+): ServerSettingsPatch {
   const patch: Partial<Mutable<AppSettings>> = {};
   const normalizedSettings = normalizeAppSettings(settings);
   const defaults = DEFAULT_APP_SETTINGS;
@@ -1725,7 +1727,8 @@ export function getCustomModelsByProvider(
 }
 
 export function getCustomModelsForProviderInstance(
-  settings: Pick<AppSettings, CustomModelSettingsKey | "providerInstances">,
+  settings: Pick<AppSettings, CustomModelSettingsKey | "providerInstances"> &
+    Partial<Pick<AppSettings, "codexAccounts" | "codexHomePath">>,
   instance: Pick<ProviderInstanceOption, "instanceId" | "provider" | "isDefault">,
 ): readonly string[] {
   const raw = settings.providerInstances[instance.instanceId];
@@ -1736,6 +1739,18 @@ export function getCustomModelsForProviderInstance(
   }
   if (instance.isDefault || instance.instanceId === instance.provider) {
     return getCustomModelsForProvider(settings, instance.provider);
+  }
+  const isDerivedCodexAccount =
+    instance.provider === "codex" &&
+    getCodexAccountOptions({
+      codexAccounts: settings.codexAccounts ?? [],
+      codexHomePath: settings.codexHomePath ?? "",
+    }).some(
+      (account) =>
+        !account.isDefault && providerInstanceIdForCodexAccount(account.id) === instance.instanceId,
+    );
+  if (isDerivedCodexAccount) {
+    return getCustomModelsForProvider(settings, "codex");
   }
   return [];
 }
@@ -2295,6 +2310,7 @@ export function useAppSettings() {
   );
   const normalizedStoredSettingsRef = useRef(false);
   const serverSettingsMutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingServerSettingsMigrationPatchRef = useRef<ServerSettingsPatch | null>(null);
 
   const defaults = normalizeAppSettings({
     ...DEFAULT_APP_SETTINGS,
@@ -2313,14 +2329,16 @@ export function useAppSettings() {
     }
     normalizedStoredSettingsRef.current = true;
 
-    // Un-migrated profiles may still hold plaintext instance secrets that
-    // buildInitialServerSettingsMigrationPatch must read; keep them until the
-    // migration has shipped them to the server (which then redacts below).
-    setSettings((previous) =>
-      hasCompletedServerSettingsMigration()
-        ? normalizeStoredAppSettings(previous)
-        : normalizeAppSettings(previous),
-    );
+    setSettings((previous) => {
+      const normalized = normalizeAppSettings(previous);
+      if (!hasCompletedServerSettingsMigration()) {
+        pendingServerSettingsMigrationPatchRef.current =
+          buildInitialServerSettingsMigrationPatch(normalized);
+      }
+      // Keep any plaintext needed for migration in memory only; localStorage
+      // must immediately move to the redacted representation.
+      return normalizeStoredAppSettings(normalized);
+    });
   }, [setSettings]);
 
   useEffect(() => {
@@ -2331,9 +2349,12 @@ export function useAppSettings() {
       return;
     }
 
-    const migrationPatch = buildInitialServerSettingsMigrationPatch(localSettings);
+    const migrationPatch =
+      pendingServerSettingsMigrationPatchRef.current ??
+      buildInitialServerSettingsMigrationPatch(localSettings);
     if (isServerSettingsPatchEmpty(migrationPatch)) {
       globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+      pendingServerSettingsMigrationPatchRef.current = null;
       setSettings((previous) => normalizeStoredAppSettings(previous));
       return;
     }
@@ -2344,6 +2365,7 @@ export function useAppSettings() {
       .then((nextSettings) => {
         queryClient.setQueryData(serverQueryKeys.settings(), nextSettings);
         globalThis.localStorage?.setItem(SERVER_SETTINGS_MIGRATION_STORAGE_KEY, "1");
+        pendingServerSettingsMigrationPatchRef.current = null;
         // The server now owns the migrated secrets; drop the local plaintext.
         setSettings((previous) => normalizeStoredAppSettings(previous));
       })
@@ -2384,20 +2406,9 @@ export function useAppSettings() {
   const updateSettingsAndWait = async (patch: Partial<AppSettings>): Promise<void> => {
     const providerInstancesBeforePatch =
       patch.providerInstances !== undefined ? localSettings.providerInstances : undefined;
-    const migrationCompletedBeforePatch = hasCompletedServerSettingsMigration();
-    setSettings((prev) => {
-      if (migrationCompletedBeforePatch) {
-        return applyLocalAppSettingsPatch(prev, patch);
-      }
-      const { disabledProviders: _disabledProviders, ...localPatch } = patch;
-      return normalizeAppSettings({
-        ...prev,
-        ...localPatch,
-        ...(hasOwn(patch, "openCodeServerPassword")
-          ? { openCodeServerPasswordConfigured: Boolean(patch.openCodeServerPassword?.trim()) }
-          : {}),
-      });
-    });
+    // The pending migration ref retains the one plaintext snapshot that still
+    // needs to reach the server; browser state and storage stay redacted.
+    setSettings((prev) => applyLocalAppSettingsPatch(prev, patch));
     await enqueueServerSettingsMutation(async () => {
       const currentServerSettings =
         queryClient.getQueryData<ServerSettingsView>(serverQueryKeys.settings()) ??
@@ -2425,9 +2436,7 @@ export function useAppSettings() {
               ...prev,
               providerInstances: providerInstancesBeforePatch,
             });
-            return hasCompletedServerSettingsMigration()
-              ? redactAppSettingsSecretsForClient(restored)
-              : restored;
+            return redactAppSettingsSecretsForClient(restored);
           });
         }
         await queryClient

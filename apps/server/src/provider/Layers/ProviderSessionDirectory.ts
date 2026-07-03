@@ -42,6 +42,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+const CLEARABLE_RUNTIME_PAYLOAD_KEYS = new Set([
+  "providerOptions",
+  "providerOptionsCredentialsFingerprint",
+]);
+
 function mergeRuntimePayload(
   existing: unknown | null,
   next: unknown | null | undefined,
@@ -50,7 +55,15 @@ function mergeRuntimePayload(
     return existing ?? null;
   }
   if (isRecord(existing) && isRecord(next)) {
-    return { ...existing, ...next };
+    const merged: Record<string, unknown> = { ...existing };
+    for (const [key, value] of Object.entries(next)) {
+      if (value === null && CLEARABLE_RUNTIME_PAYLOAD_KEYS.has(key)) {
+        delete merged[key];
+        continue;
+      }
+      merged[key] = value;
+    }
+    return merged;
   }
   return next;
 }

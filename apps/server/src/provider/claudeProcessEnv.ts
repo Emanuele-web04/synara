@@ -127,6 +127,7 @@ export function buildClaudeProcessEnv(input?: {
   readonly env?: NodeJS.ProcessEnv;
   readonly homeDir?: string;
   readonly hasClaudeCliCredentials?: boolean;
+  readonly preserveDirectCredentialKeys?: ReadonlySet<string>;
 }): NodeJS.ProcessEnv {
   const env = { ...(input?.env ?? process.env) };
   if (input?.homeDir) {
@@ -143,6 +144,9 @@ export function buildClaudeProcessEnv(input?: {
   // Claude gives direct request credentials precedence over local OAuth. Drop stale
   // app-process keys when a real Claude CLI login can satisfy the subprocess.
   for (const key of CLAUDE_DIRECT_CREDENTIAL_ENV_KEYS) {
+    if (input?.preserveDirectCredentialKeys?.has(key)) {
+      continue;
+    }
     delete env[key];
   }
   return buildProviderChildEnvironment({ provider: "claude", baseEnv: env });

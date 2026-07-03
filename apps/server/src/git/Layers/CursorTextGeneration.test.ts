@@ -240,6 +240,35 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("passes provider-instance environment to Cursor ACP text generation", () =>
+    withFakeAcpAgent({}, (agentPath) =>
+      Effect.gen(function* () {
+        const textGeneration = yield* TextGeneration;
+
+        const generated = yield* textGeneration.generateDiffSummary({
+          cwd: process.cwd(),
+          patch: "diff --git a/file.ts b/file.ts",
+          modelSelection: {
+            instanceId: "cursor_work",
+            model: "composer-2",
+          },
+          providerOptions: {
+            cursor: {
+              binaryPath: agentPath,
+              environment: {
+                T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+                  summary: "## Summary\n- Used the provider instance env.",
+                }),
+              },
+            },
+          },
+        });
+
+        expect(generated.summary).toBe("## Summary\n- Used the provider instance env.");
+      }),
+    ),
+  );
+
   it.effect("falls back to raw text when Cursor replies without JSON for a thread title", () =>
     withFakeAcpAgent(
       {

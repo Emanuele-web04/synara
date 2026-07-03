@@ -140,6 +140,47 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
       }
     }));
 
+  it("clears persisted launch options when a new authoritative payload omits them", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const runtimeRepository = yield* ProviderSessionRuntimeRepository;
+      const threadId = ThreadId.makeUnsafe("thread-runtime-clear-provider-options");
+
+      yield* directory.upsert({
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+        runtimePayload: {
+          cwd: "/tmp/project",
+          providerOptions: {
+            codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
+          },
+          providerOptionsCredentialsFingerprint: "old-fingerprint",
+        },
+      });
+
+      yield* directory.upsert({
+        provider: "codex",
+        providerInstanceId: "codex_work",
+        threadId,
+        runtimePayload: {
+          model: "gpt-5.5",
+          providerOptions: null,
+          providerOptionsCredentialsFingerprint: null,
+        },
+      });
+
+      const runtime = yield* runtimeRepository.getByThreadId({ threadId });
+      assert.equal(Option.isSome(runtime), true);
+      if (Option.isSome(runtime)) {
+        assert.deepEqual(runtime.value.runtimePayload, {
+          cwd: "/tmp/project",
+          providerInstanceId: "codex_work",
+          model: "gpt-5.5",
+        });
+      }
+    }));
+
   it("clears persisted resume cursors when the provider instance changes", () =>
     Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
