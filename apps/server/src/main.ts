@@ -303,15 +303,6 @@ const makeServerProgram = (input: CliInput) =>
     }
 
     yield* start;
-    const settings = yield* serverSettings.getSettings;
-    // Keep the macOS Claude OAuth token fresh using the same configured CLI binary
-    // that normal Claude Agent sessions use.
-    yield* Effect.sync(() =>
-      startClaudeCredentialKeepalive({
-        binaryPath: settings.providers.claudeAgent.binaryPath,
-        log: (message) => Effect.runFork(Effect.logInfo(message)),
-      }),
-    );
 
     const orchestrationEngine = yield* OrchestrationEngineService;
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -319,6 +310,24 @@ const makeServerProgram = (input: CliInput) =>
     // existing history first, then hide inactive threads from the app in the background.
     yield* startThreadRetentionJob(orchestrationEngine, projectionSnapshotQuery);
     yield* Effect.forkChild(recordStartupHeartbeat);
+    // Optional Claude OAuth keepalive. Disabled by default because it touches
+    // Claude Code auth data in the background; users can opt in with
+    // T3CODE_CLAUDE_KEEPALIVE=1.
+    yield* Effect.forkChild(
+      Effect.gen(function* () {
+        const settings = yield* serverSettings.getSettings;
+        if (settings.providers.claudeAgent.enabled === false) {
+          return;
+        }
+        yield* Effect.sync(() =>
+          startClaudeCredentialKeepalive({
+            binaryPath: settings.providers.claudeAgent.binaryPath,
+            homeDir: config.homeDir,
+            log: (message) => Effect.runFork(Effect.logInfo(message)),
+          }),
+        );
+      }),
+    );
 
     const localUrl = `http://localhost:${config.port}`;
     const bindUrl =

@@ -12,6 +12,7 @@ import { SynaraLogo } from "~/components/SynaraLogo";
 import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { formatCompact, formatDays } from "./profileFormatting";
+import { selectProfileHeatmap, selectProfileTopProvider } from "./profileSelectors";
 
 export const SHARE_CARD_WIDTH = 860;
 export const SHARE_CARD_HEIGHT = 440;
@@ -43,8 +44,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
   { stats, tokenStats, displayName, handle, avatarColor, avatarImage },
   ref,
 ) {
-  const topProvider = stats.insights.topProvider;
-  const topProviderPercent = stats.insights.topProviderPercent;
+  const topProvider = selectProfileTopProvider(stats, tokenStats);
 
   const tiles: Tile[] = [
     {
@@ -75,14 +75,16 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
     },
     {
       key: "provider",
-      // Most-used provider by turn count (from insights): glyph then usage percent. An
-      // explicit slate color keeps currentColor glyphs visible on the white card even when
-      // the app is in dark mode; brand-colored glyphs keep their own colors.
-      value: topProvider ? (
+      // Most-used provider: token telemetry when available, otherwise turn count. An explicit
+      // slate color keeps currentColor glyphs visible on the white card in every theme.
+      value: topProvider.provider ? (
         <span className="flex items-center gap-2">
-          <ProviderIcon provider={topProvider} className="size-6 shrink-0 text-slate-700" />
-          {topProviderPercent !== null ? (
-            <span className={VALUE_CLASS}>{`${Math.round(topProviderPercent)}%`}</span>
+          <ProviderIcon
+            provider={topProvider.provider}
+            className="size-6 shrink-0 text-slate-700"
+          />
+          {topProvider.percent !== null ? (
+            <span className={VALUE_CLASS}>{`${Math.round(topProvider.percent)}%`}</span>
           ) : null}
         </span>
       ) : (
@@ -92,7 +94,8 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
     },
   ];
 
-  const heatmapCells = stats.activity.heatmap.slice(-CARD_HEATMAP_DAYS);
+  // Same tokens-first series as the profile page so the exported card matches the app.
+  const heatmapCells = selectProfileHeatmap(stats, tokenStats).cells.slice(-CARD_HEATMAP_DAYS);
 
   return (
     <div

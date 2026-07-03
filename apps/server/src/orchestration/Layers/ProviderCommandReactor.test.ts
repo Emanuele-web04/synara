@@ -104,6 +104,7 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
+    readonly checkpointStore?: Partial<CheckpointStoreShape>;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -161,6 +162,38 @@ describe("ProviderCommandReactor", () => {
         turnId: asTurnId("turn-1"),
       }),
     );
+    // Mirrors adapter behavior: the reactor consults live provider sessions
+    // (status + activeTurnId) to decide whether a turn is genuinely running.
+    const setRuntimeSessionTurnState = (input: {
+      readonly threadId: string;
+      readonly status: ProviderSession["status"];
+      readonly activeTurnId?: TurnId;
+    }) => {
+      const threadId = ThreadId.makeUnsafe(input.threadId);
+      const index = runtimeSessions.findIndex((session) => session.threadId === threadId);
+      const base: ProviderSession = runtimeSessions[index] ?? {
+        provider: modelSelection.provider,
+        status: "ready",
+        runtimeMode: "full-access",
+        threadId,
+        resumeCursor: { opaque: "resume-synthetic" },
+        createdAt: now,
+        updatedAt: now,
+      };
+      const next: ProviderSession = {
+        ...base,
+        status: input.status,
+        ...(input.activeTurnId !== undefined ? { activeTurnId: input.activeTurnId } : {}),
+      };
+      if (input.activeTurnId === undefined) {
+        delete (next as { activeTurnId?: TurnId }).activeTurnId;
+      }
+      if (index >= 0) {
+        runtimeSessions[index] = next;
+      } else {
+        runtimeSessions.push(next);
+      }
+    };
     const steerTurn = vi.fn((_: unknown) =>
       Effect.succeed({
         threadId: ThreadId.makeUnsafe("thread-1"),
@@ -182,14 +215,16 @@ describe("ProviderCommandReactor", () => {
     const isGitRepository = vi.fn<CheckpointStoreShape["isGitRepository"]>(() =>
       Effect.succeed(false),
     );
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() => Effect.void);
     const checkpointStore: CheckpointStoreShape = {
       isGitRepository,
-      captureCheckpoint: () => Effect.void,
+      captureCheckpoint,
       copyCheckpointRef: () => Effect.succeed(true),
       hasCheckpointRef: () => Effect.succeed(false),
       restoreCheckpoint,
       diffCheckpoints: () => Effect.succeed(""),
       deleteCheckpointRefs: () => Effect.void,
+      ...input?.checkpointStore,
     };
     const stopSession = vi.fn((input: unknown) =>
       Effect.sync(() => {
@@ -365,6 +400,7 @@ describe("ProviderCommandReactor", () => {
       respondToUserInput,
       rollbackConversation,
       isGitRepository,
+      captureCheckpoint,
       restoreCheckpoint,
       stopSession,
       stopRuntimeSession,
@@ -376,6 +412,7 @@ describe("ProviderCommandReactor", () => {
       stateDir,
       drain,
       emitRuntimeEvent,
+      setRuntimeSessionTurnState,
     };
   }
 
@@ -659,6 +696,11 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running-edit-queued"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -716,6 +758,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.rollbackConversation).not.toHaveBeenCalled();
     expect(harness.sendTurn).not.toHaveBeenCalled();
 
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-edited-queue"),
@@ -1060,6 +1103,53 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.runtimeMode).toBe("approval-required");
   });
 
+  it("waits for the message-start checkpoint before sending the provider turn", async () => {
+    let releaseCapture: (() => void) | undefined;
+    const captureGate = new Promise<void>((resolve) => {
+      releaseCapture = resolve;
+    });
+    const captureCheckpoint = vi.fn<CheckpointStoreShape["captureCheckpoint"]>(() =>
+      Effect.promise(() => captureGate),
+    );
+    const harness = await createHarness({
+      checkpointStore: {
+        isGitRepository: vi.fn<CheckpointStoreShape["isGitRepository"]>(() => Effect.succeed(true)),
+        captureCheckpoint,
+      },
+    });
+    const now = new Date().toISOString();
+
+    const dispatch = Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-slow-checkpoint"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-slow-checkpoint"),
+          role: "user",
+          text: "hello despite slow git",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => captureCheckpoint.mock.calls.length === 1);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
+
+    releaseCapture?.();
+    await dispatch;
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(captureCheckpoint.mock.calls.length).toBe(1);
+    expect(captureCheckpoint.mock.calls[0]?.[0]).toMatchObject({
+      cwd: "/tmp/provider-project",
+    });
+    expect(captureCheckpoint.mock.calls[0]?.[0].checkpointRef).toContain("/message-start/");
+  });
+
   it("publishes a starting session status before the provider session is ready", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -1389,7 +1479,7 @@ describe("ProviderCommandReactor", () => {
         type: "thread.meta.update",
         commandId: CommandId.makeUnsafe("cmd-thread-title-gemini-generated"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        title: "Summarize provider startup failures",
+        title: "Summarize provider startup failures without Codex",
       }),
     );
 
@@ -1473,7 +1563,7 @@ describe("ProviderCommandReactor", () => {
       const readModel = await Effect.runPromise(harness.engine.getReadModel());
       return (
         readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
-        "Summarize provider startup failures"
+        "Summarize provider startup failures without Codex"
       );
     });
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
@@ -1692,6 +1782,11 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -1733,6 +1828,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn).not.toHaveBeenCalled();
 
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-queue"),
@@ -1750,6 +1846,113 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
       threadId: ThreadId.makeUnsafe("thread-1"),
       input: "queue this next",
+    });
+  });
+
+  it("promotes a queued turn immediately when the provider turn already settled", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // Projection still says the thread is running (stale), but the provider
+    // turn has already settled: its terminal event was consumed before this
+    // message was queued, so no future drain trigger will ever arrive.
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-stale-running"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-already-settled"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-queue-stale"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-queue-stale"),
+          role: "user",
+          text: "recover me",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    // No turn.completed/turn.aborted is emitted: the recovery drain alone
+    // must promote the queued message.
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "recover me",
+    });
+  });
+
+  it("re-queues a direct turn start that races a live provider turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    // The provider is mid-turn but the projection has no running session yet
+    // (e.g. the gap between a steer interrupt and the steered turn's start):
+    // the decider dispatches directly instead of queueing.
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-live-race"),
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-race"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("msg-turn-race"),
+          role: "user",
+          text: "wait your turn",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-race"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-live-race"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      input: "wait your turn",
     });
   });
 
@@ -1816,6 +2019,11 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-running"),
+    });
     await Effect.runPromise(
       harness.engine.dispatch({
         type: "thread.session.set",
@@ -1861,6 +2069,7 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).not.toHaveBeenCalled();
     expect(harness.interruptTurn.mock.calls.length).toBe(1);
 
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await harness.emitRuntimeEvent({
       type: "turn.completed",
       eventId: asEventId("evt-turn-completed-steer-claude"),

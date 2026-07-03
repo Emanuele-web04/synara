@@ -10,7 +10,7 @@ import {
 describe("chatThreads", () => {
   it("builds a short fallback title without forcing case", () => {
     expect(buildPromptThreadTitleFallback("FIX the BROKEN auth redirect in production now")).toBe(
-      "FIX the BROKEN auth",
+      "FIX the BROKEN auth redirect in",
     );
   });
 
@@ -18,8 +18,14 @@ describe("chatThreads", () => {
     expect(buildPromptThreadTitleFallback("   \n\t  ")).toBe(GENERIC_CHAT_THREAD_TITLE);
   });
 
-  it("sanitizes generated titles down to four words without lowercasing acronyms", () => {
+  it("sanitizes generated titles without lowercasing acronyms", () => {
     expect(sanitizeGeneratedThreadTitle('"Folder picker UI ASAP."')).toBe("Folder picker UI ASAP");
+  });
+
+  it("keeps distinguishing identifiers within the six-word cap", () => {
+    expect(sanitizeGeneratedThreadTitle("PR #1234 Conflict Review and more extra")).toBe(
+      "PR #1234 Conflict Review and more",
+    );
   });
 
   it("detects the generic chat placeholder title", () => {

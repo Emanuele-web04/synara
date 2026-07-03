@@ -19,13 +19,16 @@ export const openUsageQueryKeys = {
     ["openUsage", "provider", provider ?? null] as const,
 };
 
-export function openUsageProviderSnapshotQueryOptions(provider: ProviderKind | null | undefined) {
+export function openUsageProviderSnapshotQueryOptions(
+  provider: ProviderKind | null | undefined,
+  input: { enabled?: boolean } = {},
+) {
   const providerId = openUsageProviderIdForProvider(provider);
   const openUsageEnabled = isOpenUsagePollingEnabled();
 
   return queryOptions({
     queryKey: openUsageQueryKeys.provider(provider),
-    enabled: openUsageEnabled && providerId !== null,
+    enabled: (input.enabled ?? true) && openUsageEnabled && providerId !== null,
     staleTime: 15_000,
     refetchInterval: 15_000,
     refetchOnWindowFocus: false,

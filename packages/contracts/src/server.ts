@@ -155,10 +155,12 @@ export type ServerGetProviderUsageSnapshotInput = typeof ServerGetProviderUsageS
 export const ServerGetProviderUsageSnapshotResult = Schema.NullOr(ServerProviderUsageSnapshot);
 export type ServerGetProviderUsageSnapshotResult = typeof ServerGetProviderUsageSnapshotResult.Type;
 
-// Batch live-usage fetch for every supported provider, powering the Settings → Usage section.
-// Returns one entry per supported provider (including needs-auth/error) so the UI can render a row each.
+// Batch live-usage fetch for supported providers, powering the Settings → Usage section and
+// provider-scoped usage chips. Unfiltered requests return one entry per supported provider
+// (including needs-auth/error) so the UI can render a row each.
 export const ServerListProviderUsageInput = Schema.Struct({
   forceRefresh: Schema.optional(Schema.Boolean),
+  provider: Schema.optional(ProviderKind),
 });
 export type ServerListProviderUsageInput = typeof ServerListProviderUsageInput.Type;
 
