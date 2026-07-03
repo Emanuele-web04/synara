@@ -47,9 +47,12 @@ describe("GoalIndicator", () => {
 
   it("labels budget-limited goals", () => {
     const html = renderToStaticMarkup(
-      <GoalIndicator goal={makeGoal({ status: "budget_limited" })} />,
+      <GoalIndicator
+        goal={makeGoal({ status: "budget_limited", tokensUsed: 1250, timeUsedSeconds: 45 })}
+      />,
     );
     expect(html).toContain("budget limited");
+    expect(html).toContain("1.3k tokens · 45s");
     expect(html).toContain('data-goal-status="budget_limited"');
   });
 
@@ -59,9 +62,12 @@ describe("GoalIndicator", () => {
     expect(paused).toContain('data-goal-status="paused"');
 
     const completed = renderToStaticMarkup(
-      <GoalIndicator goal={makeGoal({ status: "complete" })} />,
+      <GoalIndicator
+        goal={makeGoal({ status: "complete", tokensUsed: 12_340, timeUsedSeconds: 125 })}
+      />,
     );
     expect(completed).toContain("Goal: complete");
+    expect(completed).toContain("12k tokens · 2m 5s");
     expect(completed).toContain('data-goal-status="complete"');
   });
 });

@@ -486,7 +486,8 @@ export const OrchestrationGoal = Schema.Struct({
   turnCount: NonNegativeInt,
   // Number of hidden continuation turns the goal loop has injected.
   continuationCount: NonNegativeInt,
-  // Wall-clock seconds the goal has been running (createdAt → latest turn completion).
+  // Wall-clock seconds the goal has been running (createdAt → latest turn completion
+  // or terminal status update).
   timeUsedSeconds: NonNegativeInt,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

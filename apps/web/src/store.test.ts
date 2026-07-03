@@ -3502,5 +3502,41 @@ describe("store — goals", () => {
       }),
     ]);
     expect(completed.threads[0]?.goal?.status).toBe("complete");
+    expect(completed.threads[0]?.goal?.timeUsedSeconds).toBe(3600);
+  });
+
+  it("applies live goal usage accounting from completed-turn activities", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const created = applyOrchestrationEventsHotPath(makeState(makeThread()), [
+      makeDomainEvent("thread.goal-created", {
+        threadId,
+        goal: makeGoal(),
+      }),
+    ]);
+
+    const next = applyOrchestrationEventsHotPath(created, [
+      makeDomainEvent(
+        "thread.activity-appended",
+        {
+          threadId,
+          activity: makeActivity({
+            id: "activity-turn-completed",
+            kind: "turn.completed",
+            payload: { usage: { inputTokens: 100, outputTokens: 50 } },
+            createdAt: "2026-02-27T00:00:30.000Z",
+          }),
+        },
+        { occurredAt: "2026-02-27T00:00:30.000Z" },
+      ),
+    ]);
+
+    expect(next.threads[0]?.goal?.turnCount).toBe(3);
+    expect(next.threads[0]?.goal?.tokensUsed).toBe(150);
+    expect(next.threads[0]?.goal?.usage).toEqual({
+      inputTokens: 100,
+      outputTokens: 50,
+      totalTokens: 150,
+    });
+    expect(next.threads[0]?.goal?.timeUsedSeconds).toBe(30);
   });
 });

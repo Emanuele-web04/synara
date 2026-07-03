@@ -29,6 +29,7 @@ import {
   setThreadMarkerLabel,
 } from "@t3tools/shared/threadMarkers";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import { applyGoalTurnAccounting, transitionGoalStatus } from "@t3tools/shared/orchestrationGoals";
 import { normalizeWorkspaceRootForComparison } from "@t3tools/shared/threadWorkspace";
 import { create } from "zustand";
 import {
@@ -3717,9 +3718,22 @@ function applyOrchestrationEvent(
           if (nextActivities === thread.activities) {
             return thread;
           }
+          const goalAccountingPatch =
+            thread.goal &&
+            thread.goal.status === "active" &&
+            event.payload.activity.kind === "turn.completed"
+              ? {
+                  goal: applyGoalTurnAccounting(
+                    thread.goal,
+                    event.payload.activity.payload,
+                    event.occurredAt,
+                  ),
+                }
+              : {};
           return {
             ...thread,
             activities: nextActivities,
+            ...goalAccountingPatch,
             updatedAt:
               (thread.updatedAt ?? thread.createdAt) > event.payload.activity.createdAt
                 ? thread.updatedAt
@@ -3805,7 +3819,7 @@ function applyOrchestrationEvent(
           thread.goal
             ? {
                 ...thread,
-                goal: { ...thread.goal, status: nextGoalStatus, updatedAt: goalUpdatedAt },
+                goal: transitionGoalStatus(thread.goal, nextGoalStatus, goalUpdatedAt),
                 updatedAt: resolveEventUpdatedAt(thread, goalUpdatedAt),
               }
             : thread,

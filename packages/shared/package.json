@@ -140,6 +140,10 @@
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
     },
+    "./orchestrationGoals": {
+      "types": "./src/orchestrationGoals.ts",
+      "import": "./src/orchestrationGoals.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"

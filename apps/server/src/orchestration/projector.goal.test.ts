@@ -154,6 +154,7 @@ describe("orchestration projector — goals", () => {
       }),
     ]);
     expect(completed.threads[0]?.goal?.status).toBe("complete");
+    expect(completed.threads[0]?.goal?.timeUsedSeconds).toBe(0);
 
     const cleared = await applyEvents([
       threadCreatedEvent,
@@ -222,5 +223,21 @@ describe("orchestration projector — goals", () => {
     const goal = model.threads[0]?.goal;
     expect(goal?.tokensUsed).toBe(150);
     expect(goal?.status).toBe("budget_limited");
+  });
+
+  it("refreshes elapsed time when a goal is manually completed", async () => {
+    const model = await applyEvents([
+      threadCreatedEvent,
+      goalCreatedEvent(),
+      makeEvent({
+        sequence: 3,
+        type: "thread.goal-completed",
+        occurredAt: "2026-06-02T10:03:05.000Z",
+        payload: { threadId: "thread-1", updatedAt: "2026-06-02T10:03:05.000Z" },
+      }),
+    ]);
+    const goal = model.threads[0]?.goal;
+    expect(goal?.status).toBe("complete");
+    expect(goal?.timeUsedSeconds).toBe(185);
   });
 });
