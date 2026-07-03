@@ -4565,6 +4565,116 @@ routing.layer("ProviderServiceLive routing", (it) => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
   );
+
+  it.effect("recovers provider-instance sessions from current settings after options clear", () =>
+    Effect.gen(function* () {
+      const tempDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), "synara-provider-service-instance-clear-"),
+      );
+      const dbPath = path.join(tempDir, "orchestration.sqlite");
+      const threadId = asThreadId("thread-instance-options-clear");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(persistenceLayer),
+      );
+      const firstSettings: Partial<ServerSettings> = {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: {
+              homePath: "/tmp/codex-work",
+              shadowHomePath: "/tmp/codex-work-shadow",
+              accountId: "work",
+            },
+          },
+        },
+      };
+      const secondSettings: Partial<ServerSettings> = {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      };
+
+      const firstCodex = makeFakeCodexAdapter("codex");
+      const firstRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(firstCodex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const firstDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const firstProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, firstRegistry)),
+        Layer.provide(firstDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(ServerSettingsService.layerTest(firstSettings)),
+      );
+
+      const initial = yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        return yield* provider.startSession(threadId, {
+          provider: "codex",
+          providerInstanceId: "codex_work",
+          threadId,
+          cwd: "/tmp/project-instance-options-clear",
+          runtimeMode: "full-access",
+        });
+      }).pipe(Effect.provide(firstProviderLayer));
+
+      const secondCodex = makeFakeCodexAdapter("codex");
+      const secondRegistry: typeof ProviderAdapterRegistry.Service = {
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(secondCodex.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex"]),
+      };
+      const secondDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const secondProviderLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, secondRegistry)),
+        Layer.provide(secondDirectoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(ServerSettingsService.layerTest(secondSettings)),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        yield* provider.sendTurn({
+          threadId: initial.threadId,
+          input: "continue after account fields cleared",
+          attachments: [],
+        });
+      }).pipe(Effect.provide(secondProviderLayer));
+
+      assert.equal(secondCodex.startSession.mock.calls.length, 1);
+      const recoveredInput = secondCodex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof recoveredInput === "object" && recoveredInput !== null, true);
+      if (recoveredInput && typeof recoveredInput === "object") {
+        const startPayload = recoveredInput as {
+          providerOptions?: unknown;
+          resumeCursor?: unknown;
+          providerInstanceId?: string;
+        };
+        assert.equal(startPayload.providerInstanceId, "codex_work");
+        assert.deepEqual(startPayload.providerOptions, {
+          codex: { homePath: "/tmp/codex-work", accountId: "codex_work" },
+        });
+        assert.equal(startPayload.resumeCursor, undefined);
+      }
+
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
 });
 
 rotationRetry.layer("ProviderServiceLive credential rotation event durability", (it) => {
