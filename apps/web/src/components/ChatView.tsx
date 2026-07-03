@@ -9697,6 +9697,15 @@ export default function ChatView({
                   />
                 </div>
               ) : null}
+              <GoalIndicator
+                goal={activeThread?.goal}
+                attachedToPrevious={
+                  pendingUserInputs.length === 0 &&
+                  (showComposerLiveChangesHeader ||
+                    showComposerActiveTaskListCard ||
+                    queuedComposerTurns.length > 0)
+                }
+              />
             </div>
             <div
               className={cn(
@@ -9882,8 +9891,6 @@ export default function ChatView({
                               <span className="sr-only sm:not-sr-only">Plan</span>
                             </Button>
                           ) : null}
-
-                          <GoalIndicator goal={activeThread?.goal} />
 
                           {activeTaskList || sidebarProposedPlan || planSidebarOpen ? (
                             <Button

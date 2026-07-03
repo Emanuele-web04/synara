@@ -34,9 +34,15 @@ describe("GoalIndicator", () => {
   it("shows status, objective, and turn count for an active goal", () => {
     const html = renderToStaticMarkup(<GoalIndicator goal={makeGoal()} />);
     expect(html).toContain("Goal: active");
+    expect(html).toContain("Make all tests pass");
     expect(html).toContain("3 turns");
     expect(html).toContain('title="Make all tests pass"');
     expect(html).toContain('data-goal-status="active"');
+  });
+
+  it("can attach to the stacked composer panel above it", () => {
+    const html = renderToStaticMarkup(<GoalIndicator goal={makeGoal()} attachedToPrevious />);
+    expect(html).toContain('data-composer-stacked-attached="true"');
   });
 
   it("labels budget-limited goals", () => {
