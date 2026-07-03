@@ -24,6 +24,11 @@ import {
   type ProviderStartReviewInput,
   type ProviderSkillDescriptor,
   type ProviderSkillReference,
+  type ProviderThreadGoal,
+  type ProviderThreadGoalClearResult,
+  type ProviderThreadGoalGetResult,
+  type ProviderThreadGoalSetInput,
+  type ProviderThreadGoalSetResult,
   ProviderRequestKind,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -1588,6 +1593,44 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     }
   }
 
+  async getThreadGoal(threadId: ThreadId): Promise<ProviderThreadGoalGetResult> {
+    const context = this.requireSession(threadId);
+    const providerThreadId = this.requireProviderThreadId(context);
+    const response = await this.sendRequest(context, "thread/goal/get", {
+      threadId: providerThreadId,
+    });
+    return {
+      goal: this.parseThreadGoal(context, this.readObject(response, "goal")),
+    };
+  }
+
+  async setThreadGoal(input: ProviderThreadGoalSetInput): Promise<ProviderThreadGoalSetResult> {
+    const context = this.requireSession(input.threadId);
+    const providerThreadId = this.requireProviderThreadId(context);
+    const response = await this.sendRequest(context, "thread/goal/set", {
+      threadId: providerThreadId,
+      ...(input.objective !== undefined ? { objective: input.objective } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      ...(input.tokenBudget !== undefined ? { tokenBudget: input.tokenBudget } : {}),
+    });
+    const goal = this.parseThreadGoal(context, this.readObject(response, "goal"));
+    if (!goal) {
+      throw new Error("thread/goal/set response did not include a goal.");
+    }
+    return { goal };
+  }
+
+  async clearThreadGoal(threadId: ThreadId): Promise<ProviderThreadGoalClearResult> {
+    const context = this.requireSession(threadId);
+    const providerThreadId = this.requireProviderThreadId(context);
+    const response = await this.sendRequest(context, "thread/goal/clear", {
+      threadId: providerThreadId,
+    });
+    return {
+      cleared: this.readBoolean(response, "cleared") ?? true,
+    };
+  }
+
   private resolveApprovalRequest(
     context: CodexSessionContext,
     pendingRequest: PendingApprovalRequest,
@@ -2700,6 +2743,60 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       throw new Error(`${method} response did not include a thread id.`);
     }
     return threadIdRaw;
+  }
+
+  private requireProviderThreadId(context: CodexSessionContext): string {
+    const providerThreadId = readResumeThreadId({
+      threadId: context.session.threadId,
+      runtimeMode: context.session.runtimeMode,
+      resumeCursor: context.session.resumeCursor,
+    });
+    if (!providerThreadId) {
+      throw new Error("Session is missing a provider resume thread id.");
+    }
+    return providerThreadId;
+  }
+
+  private parseThreadGoal(
+    context: CodexSessionContext,
+    rawGoal: Record<string, unknown> | undefined,
+  ): ProviderThreadGoal | null {
+    if (!rawGoal) {
+      return null;
+    }
+    const objective = this.readString(rawGoal, "objective")?.trim();
+    const status = this.readThreadGoalStatus(rawGoal, "status");
+    if (!objective || !status) {
+      return null;
+    }
+    return {
+      threadId: context.session.threadId,
+      objective,
+      status,
+      tokenBudget: this.readNullableNumber(rawGoal, "tokenBudget"),
+      tokensUsed: this.readNumber(rawGoal, "tokensUsed") ?? 0,
+      timeUsedSeconds: this.readNumber(rawGoal, "timeUsedSeconds") ?? 0,
+      createdAt: this.readNumber(rawGoal, "createdAt") ?? 0,
+      updatedAt: this.readNumber(rawGoal, "updatedAt") ?? 0,
+    };
+  }
+
+  private readThreadGoalStatus(
+    value: unknown,
+    key: string,
+  ): ProviderThreadGoal["status"] | undefined {
+    const status = this.readString(value, key);
+    switch (status) {
+      case "active":
+      case "paused":
+      case "blocked":
+      case "usageLimited":
+      case "budgetLimited":
+      case "complete":
+        return status;
+      default:
+        return undefined;
+    }
   }
 
   private isServerRequest(value: unknown): value is JsonRpcRequest {

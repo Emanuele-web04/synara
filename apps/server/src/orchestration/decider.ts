@@ -1109,7 +1109,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           turnId: null,
           streaming: false,
-          source: command.inputSource ?? "native",
+          source: "native",
           createdAt: command.createdAt,
           updatedAt: command.createdAt,
         },
@@ -1127,6 +1127,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         runtimeMode: command.runtimeMode,
         interactionMode: command.interactionMode,
         ...(sourceProposedPlan !== undefined ? { sourceProposedPlan } : {}),
+        ...(command.codexGoal !== undefined ? { codexGoal: command.codexGoal } : {}),
         createdAt: command.createdAt,
       } as const;
       const activeProvider =
@@ -1201,6 +1202,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           ...(command.sourceProposedPlan !== undefined
             ? { sourceProposedPlan: command.sourceProposedPlan }
             : {}),
+          ...(command.codexGoal !== undefined ? { codexGoal: command.codexGoal } : {}),
           createdAt: command.createdAt,
         },
       };
@@ -1644,182 +1646,6 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           activity: command.activity,
-        },
-      };
-    }
-
-    case "thread.goal.create": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      const existingGoal = thread.goal;
-      if (
-        existingGoal &&
-        existingGoal.status !== "complete" &&
-        existingGoal.status !== "cleared" &&
-        existingGoal.status !== "budget_limited"
-      ) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail:
-            "A goal already exists on this thread; complete or clear it before creating another.",
-        });
-      }
-      const goal = {
-        id: command.goalId,
-        objective: command.objective,
-        status: "active" as const,
-        tokenBudget: command.tokenBudget ?? null,
-        tokensUsed: 0,
-        usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-        turnCount: 0,
-        continuationCount: 0,
-        timeUsedSeconds: 0,
-        createdAt: command.createdAt,
-        updatedAt: command.createdAt,
-      };
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-created",
-        payload: {
-          threadId: command.threadId,
-          goal,
-        },
-      };
-    }
-
-    case "thread.goal.upsert": {
-      yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-created",
-        payload: {
-          threadId: command.threadId,
-          goal: command.goal,
-        },
-      };
-    }
-
-    case "thread.goal.pause": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (!thread.goal || thread.goal.status !== "active") {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: "No active goal to pause.",
-        });
-      }
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-paused",
-        payload: {
-          threadId: command.threadId,
-          updatedAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.goal.resume": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (!thread.goal || thread.goal.status !== "paused") {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: "No paused goal to resume.",
-        });
-      }
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-resumed",
-        payload: {
-          threadId: command.threadId,
-          updatedAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.goal.clear": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (!thread.goal || thread.goal.status === "cleared") {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: "No goal to clear.",
-        });
-      }
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-cleared",
-        payload: {
-          threadId: command.threadId,
-          updatedAt: command.createdAt,
-        },
-      };
-    }
-
-    case "thread.goal.complete": {
-      const thread = yield* requireThread({
-        readModel,
-        command,
-        threadId: command.threadId,
-      });
-      if (!thread.goal || (thread.goal.status !== "active" && thread.goal.status !== "paused")) {
-        return yield* new OrchestrationCommandInvariantError({
-          commandType: command.type,
-          detail: "No active or paused goal to complete.",
-        });
-      }
-      return {
-        ...withEventBase({
-          aggregateKind: "thread",
-          aggregateId: command.threadId,
-          occurredAt: command.createdAt,
-          commandId: command.commandId,
-        }),
-        type: "thread.goal-completed",
-        payload: {
-          threadId: command.threadId,
-          updatedAt: command.createdAt,
         },
       };
     }

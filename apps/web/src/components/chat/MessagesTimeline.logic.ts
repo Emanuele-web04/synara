@@ -197,28 +197,6 @@ export function deriveTerminalAssistantMessageIds(
   return terminalAssistantMessageIds;
 }
 
-// A hidden goal-continuation turn (Synara's analog of pi-goal's `display:false`): the
-// user-role message the goal loop injects to keep the agent working. It drives the next
-// turn but is never shown in the transcript — only the agent's response to it is.
-export function isHiddenGoalContinuationMessage(
-  message: Pick<ChatMessage, "role" | "source">,
-): boolean {
-  return message.role === "user" && message.source === "goal-continuation";
-}
-
-function groupedEntriesEqual(
-  left: ReadonlyArray<WorkLogEntry>,
-  right: ReadonlyArray<WorkLogEntry>,
-) {
-  return left.length === right.length && left.every((entry, index) => entry === right[index]);
-}
-
-function collectWorkItems(entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) {
-  for (const entry of entries) {
-    into.push({ kind: "work", id: entry.id, entry });
-  }
-}
-
 // Derives transcript rows from timeline entries while keeping live narration and
 // tool rows in visual chronology. Work already waiting when assistant text
 // arrives renders above that text; trailing work renders below it.
@@ -232,16 +210,17 @@ export function deriveMessagesTimelineRows(input: {
   revertTurnCountByUserMessageId: ReadonlyMap<MessageId, number>;
 }): MessagesTimelineRow[] {
   const nextRows: MessagesTimelineRow[] = [];
-  // Hidden goal-continuation turns never render (their assistant responses still do).
-  const timelineEntries = input.timelineEntries.filter(
-    (entry) => entry.kind !== "message" || !isHiddenGoalContinuationMessage(entry.message),
-  );
-  const timelineMessages = timelineEntries.flatMap((entry) =>
+  const timelineMessages = input.timelineEntries.flatMap((entry) =>
     entry.kind === "message" ? [entry.message] : [],
   );
   const durationStartByMessageId = computeMessageDurationStart(timelineMessages);
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineMessages);
   let pendingWorkGroup: Extract<MessagesTimelineRow, { kind: "work" }> | null = null;
+
+  const groupedEntriesEqual = (
+    left: ReadonlyArray<WorkLogEntry>,
+    right: ReadonlyArray<WorkLogEntry>,
+  ) => left.length === right.length && left.every((entry, index) => entry === right[index]);
 
   const appendWorkEntriesToPreviousAssistant = (
     groupedEntries: WorkLogEntry[],
@@ -281,8 +260,8 @@ export function deriveMessagesTimelineRows(input: {
     pendingWorkGroup = null;
   };
 
-  for (let index = 0; index < timelineEntries.length; index += 1) {
-    const timelineEntry = timelineEntries[index];
+  for (let index = 0; index < input.timelineEntries.length; index += 1) {
+    const timelineEntry = input.timelineEntries[index];
     if (!timelineEntry) {
       continue;
     }
@@ -290,8 +269,8 @@ export function deriveMessagesTimelineRows(input: {
     if (timelineEntry.kind === "work") {
       const groupedEntries = [timelineEntry.entry];
       let cursor = index + 1;
-      while (cursor < timelineEntries.length) {
-        const nextEntry = timelineEntries[cursor];
+      while (cursor < input.timelineEntries.length) {
+        const nextEntry = input.timelineEntries[cursor];
         if (!nextEntry || nextEntry.kind !== "work") break;
         groupedEntries.push(nextEntry.entry);
         cursor += 1;
@@ -419,6 +398,12 @@ function collapseSettledTurns(
     ? findTailTerminalAssistantMessageId(rows, terminalAssistantMessageIds)
     : null;
 
+  const collectWorkItems = (entries: ReadonlyArray<WorkLogEntry>, into: CollapsedTurnItem[]) => {
+    for (const entry of entries) {
+      into.push({ kind: "work", id: entry.id, entry });
+    }
+  };
+
   for (let pass = rows.length - 1; pass >= 0; pass -= 1) {
     const row = rows[pass]!;
     if (row.kind !== "message" || row.message.role !== "assistant") continue;
@@ -491,7 +476,7 @@ function collapseSettledTurns(
       delete row.inlineWorkEntries;
       delete row.inlineWorkGroupId;
 
-      for (const index of foldIndices.toSorted((a, b) => b - a)) {
+      for (const index of [...foldIndices].sort((a, b) => b - a)) {
         rows.splice(index, 1);
       }
       pass -= foldIndices.length;
@@ -681,6 +666,15 @@ function collapsedTurnItemsEqual(
     }
     return false;
   });
+}
+
+function shallowEqualEntryArray<T>(
+  left: ReadonlyArray<T> | undefined,
+  right: ReadonlyArray<T> | undefined,
+) {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
 }
 
 function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean {

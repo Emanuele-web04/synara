@@ -171,7 +171,6 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     messages: [],
     activities: [],
     proposedPlans: [],
-    goal: null,
     checkpoints: [],
     session: null,
     ...overrides,
@@ -3454,89 +3453,5 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(hydratedState, readModel);
 
     expect(next.threads[0]).toBe(thread);
-  });
-});
-
-describe("store — goals", () => {
-  function makeGoal() {
-    return {
-      id: "goal-1",
-      objective: "Ship it",
-      status: "active" as const,
-      tokenBudget: null,
-      tokensUsed: 0,
-      usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
-      turnCount: 2,
-      continuationCount: 1,
-      timeUsedSeconds: 0,
-      createdAt: "2026-02-27T00:00:00.000Z",
-      updatedAt: "2026-02-27T00:00:00.000Z",
-    };
-  }
-
-  // Regression: the normalized store reconstructs Thread objects from slices, so a goal
-  // that is not stored in a slice is silently dropped on rebuild (getThreadsFromState).
-  it("retains the goal through normalized read-model reconstruction", () => {
-    const next = syncServerReadModel(
-      makeState(makeThread()),
-      makeReadModel(makeReadModelThread({ goal: makeGoal() })),
-    );
-    expect(next.threads[0]?.goal?.status).toBe("active");
-    expect(next.threads[0]?.goal?.objective).toBe("Ship it");
-    expect(next.threads[0]?.goal?.turnCount).toBe(2);
-  });
-
-  it("applies goal domain events to the thread goal", () => {
-    const created = applyOrchestrationEventsHotPath(makeState(makeThread()), [
-      makeDomainEvent("thread.goal-created", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        goal: makeGoal(),
-      }),
-    ]);
-    expect(created.threads[0]?.goal?.status).toBe("active");
-
-    const completed = applyOrchestrationEventsHotPath(created, [
-      makeDomainEvent("thread.goal-completed", {
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        updatedAt: "2026-02-27T01:00:00.000Z",
-      }),
-    ]);
-    expect(completed.threads[0]?.goal?.status).toBe("complete");
-    expect(completed.threads[0]?.goal?.timeUsedSeconds).toBe(3600);
-  });
-
-  it("applies live goal usage accounting from completed-turn activities", () => {
-    const threadId = ThreadId.makeUnsafe("thread-1");
-    const created = applyOrchestrationEventsHotPath(makeState(makeThread()), [
-      makeDomainEvent("thread.goal-created", {
-        threadId,
-        goal: makeGoal(),
-      }),
-    ]);
-
-    const next = applyOrchestrationEventsHotPath(created, [
-      makeDomainEvent(
-        "thread.activity-appended",
-        {
-          threadId,
-          activity: makeActivity({
-            id: "activity-turn-completed",
-            kind: "turn.completed",
-            payload: { usage: { inputTokens: 100, outputTokens: 50 } },
-            createdAt: "2026-02-27T00:00:30.000Z",
-          }),
-        },
-        { occurredAt: "2026-02-27T00:00:30.000Z" },
-      ),
-    ]);
-
-    expect(next.threads[0]?.goal?.turnCount).toBe(3);
-    expect(next.threads[0]?.goal?.tokensUsed).toBe(150);
-    expect(next.threads[0]?.goal?.usage).toEqual({
-      inputTokens: 100,
-      outputTokens: 50,
-      totalTokens: 150,
-    });
-    expect(next.threads[0]?.goal?.timeUsedSeconds).toBe(30);
   });
 });

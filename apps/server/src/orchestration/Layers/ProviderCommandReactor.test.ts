@@ -203,6 +203,35 @@ describe("ProviderCommandReactor", () => {
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>(() =>
       Effect.succeed(null),
     );
+    const setThreadGoal = vi.fn<ProviderServiceShape["setThreadGoal"]>((input) =>
+      Effect.succeed({
+        goal: {
+          threadId:
+            typeof input === "object" && input !== null && "threadId" in input
+              ? input.threadId
+              : ThreadId.makeUnsafe("thread-1"),
+          objective:
+            typeof input === "object" &&
+            input !== null &&
+            "objective" in input &&
+            typeof input.objective === "string"
+              ? input.objective
+              : "Goal objective",
+          status: "active",
+          tokenBudget:
+            typeof input === "object" &&
+            input !== null &&
+            "tokenBudget" in input &&
+            typeof input.tokenBudget === "number"
+              ? input.tokenBudget
+              : null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 0,
+          updatedAt: 0,
+        },
+      }),
+    );
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
@@ -324,6 +353,9 @@ describe("ProviderCommandReactor", () => {
         }),
       rollbackConversation,
       compactThread: () => unsupported(),
+      getThreadGoal: () => unsupported(),
+      setThreadGoal: setThreadGoal as ProviderServiceShape["setThreadGoal"],
+      clearThreadGoal: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };
 
@@ -395,6 +427,7 @@ describe("ProviderCommandReactor", () => {
       sendTurn,
       steerTurn,
       forkThread,
+      setThreadGoal,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
@@ -1101,6 +1134,44 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("sets Codex native goal without also dispatching a normal provider turn", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-goal"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-goal"),
+          role: "user",
+          text: "Fix the flaky checkout test",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "codex",
+          model: "gpt-5-codex",
+        },
+        codexGoal: { tokenBudget: 12000 },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.setThreadGoal.mock.calls.length === 1);
+
+    expect(harness.setThreadGoal.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      objective: "Fix the flaky checkout test",
+      status: "active",
+      tokenBudget: 12000,
+    });
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
   });
 
   it("waits for the message-start checkpoint before sending the provider turn", async () => {

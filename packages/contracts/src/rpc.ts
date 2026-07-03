@@ -70,7 +70,15 @@ import {
   OrchestrationShellStreamItem,
   OrchestrationThreadStreamItem,
 } from "./orchestration";
-import { ProviderCompactThreadInput } from "./provider";
+import {
+  ProviderCompactThreadInput,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalGetResult,
+  ProviderThreadGoalSetInput,
+  ProviderThreadGoalSetResult,
+} from "./provider";
 import {
   ProviderGetComposerCapabilitiesInput,
   ProviderComposerCapabilities,
@@ -693,6 +701,24 @@ export const WsProviderCompactThreadRpc = Rpc.make(WS_METHODS.providerCompactThr
   error: WsRpcError,
 });
 
+export const WsProviderThreadGoalGetRpc = Rpc.make(WS_METHODS.providerThreadGoalGet, {
+  payload: ProviderThreadGoalGetInput,
+  success: ProviderThreadGoalGetResult,
+  error: WsRpcError,
+});
+
+export const WsProviderThreadGoalSetRpc = Rpc.make(WS_METHODS.providerThreadGoalSet, {
+  payload: ProviderThreadGoalSetInput,
+  success: ProviderThreadGoalSetResult,
+  error: WsRpcError,
+});
+
+export const WsProviderThreadGoalClearRpc = Rpc.make(WS_METHODS.providerThreadGoalClear, {
+  payload: ProviderThreadGoalClearInput,
+  success: ProviderThreadGoalClearResult,
+  error: WsRpcError,
+});
+
 export const WsProviderListCommandsRpc = Rpc.make(WS_METHODS.providerListCommands, {
   payload: ProviderListCommandsInput,
   success: ProviderListCommandsResult,
@@ -871,6 +897,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerSettingsRpc,
   WsProviderGetComposerCapabilitiesRpc,
   WsProviderCompactThreadRpc,
+  WsProviderThreadGoalGetRpc,
+  WsProviderThreadGoalSetRpc,
+  WsProviderThreadGoalClearRpc,
   WsProviderListCommandsRpc,
   WsProviderListSkillsRpc,
   WsProviderListSkillsCatalogRpc,

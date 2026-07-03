@@ -85,6 +85,9 @@ function createProviderServiceHarness() {
       }),
     rollbackConversation: () => unsupported(),
     compactThread: () => unsupported(),
+    getThreadGoal: () => unsupported(),
+    setThreadGoal: () => unsupported(),
+    clearThreadGoal: () => unsupported(),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 
@@ -297,59 +300,6 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
-  });
-
-  it("projects provider-native Codex goal updates without using the Synara goal reactor", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    harness.emit({
-      type: "thread.goal.updated",
-      eventId: asEventId("evt-thread-goal-updated"),
-      provider: "codex",
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-goal"),
-      createdAt: now,
-      payload: {
-        goal: {
-          providerThreadId: "provider-thread-1",
-          objective: "Explore docs",
-          status: "complete",
-          tokenBudget: 5000,
-          tokensUsed: 1234,
-          timeUsedSeconds: 37,
-          createdAt: "2026-07-03T11:00:00.000Z",
-          updatedAt: "2026-07-03T11:00:37.000Z",
-        },
-      },
-    });
-    await harness.drain();
-
-    let thread = await waitForThread(
-      harness.engine,
-      (entry) =>
-        entry.goal?.objective === "Explore docs" &&
-        entry.goal.status === "complete" &&
-        entry.goal.tokensUsed === 1234 &&
-        entry.goal.timeUsedSeconds === 37,
-    );
-    expect(thread.goal?.id).toBe("provider:codex:goal:provider-thread-1");
-    expect(thread.goal?.tokenBudget).toBe(5000);
-
-    harness.emit({
-      type: "thread.goal.cleared",
-      eventId: asEventId("evt-thread-goal-cleared"),
-      provider: "codex",
-      threadId: asThreadId("thread-1"),
-      createdAt: new Date().toISOString(),
-      payload: {
-        providerThreadId: "provider-thread-1",
-      },
-    });
-    await harness.drain();
-
-    thread = await waitForThread(harness.engine, (entry) => entry.goal?.status === "cleared");
-    expect(thread.goal?.objective).toBe("Explore docs");
   });
 
   it("applies provider session.state.changed transitions directly", async () => {
@@ -4019,59 +3969,6 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completed?.turnId).toBe("turn-no-cost");
     expect(completedPayload?.state).toBe("completed");
     expect(completedPayload?.totalCostUsd).toBeUndefined();
-  });
-
-  it("preserves completed-turn usage on the projected activity payload", async () => {
-    const harness = await createHarness();
-    const now = new Date().toISOString();
-
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-turn-completed-usage"),
-      provider: "codex",
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-usage"),
-      payload: {
-        state: "completed",
-        usage: {
-          inputTokens: 123,
-          outputTokens: 45,
-          totalTokens: 168,
-        },
-        modelUsage: {
-          "gpt-5-codex": {
-            contextWindow: 200000,
-          },
-        },
-      },
-    });
-
-    const thread = await waitForThread(harness.engine, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-usage",
-      ),
-    );
-
-    const completed = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-usage",
-    );
-    const completedPayload =
-      completed?.payload && typeof completed.payload === "object"
-        ? (completed.payload as Record<string, unknown>)
-        : undefined;
-
-    expect(completed?.kind).toBe("turn.completed");
-    expect(completedPayload?.usage).toEqual({
-      inputTokens: 123,
-      outputTokens: 45,
-      totalTokens: 168,
-    });
-    expect(completedPayload?.modelUsage).toEqual({
-      "gpt-5-codex": {
-        contextWindow: 200000,
-      },
-    });
   });
 
   it("projects structured user input request and resolution as thread activities", async () => {

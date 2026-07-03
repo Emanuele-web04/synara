@@ -103,6 +103,9 @@ function createProviderServiceHarness(
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
     rollbackConversation,
     compactThread: () => unsupported(),
+    getThreadGoal: () => unsupported(),
+    setThreadGoal: () => unsupported(),
+    clearThreadGoal: () => unsupported(),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
 

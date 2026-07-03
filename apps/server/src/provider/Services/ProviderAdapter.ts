@@ -27,6 +27,10 @@ import type {
   ProviderListSkillsResult,
   ProviderListSkillsInput,
   ProviderStartReviewInput,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalGetResult,
+  ProviderThreadGoalSetInput,
+  ProviderThreadGoalSetResult,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
   ProviderSendTurnInput,
@@ -173,6 +177,19 @@ export interface ProviderAdapterShape<TError> {
    * Trigger provider-native context compaction for a thread when supported.
    */
   readonly compactThread?: (threadId: ThreadId) => Effect.Effect<void, TError>;
+
+  /**
+   * Manage provider-native long-running goals for a thread when supported.
+   */
+  readonly getThreadGoal?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderThreadGoalGetResult, TError>;
+  readonly setThreadGoal?: (
+    input: ProviderThreadGoalSetInput,
+  ) => Effect.Effect<ProviderThreadGoalSetResult, TError>;
+  readonly clearThreadGoal?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<ProviderThreadGoalClearResult, TError>;
 
   /**
    * Fork one provider thread into another persisted thread cursor when supported.

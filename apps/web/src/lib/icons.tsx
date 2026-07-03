@@ -71,6 +71,7 @@ import {
   IconStar,
   IconStarFilled,
   IconSun,
+  IconTarget,
   IconTextWrap,
   IconTrash,
   IconTrophy,
@@ -247,6 +248,7 @@ export const StarIcon = adaptIcon(IconStar);
 export const StarFilledIcon = adaptIcon(IconStarFilled);
 export const SunIcon = adaptIcon(IconSun);
 export const MoonIcon = adaptIcon(IconMoon);
+export const TargetIcon = adaptIcon(IconTarget);
 export const DeviceLaptopIcon = adaptIcon(IconDeviceLaptop);
 export const StopIcon = adaptIcon(IconPlayerStop);
 export const StopFilledIcon = adaptIcon(IconPlayerStopFilled);

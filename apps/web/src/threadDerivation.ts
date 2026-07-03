@@ -41,7 +41,6 @@ const threadCache = new WeakMap<
     activities: Thread["activities"];
     proposedPlans: Thread["proposedPlans"];
     turnDiffSummaries: Thread["turnDiffSummaries"];
-    goal: Thread["goal"];
     thread: Thread;
   }
 >();
@@ -120,7 +119,6 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
   const activities = selectThreadActivities(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
-  const goal = state.threadGoalById?.[threadId] ?? null;
   const cached = threadCache.get(shell);
 
   if (
@@ -130,8 +128,7 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     cached.messages === messages &&
     cached.activities === activities &&
     cached.proposedPlans === proposedPlans &&
-    cached.turnDiffSummaries === turnDiffSummaries &&
-    cached.goal === goal
+    cached.turnDiffSummaries === turnDiffSummaries
   ) {
     return cached.thread;
   }
@@ -145,7 +142,6 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     activities,
     proposedPlans,
     turnDiffSummaries,
-    goal,
   };
 
   threadCache.set(shell, {
@@ -155,7 +151,6 @@ export function getThreadFromState(state: AppState, threadId: ThreadId): Thread 
     activities,
     proposedPlans,
     turnDiffSummaries,
-    goal,
     thread,
   });
 

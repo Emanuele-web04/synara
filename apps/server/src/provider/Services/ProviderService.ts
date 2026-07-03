@@ -25,6 +25,12 @@ import type {
   ProviderSession,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalClearResult,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalGetResult,
+  ProviderThreadGoalSetInput,
+  ProviderThreadGoalSetResult,
   ThreadId,
   ProviderTurnStartResult,
 } from "@t3tools/contracts";
@@ -149,6 +155,19 @@ export interface ProviderServiceShape {
   readonly compactThread: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Manage a provider-native long-running goal for a thread.
+   */
+  readonly getThreadGoal: (
+    input: ProviderThreadGoalGetInput,
+  ) => Effect.Effect<ProviderThreadGoalGetResult, ProviderServiceError>;
+  readonly setThreadGoal: (
+    input: ProviderThreadGoalSetInput,
+  ) => Effect.Effect<ProviderThreadGoalSetResult, ProviderServiceError>;
+  readonly clearThreadGoal: (
+    input: ProviderThreadGoalClearInput,
+  ) => Effect.Effect<ProviderThreadGoalClearResult, ProviderServiceError>;
 
   /**
    * Canonical provider runtime event stream.

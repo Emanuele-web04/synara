@@ -6,6 +6,7 @@ import {
   type ProviderApprovalDecision,
   type ProviderEvent,
   type ProviderSession,
+  type ProviderThreadGoal,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -77,6 +78,36 @@ class FakeCodexManager extends CodexAppServerManager {
     turns: [],
   }));
 
+  public getThreadGoalImpl = vi.fn(async (threadId: ThreadId) => ({
+    goal: {
+      threadId,
+      objective: "Fix Codex goals",
+      status: "active",
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    } satisfies ProviderThreadGoal,
+  }));
+
+  public setThreadGoalImpl = vi.fn(
+    async (input: Parameters<CodexAppServerManager["setThreadGoal"]>[0]) => ({
+      goal: {
+        threadId: input.threadId,
+        objective: input.objective ?? "Fix Codex goals",
+        status: input.status ?? "active",
+        tokenBudget: input.tokenBudget ?? null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 2,
+      } satisfies ProviderThreadGoal,
+    }),
+  );
+
+  public clearThreadGoalImpl = vi.fn(async (_threadId: ThreadId) => ({ cleared: true }));
+
   public respondToRequestImpl = vi.fn(
     async (
       _threadId: ThreadId,
@@ -121,6 +152,18 @@ class FakeCodexManager extends CodexAppServerManager {
 
   override rollbackThread(threadId: ThreadId, numTurns: number) {
     return this.rollbackThreadImpl(threadId, numTurns);
+  }
+
+  override getThreadGoal(threadId: ThreadId) {
+    return this.getThreadGoalImpl(threadId);
+  }
+
+  override setThreadGoal(input: Parameters<CodexAppServerManager["setThreadGoal"]>[0]) {
+    return this.setThreadGoalImpl(input);
+  }
+
+  override clearThreadGoal(threadId: ThreadId) {
+    return this.clearThreadGoalImpl(threadId);
   }
 
   override respondToRequest(
@@ -224,6 +267,43 @@ validationLayer("CodexAdapterLive validation", (it) => {
         serviceTier: "fast",
         runtimeMode: "full-access",
       });
+    }),
+  );
+
+  it.effect("routes provider-native goal operations to the Codex manager", () =>
+    Effect.gen(function* () {
+      validationManager.getThreadGoalImpl.mockClear();
+      validationManager.setThreadGoalImpl.mockClear();
+      validationManager.clearThreadGoalImpl.mockClear();
+      const adapter = yield* CodexAdapter;
+      const threadId = asThreadId("thread-goal");
+      const getThreadGoal = adapter.getThreadGoal;
+      const setThreadGoal = adapter.setThreadGoal;
+      const clearThreadGoal = adapter.clearThreadGoal;
+      if (!getThreadGoal || !setThreadGoal || !clearThreadGoal) {
+        throw new Error("Codex adapter did not expose native goal methods.");
+      }
+
+      const read = yield* getThreadGoal(threadId);
+      const updated = yield* setThreadGoal({
+        threadId,
+        objective: "Fix Codex native goals",
+        status: "active",
+        tokenBudget: 40_000,
+      });
+      const cleared = yield* clearThreadGoal(threadId);
+
+      assert.equal(read.goal?.objective, "Fix Codex goals");
+      assert.equal(updated.goal.objective, "Fix Codex native goals");
+      assert.equal(cleared.cleared, true);
+      assert.equal(validationManager.getThreadGoalImpl.mock.calls[0]?.[0], threadId);
+      assert.deepStrictEqual(validationManager.setThreadGoalImpl.mock.calls[0]?.[0], {
+        threadId,
+        objective: "Fix Codex native goals",
+        status: "active",
+        tokenBudget: 40_000,
+      });
+      assert.equal(validationManager.clearThreadGoalImpl.mock.calls[0]?.[0], threadId);
     }),
   );
 });
@@ -1129,53 +1209,6 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         lastReasoningOutputTokens: 0,
         compactsAutomatically: true,
       });
-    }),
-  );
-
-  it.effect("maps Codex thread goal notifications to canonical goal events", () =>
-    Effect.gen(function* () {
-      const adapter = yield* CodexAdapter;
-      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
-
-      lifecycleManager.emit("event", {
-        id: asEventId("evt-codex-thread-goal-updated"),
-        kind: "notification",
-        provider: "codex",
-        threadId: asThreadId("thread-1"),
-        turnId: asTurnId("turn-1"),
-        createdAt: new Date().toISOString(),
-        method: "thread/goal/updated",
-        payload: {
-          threadId: "provider-thread-1",
-          turnId: "turn-1",
-          goal: {
-            threadId: "provider-thread-1",
-            objective: "Explore docs",
-            status: "budgetLimited",
-            tokenBudget: 1000,
-            tokensUsed: 1000,
-            timeUsedSeconds: 37,
-            createdAt: 1_700_000_000,
-            updatedAt: 1_700_000_037,
-          },
-        },
-      } satisfies ProviderEvent);
-
-      const firstEvent = yield* Fiber.join(firstEventFiber);
-      assert.equal(firstEvent._tag, "Some");
-      if (firstEvent._tag !== "Some") {
-        return;
-      }
-      assert.equal(firstEvent.value.type, "thread.goal.updated");
-      if (firstEvent.value.type !== "thread.goal.updated") {
-        return;
-      }
-      assert.equal(firstEvent.value.payload.goal.objective, "Explore docs");
-      assert.equal(firstEvent.value.payload.goal.status, "budget_limited");
-      assert.equal(firstEvent.value.payload.goal.tokensUsed, 1000);
-      assert.equal(firstEvent.value.payload.goal.timeUsedSeconds, 37);
-      assert.equal(firstEvent.value.payload.goal.createdAt, "2023-11-14T22:13:20.000Z");
-      assert.equal(firstEvent.value.payload.goal.updatedAt, "2023-11-14T22:13:57.000Z");
     }),
   );
 

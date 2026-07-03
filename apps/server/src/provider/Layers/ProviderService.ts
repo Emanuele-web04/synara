@@ -24,6 +24,9 @@ import {
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderStartOptions,
+  ProviderThreadGoalClearInput,
+  ProviderThreadGoalGetInput,
+  ProviderThreadGoalSetInput,
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
@@ -1338,6 +1341,100 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         );
       });
 
+    const getThreadGoal: ProviderServiceShape["getThreadGoal"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.getThreadGoal",
+          schema: ProviderThreadGoalGetInput,
+          payload: rawInput,
+        });
+        return yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.getThreadGoal",
+              allowRecovery: true,
+            });
+            if (!routed.adapter.getThreadGoal) {
+              return yield* toValidationError(
+                "ProviderService.getThreadGoal",
+                `Goals are unavailable for provider '${routed.adapter.provider}'.`,
+              );
+            }
+            return yield* routed.adapter.getThreadGoal(routed.threadId);
+          }),
+          { scheduleIdleStopOnSuccess: true },
+        );
+      });
+
+    const setThreadGoal: ProviderServiceShape["setThreadGoal"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.setThreadGoal",
+          schema: ProviderThreadGoalSetInput,
+          payload: rawInput,
+        });
+        return yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.setThreadGoal",
+              allowRecovery: true,
+            });
+            if (!routed.adapter.setThreadGoal) {
+              return yield* toValidationError(
+                "ProviderService.setThreadGoal",
+                `Goals are unavailable for provider '${routed.adapter.provider}'.`,
+              );
+            }
+            const result = yield* routed.adapter.setThreadGoal({
+              ...input,
+              threadId: routed.threadId,
+            });
+            yield* analytics.record("provider.thread.goal_set", {
+              provider: routed.adapter.provider,
+              status: result.goal.status,
+            });
+            return result;
+          }),
+          { scheduleIdleStopOnSuccess: true },
+        );
+      });
+
+    const clearThreadGoal: ProviderServiceShape["clearThreadGoal"] = (rawInput) =>
+      Effect.gen(function* () {
+        const input = yield* decodeInputOrValidationError({
+          operation: "ProviderService.clearThreadGoal",
+          schema: ProviderThreadGoalClearInput,
+          payload: rawInput,
+        });
+        return yield* runIdleSensitiveProviderWork(
+          input.threadId,
+          Effect.gen(function* () {
+            const routed = yield* resolveRoutableSession({
+              threadId: input.threadId,
+              operation: "ProviderService.clearThreadGoal",
+              allowRecovery: true,
+            });
+            if (!routed.adapter.clearThreadGoal) {
+              return yield* toValidationError(
+                "ProviderService.clearThreadGoal",
+                `Goals are unavailable for provider '${routed.adapter.provider}'.`,
+              );
+            }
+            const result = yield* routed.adapter.clearThreadGoal(routed.threadId);
+            yield* analytics.record("provider.thread.goal_cleared", {
+              provider: routed.adapter.provider,
+              cleared: result.cleared,
+            });
+            return result;
+          }),
+          { scheduleIdleStopOnSuccess: true },
+        );
+      });
+
     const runStopAll = () =>
       Effect.gen(function* () {
         const stoppedAt = new Date().toISOString();
@@ -1391,6 +1488,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       getCapabilities,
       rollbackConversation,
       compactThread,
+      getThreadGoal,
+      setThreadGoal,
+      clearThreadGoal,
       // Each access creates a fresh PubSub subscription so that multiple
       // consumers (ProviderRuntimeIngestion, CheckpointReactor, etc.) each
       // independently receive all runtime events.

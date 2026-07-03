@@ -6,7 +6,6 @@ import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
   deriveTerminalAssistantMessageIds,
-  isHiddenGoalContinuationMessage,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   type MessagesTimelineRow,
@@ -602,19 +601,6 @@ describe("resolveAssistantMessageCopyState", () => {
   });
 });
 
-describe("isHiddenGoalContinuationMessage", () => {
-  it("matches only user-role goal-continuation messages", () => {
-    expect(isHiddenGoalContinuationMessage({ role: "user", source: "goal-continuation" })).toBe(
-      true,
-    );
-    expect(
-      isHiddenGoalContinuationMessage({ role: "assistant", source: "goal-continuation" }),
-    ).toBe(false);
-    expect(isHiddenGoalContinuationMessage({ role: "user", source: "native" })).toBe(false);
-    expect(isHiddenGoalContinuationMessage({ role: "user" })).toBe(false);
-  });
-});
-
 describe("deriveMessagesTimelineRows", () => {
   type MessageTimelineRow = Extract<MessagesTimelineRow, { kind: "message" }>;
 
@@ -692,46 +678,6 @@ describe("deriveMessagesTimelineRows", () => {
 
   const collapsedSignature = (row: MessageTimelineRow): string[] =>
     (row.collapsedTurnItems ?? []).map((item) => `${item.kind}:${String(item.id)}`);
-
-  const goalContinuationEntry = (id: string, createdAt: string): TimelineEntry => ({
-    id: `entry-${id}`,
-    kind: "message",
-    createdAt,
-    message: {
-      id: MessageId.makeUnsafe(id),
-      role: "user",
-      text: "internal goal continuation",
-      createdAt,
-      streaming: false,
-      source: "goal-continuation",
-    },
-  });
-
-  it("hides hidden goal-continuation turns but keeps their assistant response", () => {
-    const rows = deriveMessagesTimelineRows({
-      ...baseInput,
-      timelineEntries: [
-        userEntry("u1", "2026-01-01T00:00:00Z"),
-        assistantEntry("a1", "2026-01-01T00:00:01Z", {
-          turnId: "t1",
-          text: "first",
-          completedAt: "2026-01-01T00:00:01Z",
-        }),
-        goalContinuationEntry("uc1", "2026-01-01T00:00:10Z"),
-        assistantEntry("a2", "2026-01-01T00:00:11Z", {
-          turnId: "t2",
-          text: "second",
-          completedAt: "2026-01-01T00:00:12Z",
-        }),
-      ],
-    });
-
-    // The injected continuation message itself never renders...
-    expect(messageRow(rows, "uc1")).toBeUndefined();
-    // ...but the real user turn and the agent's response to the continuation both remain.
-    expect(messageRow(rows, "u1")).toBeDefined();
-    expect(messageRow(rows, "a2")).toBeDefined();
-  });
 
   it("folds a settled turn's narration and work into one collapsed group on the terminal message", () => {
     const rows = deriveMessagesTimelineRows({
