@@ -7,9 +7,10 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  ThreadId,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
-import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
+import { DateTime, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -454,8 +455,9 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
 );
 
 // Builds a ZIP export of a single thread (thread.json + transcript.md) and streams
-// it back as a download. Reads the orchestration snapshot the same way getSnapshot
-// does; mirrors the auth shape of the other binary GET routes (favicon/attachments).
+// it back as a download. Loads only the requested thread detail so the export cost
+// scales with that thread rather than the whole projection; mirrors the auth shape
+// of the other binary GET routes (favicon/attachments).
 const threadExportEffectRouteLayer = HttpRouter.add(
   "GET",
   "/api/thread-export",
@@ -474,9 +476,11 @@ const threadExportEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Missing threadId parameter", { status: 400 });
 
     const snapshotQuery = yield* ProjectionSnapshotQuery;
-    const readModel = yield* snapshotQuery.getSnapshot();
-    const thread = readModel.threads.find((candidate) => candidate.id === threadIdParam);
-    if (!thread) return HttpServerResponse.text("Not Found", { status: 404 });
+    const threadOption = yield* snapshotQuery.getThreadDetailById(
+      ThreadId.makeUnsafe(threadIdParam),
+    );
+    if (Option.isNone(threadOption)) return HttpServerResponse.text("Not Found", { status: 404 });
+    const thread = threadOption.value;
 
     const archive = yield* Effect.promise(() => buildThreadArchiveBytes(thread));
     const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });

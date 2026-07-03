@@ -139,6 +139,38 @@ describe("exportThreadArchive", () => {
     expect(transcript).not.toContain("\\`");
   });
 
+  it("preserves attachment, skill, and mention references in thread.json", async () => {
+    const thread = {
+      ...sampleThread(),
+      messages: [
+        {
+          id: "m-att",
+          role: "user",
+          text: "See the attached screenshot",
+          streaming: false,
+          source: "native",
+          turnId: null,
+          attachments: [{ id: "att-1", kind: "image", name: "screen.png" }],
+          skills: [{ name: "review" }],
+          mentions: [{ path: "src/index.ts" }],
+          createdAt: "2026-06-28T00:00:03.000Z",
+          updatedAt: "2026-06-28T00:00:03.000Z",
+        },
+      ],
+    } as unknown as OrchestrationThread;
+
+    const entries = readZip(await buildThreadArchiveBytes(thread));
+    const threadJson = JSON.parse(
+      entries.find((entry) => entry.name === "thread.json")!.data.toString("utf8"),
+    );
+
+    expect(threadJson.messages[0].attachments).toEqual([
+      { id: "att-1", kind: "image", name: "screen.png" },
+    ]);
+    expect(threadJson.messages[0].skills).toEqual([{ name: "review" }]);
+    expect(threadJson.messages[0].mentions).toEqual([{ path: "src/index.ts" }]);
+  });
+
   it("slugifies the title and stamps the date bucket into the filename", () => {
     expect(
       threadArchiveFileName({ title: "Fix: nasty bug!!", isoTimestamp: "2026-06-28T01:02:03Z" }),

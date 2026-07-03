@@ -567,6 +567,21 @@ export function useComposerSlashCommands(input: {
     return false;
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
+  const runExportSlashCommand = useCallback(() => {
+    const params = new URLSearchParams({ threadId: threadId });
+    void downloadUrlAsBlob({
+      url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
+      filename: `synara-thread-${threadId}.zip`,
+    }).catch((error: unknown) => {
+      toastManager.add({
+        type: "error",
+        title: "Could not export thread",
+        description:
+          error instanceof Error ? error.message : "An error occurred while exporting the thread.",
+      });
+    });
+  }, [threadId]);
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -610,20 +625,7 @@ export function useComposerSlashCommands(input: {
       }
       if (slashInvocation.command === "export") {
         editorActions.clearComposerSlashDraft();
-        const params = new URLSearchParams({ threadId: threadId });
-        void downloadUrlAsBlob({
-          url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
-          filename: `synara-thread-${threadId}.zip`,
-        }).catch((error: unknown) => {
-          toastManager.add({
-            type: "error",
-            title: "Could not export thread",
-            description:
-              error instanceof Error
-                ? error.message
-                : "An error occurred while exporting the thread.",
-          });
-        });
+        runExportSlashCommand();
         return true;
       }
       if (slashInvocation.command === "review") {
@@ -726,6 +728,7 @@ export function useComposerSlashCommands(input: {
       selectedProvider,
       supportsTextNativeReviewCommand,
       runCodexReviewStart,
+      runExportSlashCommand,
       runFastSlashCommand,
     ],
   );
@@ -845,6 +848,17 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
+      if (item.command === "export") {
+        const applied = clearSlashCommandFromComposer();
+        if (!wasPromptReplacementApplied(applied)) {
+          return;
+        }
+        editorActions.setComposerHighlightedItemId(null);
+        runExportSlashCommand();
+        editorActions.scheduleComposerFocus();
+        return;
+      }
+
       if (item.command === "review") {
         if (selectedProvider === "codex") {
           const applied = clearSlashCommandFromComposer();
@@ -921,6 +935,7 @@ export function useComposerSlashCommands(input: {
       openReviewTargetPicker,
       selectedProvider,
       supportsTextNativeReviewCommand,
+      runExportSlashCommand,
       runFastSlashCommand,
     ],
   );

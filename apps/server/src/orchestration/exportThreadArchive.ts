@@ -144,6 +144,12 @@ function buildThreadJson(thread: OrchestrationThread): string {
         role: message.role,
         text: message.text,
         source: message.source,
+        // Attachment/skill/mention references are part of the user's input for a
+        // turn; keep them in the structured export (metadata only — the archive
+        // does not bundle the referenced files).
+        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+        ...(message.skills?.length ? { skills: message.skills } : {}),
+        ...(message.mentions?.length ? { mentions: message.mentions } : {}),
         createdAt: message.createdAt,
         updatedAt: message.updatedAt,
       })),
