@@ -188,6 +188,40 @@ function splitTomlTables(snippet: string): string[] {
   return tables.filter((table) => table.length > 0);
 }
 
+// Insert an env-var name into the `exclude` array of an existing
+// `[shell_environment_policy]` table, or add the key if the table lacks one.
+// Only used when the user already defines the table (we cannot append a
+// duplicate table header), because the token exclusion is a security control
+// that must survive user-customized policies.
+export function mergeShellEnvPolicyExclude(config: string, envVarName: string): string {
+  if (!envVarName) {
+    return config;
+  }
+  const headerPattern = /^\s*\[shell_environment_policy]\s*$/m;
+  const headerMatch = headerPattern.exec(config);
+  if (!headerMatch) {
+    return config;
+  }
+  const tableStart = headerMatch.index + headerMatch[0].length;
+  const nextHeader = /^\s*\[/m.exec(config.slice(tableStart));
+  const tableEnd = nextHeader ? tableStart + nextHeader.index : config.length;
+  const tableBody = config.slice(tableStart, tableEnd);
+  const quotedVar = JSON.stringify(envVarName);
+
+  if (tableBody.includes(quotedVar) || tableBody.includes(`'${envVarName}'`)) {
+    return config;
+  }
+
+  const excludePattern = /(^\s*exclude\s*=\s*\[)/m;
+  const excludeMatch = excludePattern.exec(tableBody);
+  if (excludeMatch) {
+    const insertAt = tableStart + excludeMatch.index + excludeMatch[0].length;
+    return `${config.slice(0, insertAt)}${quotedVar}, ${config.slice(insertAt)}`;
+  }
+
+  return `${config.slice(0, tableStart)}\nexclude = [${quotedVar}]${config.slice(tableStart)}`;
+}
+
 function appendManagedCodexConfigSection(config: string, section: string): string {
   const trimmedSection = section.trim();
   if (!trimmedSection) {
@@ -195,16 +229,27 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
   }
   // Respect user-managed copies table by table: appending a table whose
   // header already exists in the config would produce invalid TOML, and the
-  // user's own definition should govern in that case.
+  // user's own definition should govern in that case — except the token
+  // exclusion, which is merged into the user's policy table below.
   const tables = splitTomlTables(trimmedSection).filter((table) => {
     const header = table.split("\n")[0]?.trim();
     return header === undefined || !config.includes(header);
   });
+  const skippedPolicyTable = splitTomlTables(trimmedSection).find(
+    (table) =>
+      table.split("\n")[0]?.trim() === "[shell_environment_policy]" && !tables.includes(table),
+  );
+  let nextConfig = config;
+  if (skippedPolicyTable) {
+    for (const excludedVar of skippedPolicyTable.matchAll(/"([^"]+)"/g)) {
+      nextConfig = mergeShellEnvPolicyExclude(nextConfig, excludedVar[1] ?? "");
+    }
+  }
   if (tables.length === 0) {
-    return config;
+    return nextConfig;
   }
   return appendCodexConfigSection(
-    config,
+    nextConfig,
     `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
 }

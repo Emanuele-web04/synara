@@ -610,11 +610,14 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             a.thread_id AS thread_id,
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
-            CASE
-              WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
-              THEN COALESCE(json_extract(th.model_selection_json, '$.provider'), 'unknown')
-              ELSE 'unknown'
-            END AS provider,
+            COALESCE(
+              json_extract(a.payload_json, '$.provider'),
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.provider')
+              END,
+              'unknown'
+            ) AS provider,
             CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
             a.sequence AS sequence,
             a.created_at AS created_at,

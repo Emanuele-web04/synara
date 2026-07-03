@@ -7334,8 +7334,12 @@ export default function ChatView({
       });
       turnStartSucceeded = true;
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && selectedModelSelectionForSend.provider !== "codex") {
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const liveProviderForSteerGate =
+        activeThread?.session?.provider ?? selectedModelSelectionForSend.provider;
+      if (dispatchMode === "steer" && liveProviderForSteerGate !== "codex") {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,
@@ -7746,8 +7750,12 @@ export default function ChatView({
         createdAt: messageCreatedAt,
       });
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
-      // queued auto-dispatch through that gap so it can't race the steer.
-      if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
+      // queued auto-dispatch through that gap so it can't race the steer. The
+      // live session provider decides the interrupt path server-side, so the
+      // gate keys off it rather than the requested model selection.
+      const livePlanProviderForSteerGate =
+        activeThread?.session?.provider ?? modelSelectionForPlanDispatch.provider;
+      if (dispatchMode === "steer" && livePlanProviderForSteerGate !== "codex") {
         setQueuedSteerGate({
           sawInterruptGap: false,
           gapStartedAt: null,

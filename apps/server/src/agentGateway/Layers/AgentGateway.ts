@@ -465,8 +465,13 @@ export const makeAgentGateway = Effect.gen(function* () {
           const baseBranchArg = readStringArg(args, "baseBranch");
           // A worktree-isolated caller forks from its own branch by default,
           // not from whatever the shared checkout happens to have checked
-          // out — the worker should continue the caller's line of work.
-          const callerBranch = callerIsolatedInWorktree ? (caller.branch ?? null) : null;
+          // out — the worker should continue the caller's line of work. Only
+          // within the caller's own project: the branch name is meaningless
+          // (or worse, collides) in another project's repository.
+          const callerBranch =
+            callerIsolatedInWorktree && caller.projectId === projectId
+              ? (caller.branch ?? null)
+              : null;
           const baseBranch =
             baseBranchArg ??
             callerBranch ??

@@ -3,6 +3,7 @@ import { assert, describe, it } from "@effect/vitest";
 import {
   appendCodexConfigSection,
   extractManagedCodexConfigSection,
+  mergeShellEnvPolicyExclude,
   SYNARA_MANAGED_CODEX_CONFIG_BEGIN,
   SYNARA_MANAGED_CODEX_CONFIG_END,
 } from "../codexProcessEnv.ts";
@@ -41,6 +42,33 @@ describe("agent gateway MCP injection", () => {
 
     const reappended = appendCodexConfigSection(appended, section);
     assert.equal(reappended.split("[mcp_servers.synara]").length, 2);
+  });
+
+  it("merges the token exclusion into a user-defined shell environment policy", () => {
+    const withExclude = [
+      "[shell_environment_policy]",
+      'exclude = ["AWS_*"]',
+      "",
+      "[model]",
+      'name = "gpt-5.5"',
+    ].join("\n");
+    const merged = mergeShellEnvPolicyExclude(withExclude, SYNARA_AGENT_GATEWAY_TOKEN_ENV);
+    assert.include(merged, `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}", "AWS_*"]`);
+
+    // Idempotent: the var is not added twice.
+    assert.equal(mergeShellEnvPolicyExclude(merged, SYNARA_AGENT_GATEWAY_TOKEN_ENV), merged);
+
+    // A policy table without an exclude key gains one.
+    const withoutExclude = ["[shell_environment_policy]", 'inherit = "core"'].join("\n");
+    const gained = mergeShellEnvPolicyExclude(withoutExclude, SYNARA_AGENT_GATEWAY_TOKEN_ENV);
+    assert.include(gained, `exclude = ["${SYNARA_AGENT_GATEWAY_TOKEN_ENV}"]`);
+    assert.include(gained, 'inherit = "core"');
+
+    // No policy table: unchanged (the managed section appends its own).
+    assert.equal(
+      mergeShellEnvPolicyExclude('[model]\nname = "gpt-5.5"', SYNARA_AGENT_GATEWAY_TOKEN_ENV),
+      '[model]\nname = "gpt-5.5"',
+    );
   });
 
   it("round-trips the managed section through the overlay markers", () => {

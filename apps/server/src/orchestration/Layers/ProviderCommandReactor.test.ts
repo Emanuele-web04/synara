@@ -1959,6 +1959,78 @@ describe("ProviderCommandReactor", () => {
     expect(harness.sendTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("queues a child-thread turn while the shared parent session runs and drains it on settle", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.makeUnsafe("cmd-child-thread-create"),
+        threadId: ThreadId.makeUnsafe("thread-child"),
+        projectId: asProjectId("project-1"),
+        parentThreadId: ThreadId.makeUnsafe("thread-1"),
+        title: "Child",
+        modelSelection: { provider: "codex", model: "gpt-5-codex" },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+
+    // The child shares the parent's provider session, which is mid-turn.
+    harness.setRuntimeSessionTurnState({
+      threadId: "thread-1",
+      status: "running",
+      activeTurnId: asTurnId("turn-parent-running"),
+    });
+    harness.sendTurn.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-child-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-child"),
+        message: {
+          messageId: asMessageId("msg-child-queued"),
+          role: "user",
+          text: "child follow-up",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await harness.drain();
+    // A raw child-id session lookup would miss the parent's live turn and
+    // dispatch immediately, overlapping the shared provider session.
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+    await harness.emitRuntimeEvent({
+      type: "turn.completed",
+      eventId: asEventId("evt-parent-turn-completed"),
+      provider: "codex",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      createdAt: new Date().toISOString(),
+      turnId: asTurnId("turn-parent-running"),
+      payload: {
+        state: "completed",
+      },
+      providerRefs: {},
+    } as ProviderRuntimeEvent);
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.makeUnsafe("thread-child"),
+      input: "child follow-up",
+    });
+  });
+
   it("promotes a queued turn immediately when the provider turn already settled", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

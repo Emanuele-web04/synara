@@ -504,10 +504,15 @@ const make = Effect.gen(function* () {
   // directions (queueing after the turn already settled, or dispatching while
   // a turn is still live). Adapters clear `activeTurnId` synchronously with
   // emitting `turn.completed`/`turn.aborted`, so this check is authoritative.
+  // Child subagent threads share their parent's provider session, so the
+  // lookup must resolve to the session-owning thread — a raw child-id lookup
+  // would always miss and drain queued child messages into a live turn.
   const hasLiveProviderTurn = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const providerThread = yield* resolveProviderSessionThread(threadId);
+    const sessionThreadId = providerThread?.id ?? threadId;
     const session = yield* providerService
       .listSessions()
-      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === threadId)));
+      .pipe(Effect.map((sessions) => sessions.find((entry) => entry.threadId === sessionThreadId)));
     return session?.status === "running" && session.activeTurnId !== undefined;
   });
 
@@ -1592,6 +1597,20 @@ const make = Effect.gen(function* () {
 
   const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
     yield* drainQueuedTurnsForThread(event.threadId);
+    // Child subagent threads queue under their own id but share the parent's
+    // provider session, and terminal runtime events carry the session-owning
+    // thread id — drain child queues bound to this session too.
+    for (const queuedThreadId of [...queuedTurnStartsByThread.keys()]) {
+      if (queuedThreadId === (event.threadId as string)) {
+        continue;
+      }
+      const providerThread = yield* resolveProviderSessionThread(
+        ThreadId.makeUnsafe(queuedThreadId),
+      );
+      if (providerThread !== null && providerThread.id === event.threadId) {
+        yield* drainQueuedTurnsForThread(ThreadId.makeUnsafe(queuedThreadId));
+      }
+    }
   });
 
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {

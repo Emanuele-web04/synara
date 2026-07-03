@@ -613,7 +613,10 @@ function buildContextWindowActivityPayload(
   if (!hasTokenUsage && !hasPercentUsage && !hasKnownWindow) {
     return undefined;
   }
-  return toActivityPayload(usage);
+  // Stamp the emitting provider so token stats can attribute usage to the
+  // provider that actually processed the turn, not the thread's persisted
+  // model selection (which can drift, e.g. across future per-turn providers).
+  return toActivityPayload({ ...usage, provider: event.provider });
 }
 
 function asPositiveFiniteNumber(value: unknown): number | undefined {
