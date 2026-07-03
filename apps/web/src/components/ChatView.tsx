@@ -90,6 +90,7 @@ import {
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { useRefreshProviderStatusesNow } from "~/hooks/useProviderStatusRefresh";
+import { SINGLE_CHAT_PANE_SCOPE_ID } from "~/lib/chatPaneScope";
 import {
   formatComposerMentionToken,
   filterPromptProviderMentionReferences,
@@ -429,7 +430,7 @@ import {
   ComposerLocalDirectoryMenu,
   type ComposerLocalDirectoryMenuHandle,
 } from "./chat/ComposerLocalDirectoryMenu";
-import { ComposerPendingApprovalActions } from "./chat/ComposerPendingApprovalActions";
+import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerExtrasMenu } from "./chat/ComposerExtrasMenu";
 import { ContextWindowMeter } from "./chat/ContextWindowMeter";
 import { ComposerInputBanners } from "./chat/ComposerInputBanners";
@@ -455,7 +456,6 @@ import {
   COMPOSER_INPUT_SURFACE_CLASS_NAME,
   COMPOSER_COLUMN_FRAME_CLASS_NAME,
   COMPOSER_EDITOR_PADDING_CLASS_NAME,
-  COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME,
   COMPOSER_FOOTER_ROW_CLASS_NAME,
   COMPOSER_MUTED_ACCENT_TEXT_CLASS_NAME,
   CHAT_BACKGROUND_CLASS_NAME,
@@ -907,7 +907,7 @@ function makeAutomationSetupBubble(role: "user" | "assistant", text: string): Ch
 
 export default function ChatView({
   threadId,
-  paneScopeId = "single",
+  paneScopeId = SINGLE_CHAT_PANE_SCOPE_ID,
   surfaceMode = "single",
   presentationMode = "default",
   isFocusedPane = true,
@@ -9678,11 +9678,20 @@ export default function ChatView({
                 cwd={threadWorkspaceCwd ?? undefined}
                 attachedToPrevious={showComposerLiveChangesHeader || showComposerActiveTaskListCard}
               />
-              {/* Pending user-input questions render as a detached card floating just
-                  above the composer (padding gives the measured gap), instead of a
-                  banner fused into the composer surface. Approvals still take over the
-                  composer, so suppress the card while one is active. */}
-              {!activePendingApproval && pendingUserInputs.length > 0 ? (
+              {/* Pending approvals and AskUserQuestion prompts both render as a detached
+                  card floating just above the composer (padding gives the measured gap),
+                  instead of a banner fused into the composer surface. An approval takes
+                  precedence and suppresses the question card while one is active. */}
+              {activePendingApproval ? (
+                <div className="pb-2">
+                  <ComposerPendingApprovalPanel
+                    approval={activePendingApproval}
+                    pendingCount={pendingApprovals.length}
+                    isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
+                    onRespond={onRespondToApproval}
+                  />
+                </div>
+              ) : pendingUserInputs.length > 0 ? (
                 <div className="pb-2">
                   <ComposerPendingUserInputPanel
                     pendingUserInputs={pendingUserInputs}
@@ -9713,10 +9722,11 @@ export default function ChatView({
               >
                 <ComposerInputBanners
                   roundedTopReset={false}
-                  activeApproval={activePendingApproval}
-                  pendingApprovalCount={pendingApprovals.length}
                   planFollowUp={
-                    pendingUserInputs.length === 0 && showPlanFollowUpPrompt && activeProposedPlan
+                    !activePendingApproval &&
+                    pendingUserInputs.length === 0 &&
+                    showPlanFollowUpPrompt &&
+                    activeProposedPlan
                       ? {
                           id: activeProposedPlan.id,
                           title: proposedPlanTitle(activeProposedPlan.planMarkdown) ?? null,
@@ -9724,6 +9734,7 @@ export default function ChatView({
                       : null
                   }
                   automationSetup={
+                    !activePendingApproval &&
                     pendingUserInputs.length === 0 &&
                     pendingAutomationConversation &&
                     pendingAutomationConversation.threadId === threadId
@@ -9831,16 +9842,10 @@ export default function ChatView({
                     disabled={isComposerEditorDisabled}
                   />
                 </div>
-                {/* Bottom toolbar */}
-                {activePendingApproval ? (
-                  <div className={COMPOSER_FOOTER_APPROVAL_ROW_CLASS_NAME}>
-                    <ComposerPendingApprovalActions
-                      requestId={activePendingApproval.requestId}
-                      isResponding={respondingRequestIds.includes(activePendingApproval.requestId)}
-                      onRespondToApproval={onRespondToApproval}
-                    />
-                  </div>
-                ) : (
+                {/* Bottom toolbar — hidden while an approval takes over the composer,
+                    since the approve/decline actions live in the detached approval card
+                    floating above (see ComposerPendingApprovalPanel). */}
+                {activePendingApproval ? null : (
                   <div
                     data-chat-composer-footer="true"
                     className={cn(
@@ -9986,7 +9991,7 @@ export default function ChatView({
                         >
                           <span
                             aria-hidden="true"
-                            className="block size-2 rounded-[2px] bg-current"
+                            className="block size-2 rounded-[1px] bg-current"
                           />
                         </Button>
                       ) : pendingUserInputs.length === 0 &&

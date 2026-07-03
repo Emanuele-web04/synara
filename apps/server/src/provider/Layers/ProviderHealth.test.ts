@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ServerProviderStatus } from "@t3tools/contracts";
 import { DEFAULT_SERVER_SETTINGS, ServerProviderUpdateError } from "@t3tools/contracts";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, Fiber, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -286,7 +286,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       }),
     );
 
-    it.effect("publishes ready status when a disabled provider is re-enabled", () =>
+    it.effect("projects cached ready status when a disabled provider is re-enabled", () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
@@ -302,11 +302,13 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           provider: cachedReadyCodexStatus,
         });
 
+        let spawnCount = 0;
         const layer = ProviderHealthLive.pipe(
           Layer.provideMerge(ServerSettingsService.layerTest(allProvidersDisabledSettings)),
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
           Layer.provideMerge(
             mockSpawnerLayer((args) => {
+              spawnCount += 1;
               const joined = args.join(" ");
               if (joined === "--version") {
                 return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
@@ -328,17 +330,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(disabledCodex?.available, false);
           assert.strictEqual(disabledCodex?.message, "Provider is disabled in Synara settings.");
 
-          const enabledCodexFiber = yield* providerHealth.streamChanges.pipe(
-            Stream.map((statuses) => statuses.find((status) => status.provider === "codex")),
-            Stream.filter(
-              (status): status is ServerProviderStatus =>
-                status !== undefined &&
-                status.available === true &&
-                status.authStatus === "authenticated",
-            ),
-            Stream.runHead,
-            Effect.forkChild,
-          );
           yield* serverSettings.updateSettings({
             providers: {
               codex: {
@@ -347,27 +338,12 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             },
           });
 
-          const streamedCodex = yield* Fiber.join(enabledCodexFiber).pipe(
-            Effect.timeoutOption(2_000),
-          );
-          assert.strictEqual(streamedCodex._tag, "Some");
-          if (streamedCodex._tag !== "Some") {
-            return;
-          }
-          assert.strictEqual(streamedCodex.value._tag, "Some");
-          if (streamedCodex.value._tag !== "Some") {
-            return;
-          }
-          assert.notStrictEqual(
-            streamedCodex.value.value.message,
-            "Provider is disabled in Synara settings.",
-          );
-
           const currentStatuses = yield* providerHealth.getStatuses;
           const currentCodex = currentStatuses.find((status) => status.provider === "codex");
           assert.strictEqual(currentCodex?.available, true);
           assert.strictEqual(currentCodex?.authStatus, "authenticated");
           assert.notStrictEqual(currentCodex?.message, "Provider is disabled in Synara settings.");
+          assert.strictEqual(spawnCount, 0);
         }).pipe(Effect.provide(layer));
       }),
     );
@@ -397,6 +373,36 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(error.provider, "kilo");
         assert.strictEqual(error.reason, "Provider is disabled in Synara settings.");
       }).pipe(Effect.provide(disabledProviderHealthLayer)),
+    );
+  });
+
+  describe("startup refresh behavior", () => {
+    it.effect("serves cached statuses without spawning provider CLIs on layer startup", () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "provider-health-no-boot-refresh-",
+        });
+        let spawnCount = 0;
+        const layer = ProviderHealthLive.pipe(
+          Layer.provideMerge(ServerSettingsService.layerTest(DEFAULT_SERVER_SETTINGS)),
+          Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
+          Layer.provideMerge(
+            mockSpawnerLayer(() => {
+              spawnCount += 1;
+              return { stdout: "", stderr: "", code: 0 };
+            }),
+          ),
+        );
+
+        const statuses = yield* Effect.gen(function* () {
+          const providerHealth = yield* ProviderHealth;
+          return yield* providerHealth.getStatuses;
+        }).pipe(Effect.provide(layer));
+
+        assert.deepStrictEqual(statuses, []);
+        assert.strictEqual(spawnCount, 0);
+      }),
     );
   });
 
