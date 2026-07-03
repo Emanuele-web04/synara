@@ -368,6 +368,7 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
 }
 
 interface MessagesTimelineProps {
+  activeThreadId: string;
   hasMessages: boolean;
   isWorking: boolean;
   activeTurnInProgress: boolean;
@@ -433,6 +434,7 @@ interface MessagesTimelineProps {
 }
 
 export const MessagesTimeline = memo(function MessagesTimeline({
+  activeThreadId,
   hasMessages,
   isWorking,
   activeTurnInProgress,
@@ -973,9 +975,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div>
               <div className="space-y-0.5">
                 {visibleEntries.map((workEntry) => (
-                  <SimpleWorkEntryRow
-                    key={`work-row:${workEntry.id}`}
-                    workEntry={workEntry}
+                    <SimpleWorkEntryRow
+                      key={`work-row:${workEntry.id}`}
+                      parentThreadId={activeThreadId}
+                      workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}
@@ -1351,6 +1354,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     {display.visibleRenderableToolEntries.map((workEntry) => (
                       <SimpleWorkEntryRow
                         key={`${placement}-tool-row:${row.message.id}:${workEntry.id}`}
+                        parentThreadId={activeThreadId}
                         workEntry={workEntry}
                         chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                         textFontSizePx={normalizedChatFontSizePx}
@@ -1389,6 +1393,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   {display.statusEntries.map((workEntry) => (
                     <SimpleWorkEntryRow
                       key={`${placement}-status-row:${row.message.id}:${workEntry.id}`}
+                      parentThreadId={activeThreadId}
                       workEntry={workEntry}
                       chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                       textFontSizePx={normalizedChatFontSizePx}
@@ -1409,6 +1414,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             item.kind === "work" ? (
               <SimpleWorkEntryRow
                 key={`${keyPrefix}:work:${row.message.id}:${item.id}`}
+                parentThreadId={activeThreadId}
                 workEntry={item.entry}
                 chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                 textFontSizePx={normalizedChatFontSizePx}
@@ -2929,6 +2935,7 @@ function ToolRowTooltip(props: { content: ReactNode; children: ReactElement }) {
 }
 
 const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
+  parentThreadId: string;
   workEntry: TimelineWorkEntry;
   chatMetaFontSizePx: number;
   textFontSizePx?: number;
@@ -2944,6 +2951,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   onOpenAutomation?: (automationId: string) => void;
 }) {
   const {
+    parentThreadId,
     workEntry,
     chatMetaFontSizePx,
     textFontSizePx = chatMetaFontSizePx,
@@ -3173,6 +3181,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   subagent.statusLabel ??
                   humanizeSubagentStatus(subagent.rawStatus, subagent.isActive);
                 const canOpenThread = Boolean(onOpenThread);
+                const targetThreadId =
+                  subagent.resolvedThreadId ??
+                  `subagent:${parentThreadId}:${subagent.providerThreadId ?? subagent.threadId}`;
                 return (
                   <div
                     key={`${workEntry.id}:${subagent.threadId}`}
@@ -3243,11 +3254,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                             : "cursor-default opacity-50",
                         )}
                         disabled={!canOpenThread}
-                        onClick={() =>
-                          onOpenThread?.(
-                            ThreadId.makeUnsafe(subagent.resolvedThreadId ?? subagent.threadId),
-                          )
-                        }
+                        onClick={() => onOpenThread?.(ThreadId.makeUnsafe(targetThreadId))}
                       >
                         Open thread
                       </button>

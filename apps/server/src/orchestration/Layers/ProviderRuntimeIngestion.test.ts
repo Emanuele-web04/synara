@@ -4166,6 +4166,73 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("imports provider user-message lifecycle events into subagent child threads", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-child-user-message"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("pi-subagent-prompt-child-provider-1"),
+      providerRefs: {
+        providerThreadId: "child-provider-1",
+        providerParentThreadId: "parent-provider-1",
+      },
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "Subagent prompt",
+        detail: "Run a deterministic child-thread prompt smoke test.",
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-1" &&
+        entry.messages.some(
+          (message: { role: string; text: string }) =>
+            message.role === "user" &&
+            message.text === "Run a deterministic child-thread prompt smoke test.",
+        ),
+      2000,
+      asThreadId("subagent:thread-1:child-provider-1"),
+    );
+
+    expect(childThread.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
+      { role: "user", text: "Run a deterministic child-thread prompt smoke test." },
+    ]);
+  });
+
+  it("does not import parent-thread provider user-message lifecycle events", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-parent-user-message"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("parent-prompt-1"),
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "User message",
+        detail: "This parent prompt should not be imported a second time.",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const parentThread = readModel.threads.find((entry) => entry.id === "thread-1");
+
+    expect(parentThread?.messages).toEqual([]);
+  });
+
   it("handles collab receiver and child provider refs on the same event without duplicate thread creation", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

@@ -289,6 +289,7 @@ export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 export const ProviderListAgentsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  agentDir: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;

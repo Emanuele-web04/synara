@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 import type {
@@ -16,7 +17,9 @@ import {
   ApprovalRequestId,
   type ChatAttachment,
   EventId,
+  type ProviderAgentDescriptor,
   type ProviderComposerCapabilities,
+  type ProviderListAgentsResult,
   type ProviderListCommandsResult,
   type ProviderListModelsResult,
   type ProviderListSkillsResult,
@@ -45,6 +48,7 @@ import { PiAdapter, type PiAdapterShape } from "../Services/PiAdapter.ts";
 import type { ProviderThreadSnapshot } from "../Services/ProviderAdapter.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { classifyPiTurnFailure } from "../piTurnFailure.ts";
+import { listPiSubagentDefinitions } from "../piSubagentDefinitions.ts";
 import { clampUsagePercent, nonNegativeFiniteNumber, positiveFiniteNumber } from "../tokenUsage.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -70,6 +74,8 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
   "medium",
   "high",
 ]);
+const DEFAULT_PI_SUBAGENT_PI_COMMAND = "pi";
+const MAX_PI_SUBAGENT_SESSION_TRANSCRIPT_BYTES = 1_000_000;
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
@@ -81,12 +87,14 @@ interface PiSessionContext {
   runtime: PiAgentRuntime;
   modelRegistry: PiModelRegistry;
   session: ProviderSession;
+  agentDir: string;
   turns: PiStoredTurn[];
   activeTurnId: TurnId | undefined;
   activeAssistantItemId: RuntimeItemId | undefined;
   activeReasoningItemId: RuntimeItemId | undefined;
   activeToolItems: Map<string, PiTrackedToolCall>;
   pendingUserInputs: Map<ApprovalRequestId, PiPendingUserInput>;
+  emittedSubagentSessionTranscripts: Set<string>;
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
@@ -103,7 +111,12 @@ interface PiTrackedToolCall {
   readonly toolName: string;
   readonly args: unknown;
   readonly itemId: RuntimeItemId;
-  readonly itemType: "command_execution" | "file_change" | "dynamic_tool_call" | "web_search";
+  readonly itemType:
+    | "command_execution"
+    | "file_change"
+    | "dynamic_tool_call"
+    | "collab_agent_tool_call"
+    | "web_search";
 }
 
 interface PiPendingUserInput {
@@ -130,6 +143,13 @@ function toMessage(cause: unknown, fallback: string): string {
 function trimToUndefined(value: string | null | undefined): string | undefined {
   const trimmed = typeof value === "string" ? value.trim() : "";
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export function ensurePiSubagentChildLauncherEnv(
+  env: Pick<NodeJS.ProcessEnv, "PI_SUBAGENT_PI_COMMAND"> = process.env,
+): void {
+  if (trimToUndefined(env.PI_SUBAGENT_PI_COMMAND)) return;
+  env.PI_SUBAGENT_PI_COMMAND = DEFAULT_PI_SUBAGENT_PI_COMMAND;
 }
 
 function isPiThinkingLevel(value: string | null | undefined): value is ThinkingLevel {
@@ -416,6 +436,110 @@ function textFromContent(content: string | (TextContent | ImageContent)[]): stri
     .join("\n\n");
 }
 
+function timestampFromUnknown(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim().length > 0) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return new Date(value).toISOString();
+  }
+  return undefined;
+}
+
+function parseJsonLineRecord(line: string): Record<string, unknown> | undefined {
+  if (!line.trim()) return undefined;
+  try {
+    return toolRecord(JSON.parse(line));
+  } catch {
+    return undefined;
+  }
+}
+
+export function makePiSubagentPromptItemId(providerThreadId: string): RuntimeItemId {
+  return RuntimeItemId.makeUnsafe(`pi-subagent-prompt-${providerThreadId}-${crypto.randomUUID()}`);
+}
+
+function readBoundedPiSubagentSessionFile(sessionFile: string): string | undefined {
+  try {
+    if (!existsSync(sessionFile)) return undefined;
+    if (statSync(sessionFile).size > MAX_PI_SUBAGENT_SESSION_TRANSCRIPT_BYTES) return undefined;
+    return readFileSync(sessionFile, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+function isInlineAgentAliasChar(char: string | undefined): boolean {
+  return typeof char === "string" && /[a-zA-Z0-9._-]/.test(char);
+}
+
+function isInlineAgentMentionBoundary(char: string | undefined): boolean {
+  return char === undefined || /\s/.test(char);
+}
+
+function readBalancedInlineTask(
+  text: string,
+  openParenIndex: number,
+): { task: string; end: number } | null {
+  let depth = 1;
+  let cursor = openParenIndex + 1;
+  while (cursor < text.length) {
+    const char = text[cursor];
+    if (char === "(") depth += 1;
+    else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return { task: text.slice(openParenIndex + 1, cursor).trim(), end: cursor + 1 };
+      }
+    }
+    cursor += 1;
+  }
+  return null;
+}
+
+function buildPiSubagentPrompt(
+  text: string,
+  agents: ReadonlyArray<ProviderAgentDescriptor>,
+): string {
+  if (agents.length === 0 || !text.includes("@")) return text;
+  const agentNames = new Set(agents.map((agent) => agent.name));
+  const directives: Array<{ alias: string; task: string }> = [];
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "@" || !isInlineAgentMentionBoundary(text[index - 1])) continue;
+    let aliasEnd = index + 1;
+    while (isInlineAgentAliasChar(text[aliasEnd])) aliasEnd += 1;
+    const alias = text.slice(index + 1, aliasEnd);
+    if (!agentNames.has(alias) || text[aliasEnd] !== "(") continue;
+    const taskMatch = readBalancedInlineTask(text, aliasEnd);
+    if (!taskMatch) continue;
+    directives.push({ alias, task: taskMatch.task });
+    index = taskMatch.end - 1;
+  }
+
+  if (directives.length === 0) return text;
+
+  const directiveLines = directives
+    .map(
+      (directive, index) =>
+        `${index + 1}. Launch the "${directive.alias}" subagent for this task:\n${directive.task}`,
+    )
+    .join("\n\n");
+
+  return [
+    "The user included inline Pi subagent directives in the form @agent(task).",
+    "Execute each directive explicitly with the subagent tool using the named agent below.",
+    "After delegated work completes or reports back, continue with the overall request and synthesize the results.",
+    "Do not echo the literal @agent(task) syntax back to the user unless it is directly relevant.",
+    "",
+    "Inline directives:",
+    directiveLines,
+    "",
+    "Original user prompt:",
+    text,
+  ].join("\n");
+}
+
 function toolRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -536,7 +660,150 @@ function toolEditEntries(args: unknown): ReadonlyArray<Record<string, unknown>> 
   return undefined;
 }
 
+function isPiSubagentTool(toolName: string): boolean {
+  return toolName === "subagent" || toolName === "subagent_resume";
+}
+
+function piSubagentReceiverAgents(input: {
+  readonly args: unknown;
+  readonly details: Record<string, unknown> | undefined;
+}): ReadonlyArray<Record<string, unknown>> {
+  const argsRecord = toolRecord(input.args);
+  const children = Array.isArray(argsRecord?.children) ? argsRecord.children : undefined;
+  if (children && children.length > 0) {
+    return children.flatMap((child, index) => {
+      const childRecord = toolRecord(child);
+      if (!childRecord) return [];
+      const detailsChildren = Array.isArray(input.details?.children) ? input.details.children : [];
+      const childDetails = toolRecord(detailsChildren[index]);
+      const providerThreadId = firstStringValue(childDetails, ["id", "threadId"]);
+      if (!providerThreadId) return [];
+      const agent = firstStringValue(childRecord, ["agent"]);
+      const name = firstStringValue(childRecord, ["name"]);
+      const title = firstStringValue(childRecord, ["title"]);
+      const model = firstStringValue(childRecord, ["model"]);
+      const task = firstStringValue(childRecord, ["task"]);
+      return [
+        {
+          threadId: providerThreadId,
+          ...(agent ? { agentId: agent, agentRole: agent } : {}),
+          ...(name ? { agentNickname: name } : title ? { agentNickname: title } : {}),
+          ...(model ? { model } : {}),
+          ...(task ? { prompt: task } : {}),
+        },
+      ];
+    });
+  }
+
+  const providerThreadId = firstStringValue(input.details, ["id", "threadId"]);
+  if (!providerThreadId) return [];
+  const agent = firstStringValue(input.details, ["agent"]);
+  const name = firstStringValue(input.details, ["name"]);
+  const title = firstStringValue(input.details, ["title"]);
+  const task = firstStringValue(input.details, ["task"]);
+  const model = firstStringValue(input.details, ["model"]);
+  return [
+    {
+      threadId: providerThreadId,
+      ...(agent ? { agentId: agent, agentRole: agent } : {}),
+      ...(name ? { agentNickname: name } : title ? { agentNickname: title } : {}),
+      ...(model ? { model } : {}),
+      ...(task ? { prompt: task } : {}),
+    },
+  ];
+}
+
+function piSubagentPromptText(args: unknown, details?: Record<string, unknown>): string | undefined {
+  const argsRecord = toolRecord(args);
+  return firstStringValue(argsRecord, ["task", "prompt", "message"]) ?? firstStringValue(details, ["task"]);
+}
+
+function isPiSubagentLaunchAcknowledgement(details: Record<string, unknown> | undefined): boolean {
+  const status = firstStringValue(details, ["status"]);
+  return (
+    status === "started" ||
+    status === "running" ||
+    status === "inProgress" ||
+    status === "in_progress"
+  );
+}
+
+function hasRenderablePiSubagentSessionEntry(entry: Record<string, unknown>): boolean {
+  if (entry.type !== "message") return false;
+  const message = toolRecord(entry.message);
+  const role = message?.role;
+  const content = Array.isArray(message?.content) ? message.content : [];
+  if (role === "assistant") {
+    return content.some((part) => {
+      const partRecord = toolRecord(part);
+      if (!partRecord) return false;
+      if (partRecord.type === "text") return typeof partRecord.text === "string" && partRecord.text.length > 0;
+      if (partRecord.type === "thinking") {
+        return typeof partRecord.thinking === "string" && partRecord.thinking.length > 0;
+      }
+      return partRecord.type === "toolCall" && firstStringValue(partRecord, ["id"]) !== undefined;
+    });
+  }
+  return role === "toolResult" && firstStringValue(message, ["toolCallId"]) !== undefined;
+}
+
+function piSubagentLifecycleItem(input: {
+  readonly toolName: string;
+  readonly args: unknown;
+  readonly receiverAgents: ReadonlyArray<Record<string, unknown>>;
+}): Record<string, unknown> {
+  const argsRecord = toolRecord(input.args);
+  const agent = firstStringValue(argsRecord, ["agent"]);
+  const name = firstStringValue(argsRecord, ["name"]);
+  const title = firstStringValue(argsRecord, ["title"]);
+  const task = firstStringValue(argsRecord, ["task", "prompt", "message"]);
+  const model = firstStringValue(argsRecord, ["model", "modelName", "model_name"]);
+  const children = Array.isArray(argsRecord?.children) ? argsRecord.children : undefined;
+  const childItems = children?.flatMap((child) => {
+    const childRecord = toolRecord(child);
+    if (!childRecord) return [];
+    const childAgent = firstStringValue(childRecord, ["agent"]);
+    const childName = firstStringValue(childRecord, ["name"]);
+    const childTitle = firstStringValue(childRecord, ["title"]);
+    const childTask = firstStringValue(childRecord, ["task", "prompt", "message"]);
+    const childModel = firstStringValue(childRecord, ["model", "modelName", "model_name"]);
+    return [
+      {
+        ...(childAgent ? { agent: childAgent, agentId: childAgent, agentRole: childAgent } : {}),
+        ...(childName ? { name: childName, agentNickname: childName } : {}),
+        ...(childTitle ? { title: childTitle } : {}),
+        ...(childTask ? { task: childTask, prompt: childTask } : {}),
+        ...(childModel ? { model: childModel } : {}),
+      },
+    ];
+  });
+
+  return {
+    type: "collabAgentToolCall",
+    tool: input.toolName,
+    toolName: input.toolName,
+    ...(input.args !== undefined ? { input: input.args, args: input.args, rawInput: input.args } : {}),
+    ...(agent ? { agent, agentId: agent, agentRole: agent } : {}),
+    ...(name ? { name, agentNickname: name } : {}),
+    ...(title ? { title } : {}),
+    ...(task ? { task, prompt: task } : {}),
+    ...(model ? { model } : {}),
+    ...(childItems && childItems.length > 0 ? { children: childItems } : {}),
+    ...(input.receiverAgents.length > 0
+      ? {
+          receiverAgents: input.receiverAgents,
+          receiverThreadIds: input.receiverAgents.flatMap((agent) =>
+            typeof agent.threadId === "string" ? [agent.threadId] : [],
+          ),
+        }
+      : {}),
+  };
+}
+
 function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
+  if (isPiSubagentTool(toolName)) {
+    return "collab_agent_tool_call";
+  }
   switch (toolName) {
     case "bash":
       return "command_execution";
@@ -552,6 +819,9 @@ function toolItemType(toolName: string): PiTrackedToolCall["itemType"] {
 }
 
 function toolTitle(toolName: string, args: unknown): string {
+  if (isPiSubagentTool(toolName)) {
+    return toolName === "subagent_resume" ? "Resume subagent" : "Subagent task";
+  }
   const command = toolName === "bash" ? toolCommand(args) : undefined;
   if (command) return command;
   const filePath = toolPath(args);
@@ -602,6 +872,25 @@ function toolLifecycleData(input: {
   };
 
   switch (toolName) {
+    case "subagent":
+    case "subagent_resume": {
+      const receiverAgents = piSubagentReceiverAgents({ args, details: outputDetails });
+      const item = piSubagentLifecycleItem({ toolName, args, receiverAgents });
+      return {
+        ...base,
+        kind: "subagent",
+        itemType: "collab_agent_tool_call",
+        item,
+        ...(receiverAgents.length > 0
+          ? {
+              receiverAgents,
+              receiverThreadIds: receiverAgents.flatMap((agent) =>
+                typeof agent.threadId === "string" ? [agent.threadId] : [],
+              ),
+            }
+          : {}),
+      };
+    }
     case "bash":
       return {
         ...base,
@@ -933,6 +1222,380 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           payload: input.cause ?? { message: input.message },
         },
       } satisfies ProviderRuntimeEvent);
+    };
+
+    const customMessageText = (content: unknown): string => {
+      if (typeof content === "string") return content;
+      if (!Array.isArray(content)) return "";
+      return textFromContent(content as (TextContent | ImageContent)[]);
+    };
+
+    const emitPiSubagentChildTranscript = (input: {
+      readonly context: PiSessionContext;
+      readonly providerThreadId: string;
+      readonly name?: string | undefined;
+      readonly promptText?: string | undefined;
+      readonly messageText: string;
+      readonly failed: boolean;
+      readonly raw: ProviderRuntimeEvent["raw"];
+    }): void => {
+      const childTurnId = TurnId.makeUnsafe(`pi-subagent-turn-${crypto.randomUUID()}`);
+      const assistantItemId = RuntimeItemId.makeUnsafe(
+        `pi-subagent-assistant-${crypto.randomUUID()}`,
+      );
+      const providerRefs = {
+        providerThreadId: input.providerThreadId,
+        providerParentThreadId: input.context.session.threadId,
+      };
+
+      if (input.promptText) {
+        offerRuntimeEvent({
+          ...makeEventBase(input.context, { includeTurnId: false }),
+          itemId: makePiSubagentPromptItemId(input.providerThreadId),
+          providerRefs,
+          type: "item.completed",
+          payload: {
+            itemType: "user_message",
+            status: "completed",
+            title: "Subagent prompt",
+            detail: input.promptText,
+          },
+          raw: input.raw,
+        } satisfies ProviderRuntimeEvent);
+      }
+
+      offerRuntimeEvent({
+        ...makeEventBase(input.context, { includeTurnId: false }),
+        turnId: childTurnId,
+        providerRefs,
+        type: "turn.started",
+        payload: {},
+        raw: input.raw,
+      } satisfies ProviderRuntimeEvent);
+      offerRuntimeEvent({
+        ...makeEventBase(input.context, { includeTurnId: false }),
+        turnId: childTurnId,
+        itemId: assistantItemId,
+        providerRefs,
+        type: "content.delta",
+        payload: { streamKind: "assistant_text", delta: input.messageText },
+        raw: input.raw,
+      } satisfies ProviderRuntimeEvent);
+      offerRuntimeEvent({
+        ...makeEventBase(input.context, { includeTurnId: false }),
+        turnId: childTurnId,
+        itemId: assistantItemId,
+        providerRefs,
+        type: "item.completed",
+        payload: {
+          itemType: "assistant_message",
+          status: input.failed ? "failed" : "completed",
+          title: input.name ? `Subagent ${input.name}` : "Subagent",
+          detail: input.messageText,
+        },
+        raw: input.raw,
+      } satisfies ProviderRuntimeEvent);
+      offerRuntimeEvent({
+        ...makeEventBase(input.context, { includeTurnId: false }),
+        turnId: childTurnId,
+        providerRefs,
+        type: "turn.completed",
+        payload: {
+          state: input.failed ? "failed" : "completed",
+          stopReason: null,
+          ...(input.failed ? { errorMessage: "Subagent failed" } : {}),
+        },
+        raw: input.raw,
+      } satisfies ProviderRuntimeEvent);
+    };
+
+    const emitPiSubagentSessionTranscript = (input: {
+      readonly context: PiSessionContext;
+      readonly providerThreadId: string;
+      readonly sessionFile: string;
+      readonly promptText?: string | undefined;
+      readonly raw: ProviderRuntimeEvent["raw"];
+    }): boolean => {
+      const sessionContent = readBoundedPiSubagentSessionFile(input.sessionFile);
+      if (sessionContent === undefined) {
+        return false;
+      }
+
+      const transcriptKey = `${input.providerThreadId}\u0000${input.sessionFile}`;
+      if (input.context.emittedSubagentSessionTranscripts.has(transcriptKey)) {
+        return true;
+      }
+
+      const childTurnId = TurnId.makeUnsafe(`pi-subagent-turn-${crypto.randomUUID()}`);
+      const providerRefs = {
+        providerThreadId: input.providerThreadId,
+        providerParentThreadId: input.context.session.threadId,
+      };
+      const sessionLines = sessionContent.split(/\r?\n/);
+      const sessionEntries = sessionLines.flatMap((line) => {
+        const entry = parseJsonLineRecord(line);
+        return entry ? [entry] : [];
+      });
+      if (!sessionEntries.some(hasRenderablePiSubagentSessionEntry)) {
+        return false;
+      }
+      input.context.emittedSubagentSessionTranscripts.add(transcriptKey);
+
+      const sessionStartedAt = sessionLines
+        .map((line) => timestampFromUnknown(parseJsonLineRecord(line)?.timestamp))
+        .find((timestamp) => timestamp !== undefined);
+      const pendingTools = new Map<
+        string,
+        { toolName: string; args: unknown; itemId: RuntimeItemId }
+      >();
+      let emittedRenderableEvent = false;
+
+      const transcriptRaw = {
+        ...(input.raw && typeof input.raw === "object" ? input.raw : {}),
+        sessionFile: input.sessionFile,
+      } as ProviderRuntimeEvent["raw"];
+
+      const childBase = (createdAt?: string) => ({
+        ...makeEventBase(input.context, { includeTurnId: false }),
+        ...(createdAt ? { createdAt } : {}),
+        turnId: childTurnId,
+        providerRefs,
+      });
+
+      if (input.promptText) {
+        offerRuntimeEvent({
+          ...makeEventBase(input.context, { includeTurnId: false }),
+          ...(sessionStartedAt ? { createdAt: sessionStartedAt } : {}),
+          itemId: makePiSubagentPromptItemId(input.providerThreadId),
+          providerRefs,
+          type: "item.completed",
+          payload: {
+            itemType: "user_message",
+            status: "completed",
+            title: "Subagent prompt",
+            detail: input.promptText,
+          },
+          raw: transcriptRaw,
+        } satisfies ProviderRuntimeEvent);
+      }
+
+      offerRuntimeEvent({
+        ...childBase(sessionStartedAt),
+        type: "turn.started",
+        payload: {},
+        raw: transcriptRaw,
+      } satisfies ProviderRuntimeEvent);
+
+      for (const entry of sessionEntries) {
+        if (entry?.type !== "message") continue;
+        const message = toolRecord(entry.message);
+        const role = message?.role;
+        const content = Array.isArray(message?.content) ? message.content : [];
+        const createdAt = timestampFromUnknown(entry.timestamp) ?? timestampFromUnknown(message?.timestamp);
+
+        if (role === "assistant") {
+          for (const [index, part] of content.entries()) {
+            const partRecord = toolRecord(part);
+            if (!partRecord) continue;
+            if (partRecord.type === "text" && typeof partRecord.text === "string") {
+              const text = partRecord.text;
+              if (text.length === 0) continue;
+              const itemId = RuntimeItemId.makeUnsafe(
+                `pi-subagent-session-assistant-${entry.id ?? crypto.randomUUID()}-${index}`,
+              );
+              emittedRenderableEvent = true;
+              offerRuntimeEvent({
+                ...childBase(createdAt),
+                itemId,
+                type: "content.delta",
+                payload: { streamKind: "assistant_text", delta: text },
+                raw: transcriptRaw,
+              } satisfies ProviderRuntimeEvent);
+              offerRuntimeEvent({
+                ...childBase(createdAt),
+                itemId,
+                type: "item.completed",
+                payload: {
+                  itemType: "assistant_message",
+                  status: "completed",
+                  title: "Assistant message",
+                  detail: text,
+                },
+                raw: transcriptRaw,
+              } satisfies ProviderRuntimeEvent);
+              continue;
+            }
+            if (partRecord.type === "thinking" && typeof partRecord.thinking === "string") {
+              const thinking = partRecord.thinking;
+              if (thinking.length === 0) continue;
+              const itemId = RuntimeItemId.makeUnsafe(
+                `pi-subagent-session-thinking-${entry.id ?? crypto.randomUUID()}-${index}`,
+              );
+              emittedRenderableEvent = true;
+              offerRuntimeEvent({
+                ...childBase(createdAt),
+                itemId,
+                type: "content.delta",
+                payload: { streamKind: "reasoning_text", delta: thinking },
+                raw: transcriptRaw,
+              } satisfies ProviderRuntimeEvent);
+              offerRuntimeEvent({
+                ...childBase(createdAt),
+                itemId,
+                type: "item.completed",
+                payload: {
+                  itemType: "reasoning",
+                  status: "completed",
+                  title: "Reasoning",
+                  detail: thinking,
+                },
+                raw: transcriptRaw,
+              } satisfies ProviderRuntimeEvent);
+              continue;
+            }
+            if (partRecord.type === "toolCall") {
+              const toolCallId = firstStringValue(partRecord, ["id"]);
+              const toolName = firstStringValue(partRecord, ["name"]) ?? "tool";
+              if (!toolCallId) continue;
+              const args = partRecord.arguments;
+              const itemId = RuntimeItemId.makeUnsafe(`pi-subagent-session-tool-${toolCallId}`);
+              pendingTools.set(toolCallId, { toolName, args, itemId });
+              emittedRenderableEvent = true;
+              offerRuntimeEvent({
+                ...childBase(createdAt),
+                itemId,
+                providerRefs: {
+                  ...providerRefs,
+                  providerItemId: ProviderItemId.makeUnsafe(toolCallId),
+                },
+                type: "item.started",
+                payload: {
+                  itemType: toolItemType(toolName),
+                  status: "inProgress",
+                  title: toolTitle(toolName, args),
+                  data: toolLifecycleData({ toolCallId, toolName, args }),
+                },
+                raw: transcriptRaw,
+              } satisfies ProviderRuntimeEvent);
+            }
+          }
+          continue;
+        }
+
+        if (role === "toolResult") {
+          const toolCallId = firstStringValue(message, ["toolCallId"]);
+          if (!toolCallId) continue;
+          const pending = pendingTools.get(toolCallId);
+          const toolName = pending?.toolName ?? firstStringValue(message, ["toolName"]) ?? "tool";
+          const args = pending?.args;
+          const isError = message?.isError === true;
+          const result = { content };
+          const detail = textFromToolResult(result);
+          const itemId =
+            pending?.itemId ?? RuntimeItemId.makeUnsafe(`pi-subagent-session-tool-${toolCallId}`);
+          pendingTools.delete(toolCallId);
+          emittedRenderableEvent = true;
+          offerRuntimeEvent({
+            ...childBase(createdAt),
+            itemId,
+            providerRefs: {
+              ...providerRefs,
+              providerItemId: ProviderItemId.makeUnsafe(toolCallId),
+            },
+            type: "item.completed",
+            payload: {
+              itemType: toolItemType(toolName),
+              status: isError ? "failed" : "completed",
+              title: toolTitle(toolName, args),
+              ...(detail ? { detail } : {}),
+              data: toolLifecycleData({
+                toolCallId,
+                toolName,
+                args,
+                result,
+                isError,
+              }),
+            },
+            raw: transcriptRaw,
+          } satisfies ProviderRuntimeEvent);
+        }
+      }
+
+      offerRuntimeEvent({
+        ...childBase(),
+        type: "turn.completed",
+        payload: { state: "completed", stopReason: null },
+        raw: transcriptRaw,
+      } satisfies ProviderRuntimeEvent);
+
+      return emittedRenderableEvent;
+    };
+
+    const emitPiSubagentCustomMessage = (context: PiSessionContext, message: unknown): boolean => {
+      const record = toolRecord(message);
+      const customType = firstStringValue(record, ["customType"]);
+      if (customType !== "subagent_result" && customType !== "subagent_ping") return false;
+
+      const details = toolRecord(record?.details);
+      const providerThreadId =
+        firstStringValue(details, ["id", "paseoAgentId", "name"]) ??
+        `subagent-message-${crypto.randomUUID()}`;
+      const agent = firstStringValue(details, ["agent"]);
+      const name = firstStringValue(details, ["name"]);
+      const task = firstStringValue(details, ["task"]);
+      const status = firstStringValue(details, ["status"]);
+      const sessionFile = firstStringValue(details, ["sessionFile", "sessionPath", "session_file"]);
+      const promptText = task;
+      const failed = status === "failed" || status === "cancelled";
+      const messageText = customMessageText(record?.content);
+      const receiverAgent = {
+        threadId: providerThreadId,
+        ...(agent ? { agentId: agent, agentRole: agent } : {}),
+        ...(name ? { agentNickname: name } : {}),
+        ...(task ? { prompt: task } : {}),
+      };
+      const raw = {
+        source: "pi.sdk.event",
+        messageType: "message_end",
+        payload: { message },
+      } as const;
+
+      offerRuntimeEvent({
+        ...makeEventBase(context, { includeTurnId: false }),
+        itemId: RuntimeItemId.makeUnsafe(`pi-subagent-message-${crypto.randomUUID()}`),
+        type: "item.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: failed ? "failed" : "completed",
+          title: customType === "subagent_ping" ? "Subagent needs help" : "Subagent result",
+          ...(messageText ? { detail: messageText } : {}),
+          data: {
+            receiverThreadIds: [providerThreadId],
+            receiverAgents: [receiverAgent],
+            item: { receiverThreadIds: [providerThreadId], receiverAgents: [receiverAgent] },
+          },
+        },
+        raw,
+      } satisfies ProviderRuntimeEvent);
+
+      if (!messageText) return true;
+
+      const emittedSessionTranscript = sessionFile
+        ? emitPiSubagentSessionTranscript({ context, providerThreadId, sessionFile, promptText, raw })
+        : false;
+      if (!emittedSessionTranscript) {
+        emitPiSubagentChildTranscript({
+          context,
+          providerThreadId,
+          ...(name ? { name } : {}),
+          ...(promptText ? { promptText } : {}),
+          messageText,
+          failed,
+          raw,
+        });
+      }
+
+      return true;
     };
 
     const resolvePiExtensionUserInput = (
@@ -1328,6 +1991,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           } satisfies ProviderRuntimeEvent);
           return;
         case "turn_start":
+          if (!context.activeTurnId) {
+            const turnId = TurnId.makeUnsafe(crypto.randomUUID());
+            context.activeTurnId = turnId;
+            context.turns.push({ id: turnId, items: [] });
+            context.session = makeSessionSnapshot(context);
+          }
           offerRuntimeEvent({
             ...makeEventBase(context),
             type: "turn.started",
@@ -1341,6 +2010,9 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
           } satisfies ProviderRuntimeEvent);
+          return;
+        case "message_end":
+          if (emitPiSubagentCustomMessage(context, event.message)) return;
           return;
         case "message_update":
           handleMessageUpdate(context, event);
@@ -1422,6 +2094,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           };
           context.activeToolItems.delete(event.toolCallId);
           const detail = textFromToolResult(event.result);
+          const lifecycleData = toolLifecycleData({
+            toolCallId: event.toolCallId,
+            toolName: event.toolName,
+            args: tracked.args,
+            result: event.result,
+            isError: event.isError,
+          });
+          const raw = { source: "pi.sdk.event", messageType: event.type, payload: event } as const;
           recordItem(context, {
             type: "tool_call",
             status: event.isError ? "failed" : "completed",
@@ -1439,16 +2119,62 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               status: event.isError ? "failed" : "completed",
               title: toolTitle(event.toolName, tracked.args),
               ...(detail ? { detail } : {}),
-              data: toolLifecycleData({
-                toolCallId: event.toolCallId,
-                toolName: event.toolName,
-                args: tracked.args,
-                result: event.result,
-                isError: event.isError,
-              }),
+              data: lifecycleData,
             },
-            raw: { source: "pi.sdk.event", messageType: event.type, payload: event },
+            raw,
           } satisfies ProviderRuntimeEvent);
+          if (isPiSubagentTool(event.toolName) && detail) {
+            const outputDetails = toolRecord(toolRawOutput(event.result)?.details);
+            if (isPiSubagentLaunchAcknowledgement(outputDetails)) {
+              return;
+            }
+            const receiverAgents = piSubagentReceiverAgents({
+              args: tracked.args,
+              details: outputDetails,
+            });
+            const fallbackThreadId = firstStringValue(outputDetails, ["id", "threadId"]);
+            const sessionFile = firstStringValue(outputDetails, [
+              "sessionFile",
+              "sessionPath",
+              "session_file",
+            ]);
+            const promptText = piSubagentPromptText(tracked.args, outputDetails);
+            const transcriptTargets =
+              receiverAgents.length > 0
+                ? receiverAgents
+                : fallbackThreadId
+                  ? [{ threadId: fallbackThreadId }]
+                  : [];
+            for (const receiverAgent of transcriptTargets) {
+              const providerThreadId = firstStringValue(receiverAgent, ["threadId"]);
+              if (!providerThreadId) continue;
+              const emittedSessionTranscript = sessionFile
+                ? emitPiSubagentSessionTranscript({
+                    context,
+                    providerThreadId,
+                    sessionFile,
+                    promptText,
+                    raw,
+                  })
+                : false;
+              if (!emittedSessionTranscript) {
+                const childName = firstStringValue(receiverAgent, [
+                  "agentNickname",
+                  "name",
+                  "threadId",
+                ]);
+                emitPiSubagentChildTranscript({
+                  context,
+                  providerThreadId,
+                  ...(childName ? { name: childName } : {}),
+                  ...(promptText ? { promptText } : {}),
+                  messageText: detail,
+                  failed: event.isError,
+                  raw,
+                });
+              }
+            }
+          }
           return;
         }
         case "compaction_start": {
@@ -1613,6 +2339,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       Effect.gen(function* () {
         const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
         const piSdk = yield* loadPiSdk("session/start");
+        ensurePiSubagentChildLauncherEnv();
         const agentDir = makeAgentDir(input.providerOptions?.pi?.agentDir, piSdk);
         const sessionFile = extractResumeSessionFile(input.resumeCursor);
         const sessionManager = sessionFile
@@ -1676,12 +2403,14 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           runtime,
           modelRegistry,
           session,
+          agentDir,
           turns: [],
           activeTurnId: undefined,
           activeAssistantItemId: undefined,
           activeReasoningItemId: undefined,
           activeToolItems: new Map(),
           pendingUserInputs: new Map(),
+          emittedSubagentSessionTranscripts: new Set(),
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
@@ -1758,10 +2487,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         return session;
       });
 
-    const buildPromptPayload = (input: {
-      readonly input?: string | undefined;
-      readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
-    }) =>
+    const buildPromptPayload = (
+      context: PiSessionContext,
+      input: {
+        readonly input?: string | undefined;
+        readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
+      },
+    ) =>
       Effect.gen(function* () {
         const text =
           appendFileAttachmentsPromptBlock({
@@ -1770,6 +2502,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             attachmentsDir: serverConfig.attachmentsDir,
             include: "all-files",
           }) ?? "";
+        const piSubagentAgents = listPiSubagentDefinitions({
+          agentDir: context.agentDir,
+          cwd: context.session.cwd ?? serverConfig.cwd,
+        });
         const images = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>
@@ -1806,7 +2542,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           { concurrency: 1 },
         );
         return {
-          text,
+          text: buildPiSubagentPrompt(text, piSubagentAgents),
           images: images.filter((image): image is ImageContent => image !== undefined),
         };
       });
@@ -1847,7 +2583,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             context.runtime.session.setThinkingLevel(thinkingLevel);
           }
         }
-        const payload = yield* buildPromptPayload(input);
+        const payload = yield* buildPromptPayload(context, input);
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         context.activeTurnId = turnId;
         context.turns.push({ id: turnId, items: [] });
@@ -1925,7 +2661,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const steerTurn: NonNullable<PiAdapterShape["steerTurn"]> = (input) =>
       Effect.gen(function* () {
         const context = yield* requireSession(input.threadId);
-        const payload = yield* buildPromptPayload(input);
+        const payload = yield* buildPromptPayload(context, input);
         const turnId = context.activeTurnId ?? TurnId.makeUnsafe(crypto.randomUUID());
         if (!context.activeTurnId) {
           context.activeTurnId = turnId;
@@ -2159,6 +2895,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           }),
       });
 
+    const listAgents: NonNullable<PiAdapterShape["listAgents"]> = (input) =>
+      Effect.tryPromise({
+        try: async () => {
+          const piSdk = await loadPiCodingAgentModule();
+          const agentDir = makeAgentDir(input.agentDir, piSdk);
+          const cwd = trimToUndefined(input.cwd) ?? serverConfig.cwd;
+          return {
+            agents: listPiSubagentDefinitions({ agentDir, cwd }),
+            source: "pi.agents",
+            cached: false,
+          } satisfies ProviderListAgentsResult;
+        },
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "agent/list",
+            detail: toMessage(cause, "Failed to list Pi agents."),
+            cause,
+          }),
+      });
+
     const listSkills: NonNullable<PiAdapterShape["listSkills"]> = (input) =>
       Effect.tryPromise({
         try: async () => {
@@ -2329,6 +3086,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       compactThread,
       stopAll,
       listModels,
+      listAgents,
       listSkills,
       listCommands,
       getComposerCapabilities,

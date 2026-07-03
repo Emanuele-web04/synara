@@ -6,7 +6,9 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  ensurePiSubagentChildLauncherEnv,
   getPiSupportedThinkingOptions,
+  makePiSubagentPromptItemId,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
 } from "./PiAdapter";
@@ -83,5 +85,34 @@ describe("Pi extension UI helpers", () => {
     expect(PLAIN_PI_EXTENSION_THEME.fg("accent", "ready")).toBe("ready");
     expect(PLAIN_PI_EXTENSION_THEME.bold("done")).toBe("done");
     expect(PLAIN_PI_EXTENSION_THEME.getThinkingBorderColor("medium")("thinking")).toBe("thinking");
+  });
+});
+
+describe("Pi subagent child launcher env", () => {
+  it("defaults embedded subagent launches to the Pi CLI", () => {
+    const env: { PI_SUBAGENT_PI_COMMAND?: string } = {};
+
+    ensurePiSubagentChildLauncherEnv(env);
+
+    expect(env.PI_SUBAGENT_PI_COMMAND).toBe("pi");
+  });
+
+  it("preserves an explicit subagent launcher override", () => {
+    const env = { PI_SUBAGENT_PI_COMMAND: "custom-pi-wrapper pi" };
+
+    ensurePiSubagentChildLauncherEnv(env);
+
+    expect(env.PI_SUBAGENT_PI_COMMAND).toBe("custom-pi-wrapper pi");
+  });
+});
+
+describe("Pi subagent transcript helpers", () => {
+  it("uses distinct prompt item ids for repeated prompts to the same child thread", () => {
+    const first = makePiSubagentPromptItemId("child-provider-1");
+    const second = makePiSubagentPromptItemId("child-provider-1");
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^pi-subagent-prompt-child-provider-1-/);
+    expect(second).toMatch(/^pi-subagent-prompt-child-provider-1-/);
   });
 });

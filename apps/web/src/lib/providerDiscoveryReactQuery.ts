@@ -73,8 +73,13 @@ export const providerDiscoveryQueryKeys = {
   ) => ["provider-discovery", "models", provider, binaryPath, apiEndpoint, agentDir, cwd] as const,
   agentsForProvider: (provider: ProviderKind) =>
     ["provider-discovery", "agents", provider] as const,
-  agents: (provider: ProviderKind, binaryPath: string | null, cwd: string | null) =>
-    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, cwd] as const,
+  agents: (
+    provider: ProviderKind,
+    binaryPath: string | null,
+    agentDir: string | null,
+    cwd: string | null,
+  ) =>
+    [...providerDiscoveryQueryKeys.agentsForProvider(provider), binaryPath, agentDir, cwd] as const,
 };
 
 export function providerComposerCapabilitiesQueryOptions(provider: ProviderKind) {
@@ -217,6 +222,7 @@ export function providerModelsQueryOptions(input: {
 export function providerAgentsQueryOptions(input: {
   provider: ProviderKind;
   binaryPath?: string | null;
+  agentDir?: string | null;
   cwd?: string | null;
   enabled?: boolean;
 }) {
@@ -224,6 +230,7 @@ export function providerAgentsQueryOptions(input: {
     queryKey: providerDiscoveryQueryKeys.agents(
       input.provider,
       input.binaryPath ?? null,
+      input.agentDir ?? null,
       input.cwd ?? null,
     ),
     queryFn: async () => {
@@ -231,6 +238,7 @@ export function providerAgentsQueryOptions(input: {
       return api.provider.listAgents({
         provider: input.provider,
         ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        ...(input.agentDir ? { agentDir: input.agentDir } : {}),
         ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },

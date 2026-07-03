@@ -1871,6 +1871,14 @@ export default function ChatView({
       enabled: kiloModelDiscoveryEnabled,
     }),
   );
+  const piDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({
+      provider: "pi",
+      agentDir: settings.piAgentDir || null,
+      cwd: providerModelDiscoveryCwd,
+      enabled: piModelDiscoveryEnabled,
+    }),
+  );
   const cursorRuntimeModels = useMemo(
     () =>
       showExpandedCursorModelVariants
@@ -3098,7 +3106,9 @@ export default function ChatView({
         ? (kiloDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
         : selectedProvider === "opencode"
           ? (openCodeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
-          : (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS);
+          : selectedProvider === "pi"
+            ? (piDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
+            : (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS);
   const dynamicAgents = useMemo(
     () =>
       selectedDynamicAgents.map((agent) =>

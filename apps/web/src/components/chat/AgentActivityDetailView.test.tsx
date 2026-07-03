@@ -6,6 +6,7 @@ describe("AgentActivityDetailView", () => {
   it("renders a full agent activity detail surface", () => {
     const markup = renderToStaticMarkup(
       <AgentActivityDetailView
+        parentThreadId="parent-thread"
         detail={{
           id: "agent-task-1",
           title: "Find changelog implementation",

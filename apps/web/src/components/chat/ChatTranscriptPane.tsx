@@ -182,6 +182,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
         {agentActivityDetail && onCloseAgentActivityDetail ? (
           <AgentActivityDetailView
             detail={agentActivityDetail}
+            parentThreadId={activeThreadId}
             bottomContentInsetPx={bottomContentInsetPx}
             chatFontSizePx={chatFontSizePx}
             contentInsetRightPx={contentInsetRightPx}
@@ -194,6 +195,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
         ) : (
           <MessagesTimeline
             key={activeThreadId}
+            activeThreadId={activeThreadId}
             hasMessages={hasMessages}
             isWorking={isWorking}
             worktreeSetup={worktreeSetup}
