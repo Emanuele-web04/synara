@@ -102,6 +102,7 @@ interface GatewayHarness {
 
 const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
+  "token-ghost": "thread-ghost",
 };
 
 function makeHarnessLayer(threads: ReadonlyArray<OrchestrationThreadShell>) {
@@ -472,7 +473,7 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
-  it.effect("downgrades a steer to queue when the target thread has no live turn", () => {
+  it.effect("passes an idle steer through so the reactor's live-state guard decides", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
@@ -482,12 +483,88 @@ describe("AgentGateway", () => {
         args: { threadId: "thread-child", message: "status check please", mode: "steer" },
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
-      assert.equal(toolResultJson(response.result).dispatched, "queue");
+      // The projection snapshot can lag the runtime in both directions, so
+      // the gateway must not downgrade; the reactor rechecks live state.
+      assert.equal(toolResultJson(response.result).dispatched, "steer");
       const turn = harness.dispatched[0]!;
       assert.equal(turn.type, "thread.turn.start");
       if (turn.type === "thread.turn.start") {
-        assert.equal(turn.dispatchMode, "queue");
+        assert.equal(turn.dispatchMode, "steer");
       }
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects sends that would drive a higher-privileged thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads,
+      makeThreadShell("thread-full-access", { runtimeMode: "full-access" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_send_message",
+        args: { threadId: "thread-full-access", message: "run something dangerous" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "full-access");
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects heartbeats that would target a higher-privileged thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads,
+      makeThreadShell("thread-full-access", { runtimeMode: "full-access" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_create_automation",
+        args: {
+          name: "escalate",
+          prompt: "keep running privileged work",
+          targetThreadId: "thread-full-access",
+        },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "full-access");
+      assert.equal(harness.automationCreates.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects sends from worktree-isolated callers to local-checkout threads", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      makeThreadShell("thread-parent", {
+        envMode: "worktree",
+        worktreePath: "/tmp/worktrees/caller",
+        branch: "agent/caller",
+      }),
+      makeThreadShell("thread-local"),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_send_message",
+        args: { threadId: "thread-local", message: "edit the main checkout" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "local");
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects tokens whose caller thread no longer exists", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.postRaw({
+        authorizationHeader: "Bearer token-ghost",
+        body: { jsonrpc: "2.0", id: 1, method: "tools/list" },
+      });
+      assert.equal(response.status, 401);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

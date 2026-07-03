@@ -1610,19 +1610,22 @@ export default function Sidebar() {
     presentationMode: routeTerminalState?.presentationMode ?? "drawer",
     terminalOpen,
   });
+  // Pin state must derive from the child-inclusive tree list: project trees
+  // render child rows with the pin action, and a pin stored for a child would
+  // otherwise never surface in the pinned section (root-only display list).
   const pinnedThreadIds = useMemo(
     () =>
       derivePinnedThreadIdsForSidebar({
-        threads: sidebarDisplayThreads,
+        threads: sidebarTreeThreads,
         persistedPinnedThreadIds,
         optimisticPinnedStateByThreadId,
       }),
-    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarDisplayThreads],
+    [optimisticPinnedStateByThreadId, persistedPinnedThreadIds, sidebarTreeThreads],
   );
   const pinnedThreadIdSet = useMemo(() => new Set(pinnedThreadIds), [pinnedThreadIds]);
   const pinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(sidebarDisplayThreads, pinnedThreadIds),
-    [pinnedThreadIds, sidebarDisplayThreads],
+    () => getPinnedThreadsForSidebar(sidebarTreeThreads, pinnedThreadIds),
+    [pinnedThreadIds, sidebarTreeThreads],
   );
   useEffect(() => {
     sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;

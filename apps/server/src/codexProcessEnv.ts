@@ -171,19 +171,41 @@ export function extractManagedCodexConfigSection(config: string): string | undef
   return content.length > 0 ? content : undefined;
 }
 
+// Split a TOML snippet into its top-level tables (header line + body).
+function splitTomlTables(snippet: string): string[] {
+  const tables: string[] = [];
+  let current: string[] = [];
+  for (const line of snippet.split("\n")) {
+    if (/^\s*\[/.test(line) && current.length > 0) {
+      tables.push(current.join("\n").trim());
+      current = [];
+    }
+    current.push(line);
+  }
+  if (current.length > 0) {
+    tables.push(current.join("\n").trim());
+  }
+  return tables.filter((table) => table.length > 0);
+}
+
 function appendManagedCodexConfigSection(config: string, section: string): string {
   const trimmedSection = section.trim();
   if (!trimmedSection) {
     return config;
   }
-  // Respect a user-managed copy of the same table in the source config.
-  const sectionHeader = trimmedSection.split("\n")[0] ?? trimmedSection;
-  if (config.includes(sectionHeader)) {
+  // Respect user-managed copies table by table: appending a table whose
+  // header already exists in the config would produce invalid TOML, and the
+  // user's own definition should govern in that case.
+  const tables = splitTomlTables(trimmedSection).filter((table) => {
+    const header = table.split("\n")[0]?.trim();
+    return header === undefined || !config.includes(header);
+  });
+  if (tables.length === 0) {
     return config;
   }
   return appendCodexConfigSection(
     config,
-    `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${trimmedSection}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
+    `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
 }
 

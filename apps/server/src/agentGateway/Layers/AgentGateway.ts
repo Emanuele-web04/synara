@@ -196,6 +196,35 @@ export const makeAgentGateway = Effect.gen(function* () {
       ),
     );
 
+  // Privilege boundary shared by every tool that makes another thread execute
+  // work (sends, heartbeats): a caller must not drive a thread that runs with
+  // more privileges than the user granted the caller itself — otherwise an
+  // approval-required or worktree-isolated agent escalates by proxy.
+  const assertCallerMayDriveThread = (
+    caller: { readonly runtimeMode: string; readonly envMode?: string | null | undefined },
+    target: {
+      readonly id: string;
+      readonly runtimeMode: string;
+      readonly envMode?: string | null | undefined;
+    },
+  ) =>
+    Effect.gen(function* () {
+      if (target.runtimeMode === "full-access" && caller.runtimeMode !== "full-access") {
+        return yield* Effect.fail(
+          new ToolInputError(
+            `Thread "${target.id}" runs in "full-access" mode but your thread is "approval-required"; you cannot drive higher-privileged threads. Ask the user to do this or to elevate your thread.`,
+          ),
+        );
+      }
+      if (caller.envMode === "worktree" && (target.envMode ?? "local") === "local") {
+        return yield* Effect.fail(
+          new ToolInputError(
+            `Thread "${target.id}" runs on the shared local checkout but your thread is isolated in a worktree; you cannot drive local-checkout threads. Ask the user to do this from a local thread.`,
+          ),
+        );
+      }
+    });
+
   // --- read tools -----------------------------------------------------------
 
   const listProjects: ToolEntry = {
@@ -434,8 +463,13 @@ export const makeAgentGateway = Effect.gen(function* () {
         let worktreePath: string | null = null;
         if (environment === "worktree") {
           const baseBranchArg = readStringArg(args, "baseBranch");
+          // A worktree-isolated caller forks from its own branch by default,
+          // not from whatever the shared checkout happens to have checked
+          // out — the worker should continue the caller's line of work.
+          const callerBranch = callerIsolatedInWorktree ? (caller.branch ?? null) : null;
           const baseBranch =
             baseBranchArg ??
+            callerBranch ??
             (yield* git.statusDetails(project.workspaceRoot).pipe(
               Effect.mapError((error) => new ToolInputError(errorText(error))),
               Effect.flatMap((status) =>
@@ -540,7 +574,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         additionalProperties: false,
       },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
         const message = readStringArg(args, "message", { required: true })!;
@@ -548,15 +582,13 @@ export const makeAgentGateway = Effect.gen(function* () {
         if (modeArg !== "queue" && modeArg !== "steer") {
           throw new ToolInputError(`Argument "mode" must be "queue" or "steer".`);
         }
+        const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
-        // Steering only makes sense against a live turn. An idle "steer" would
-        // ride the Codex native-steer fast path in the reactor (skipping the
-        // turn-start checkpoint) instead of queueing as the tool promises, so
-        // downgrade it based on the projected session state.
-        const hasLiveTurn =
-          target.session?.status === "running" && target.session.activeTurnId !== null;
-        const dispatchMode: TurnDispatchMode =
-          modeArg === "steer" && !hasLiveTurn ? "queue" : modeArg;
+        yield* assertCallerMayDriveThread(caller, target);
+        // Pass the requested mode through unchanged: the reactor checks live
+        // provider state (authoritative, unlike this projection snapshot) and
+        // already downgrades steers whose turn is not actually live.
+        const dispatchMode: TurnDispatchMode = modeArg;
         const suffix = randomUUID();
         yield* orchestrationEngine
           .dispatch({
@@ -721,6 +753,12 @@ export const makeAgentGateway = Effect.gen(function* () {
           Math.round(readNumberArg(args, "maxIterations") ?? HEARTBEAT_DEFAULT_MAX_ITERATIONS),
         );
         const target = yield* requireThreadShell(targetThreadId);
+        if (target.id !== context.callerThreadId) {
+          // A heartbeat repeatedly executes prompts on the target with the
+          // target's privileges; cap it exactly like direct sends.
+          const caller = yield* requireThreadShell(context.callerThreadId);
+          yield* assertCallerMayDriveThread(caller, target);
+        }
         // Heartbeats run in the target thread's existing environment, so the
         // automation policy must see that environment: a local-checkout target
         // requires the matching risk acknowledgement (the user already accepted
@@ -903,6 +941,22 @@ export const makeAgentGateway = Effect.gen(function* () {
         return {
           status: 401,
           body: jsonRpcError(null, JSON_RPC_INVALID_REQUEST, "Missing or invalid bearer token."),
+        };
+      }
+      // Tokens are stateless HMACs and survive restarts, so bind their
+      // validity to the caller thread's existence: a token minted for a
+      // since-deleted thread must not keep app-control access.
+      const callerThread = yield* snapshotQuery
+        .getThreadShellById(ThreadId.makeUnsafe(callerThreadId))
+        .pipe(Effect.catch(() => Effect.succeed(Option.none())));
+      if (Option.isNone(callerThread)) {
+        return {
+          status: 401,
+          body: jsonRpcError(
+            null,
+            JSON_RPC_INVALID_REQUEST,
+            "Bearer token refers to a thread that no longer exists.",
+          ),
         };
       }
       const context: ToolContext = { callerThreadId };

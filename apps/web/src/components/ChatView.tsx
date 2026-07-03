@@ -7336,7 +7336,11 @@ export default function ChatView({
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
       // queued auto-dispatch through that gap so it can't race the steer.
       if (dispatchMode === "steer" && selectedModelSelectionForSend.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       if (sourceProposedPlanForSend) {
         planSidebarDismissedForTurnRef.current = null;
@@ -7744,7 +7748,11 @@ export default function ChatView({
       // Non-Codex steers interrupt the live turn before re-dispatching; hold
       // queued auto-dispatch through that gap so it can't race the steer.
       if (dispatchMode === "steer" && modelSelectionForPlanDispatch.provider !== "codex") {
-        setQueuedSteerGate({ sawInterruptGap: false, gapStartedAt: null });
+        setQueuedSteerGate({
+          sawInterruptGap: false,
+          gapStartedAt: null,
+          armedActiveTurnId: activeThread?.session?.activeTurnId ?? null,
+        });
       }
       // Optimistically open the plan sidebar when implementing (not refining).
       // "default" mode here means the agent is executing the plan, which produces
@@ -7914,6 +7922,7 @@ export default function ChatView({
   // Advance/expire the steer gate as the session moves through the
   // interrupt→steered-turn handoff (or fails out of it).
   const sessionErroredForSteerGate = activeThread?.session?.status === "error";
+  const activeTurnIdForSteerGate = activeThread?.session?.activeTurnId ?? null;
   useEffect(() => {
     if (!queuedSteerGate) {
       return;
@@ -7922,6 +7931,7 @@ export default function ChatView({
       gate: queuedSteerGate,
       phase,
       sessionErrored: sessionErroredForSteerGate,
+      activeTurnId: activeTurnIdForSteerGate,
       now: Date.now(),
     });
     if (transition.kind === "clear") {
@@ -7930,7 +7940,8 @@ export default function ChatView({
     }
     if (
       transition.gate.sawInterruptGap !== queuedSteerGate.sawInterruptGap ||
-      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt
+      transition.gate.gapStartedAt !== queuedSteerGate.gapStartedAt ||
+      transition.gate.armedActiveTurnId !== queuedSteerGate.armedActiveTurnId
     ) {
       setQueuedSteerGate(transition.gate);
       return;
@@ -7940,7 +7951,7 @@ export default function ChatView({
     }
     const timer = window.setTimeout(() => setQueuedSteerGate(null), transition.expiresInMs);
     return () => window.clearTimeout(timer);
-  }, [phase, queuedSteerGate, sessionErroredForSteerGate]);
+  }, [activeTurnIdForSteerGate, phase, queuedSteerGate, sessionErroredForSteerGate]);
 
   useEffect(() => {
     if (

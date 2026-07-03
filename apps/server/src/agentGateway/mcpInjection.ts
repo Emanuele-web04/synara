@@ -26,12 +26,21 @@ export const SYNARA_AGENT_GATEWAY_URL_ENV = "SYNARA_AGENT_GATEWAY_URL";
  * Codex reads MCP servers from `config.toml`; the config file is shared by all
  * sessions of one Codex home, so the token is never written into it. Instead
  * the block references an env var that Synara sets per app-server process.
+ *
+ * The shell_environment_policy table keeps that env var out of exec tool
+ * subprocesses: codex defaults to `ignore_default_excludes = true`, so the
+ * built-in *TOKEN* filter is inactive and workspace commands would otherwise
+ * inherit the gateway bearer token. Appended per-table, so a user-defined
+ * policy table is never duplicated (their policy then governs).
  */
 export function buildCodexMcpConfigToml(endpointUrl: string): string {
   return [
     `[mcp_servers.${SYNARA_MCP_SERVER_NAME}]`,
     `url = ${JSON.stringify(endpointUrl)}`,
     `bearer_token_env_var = ${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}`,
+    "",
+    "[shell_environment_policy]",
+    `exclude = [${JSON.stringify(SYNARA_AGENT_GATEWAY_TOKEN_ENV)}]`,
   ].join("\n");
 }
 
