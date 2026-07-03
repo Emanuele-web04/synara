@@ -1178,6 +1178,10 @@ function runtimeEventToActivities(
           summary: state === "failed" ? "Turn failed" : "Turn completed",
           payload: toActivityPayload({
             state,
+            ...(event.payload.usage !== undefined ? { usage: event.payload.usage } : {}),
+            ...(event.payload.modelUsage !== undefined
+              ? { modelUsage: event.payload.modelUsage }
+              : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
               : {}),

@@ -3968,6 +3968,59 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completedPayload?.totalCostUsd).toBeUndefined();
   });
 
+  it("preserves completed-turn usage on the projected activity payload", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-usage"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-usage"),
+      payload: {
+        state: "completed",
+        usage: {
+          inputTokens: 123,
+          outputTokens: 45,
+          totalTokens: 168,
+        },
+        modelUsage: {
+          "gpt-5-codex": {
+            contextWindow: 200000,
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-usage",
+      ),
+    );
+
+    const completed = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-usage",
+    );
+    const completedPayload =
+      completed?.payload && typeof completed.payload === "object"
+        ? (completed.payload as Record<string, unknown>)
+        : undefined;
+
+    expect(completed?.kind).toBe("turn.completed");
+    expect(completedPayload?.usage).toEqual({
+      inputTokens: 123,
+      outputTokens: 45,
+      totalTokens: 168,
+    });
+    expect(completedPayload?.modelUsage).toEqual({
+      "gpt-5-codex": {
+        contextWindow: 200000,
+      },
+    });
+  });
+
   it("projects structured user input request and resolution as thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

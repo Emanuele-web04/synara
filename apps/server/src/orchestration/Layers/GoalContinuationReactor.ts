@@ -76,6 +76,16 @@ function turnWasGoalContinuation(thread: OrchestrationThread, turnId: TurnId): b
   );
 }
 
+function turnCompletedBeforeGoalStart(
+  latestTurn: NonNullable<OrchestrationThread["latestTurn"]>,
+  goalCreatedAt: string,
+): boolean {
+  if (latestTurn.completedAt === null) {
+    return true;
+  }
+  return Date.parse(latestTurn.completedAt) < Date.parse(goalCreatedAt);
+}
+
 const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
@@ -104,6 +114,10 @@ const make = Effect.gen(function* () {
       return;
     }
     if (lastHandledTurnId.get(threadId) === latestTurn.turnId) {
+      return;
+    }
+    if (turnCompletedBeforeGoalStart(latestTurn, goal.createdAt)) {
+      lastHandledTurnId.set(threadId, latestTurn.turnId);
       return;
     }
 
@@ -214,6 +228,20 @@ const make = Effect.gen(function* () {
         const threadId = triggerThreadId(event);
         return threadId === null ? Effect.void : worker.enqueue(threadId);
       }),
+    );
+    yield* projectionSnapshotQuery.getSnapshot().pipe(
+      Effect.flatMap((snapshot) =>
+        Effect.forEach(
+          snapshot.threads,
+          (thread) => (thread.goal?.status === "active" ? worker.enqueue(thread.id) : Effect.void),
+          { concurrency: 1 },
+        ).pipe(Effect.asVoid),
+      ),
+      Effect.catch((error) =>
+        Effect.logWarning("goal continuation reactor failed to seed active goals", {
+          error: String(error),
+        }),
+      ),
     );
   });
 
