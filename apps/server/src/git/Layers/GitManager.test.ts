@@ -54,6 +54,7 @@ interface FakeGhScenario {
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
   pullRequestChecks?: GitPullRequestCheck[];
   pullRequestReviewComments?: GitPullRequestComment[];
+  pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
   reviewCommentsError?: GitHubCliError;
   createPullRequestError?: GitHubCliError;
@@ -643,7 +644,10 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         );
         return scenario.reviewCommentsError
           ? Effect.fail(scenario.reviewCommentsError)
-          : Effect.succeed(scenario.pullRequestReviewComments ?? []);
+          : Effect.succeed({
+              comments: scenario.pullRequestReviewComments ?? [],
+              truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
+            });
       },
     },
     ghCalls,
@@ -2221,6 +2225,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           },
           pullRequestChecks: checks,
           pullRequestReviewComments: comments,
+          pullRequestReviewCommentsTruncated: true,
         },
       });
 
@@ -2232,6 +2237,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.pullRequest.number).toBe(42);
       expect(result.checks).toEqual(checks);
       expect(result.comments).toEqual(comments);
+      expect(result.commentsTruncated).toBe(true);
       expect(result.commentsError).toBeNull();
       expect(ghCalls).toContain("pr view 42 --json statusCheckRollup");
       // Owner/repo come from the PR URL, not the local checkout's remotes.
@@ -2274,6 +2280,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
 
       expect(result.checks).toEqual(checks);
       expect(result.comments).toEqual([]);
+      expect(result.commentsTruncated).toBe(false);
       expect(result.commentsError).toContain("GraphQL rate limit exceeded");
     }),
   );

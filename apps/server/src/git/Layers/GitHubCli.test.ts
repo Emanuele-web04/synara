@@ -243,7 +243,7 @@ layer("GitHubCliLive", (it) => {
         });
       });
 
-      assert.deepStrictEqual(result, [
+      assert.deepStrictEqual(result.comments, [
         {
           id: "PRRC_11",
           author: "codex-bot",
@@ -253,6 +253,7 @@ layer("GitHubCliLive", (it) => {
           createdAt: "2026-07-01T10:00:00Z",
         },
       ]);
+      assert.equal(result.truncated, false);
 
       const [command, args, options] = mockedRunProcess.mock.calls[0] ?? [];
       expect(command).toBe("gh");
@@ -368,9 +369,10 @@ layer("GitHubCliLive", (it) => {
       });
 
       assert.deepStrictEqual(
-        result.map((comment) => comment.body),
+        result.comments.map((comment) => comment.body),
         ["First page", "Second page"],
       );
+      assert.equal(result.truncated, false);
       expect(mockedRunProcess).toHaveBeenCalledTimes(2);
       expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
         expect.arrayContaining(["-F", "after=cursor-1"]),
@@ -378,9 +380,9 @@ layer("GitHubCliLive", (it) => {
     }),
   );
 
-  it.effect("stops review-thread pagination after the bounded comment preview", () =>
+  it.effect("marks one-page review-comment overflow as truncated", () =>
     Effect.gen(function* () {
-      const unresolvedThreads = Array.from({ length: 20 }, (_, index) => ({
+      const unresolvedThreads = Array.from({ length: 21 }, (_, index) => ({
         isResolved: false,
         comments: {
           nodes: [
@@ -403,8 +405,8 @@ layer("GitHubCliLive", (it) => {
                 reviewThreads: {
                   nodes: unresolvedThreads,
                   pageInfo: {
-                    hasNextPage: true,
-                    endCursor: "cursor-1",
+                    hasNextPage: false,
+                    endCursor: null,
                   },
                 },
               },
@@ -428,7 +430,8 @@ layer("GitHubCliLive", (it) => {
         });
       });
 
-      assert.equal(result.length, 20);
+      assert.equal(result.comments.length, 20);
+      assert.equal(result.truncated, true);
       expect(mockedRunProcess).toHaveBeenCalledTimes(1);
     }),
   );
@@ -486,7 +489,8 @@ layer("GitHubCliLive", (it) => {
         });
       });
 
-      assert.deepStrictEqual(result, []);
+      assert.deepStrictEqual(result.comments, []);
+      assert.equal(result.truncated, true);
       expect(mockedRunProcess).toHaveBeenCalledTimes(5);
       expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual(
         expect.arrayContaining(["-F", "after=cursor-4"]),

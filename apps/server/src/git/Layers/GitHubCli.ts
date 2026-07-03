@@ -482,6 +482,7 @@ const makeGitHubCli = Effect.sync(() => {
         const comments: GitPullRequestComment[] = [];
         let after: string | null = null;
         let fetchedPages = 0;
+        let truncated = false;
 
         do {
           fetchedPages += 1;
@@ -523,19 +524,25 @@ const makeGitHubCli = Effect.sync(() => {
           }
 
           const remaining = PULL_REQUEST_REVIEW_COMMENT_LIMIT - comments.length;
-          comments.push(...normalizePullRequestReviewComments(decoded).slice(0, remaining));
+          const pageComments = normalizePullRequestReviewComments(decoded);
+          if (pageComments.length > remaining) {
+            truncated = true;
+          }
+          comments.push(...pageComments.slice(0, Math.max(remaining, 0)));
 
           const pageInfo = getPullRequestReviewThreadsPageInfo(decoded);
-          after =
+          const canFetchNextPage =
             pageInfo.hasNextPage &&
             pageInfo.endCursor !== null &&
             comments.length < PULL_REQUEST_REVIEW_COMMENT_LIMIT &&
-            fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT
-              ? pageInfo.endCursor
-              : null;
+            fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT;
+          if (!canFetchNextPage && pageInfo.hasNextPage && pageInfo.endCursor !== null) {
+            truncated = true;
+          }
+          after = canFetchNextPage ? pageInfo.endCursor : null;
         } while (after !== null);
 
-        return comments;
+        return { comments, truncated };
       }),
     getRepositoryCloneUrls: (input) =>
       execute({

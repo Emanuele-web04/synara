@@ -30,6 +30,11 @@ export interface GitHubRepositoryCloneUrls {
   readonly sshUrl: string;
 }
 
+export interface GitHubPullRequestReviewCommentsResult {
+  readonly comments: ReadonlyArray<GitPullRequestComment>;
+  readonly truncated: boolean;
+}
+
 /**
  * GitHubCliShape - Service API for executing GitHub CLI commands.
  */
@@ -79,7 +84,7 @@ export interface GitHubCliShape {
     readonly owner: string;
     readonly repo: string;
     readonly number: number;
-  }) => Effect.Effect<ReadonlyArray<GitPullRequestComment>, GitHubCliError>;
+  }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
    * Resolve clone URLs for a GitHub repository.

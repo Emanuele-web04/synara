@@ -1569,10 +1569,15 @@ export const makeGitManager = Effect.gen(function* () {
               number: pullRequest.number,
             })
             .pipe(
-              Effect.map((comments) => ({ comments, commentsError: null })),
+              Effect.map((result) => ({
+                comments: result.comments,
+                commentsTruncated: result.truncated,
+                commentsError: null,
+              })),
               Effect.catch((error) =>
                 Effect.succeed({
                   comments: [],
+                  commentsTruncated: false,
                   commentsError: error.message,
                 }),
               ),
@@ -1585,6 +1590,7 @@ export const makeGitManager = Effect.gen(function* () {
         pullRequest,
         checks,
         comments: commentsResult.comments,
+        commentsTruncated: commentsResult.commentsTruncated,
         commentsError: commentsResult.commentsError,
       };
     },

@@ -393,6 +393,7 @@ export const GitPullRequestSnapshotResult = Schema.Struct({
   pullRequest: GitResolvedPullRequest,
   checks: Schema.Array(GitPullRequestCheck),
   comments: Schema.Array(GitPullRequestComment),
+  commentsTruncated: Schema.Boolean,
   commentsError: Schema.NullOr(Schema.String),
 });
 export type GitPullRequestSnapshotResult = typeof GitPullRequestSnapshotResult.Type;

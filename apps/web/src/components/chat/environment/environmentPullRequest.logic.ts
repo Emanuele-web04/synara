@@ -66,9 +66,10 @@ export function withStableCheckKeys(
   });
 }
 
-export function summarizePullRequestComments(count: number): string {
-  if (count === 0) return "No comments";
-  return pluralize(count, "comment");
+export function summarizePullRequestComments(count: number, truncated = false): string {
+  if (count === 0) return truncated ? "Comments may exist" : "No comments";
+  const noun = count === 1 ? "comment" : "comments";
+  return truncated ? `${count}+ ${noun}` : pluralize(count, "comment");
 }
 
 export interface PullRequestCommentDisplay {
@@ -132,6 +133,7 @@ export function buildFixReviewCommentsPrompt(input: {
   prNumber: number;
   prUrl: string;
   comments: ReadonlyArray<GitPullRequestComment>;
+  commentsTruncated?: boolean;
 }): string {
   const header = [
     `Address the unresolved review comments on PR #${input.prNumber} (${input.prUrl}).`,
@@ -148,6 +150,10 @@ export function buildFixReviewCommentsPrompt(input: {
       ? [
           `There are ${overflow} more unresolved review comments not listed here — fetch the rest from ${input.prUrl} once these are addressed.`,
         ]
-      : [];
+      : input.commentsTruncated === true
+        ? [
+            `More unresolved review comments may exist beyond this bounded preview — fetch the rest from ${input.prUrl} before claiming all review comments are addressed.`,
+          ]
+        : [];
   return [header, ...items, ...footer].join("\n\n");
 }

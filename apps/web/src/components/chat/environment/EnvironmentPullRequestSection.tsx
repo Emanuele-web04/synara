@@ -216,6 +216,7 @@ export function EnvironmentPullRequestSection({
 
   const checks = snapshotQuery.data?.checks ?? [];
   const comments = snapshotQuery.data?.comments ?? [];
+  const commentsTruncated = snapshotQuery.data?.commentsTruncated ?? false;
   const commentsError = snapshotQuery.data?.commentsError ?? null;
   const checksSummary = summarizePullRequestChecks(checks);
   const loading = snapshotQuery.isLoading;
@@ -228,7 +229,12 @@ export function EnvironmentPullRequestSection({
     }
     appendComposerPromptText(
       activeThreadId,
-      buildFixReviewCommentsPrompt({ prNumber: pr.number, prUrl: pr.url, comments }),
+      buildFixReviewCommentsPrompt({
+        prNumber: pr.number,
+        prUrl: pr.url,
+        comments,
+        commentsTruncated,
+      }),
     );
     onClose();
   };
@@ -329,7 +335,7 @@ export function EnvironmentPullRequestSection({
                       ? "Loading comments…"
                       : commentsError
                         ? "Comments unavailable"
-                        : summarizePullRequestComments(comments.length)
+                        : summarizePullRequestComments(comments.length, commentsTruncated)
                   }
                   trailing={<EnvironmentRowChevron />}
                 />
@@ -338,7 +344,13 @@ export function EnvironmentPullRequestSection({
                 {commentsError ? (
                   <MenuPlaceholder text={`Couldn't load review comments: ${commentsError}`} />
                 ) : comments.length === 0 ? (
-                  <MenuPlaceholder text="No unresolved review comments." />
+                  <MenuPlaceholder
+                    text={
+                      commentsTruncated
+                        ? "Review comments may be hidden by the bounded preview. Open the PR on GitHub."
+                        : "No unresolved review comments."
+                    }
+                  />
                 ) : (
                   <div className="flex flex-col gap-0.5">
                     {comments.map((comment) => (
@@ -351,6 +363,9 @@ export function EnvironmentPullRequestSection({
                         }}
                       />
                     ))}
+                    {commentsTruncated ? (
+                      <MenuPlaceholder text="More review comments may be available on GitHub." />
+                    ) : null}
                   </div>
                 )}
               </ComposerPickerMenuPopup>

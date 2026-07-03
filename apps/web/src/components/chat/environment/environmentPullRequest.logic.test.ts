@@ -92,6 +92,11 @@ describe("summarizePullRequestComments", () => {
     expect(summarizePullRequestComments(1)).toBe("1 comment");
     expect(summarizePullRequestComments(3)).toBe("3 comments");
   });
+
+  it("labels bounded comment previews", () => {
+    expect(summarizePullRequestComments(0, true)).toBe("Comments may exist");
+    expect(summarizePullRequestComments(20, true)).toBe("20+ comments");
+  });
 });
 
 describe("describePullRequestComment", () => {
@@ -150,5 +155,19 @@ describe("buildFixReviewCommentsPrompt", () => {
     expect(prompt).toContain(`${FIX_PROMPT_MAX_COMMENTS}. Comment`);
     expect(prompt).not.toContain(`${FIX_PROMPT_MAX_COMMENTS + 1}. Comment`);
     expect(prompt).toContain("There are 5 more unresolved review comments not listed here");
+  });
+
+  it("points at GitHub when the server truncated the bounded comment preview", () => {
+    const prompt = buildFixReviewCommentsPrompt({
+      prNumber: 1,
+      prUrl: "https://github.com/o/r/pull/1",
+      comments: [makeComment({ body: "Visible finding" })],
+      commentsTruncated: true,
+    });
+    expect(prompt).toContain("Visible finding");
+    expect(prompt).toContain(
+      "More unresolved review comments may exist beyond this bounded preview",
+    );
+    expect(prompt).toContain("before claiming all review comments are addressed");
   });
 });
