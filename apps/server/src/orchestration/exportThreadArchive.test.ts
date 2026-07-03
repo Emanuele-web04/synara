@@ -1,10 +1,14 @@
+// FILE: exportThreadArchive.test.ts
+// Purpose: Verifies thread export archives stay readable and preserve transcript content.
+// Layer: Orchestration utility tests
+// Depends on: exportThreadArchive ZIP writer and node:zlib for round-trip reads.
+
 import zlib from "node:zlib";
 
+import type { OrchestrationThread } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
 import { buildThreadArchiveBytes, threadArchiveFileName } from "./exportThreadArchive.ts";
-
-import type { OrchestrationThread } from "@t3tools/contracts";
 
 // Minimal ZIP reader: walks the central directory, inflates each raw-deflate
 // entry. Enough to prove the writer emits a valid archive without depending on
@@ -87,14 +91,13 @@ function sampleThread(): OrchestrationThread {
 }
 
 describe("exportThreadArchive", () => {
-  it("builds a zip containing thread.json and transcript.md", () => {
-    const entries = readZip(buildThreadArchiveBytes(sampleThread())).reduce<Record<string, Buffer>>(
-      (acc, entry) => {
-        acc[entry.name] = entry.data;
-        return acc;
-      },
-      {},
-    );
+  it("builds a zip containing thread.json and transcript.md", async () => {
+    const entries = readZip(await buildThreadArchiveBytes(sampleThread())).reduce<
+      Record<string, Buffer>
+    >((acc, entry) => {
+      acc[entry.name] = entry.data;
+      return acc;
+    }, {});
 
     expect(Object.keys(entries).sort()).toEqual(["thread.json", "transcript.md"]);
 
@@ -107,6 +110,33 @@ describe("exportThreadArchive", () => {
     expect(transcript).toContain("# Export Demo");
     expect(transcript).toContain("Hello");
     expect(transcript).toContain("Hi there");
+  });
+
+  it("keeps markdown code syntax in message text verbatim", async () => {
+    const thread = {
+      ...sampleThread(),
+      messages: [
+        {
+          id: "m-code",
+          role: "assistant",
+          text: "Inline `code` stays intact.\n\n```ts\nconst value = `template`;\n```",
+          streaming: false,
+          source: "native",
+          turnId: null,
+          createdAt: "2026-06-28T00:00:02.000Z",
+          updatedAt: "2026-06-28T00:00:02.000Z",
+        },
+      ],
+    } as unknown as OrchestrationThread;
+
+    const entries = readZip(await buildThreadArchiveBytes(thread));
+    const transcript = entries
+      .find((entry) => entry.name === "transcript.md")
+      ?.data.toString("utf8");
+
+    expect(transcript).toContain("Inline `code` stays intact.");
+    expect(transcript).toContain("```ts\nconst value = `template`;\n```");
+    expect(transcript).not.toContain("\\`");
   });
 
   it("slugifies the title and stamps the date bucket into the filename", () => {

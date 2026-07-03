@@ -7,7 +7,6 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
-  ThreadId,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
@@ -31,7 +30,10 @@ import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localI
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import { buildThreadArchiveBytes, threadArchiveFileName } from "./provider/exportThreadArchive";
+import {
+  buildThreadArchiveBytes,
+  threadArchiveFileName,
+} from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";
@@ -462,22 +464,21 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
 
-    yield* requireAuthenticatedRequest.pipe(
-      Effect.catchTag("AuthError", (error) => Effect.fail(error)),
-    );
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
 
-    const threadIdParam = url.searchParams.get("threadId");
+    const threadIdParam = url.searchParams.get("threadId")?.trim();
     if (!threadIdParam)
       return HttpServerResponse.text("Missing threadId parameter", { status: 400 });
 
     const snapshotQuery = yield* ProjectionSnapshotQuery;
     const readModel = yield* snapshotQuery.getSnapshot();
-    const thread = readModel.threads.find(
-      (candidate) => candidate.id === ThreadId.makeUnsafe(threadIdParam),
-    );
+    const thread = readModel.threads.find((candidate) => candidate.id === threadIdParam);
     if (!thread) return HttpServerResponse.text("Not Found", { status: 404 });
 
-    const archive = yield* Effect.sync(() => buildThreadArchiveBytes(thread));
+    const archive = yield* Effect.promise(() => buildThreadArchiveBytes(thread));
     const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
     return HttpServerResponse.uint8Array(archive, {
       status: 200,
@@ -485,6 +486,8 @@ const threadExportEffectRouteLayer = HttpRouter.add(
       headers: {
         "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
         "Cache-Control": "no-store",
+        ...localPreviewCorsHeaders({ config, request, url }),
+        "Access-Control-Expose-Headers": "Content-Disposition",
       },
     });
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),

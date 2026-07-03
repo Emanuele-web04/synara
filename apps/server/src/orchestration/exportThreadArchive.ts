@@ -2,12 +2,13 @@
 // Purpose: Build a ZIP archive that exports a single Synara thread so a user
 //          can download the conversation as a portable, compressed package —
 //          mirroring the `/export` affordance of agent CLIs.
-// Layer: Server runtime utility (plain module; the HTTP route composes it via
-//          Effect.promise). No external dependencies — ZIP is produced with
-//          node:zlib (deflate + crc32) and a hand-written central directory.
+// Layer: Orchestration utility (plain async module; HTTP composes it through
+//          Effect.promise). ZIP is produced with node:zlib and a hand-written
+//          central directory.
 // Exports: buildThreadArchiveBytes, threadArchiveFileName.
 
 import zlib from "node:zlib";
+import { promisify } from "node:util";
 
 import type { OrchestrationThread } from "@t3tools/contracts";
 
@@ -31,11 +32,11 @@ const u32 = (value: number): Buffer => {
 };
 
 const UTF8_FLAG = 0x0800;
+const deflateRaw = promisify(zlib.deflateRaw);
 
-// ponytail: zeroed DOS time/date (1980-01-01 00:00) is valid and is what most
-// deterministic/representative archive writers emit. Real mtimes would need
-// safe conversion from ISO -> MS-DOS fields; not worth it for an export dump.
-function buildZip(entries: ReadonlyArray<ThreadArchiveEntry>): Buffer {
+// Zeroed DOS time/date (1980-01-01 00:00) keeps exports deterministic without
+// adding date conversion code to the archive writer.
+async function buildZip(entries: ReadonlyArray<ThreadArchiveEntry>): Promise<Buffer> {
   const localHeaders: Buffer[] = [];
   const centralDirectory: Buffer[] = [];
   let offset = 0;
@@ -45,7 +46,7 @@ function buildZip(entries: ReadonlyArray<ThreadArchiveEntry>): Buffer {
     const data = Buffer.from(entry.data, "utf8");
     const crc = crc32(data);
 
-    const compressed = zlib.deflateRawSync(data);
+    const compressed = await deflateRaw(data);
     const useDeflate = compressed.length < data.length;
     const stored = useDeflate ? compressed : data;
     const method = useDeflate ? 8 : 0;
@@ -117,19 +118,13 @@ const MESSAGE_ROLE_HEADING: Record<string, string> = {
   system: "System",
 };
 
-function escapeMarkdownInline(text: string): string {
-  // ponytail: minimal escaping — backticks and backslashes are the only pairs that
-  // would visually corrupt a transcript dump. Full CommonMark escaping is YAGNI here.
-  return text.replace(/`/g, "\\`").replace(/\\/g, "\\\\");
-}
-
 function buildTranscriptMarkdown(thread: OrchestrationThread): string {
   const lines: string[] = [`# ${thread.title}`, "", `> Exported from Synara.`, ""];
 
   for (const message of thread.messages) {
     const heading = MESSAGE_ROLE_HEADING[message.role] ?? "Message";
     const timestamp = ` \`${message.createdAt}\``;
-    lines.push(`## ${heading}${timestamp}`, "", escapeMarkdownInline(message.text), "");
+    lines.push(`## ${heading}${timestamp}`, "", message.text, "");
   }
 
   return lines.join("\n");
@@ -165,7 +160,7 @@ export function buildThreadArchiveEntries(thread: OrchestrationThread): ThreadAr
   ];
 }
 
-export function buildThreadArchiveBytes(thread: OrchestrationThread): Buffer {
+export function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
   return buildZip(buildThreadArchiveEntries(thread));
 }
 
@@ -180,52 +175,12 @@ function slugifyTitle(title: string): string {
   return slug.length > 0 ? slug.slice(0, 48) : "thread";
 }
 
-// ponytail: stable date bucket derived from the ISO timestamp's YYYYMMDD prefix.
-// Keeps filenames sortable and avoids pulling in a date library for formatting.
+// Stable date bucket derived from the ISO timestamp keeps filenames sortable
+// without pulling in a date library for formatting.
 export function threadArchiveFileName(input: {
   readonly title: string;
   readonly isoTimestamp: string;
 }): string {
   const dateBucket = input.isoTimestamp.slice(0, 10).replaceAll("-", "");
   return `synara-thread-${slugifyTitle(input.title)}-${dateBucket}.zip`;
-}
-
-// --- self-check -------------------------------------------------------------
-// Run `bun apps/server/src/provider/exportThreadArchive.ts` to verify the ZIP
-// writer round-trips through `unzip`. Left in place because ZIP byte layout is
-// easy to get subtly wrong; this is the one check that fails if it breaks.
-if (import.meta.main) {
-  const sampleThread = {
-    id: "thread-sample",
-    title: "Sample Thread",
-    messages: [
-      {
-        id: "m1",
-        role: "user",
-        text: "Hello, can you help me export this?",
-        streaming: false,
-        source: "native",
-        createdAt: "2026-06-28T00:00:00.000Z",
-        updatedAt: "2026-06-28T00:00:00.000Z",
-      },
-      {
-        id: "m2",
-        role: "assistant",
-        text: "Of course. Use `/export` to download this thread as a ZIP.",
-        streaming: false,
-        source: "native",
-        createdAt: "2026-06-28T00:00:01.000Z",
-        updatedAt: "2026-06-28T00:00:01.000Z",
-      },
-    ],
-    createdAt: "2026-06-28T00:00:00.000Z",
-    updatedAt: "2026-06-28T00:00:01.000Z",
-  } as unknown as OrchestrationThread;
-
-  const bytes = buildThreadArchiveBytes(sampleThread);
-  const fileName = threadArchiveFileName({
-    title: sampleThread.title,
-    isoTimestamp: sampleThread.updatedAt,
-  });
-  console.log(`OK ${fileName} (${bytes.length} bytes)`);
 }
