@@ -171,6 +171,14 @@ export function extractManagedCodexConfigSection(config: string): string | undef
   return content.length > 0 ? content : undefined;
 }
 
+// True when the config declares the given table header as an actual TOML
+// header line (not inside a comment or string, which a raw substring search
+// would falsely match — e.g. `# [mcp_servers.synara]` in an example block).
+export function configHasTomlTableHeader(config: string, header: string): boolean {
+  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\s*${escaped}\\s*(?:#.*)?$`, "m").test(config);
+}
+
 // Split a TOML snippet into its top-level tables (header line + body).
 function splitTomlTables(snippet: string): string[] {
   const tables: string[] = [];
@@ -229,27 +237,17 @@ function appendManagedCodexConfigSection(config: string, section: string): strin
   }
   // Respect user-managed copies table by table: appending a table whose
   // header already exists in the config would produce invalid TOML, and the
-  // user's own definition should govern in that case — except the token
-  // exclusion, which is merged into the user's policy table below.
+  // user's own definition should govern in that case. (The token exclusion is
+  // separately merged into user-owned policy tables by the overlay writer.)
   const tables = splitTomlTables(trimmedSection).filter((table) => {
     const header = table.split("\n")[0]?.trim();
-    return header === undefined || !config.includes(header);
+    return header === undefined || !configHasTomlTableHeader(config, header);
   });
-  const skippedPolicyTable = splitTomlTables(trimmedSection).find(
-    (table) =>
-      table.split("\n")[0]?.trim() === "[shell_environment_policy]" && !tables.includes(table),
-  );
-  let nextConfig = config;
-  if (skippedPolicyTable) {
-    for (const excludedVar of skippedPolicyTable.matchAll(/"([^"]+)"/g)) {
-      nextConfig = mergeShellEnvPolicyExclude(nextConfig, excludedVar[1] ?? "");
-    }
-  }
   if (tables.length === 0) {
-    return nextConfig;
+    return config;
   }
   return appendCodexConfigSection(
-    nextConfig,
+    config,
     `${SYNARA_MANAGED_CODEX_CONFIG_BEGIN}\n${tables.join("\n\n")}\n${SYNARA_MANAGED_CODEX_CONFIG_END}`,
   );
 }
@@ -304,6 +302,15 @@ function prepareDpCodeCodexHomeOverlay(input: {
       : undefined);
   if (managedSection) {
     overlayConfig = appendManagedCodexConfigSection(overlayConfig, managedSection);
+    // Security control that must survive every rewrite: when the user defines
+    // their own [shell_environment_policy] (so the managed policy table was
+    // skipped), the token exclusion is merged into that table — including on
+    // rebuilds from the source config, which otherwise reset the user table
+    // to its unmerged form while keeping the MCP block alive.
+    const tokenEnvVar = /bearer_token_env_var\s*=\s*"([^"]+)"/.exec(managedSection)?.[1];
+    if (tokenEnvVar) {
+      overlayConfig = mergeShellEnvPolicyExclude(overlayConfig, tokenEnvVar);
+    }
   }
   writeFileSync(overlayConfigPath, overlayConfig, "utf8");
 

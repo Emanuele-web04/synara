@@ -296,12 +296,18 @@ const make = Effect.gen(function* () {
   >();
   const editResendTurnStartKeys = new Set<string>();
   const drainingQueuedTurns = new Set<string>();
-  // Threads with a drained queued turn whose `thread.turn-start-requested` has
-  // been dispatched into the engine but not fully started by the worker. While
-  // set, recovery drains and terminal-event drains must hold off so two queued
-  // turns are never promoted at once. The message id prevents direct starts on
-  // the same thread from clearing another queued promotion's reservation.
-  const pendingQueuedDispatchThreads = new Map<string, string>();
+  // Provider sessions with a drained queued turn whose
+  // `thread.turn-start-requested` has been dispatched into the engine but not
+  // fully started by the worker. While set, recovery drains and terminal-event
+  // drains must hold off so two queued turns are never promoted at once.
+  // Keyed by the session-owning thread id (child subagent threads share the
+  // parent session, so per-child keys would allow overlapping promotions on
+  // one session); the queued thread + message pair prevents unrelated starts
+  // from clearing another promotion's reservation.
+  const pendingQueuedDispatchBySessionThread = new Map<
+    string,
+    { readonly queuedThreadId: string; readonly messageId: string }
+  >();
   const sidechatContextBootstrapThreadIds = new Set<string>();
 
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
@@ -1361,14 +1367,22 @@ const make = Effect.gen(function* () {
   const processTurnStartRequested = Effect.fnUntraced(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.turn-start-requested" }>,
   ) {
-    const pendingQueuedMessageId = pendingQueuedDispatchThreads.get(event.payload.threadId);
-    const isPendingQueuedDispatch = pendingQueuedMessageId === event.payload.messageId;
+    const sessionThreadId =
+      (yield* resolveProviderSessionThread(event.payload.threadId))?.id ?? event.payload.threadId;
+    const matchesReservation = (
+      entry: { readonly queuedThreadId: string; readonly messageId: string } | undefined,
+    ) =>
+      entry?.queuedThreadId === (event.payload.threadId as string) &&
+      entry.messageId === event.payload.messageId;
+    const isPendingQueuedDispatch = matchesReservation(
+      pendingQueuedDispatchBySessionThread.get(sessionThreadId),
+    );
     const clearPendingQueuedDispatch = Effect.sync(() => {
       if (
         isPendingQueuedDispatch &&
-        pendingQueuedDispatchThreads.get(event.payload.threadId) === event.payload.messageId
+        matchesReservation(pendingQueuedDispatchBySessionThread.get(sessionThreadId))
       ) {
-        pendingQueuedDispatchThreads.delete(event.payload.threadId);
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
       }
     });
     try {
@@ -1549,7 +1563,11 @@ const make = Effect.gen(function* () {
 
   // Promote the next queued message only after the active provider turn settles.
   const drainQueuedTurnsForThread = Effect.fnUntraced(function* (threadId: ThreadId) {
-    if (drainingQueuedTurns.has(threadId) || pendingQueuedDispatchThreads.has(threadId)) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    if (
+      drainingQueuedTurns.has(threadId) ||
+      pendingQueuedDispatchBySessionThread.has(sessionThreadId)
+    ) {
       return;
     }
     drainingQueuedTurns.add(threadId);
@@ -1558,7 +1576,10 @@ const make = Effect.gen(function* () {
       if (!nextQueuedTurn) {
         return;
       }
-      pendingQueuedDispatchThreads.set(threadId, nextQueuedTurn.messageId);
+      pendingQueuedDispatchBySessionThread.set(sessionThreadId, {
+        queuedThreadId: threadId,
+        messageId: nextQueuedTurn.messageId,
+      });
       yield* orchestrationEngine
         .dispatch({
           type: "thread.turn.dispatch-queued",
@@ -1587,8 +1608,10 @@ const make = Effect.gen(function* () {
         })
         .pipe(
           // A failed promotion must not leave the in-flight marker behind, or
-          // every future drain for this thread would be blocked forever.
-          Effect.onError(() => Effect.sync(() => pendingQueuedDispatchThreads.delete(threadId))),
+          // every future drain for this session would be blocked forever.
+          Effect.onError(() =>
+            Effect.sync(() => pendingQueuedDispatchBySessionThread.delete(sessionThreadId)),
+          ),
         );
     } finally {
       drainingQueuedTurns.delete(threadId);
@@ -1992,7 +2015,13 @@ const make = Effect.gen(function* () {
     queuedTurnStartsByThread.delete(thread.id);
     yield* clearEditResendTurnStartKeysForThread(thread.id);
     drainingQueuedTurns.delete(thread.id);
-    pendingQueuedDispatchThreads.delete(thread.id);
+    // Reservations are keyed by session-owning thread but may belong to a
+    // stopping child's queued message; drop both directions.
+    for (const [sessionThreadId, reservation] of pendingQueuedDispatchBySessionThread) {
+      if (sessionThreadId === (thread.id as string) || reservation.queuedThreadId === thread.id) {
+        pendingQueuedDispatchBySessionThread.delete(sessionThreadId);
+      }
+    }
 
     const now = event.payload.createdAt;
     const providerThreadId =

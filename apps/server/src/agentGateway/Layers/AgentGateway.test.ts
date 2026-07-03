@@ -512,6 +512,24 @@ describe("AgentGateway", () => {
     }).pipe(Effect.provide(gatewayLayer));
   });
 
+  it.effect("rejects interrupts that would drive a higher-privileged thread", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer([
+      ...baseThreads,
+      makeThreadShell("thread-full-access", { runtimeMode: "full-access" }),
+    ]);
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_interrupt_thread",
+        args: { threadId: "thread-full-access" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "full-access");
+      assert.equal(harness.dispatched.length, 0);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
   it.effect("rejects heartbeats that would target a higher-privileged thread", () => {
     const { gatewayLayer, makeHarness } = makeHarnessLayer([
       ...baseThreads,

@@ -2,6 +2,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   appendCodexConfigSection,
+  configHasTomlTableHeader,
   extractManagedCodexConfigSection,
   mergeShellEnvPolicyExclude,
   SYNARA_MANAGED_CODEX_CONFIG_BEGIN,
@@ -68,6 +69,20 @@ describe("agent gateway MCP injection", () => {
     assert.equal(
       mergeShellEnvPolicyExclude('[model]\nname = "gpt-5.5"', SYNARA_AGENT_GATEWAY_TOKEN_ENV),
       '[model]\nname = "gpt-5.5"',
+    );
+  });
+
+  it("detects real TOML table headers, ignoring comments and strings", () => {
+    assert.isTrue(
+      configHasTomlTableHeader('[mcp_servers.synara]\nurl = "x"', "[mcp_servers.synara]"),
+    );
+    assert.isTrue(
+      configHasTomlTableHeader("  [mcp_servers.synara]  # managed", "[mcp_servers.synara]"),
+    );
+    // A commented-out example block must not count as the table being present.
+    assert.isFalse(configHasTomlTableHeader("# [mcp_servers.synara]", "[mcp_servers.synara]"));
+    assert.isFalse(
+      configHasTomlTableHeader('note = "see [mcp_servers.synara] docs"', "[mcp_servers.synara]"),
     );
   });
 

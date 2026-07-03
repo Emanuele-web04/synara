@@ -630,10 +630,13 @@ export const makeAgentGateway = Effect.gen(function* () {
         additionalProperties: false,
       },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const threadId = readStringArg(args, "threadId", { required: true })!;
+        const caller = yield* requireThreadShell(context.callerThreadId);
         const target = yield* requireThreadShell(threadId);
+        // Stopping a higher-privileged thread's work is still driving it.
+        yield* assertCallerMayDriveThread(caller, target);
         yield* orchestrationEngine
           .dispatch({
             type: "thread.turn.interrupt",
