@@ -144,6 +144,8 @@ export function useProviderModelCatalog(input: {
         provider: instance.provider,
         instanceId: instance.instanceId,
         cwd: discoveryCwd,
+        // Keep the closed picker scoped to the active account. Enabling every
+        // instance would fan model discovery out across all configured accounts.
         enabled: discoveryEnabled || selectedProviderInstanceId === instance.instanceId,
       }),
     ),
