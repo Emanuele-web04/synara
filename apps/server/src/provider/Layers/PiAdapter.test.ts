@@ -15,6 +15,7 @@ import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { SYNARA_COMPUTER_TOOL_NAMES } from "../../agentGateway/computerToolPermission.ts";
 import {
+  applyPiRuntimeApiKeysFromEnvironment,
   createPiModelRuntime,
   ensurePiAnthropicCatalogModels,
   getPiDiscoverableModels,
@@ -676,6 +677,42 @@ describe("getPiSupportedThinkingOptions", () => {
     );
 
     expect(options.map((option) => option.value)).toEqual(["low", "high", "max"]);
+  });
+});
+
+describe("applyPiRuntimeApiKeysFromEnvironment", () => {
+  it("maps Pi provider-instance API keys into runtime auth without mutating process.env", async () => {
+    const previousOpenAiKey = process.env.OPENAI_API_KEY;
+    process.env.OPENAI_API_KEY = "global-openai-key";
+    const runtimeKeys = new Map<string, string>();
+
+    try {
+      await applyPiRuntimeApiKeysFromEnvironment(
+        {
+          async setRuntimeApiKey(provider, apiKey) {
+            runtimeKeys.set(provider, apiKey);
+          },
+        },
+        {
+          OPENAI_API_KEY: "instance-openai-key",
+          ANTHROPIC_API_KEY: "anthropic-api-key",
+          ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth-token",
+          OPENCODE_API_KEY: "opencode-key",
+        },
+      );
+    } finally {
+      if (previousOpenAiKey === undefined) {
+        delete process.env.OPENAI_API_KEY;
+      } else {
+        process.env.OPENAI_API_KEY = previousOpenAiKey;
+      }
+    }
+
+    expect(runtimeKeys.get("openai")).toBe("instance-openai-key");
+    expect(runtimeKeys.get("anthropic")).toBe("anthropic-oauth-token");
+    expect(runtimeKeys.get("opencode")).toBe("opencode-key");
+    expect(runtimeKeys.get("opencode-go")).toBe("opencode-key");
+    expect(process.env.OPENAI_API_KEY).toBe(previousOpenAiKey);
   });
 });
 

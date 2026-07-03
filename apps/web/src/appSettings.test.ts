@@ -38,6 +38,7 @@ import {
   mergeProviderInstanceConfigPatch,
   mergeProviderStartOptions,
   normalizeChatFontSizePx,
+  normalizeInitialStoredAppSettingsForServerMigration,
   normalizeStoredAppSettings,
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
@@ -552,6 +553,52 @@ describe("normalizeStoredAppSettings", () => {
       },
     });
     expect(normalizeStoredAppSettings(decodedSettings).providerInstances).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: {
+          serverUrl: "http://127.0.0.1:4096",
+          serverPassword: "",
+          serverPasswordRedacted: true,
+        },
+      },
+    });
+  });
+
+  it("keeps legacy provider secrets until the server migration is committed", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        providerInstances: {
+          grok_work: {
+            driver: "grok",
+            environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+          },
+          opencode_work: {
+            driver: "opencode",
+            config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+          },
+        },
+      }),
+    );
+
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, false).providerInstances,
+    ).toEqual({
+      grok_work: {
+        driver: "grok",
+        environment: [{ name: "XAI_API_KEY", value: "super-secret", sensitive: true }],
+      },
+      opencode_work: {
+        driver: "opencode",
+        config: { serverUrl: "http://127.0.0.1:4096", serverPassword: "server-secret" },
+      },
+    });
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, true).providerInstances,
+    ).toEqual({
       grok_work: {
         driver: "grok",
         environment: [{ name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true }],
