@@ -150,6 +150,34 @@ export function gitResolvePullRequestQueryOptions(input: {
   });
 }
 
+// Refresh cadence for the Environment panel PR section: cheap enough to poll while the
+// panel is open, and event-based git invalidation covers pushes from this client.
+const GIT_PR_SNAPSHOT_STALE_TIME_MS = 30_000;
+const GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS = 60_000;
+
+export function gitPullRequestSnapshotQueryOptions(input: {
+  cwd: string | null;
+  reference: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    // Shares the ["git", "pull-request", cwd] prefix so existing invalidations cover it.
+    queryKey: ["git", "pull-request", input.cwd, "snapshot", input.reference] as const,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd || !input.reference) {
+        throw new Error("Pull request snapshot is unavailable.");
+      }
+      return api.git.pullRequestSnapshot({ cwd: input.cwd, reference: input.reference });
+    },
+    enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
+    staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
+    refetchInterval: GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
 export function gitWorkingTreeDiffQueryOptions(input: {
   cwd: string | null;
   scope?: GitReadWorkingTreeDiffInput["scope"];

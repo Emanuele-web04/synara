@@ -1697,6 +1697,15 @@ function SettingsRouteView() {
           })}
 
           {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPullRequest",
+            title: "Pull request",
+            description:
+              "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
+            resetLabel: "pull request section",
+            ariaLabel: "Show the Pull request section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
             settingKey: "showEnvironmentEditor",
             title: "Editor",
             description:

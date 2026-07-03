@@ -1,5 +1,11 @@
 import { Effect, Layer, Schema } from "effect";
-import { PositiveInt, TrimmedNonEmptyString } from "@t3tools/contracts";
+import {
+  PositiveInt,
+  TrimmedNonEmptyString,
+  type GitPullRequestCheck,
+  type GitPullRequestCheckStatus,
+  type GitPullRequestComment,
+} from "@t3tools/contracts";
 
 import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
@@ -109,6 +115,117 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   sshUrl: TrimmedNonEmptyString,
 });
 
+// `gh pr view --json statusCheckRollup` mixes CheckRun and StatusContext nodes; both are
+// covered by one permissive shape and told apart by which fields are populated.
+const RawStatusCheckRollupItemSchema = Schema.Struct({
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  context: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  conclusion: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  detailsUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  targetUrl: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawPullRequestChecksSchema = Schema.Struct({
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupItemSchema))),
+});
+
+// GraphQL review-threads query: unresolved threads with their root comment only. This is
+// the source of truth for "open review comments" — resolved threads and replies never
+// reach the client. Owner/repo are explicit variables so fork checkouts stay correct.
+const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes {
+          isResolved
+          comments(first: 1) {
+            nodes {
+              id
+              body
+              path
+              url
+              createdAt
+              author { login }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+      }
+    }
+  }
+}`;
+
+const RawReviewThreadCommentSchema = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  body: Schema.optional(Schema.NullOr(Schema.String)),
+  path: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+});
+
+const RawReviewThreadSchema = Schema.Struct({
+  isResolved: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  comments: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(
+          Schema.NullOr(Schema.Array(Schema.NullOr(RawReviewThreadCommentSchema))),
+        ),
+      }),
+    ),
+  ),
+});
+
+const RawReviewThreadsResponseSchema = Schema.Struct({
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        repository: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              pullRequest: Schema.optional(
+                Schema.NullOr(
+                  Schema.Struct({
+                    reviewThreads: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          nodes: Schema.optional(
+                            Schema.NullOr(Schema.Array(Schema.NullOr(RawReviewThreadSchema))),
+                          ),
+                          pageInfo: Schema.optional(
+                            Schema.NullOr(
+                              Schema.Struct({
+                                hasNextPage: Schema.optional(Schema.NullOr(Schema.Boolean)),
+                                endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                              }),
+                            ),
+                          ),
+                        }),
+                      ),
+                    ),
+                  }),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+});
+
 function normalizePullRequestSummary(
   raw: Schema.Schema.Type<typeof RawGitHubPullRequestSchema>,
 ): GitHubPullRequestSummary {
@@ -133,6 +250,99 @@ function normalizePullRequestSummary(
   };
 }
 
+// Maps StatusContext states and CheckRun statuses/conclusions onto the shared check status.
+function normalizeCheckStatus(
+  item: Schema.Schema.Type<typeof RawStatusCheckRollupItemSchema>,
+): GitPullRequestCheckStatus {
+  if (typeof item.state === "string" && item.state.length > 0) {
+    switch (item.state) {
+      case "SUCCESS":
+        return "success";
+      case "FAILURE":
+      case "ERROR":
+        return "failure";
+      default:
+        return "pending";
+    }
+  }
+
+  if (typeof item.status === "string" && item.status !== "COMPLETED") {
+    return "pending";
+  }
+
+  switch (item.conclusion) {
+    case "SUCCESS":
+      return "success";
+    case "FAILURE":
+    case "TIMED_OUT":
+    case "ACTION_REQUIRED":
+    case "STARTUP_FAILURE":
+      return "failure";
+    case "SKIPPED":
+      return "skipped";
+    case "CANCELLED":
+      return "cancelled";
+    case "NEUTRAL":
+    case "STALE":
+      return "neutral";
+    default:
+      return "pending";
+  }
+}
+
+function normalizePullRequestChecks(
+  raw: Schema.Schema.Type<typeof RawPullRequestChecksSchema>,
+): GitPullRequestCheck[] {
+  const checks: GitPullRequestCheck[] = [];
+  for (const item of raw.statusCheckRollup ?? []) {
+    const name = (item.name ?? item.context ?? "").trim();
+    if (name.length === 0) {
+      continue;
+    }
+    checks.push({
+      name,
+      status: normalizeCheckStatus(item),
+      url: item.detailsUrl ?? item.targetUrl ?? null,
+    });
+  }
+  return checks;
+}
+
+function normalizePullRequestReviewComments(
+  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+): GitPullRequestComment[] {
+  const threads = raw.data?.repository?.pullRequest?.reviewThreads?.nodes ?? [];
+  const comments: GitPullRequestComment[] = [];
+  for (const thread of threads) {
+    if (!thread || thread.isResolved === true) {
+      continue;
+    }
+    const rootComment = thread.comments?.nodes?.find((node) => node !== null) ?? null;
+    if (!rootComment) {
+      continue;
+    }
+    comments.push({
+      id: rootComment.id,
+      author: rootComment.author?.login?.trim() || null,
+      body: rootComment.body ?? "",
+      path: rootComment.path?.trim() || null,
+      url: rootComment.url ?? null,
+      createdAt: rootComment.createdAt?.trim() || null,
+    });
+  }
+  return comments;
+}
+
+function getPullRequestReviewThreadsPageInfo(
+  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+): { hasNextPage: boolean; endCursor: string | null } {
+  const pageInfo = raw.data?.repository?.pullRequest?.reviewThreads?.pageInfo;
+  return {
+    hasNextPage: pageInfo?.hasNextPage === true,
+    endCursor: pageInfo?.endCursor?.trim() || null,
+  };
+}
+
 function normalizeRepositoryCloneUrls(
   raw: Schema.Schema.Type<typeof RawGitHubRepositoryCloneUrlsSchema>,
 ): GitHubRepositoryCloneUrls {
@@ -146,7 +356,12 @@ function normalizeRepositoryCloneUrls(
 function decodeGitHubJson<S extends Schema.Top>(
   raw: string,
   schema: S,
-  operation: "listOpenPullRequests" | "getPullRequest" | "getRepositoryCloneUrls",
+  operation:
+    | "listOpenPullRequests"
+    | "getPullRequest"
+    | "getRepositoryCloneUrls"
+    | "getPullRequestChecks"
+    | "getPullRequestReviewComments",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -225,6 +440,61 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.map(normalizePullRequestSummary),
       ),
+    getPullRequestChecks: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "view", input.reference, "--json", "statusCheckRollup"],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawPullRequestChecksSchema,
+            "getPullRequestChecks",
+            "GitHub CLI returned invalid check rollup JSON.",
+          ),
+        ),
+        Effect.map(normalizePullRequestChecks),
+      ),
+    getPullRequestReviewComments: (input) =>
+      Effect.gen(function* () {
+        const comments: GitPullRequestComment[] = [];
+        let after: string | null = null;
+
+        do {
+          const args = [
+            "api",
+            "graphql",
+            "--hostname",
+            input.host,
+            "-f",
+            `query=${PULL_REQUEST_REVIEW_THREADS_QUERY}`,
+            "-F",
+            `owner=${input.owner}`,
+            "-F",
+            `repo=${input.repo}`,
+            "-F",
+            `number=${input.number}`,
+            ...(after ? ["-F", `after=${after}`] : []),
+          ];
+
+          const raw = yield* execute({ cwd: input.cwd, args }).pipe(
+            Effect.map((result) => result.stdout.trim()),
+          );
+          const decoded = yield* decodeGitHubJson(
+            raw,
+            RawReviewThreadsResponseSchema,
+            "getPullRequestReviewComments",
+            "GitHub CLI returned invalid review threads JSON.",
+          );
+          comments.push(...normalizePullRequestReviewComments(decoded));
+
+          const pageInfo = getPullRequestReviewThreadsPageInfo(decoded);
+          after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+        } while (after !== null);
+
+        return comments;
+      }),
     getRepositoryCloneUrls: (input) =>
       execute({
         cwd: input.cwd,
