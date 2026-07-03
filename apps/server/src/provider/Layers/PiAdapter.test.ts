@@ -398,6 +398,7 @@ describe("getPiDiscoverableModels", () => {
         agentDir,
         { ModelRuntime },
         AbortSignal.abort(),
+        { OPENAI_API_KEY: "instance-openai-key" },
       );
       const secondRuntime = await createPiModelRuntime(
         agentDir,
@@ -406,6 +407,9 @@ describe("getPiDiscoverableModels", () => {
       );
       const firstRegistry = new ModelRegistry(firstRuntime);
       const secondRegistry = new ModelRegistry(secondRuntime);
+
+      expect(firstRuntime.hasConfiguredAuth("openai")).toBe(true);
+      expect(secondRuntime.hasConfiguredAuth("openai")).toBe(false);
 
       firstRegistry.registerProvider("project-local", {
         baseUrl: "http://127.0.0.1:11434/v1",
