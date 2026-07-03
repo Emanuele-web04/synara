@@ -2001,11 +2001,11 @@ export default function ChatView({
         provider: instance.provider,
         instanceId: instance.instanceId,
         cwd: providerModelDiscoveryCwd,
-        enabled:
-          isModelPickerOpen ||
-          selectedProvider === instance.provider ||
-          lockedProvider === instance.provider ||
-          selectedProviderInstanceId === instance.instanceId,
+        // With the picker closed only the active instance needs models;
+        // enabling every same-provider instance would probe all configured
+        // accounts (Codex spawns app-server discovery per instance) just by
+        // opening a chat. The full fan-out is reserved for the open picker.
+        enabled: isModelPickerOpen || selectedProviderInstanceId === instance.instanceId,
       }),
     ),
   });
