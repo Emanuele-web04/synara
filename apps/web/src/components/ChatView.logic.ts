@@ -530,6 +530,30 @@ export function createLocalDispatchSnapshot(
   };
 }
 
+// Computes the next client-side dispatch marker while preserving in-flight setup
+// progress and dropping failed setup rows that are only being held for display.
+export function resolveNextLocalDispatchSnapshot(input: {
+  current: LocalDispatchSnapshot | null;
+  activeThread: Thread | undefined;
+  options?: { worktreeSetupStepId?: WorktreeSetupStepId };
+}): LocalDispatchSnapshot {
+  const worktreeSetupStepId = input.options?.worktreeSetupStepId;
+  if (!input.current || worktreeSetupHasError(input.current.worktreeSetup)) {
+    return createLocalDispatchSnapshot(input.activeThread, input.options);
+  }
+
+  if (!worktreeSetupStepId) {
+    return input.current;
+  }
+
+  const alreadyActive = input.current.worktreeSetup?.steps.some(
+    (step) => step.id === worktreeSetupStepId && step.status === "active",
+  );
+  return alreadyActive
+    ? input.current
+    : { ...input.current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
+}
+
 export function hasServerAcknowledgedLocalDispatch(input: {
   localDispatch: LocalDispatchSnapshot | null;
   phase: SessionPhase;

@@ -8,6 +8,7 @@ import {
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
+  resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -942,6 +943,53 @@ describe("worktree setup snapshots", () => {
   it("reports no error for null or healthy snapshots", () => {
     expect(worktreeSetupHasError(null)).toBe(false);
     expect(worktreeSetupHasError(createWorktreeSetupSnapshot("create-worktree"))).toBe(false);
+  });
+
+  it("replaces a held failed setup when a fresh local dispatch starts", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup).toBeNull();
+  });
+
+  it("replaces a held failed setup when retrying worktree setup", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "create-worktree" },
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup?.steps.map((step) => step.status)).toEqual([
+      "active",
+      "pending",
+      "pending",
+    ]);
   });
 });
 

@@ -489,12 +489,11 @@ import {
   DismissedProviderHealthBannersSchema,
   shouldRenderTerminalWorkspace,
   collectUserMessageBlobPreviewUrls,
-  createLocalDispatchSnapshot,
-  createWorktreeSetupSnapshot,
   deriveComposerSendState,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
+  resolveNextLocalDispatchSnapshot,
   WORKTREE_SETUP_ERROR_HOLD_MS,
   worktreeSetupHasError,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
@@ -1087,6 +1086,7 @@ export default function ChatView({
     Record<ThreadId, string | null>
   >({});
   const [localDispatch, setLocalDispatch] = useState<LocalDispatchSnapshot | null>(null);
+  const failedWorktreeSetupDispatchStartedAtRef = useRef<string | null>(null);
   const [isLocalConnecting, _setIsLocalConnecting] = useState(false);
   const [isRevertingCheckpoint, setIsRevertingCheckpoint] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
@@ -5275,20 +5275,12 @@ export default function ChatView({
 
   const beginLocalDispatch = useCallback(
     (options?: { worktreeSetupStepId?: WorktreeSetupStepId }) => {
-      const worktreeSetupStepId = options?.worktreeSetupStepId;
       setLocalDispatch((current) => {
-        if (current) {
-          if (!worktreeSetupStepId) {
-            return current;
-          }
-          const alreadyActive = current.worktreeSetup?.steps.some(
-            (step) => step.id === worktreeSetupStepId && step.status === "active",
-          );
-          return alreadyActive
-            ? current
-            : { ...current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
+        const next = resolveNextLocalDispatchSnapshot({ current, activeThread, options });
+        if (next !== current) {
+          failedWorktreeSetupDispatchStartedAtRef.current = null;
         }
-        return createLocalDispatchSnapshot(activeThread, options);
+        return next;
       });
     },
     [activeThread],
@@ -5300,21 +5292,33 @@ export default function ChatView({
         return current;
       }
       const failed = failWorktreeSetupSnapshot(current.worktreeSetup);
+      failedWorktreeSetupDispatchStartedAtRef.current = current.startedAt;
       return failed === current.worktreeSetup ? current : { ...current, worktreeSetup: failed };
     });
   }, []);
 
   const resetLocalDispatch = useCallback(() => {
+    failedWorktreeSetupDispatchStartedAtRef.current = null;
     setLocalDispatch(null);
   }, []);
 
   // Fallback cleanup for a failed worktree setup: clears the dispatch after the
-  // error hold unless a newer dispatch (no error step) already replaced it.
+  // error hold unless a newer dispatch already replaced it.
   const scheduleFailedWorktreeSetupDispatchReset = useCallback(() => {
+    const failedDispatchStartedAt = failedWorktreeSetupDispatchStartedAtRef.current;
     window.setTimeout(() => {
-      setLocalDispatch((current) =>
-        worktreeSetupHasError(current?.worktreeSetup ?? null) ? null : current,
-      );
+      setLocalDispatch((current) => {
+        if (
+          !failedDispatchStartedAt ||
+          !current ||
+          current.startedAt !== failedDispatchStartedAt ||
+          !worktreeSetupHasError(current.worktreeSetup)
+        ) {
+          return current;
+        }
+        failedWorktreeSetupDispatchStartedAtRef.current = null;
+        return null;
+      });
     }, WORKTREE_SETUP_ERROR_HOLD_MS);
   }, []);
 
@@ -5327,11 +5331,32 @@ export default function ChatView({
     // painted the error (thread errors count as acknowledgement), so hold the
     // row briefly before letting it animate out.
     if (localDispatchWorktreeSetupFailed) {
-      const holdTimeout = window.setTimeout(resetLocalDispatch, WORKTREE_SETUP_ERROR_HOLD_MS);
+      const failedDispatchStartedAt = localDispatch?.startedAt;
+      if (!failedDispatchStartedAt) {
+        return;
+      }
+      const holdTimeout = window.setTimeout(() => {
+        setLocalDispatch((current) => {
+          if (
+            !current ||
+            current.startedAt !== failedDispatchStartedAt ||
+            !worktreeSetupHasError(current.worktreeSetup)
+          ) {
+            return current;
+          }
+          failedWorktreeSetupDispatchStartedAtRef.current = null;
+          return null;
+        });
+      }, WORKTREE_SETUP_ERROR_HOLD_MS);
       return () => window.clearTimeout(holdTimeout);
     }
     resetLocalDispatch();
-  }, [localDispatchWorktreeSetupFailed, resetLocalDispatch, serverAcknowledgedLocalDispatch]);
+  }, [
+    localDispatch?.startedAt,
+    localDispatchWorktreeSetupFailed,
+    resetLocalDispatch,
+    serverAcknowledgedLocalDispatch,
+  ]);
 
   useEffect(() => {
     if (!activeThreadId) return;
