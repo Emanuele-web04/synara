@@ -8,6 +8,7 @@ import {
   goForwardInAppHistory,
   resolveAppNavigationState,
 } from "../appNavigation";
+import { resolveSelectableProviderInstanceId, useAppSettings } from "../appSettings";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import { RecentViewSwitcher } from "../components/RecentViewSwitcher";
 import { shouldRenderTerminalWorkspace } from "../components/ChatView.logic";
@@ -249,6 +250,7 @@ function ChatRouteGlobalShortcuts() {
   const platform = getNavigatorPlatform();
   const providerStatuses = useProviderStatusesForLocalConfig();
   const refreshProviderStatuses = useRefreshProviderStatusesNow();
+  const { settings } = useAppSettings();
   const activeThreadTerminalState = activeContextThreadId
     ? selectThreadTerminalState(terminalStateByThreadId, activeContextThreadId)
     : null;
@@ -441,8 +443,10 @@ function ChatRouteGlobalShortcuts() {
         event.preventDefault();
         event.stopPropagation();
         void (async () => {
+          const providerInstanceId = resolveSelectableProviderInstanceId(settings, provider);
           const providerAvailability = await resolveProviderSendAvailabilityWithRefresh({
             provider,
+            instanceId: providerInstanceId,
             statuses: providerStatuses,
             refreshStatuses: () => refreshProviderStatuses({ silent: true }),
           });
@@ -489,6 +493,7 @@ function ChatRouteGlobalShortcuts() {
     refreshProviderStatuses,
     recentSwitcherState,
     selectedThreadIdsSize,
+    settings,
     terminalOpen,
     terminalWorkspaceOpen,
     toggleSidebar,

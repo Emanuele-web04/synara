@@ -311,44 +311,16 @@ function shouldRestartForProviderOptionsChange(input: {
   );
 }
 
-function readNormalizedOption(options: Record<string, unknown> | undefined, key: string): string {
-  const value = options?.[key];
-  return typeof value === "string" ? value : "";
-}
-
 function shouldDropResumeCursorForProviderOptionsChange(input: {
   readonly requestedProvider: ProviderKind;
   readonly providerOptionsChanged: boolean;
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
 }): boolean {
-  if (!input.providerOptionsChanged) {
-    return false;
-  }
-  const previous = normalizeProviderOptionsForComparison(
-    input.requestedProvider,
-    input.previousProviderOptions,
-  );
-  const requested = normalizeProviderOptionsForComparison(
-    input.requestedProvider,
-    input.requestedProviderOptions,
-  );
-  switch (input.requestedProvider) {
-    case "codex":
-      return (
-        readNormalizedOption(previous, "homePath") !==
-          readNormalizedOption(requested, "homePath") ||
-        readNormalizedOption(previous, "shadowHomePath") !==
-          readNormalizedOption(requested, "shadowHomePath") ||
-        readNormalizedOption(previous, "accountId") !== readNormalizedOption(requested, "accountId")
-      );
-    case "claudeAgent":
-      return (
-        readNormalizedOption(previous, "homePath") !== readNormalizedOption(requested, "homePath")
-      );
-    default:
-      return false;
-  }
+  // Provider options include account homes, credentials, endpoints, and agent
+  // dirs. Reusing a provider-native cursor across any of those changes can
+  // silently resume the previous account/endpoint.
+  return input.providerOptionsChanged;
 }
 
 function escapeRegExp(value: string): string {
