@@ -553,6 +553,55 @@ describe("CheckpointReactor", () => {
     expect(thread.checkpoints.at(-1)?.files?.map((file) => file.path)).toEqual(["b.txt"]);
   });
 
+  it("recreates a missing message-start baseline before aliasing the turn-start ref", async () => {
+    const harness = await createHarness({ seedFilesystemCheckpoints: false });
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const messageId = MessageId.makeUnsafe("message-missing-baseline");
+    const turnId = asTurnId("turn-missing-baseline");
+    const createdAt = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-missing-baseline-start"),
+        threadId,
+        message: {
+          messageId,
+          role: "user",
+          text: "recover baseline",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+    const messageStartRef = checkpointRefForThreadMessageStart(threadId, messageId);
+    await waitForGitRefExists(harness.cwd, messageStartRef);
+
+    // Simulate a missing message-start baseline when the provider's
+    // turn.started arrives, regardless of which startup path dropped it.
+    runGit(harness.cwd, ["update-ref", "-d", messageStartRef]);
+
+    harness.provider.emit({
+      type: "turn.started",
+      eventId: EventId.makeUnsafe("evt-turn-missing-baseline-started"),
+      provider: "codex",
+      createdAt: new Date().toISOString(),
+      threadId,
+      turnId,
+    });
+    const turnStartRef = checkpointRefForThreadTurnStart(threadId, turnId);
+    await waitForGitRefExists(harness.cwd, turnStartRef);
+
+    // The reactor must re-establish the message-start baseline and alias the
+    // turn-start ref to it, not capture an independent turn-start snapshot.
+    expect(gitRefExists(harness.cwd, messageStartRef)).toBe(true);
+    expect(runGit(harness.cwd, ["rev-parse", messageStartRef]).trim()).toBe(
+      runGit(harness.cwd, ["rev-parse", turnStartRef]).trim(),
+    );
+  });
+
   it("waits briefly for the assistant message id before finalizing a completed turn checkpoint", async () => {
     const harness = await createHarness({ seedFilesystemCheckpoints: false });
     const turnId = asTurnId("turn-assistant-race");

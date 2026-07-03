@@ -361,6 +361,7 @@ export default function BranchToolbar({
     provider: activeProvider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    fetchProviderData: false,
   });
   const [rateLimitsOpen, setRateLimitsOpen] = useState(true);
   const [envPickerOpen, setEnvPickerOpen] = useState(false);

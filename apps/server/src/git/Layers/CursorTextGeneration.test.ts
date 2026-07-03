@@ -361,7 +361,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
             },
           });
 
-          expect(generated.title).toBe("Trim reconnect spinner status");
+          expect(generated.title).toBe("Trim reconnect spinner status after resume");
 
           const exitLog = yield* waitForFileContent(exitLogPath);
           expect(exitLog).toContain("exit:0");

@@ -4,8 +4,11 @@
 // Exports: generic title checks plus fallback/generated title sanitizers
 
 export const GENERIC_CHAT_THREAD_TITLE = "New thread";
-const MAX_CHAT_THREAD_TITLE_LENGTH = 50;
-const MAX_CHAT_THREAD_TITLE_WORDS = 4;
+const MAX_CHAT_THREAD_TITLE_LENGTH = 60;
+// Single source for the title word cap. Exported so the server-side title prompt
+// (textGenerationShared.buildThreadTitlePrompt) derives its wording and fallback
+// limits from the same number the sanitizers enforce here.
+export const MAX_CHAT_THREAD_TITLE_WORDS = 6;
 
 function normalizeTitleWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();

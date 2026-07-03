@@ -1,8 +1,8 @@
-// Note: option rows + nav arrows use raw <button> because they are selectable
-// card/option items with number chips and multi-state styling (selected /
-// responding) that don't fit the shadcn Button taxonomy. The card is rendered
-// detached, floating just above the composer (not fused into the composer
-// surface), so it reuses the composer surface chrome to stay in-tint.
+// Note: option rows render through the shared ComposerChoiceRow (number chip +
+// label + description) so this card and the pending-approval card stay identical;
+// the nav arrows stay raw <button> since they are compact icon controls. The card
+// is rendered detached, floating just above the composer (not fused into the
+// composer surface), so it reuses the composer surface chrome to stay in-tint.
 import { type ApprovalRequestId } from "@t3tools/contracts";
 import { memo, useEffect, useEffectEvent, useRef } from "react";
 import { type PendingUserInput } from "../../session-logic";
@@ -12,6 +12,7 @@ import {
 } from "../../pendingUserInput";
 import { CheckIcon, ChevronLeftIcon, ChevronRightIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { ComposerChoiceRow } from "./ComposerChoiceRow";
 import { COMPOSER_INPUT_SURFACE_CLASS_NAME } from "./composerPickerStyles";
 
 interface PendingUserInputPanelProps {
@@ -192,43 +193,20 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             const isSelected = progress.selectedOptionLabels.includes(option.label);
             const shortcutKey = index < 9 ? index + 1 : null;
             return (
-              <button
+              <ComposerChoiceRow
                 key={`${activeQuestion.id}:${option.label}`}
-                type="button"
+                shortcut={shortcutKey}
+                label={option.label}
+                description={option.description}
+                selected={isSelected}
                 disabled={isResponding}
-                onClick={() => handleOptionSelection(activeQuestion.id, option.label)}
-                className={cn(
-                  "group flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors duration-150",
-                  isSelected
-                    ? "bg-[var(--color-background-button-secondary)]"
-                    : "hover:bg-[var(--color-background-button-secondary-hover)]",
-                  isResponding && "cursor-not-allowed opacity-50",
-                )}
-              >
-                {shortcutKey !== null ? (
-                  <span
-                    className={cn(
-                      "flex size-[18px] shrink-0 items-center justify-center rounded-full text-[11px] font-medium tabular-nums transition-colors duration-150",
-                      isSelected
-                        ? "bg-[var(--color-text-foreground)] text-[var(--color-background-surface)]"
-                        : "border border-[color:var(--color-border)] text-[var(--color-text-foreground-secondary)] group-hover:text-[var(--color-text-foreground)]",
-                    )}
-                  >
-                    {shortcutKey}
-                  </span>
-                ) : null}
-                <div className="min-w-0 flex-1 leading-snug">
-                  <span className="text-[13px] font-medium text-foreground/90">{option.label}</span>
-                  {option.description && option.description !== option.label ? (
-                    <span className="ml-1.5 text-[12px] text-muted-foreground/55">
-                      {option.description}
-                    </span>
-                  ) : null}
-                </div>
-                {isSelected ? (
-                  <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
-                ) : null}
-              </button>
+                onSelect={() => handleOptionSelection(activeQuestion.id, option.label)}
+                trailing={
+                  isSelected ? (
+                    <CheckIcon className="mt-0.5 size-3.5 shrink-0 text-[var(--color-text-foreground)]" />
+                  ) : null
+                }
+              />
             );
           })}
         </div>

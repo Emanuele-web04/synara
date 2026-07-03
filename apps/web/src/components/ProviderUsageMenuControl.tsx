@@ -39,6 +39,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
     provider,
     threads,
     codexHomePath: settings.codexHomePath || null,
+    fetchProviderData: false,
   });
   const usageRows = useMemo(
     () => deriveProviderUsageDisplayRows(usageSummary.rateLimits),

@@ -923,8 +923,25 @@ function ComposerPromptEditorInner({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // Disabling the editor (e.g. while a turn dispatch is connecting) turns off
+  // contenteditable, which drops browser focus to <body>. Remember whether the
+  // composer owned focus at disable time and hand it back once re-enabled, so
+  // sending a message never silently kicks the user out of the input.
+  const restoreFocusOnEnableRef = useRef(false);
   useEffect(() => {
-    editor.setEditable(!disabled);
+    if (disabled) {
+      const rootElement = editor.getRootElement();
+      restoreFocusOnEnableRef.current = Boolean(
+        rootElement && document.activeElement === rootElement,
+      );
+      editor.setEditable(false);
+      return;
+    }
+    editor.setEditable(true);
+    if (restoreFocusOnEnableRef.current) {
+      restoreFocusOnEnableRef.current = false;
+      editor.getRootElement()?.focus();
+    }
   }, [disabled, editor]);
 
   useLayoutEffect(() => {
