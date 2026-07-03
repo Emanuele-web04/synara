@@ -149,6 +149,10 @@ export function useProviderModelCatalog(input: {
   const { settings, serverSettings } = useAppSettings();
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const providerInstances = useMemo(() => getProviderInstanceOptions(settings), [settings]);
+  // Callers without an explicit instance selection route to the provider's
+  // default instance, so that is the only instance discovery must warm.
+  const effectiveSelectedInstanceId = (selectedProviderInstanceId?.trim() ||
+    selectedProvider) as ProviderInstanceId;
   const instanceModelQueries = useQueries({
     queries: providerInstances.map((instance) =>
       modelQueryOptionsForProviderInstance({
@@ -158,7 +162,7 @@ export function useProviderModelCatalog(input: {
         cwd: discoveryCwd,
         // Keep the closed picker scoped to the active account. Enabling every
         // instance would fan model discovery out across all configured accounts.
-        enabled: discoveryEnabled || selectedProviderInstanceId === instance.instanceId,
+        enabled: discoveryEnabled || effectiveSelectedInstanceId === instance.instanceId,
       }),
     ),
   });

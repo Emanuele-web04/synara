@@ -375,11 +375,19 @@ export function useChatProviderModels({
   const searchableModelOptions = useMemo(
     () =>
       buildSearchableModelOptions({
-        providerOptions: providerInstances.map((instance) => ({
-          value: instance.provider,
-          label: instance.label,
-          instanceId: instance.instanceId,
-        })),
+        providerOptions: providerInstances
+          // Search mirrors the picker: disabled instances are not actionable,
+          // and a started thread is locked to its exact provider instance.
+          .filter(
+            (instance) =>
+              instance.enabled &&
+              (lockedProvider === null || instance.instanceId === selectedProviderInstanceId),
+          )
+          .map((instance) => ({
+            value: instance.provider,
+            label: instance.label,
+            instanceId: instance.instanceId,
+          })),
         modelOptionsByProvider,
         modelOptionsByProviderInstance,
         providerOrder: settings.providerOrder,
@@ -393,6 +401,7 @@ export function useChatProviderModels({
       modelOptionsByProviderInstance,
       providerInstances,
       selectedProvider,
+      selectedProviderInstanceId,
       settings.hiddenProviders,
       settings.providerOrder,
     ],
