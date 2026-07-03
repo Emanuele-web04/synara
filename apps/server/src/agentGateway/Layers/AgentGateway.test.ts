@@ -1,13 +1,14 @@
 import { assert, describe, it } from "@effect/vitest";
 import type {
   AutomationCreateInput,
+  AutomationDefinition,
   OrchestrationCommand,
   OrchestrationProjectShell,
   OrchestrationThread,
   OrchestrationThreadShell,
   ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
-import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { AutomationId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
 
 import { AutomationService } from "../../automation/Services/AutomationService.ts";
@@ -89,6 +90,7 @@ interface GatewayHarness {
   readonly dispatched: Array<OrchestrationCommand>;
   readonly automationCreates: Array<AutomationCreateInput>;
   readonly automationUpdates: Array<{ id: string; enabled?: boolean | undefined }>;
+  readonly automationDeletes: Array<{ id: string }>;
   readonly callTool: (input: {
     readonly token: string;
     readonly name: string;
@@ -100,15 +102,54 @@ interface GatewayHarness {
   }) => Effect.Effect<{ status: number; body?: unknown }>;
 }
 
+function makeAutomationDefinition(
+  overrides: Partial<AutomationDefinition> = {},
+): AutomationDefinition {
+  return {
+    id: AutomationId.makeUnsafe("automation-1"),
+    projectId: PROJECT_ID,
+    sourceThreadId: ThreadId.makeUnsafe("thread-parent"),
+    name: "Monitor children",
+    prompt: "check children",
+    schedule: { type: "interval", everySeconds: 300 },
+    enabled: true,
+    nextRunAt: NOW,
+    modelSelection: { provider: "codex", model: "gpt-5.5" },
+    runtimeMode: "approval-required",
+    interactionMode: "default",
+    worktreeMode: "local",
+    mode: "heartbeat",
+    targetThreadId: ThreadId.makeUnsafe("thread-parent"),
+    maxIterations: 50,
+    stopOnError: true,
+    completionPolicyVersion: 0,
+    completionPolicyUpdatedAt: NOW,
+    minimumIntervalSeconds: 60,
+    maxRuntimeSeconds: 3600,
+    retryPolicy: { type: "none" },
+    misfirePolicy: "coalesce",
+    acknowledgedRisks: ["local-checkout"],
+    iterationCount: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+    archivedAt: null,
+    ...overrides,
+  };
+}
+
 const VALID_TOKENS: Record<string, string> = {
   "token-parent": "thread-parent",
   "token-ghost": "thread-ghost",
 };
 
-function makeHarnessLayer(threads: ReadonlyArray<OrchestrationThreadShell>) {
+function makeHarnessLayer(
+  threads: ReadonlyArray<OrchestrationThreadShell>,
+  automationDefinitions: ReadonlyArray<AutomationDefinition> = [],
+) {
   const dispatched: Array<OrchestrationCommand> = [];
   const automationCreates: Array<AutomationCreateInput> = [];
   const automationUpdates: Array<{ id: string; enabled?: boolean | undefined }> = [];
+  const automationDeletes: Array<{ id: string }> = [];
 
   const credentialsLayer = Layer.succeed(AgentGatewayCredentials, {
     mcpEndpointUrl: "http://127.0.0.1:3773/mcp",
@@ -175,8 +216,19 @@ function makeHarnessLayer(threads: ReadonlyArray<OrchestrationThreadShell>) {
         automationUpdates.push(input);
         return { id: input.id };
       }),
-    delete: () => Effect.void,
-    list: () => Effect.succeed({ definitions: [], runs: [] }),
+    delete: (input: { id: string }) =>
+      Effect.sync(() => {
+        automationDeletes.push(input);
+      }),
+    list: (input?: { projectId?: string; includeArchived?: boolean }) =>
+      Effect.succeed({
+        definitions: automationDefinitions
+          .filter((definition) =>
+            input?.projectId ? definition.projectId === input.projectId : true,
+          )
+          .filter((definition) => (input?.includeArchived ? true : definition.archivedAt === null)),
+        runs: [],
+      }),
   } as unknown as (typeof AutomationService)["Service"]);
 
   const gitLayer = Layer.succeed(GitCore, {
@@ -222,6 +274,7 @@ function makeHarnessLayer(threads: ReadonlyArray<OrchestrationThreadShell>) {
       dispatched,
       automationCreates,
       automationUpdates,
+      automationDeletes,
       callTool,
       postRaw,
     } satisfies GatewayHarness;
@@ -661,7 +714,9 @@ describe("AgentGateway", () => {
   });
 
   it.effect("disables an automation on cancel", () => {
-    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads);
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(baseThreads, [
+      makeAutomationDefinition(),
+    ]);
     return Effect.gen(function* () {
       const harness = yield* makeHarness;
       const response = yield* harness.callTool({
@@ -671,6 +726,37 @@ describe("AgentGateway", () => {
       });
       assert.isFalse(isToolError(response.result), toolErrorText(response.result));
       assert.deepEqual(harness.automationUpdates, [{ id: "automation-1", enabled: false }]);
+    }).pipe(Effect.provide(gatewayLayer));
+  });
+
+  it.effect("rejects automation cancellation when the caller cannot own or drive it", () => {
+    const { gatewayLayer, makeHarness } = makeHarnessLayer(
+      [
+        ...baseThreads,
+        makeThreadShell("thread-elevated", { runtimeMode: "full-access" }),
+        makeThreadShell("thread-other"),
+      ],
+      [
+        makeAutomationDefinition({
+          id: AutomationId.makeUnsafe("automation-elevated"),
+          sourceThreadId: ThreadId.makeUnsafe("thread-other"),
+          targetThreadId: ThreadId.makeUnsafe("thread-elevated"),
+          runtimeMode: "full-access",
+          acknowledgedRisks: ["full-access", "local-checkout"],
+        }),
+      ],
+    );
+    return Effect.gen(function* () {
+      const harness = yield* makeHarness;
+      const response = yield* harness.callTool({
+        token: "token-parent",
+        name: "synara_cancel_automation",
+        args: { automationId: "automation-elevated" },
+      });
+      assert.isTrue(isToolError(response.result));
+      assert.include(toolErrorText(response.result), "full-access");
+      assert.deepEqual(harness.automationUpdates, []);
+      assert.deepEqual(harness.automationDeletes, []);
     }).pipe(Effect.provide(gatewayLayer));
   });
 

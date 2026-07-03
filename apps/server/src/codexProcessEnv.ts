@@ -171,12 +171,53 @@ export function extractManagedCodexConfigSection(config: string): string | undef
   return content.length > 0 ? content : undefined;
 }
 
+// Normalize TOML table headers so legal bracket/dot whitespace does not produce
+// duplicate managed tables when comparing user config against Synara config.
+function normalizeTomlTableHeaderName(line: string): string | undefined {
+  const match = /^\s*\[\s*(.*?)\s*\]\s*(?:#.*)?$/.exec(line);
+  if (!match) {
+    return undefined;
+  }
+  return match[1]
+    .split(".")
+    .map((part) => part.trim())
+    .join(".");
+}
+
+function findTomlTableHeader(config: string, header: string) {
+  const target = normalizeTomlTableHeaderName(header);
+  if (!target) {
+    return undefined;
+  }
+  let offset = 0;
+  for (const rawLine of config.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (normalizeTomlTableHeaderName(line) === target) {
+      return { index: offset, end: offset + line.length };
+    }
+    offset += rawLine.length + 1;
+  }
+  return undefined;
+}
+
+function findNextTomlTableHeaderIndex(config: string, start: number): number {
+  const tail = config.slice(start);
+  let offset = 0;
+  for (const rawLine of tail.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (normalizeTomlTableHeaderName(line) !== undefined) {
+      return start + offset;
+    }
+    offset += rawLine.length + 1;
+  }
+  return config.length;
+}
+
 // True when the config declares the given table header as an actual TOML
 // header line (not inside a comment or string, which a raw substring search
 // would falsely match — e.g. `# [mcp_servers.synara]` in an example block).
 export function configHasTomlTableHeader(config: string, header: string): boolean {
-  const escaped = header.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`^\\s*${escaped}\\s*(?:#.*)?$`, "m").test(config);
+  return findTomlTableHeader(config, header) !== undefined;
 }
 
 // Split a TOML snippet into its top-level tables (header line + body).
@@ -205,14 +246,12 @@ export function mergeShellEnvPolicyExclude(config: string, envVarName: string): 
   if (!envVarName) {
     return config;
   }
-  const headerPattern = /^\s*\[shell_environment_policy]\s*$/m;
-  const headerMatch = headerPattern.exec(config);
+  const headerMatch = findTomlTableHeader(config, "[shell_environment_policy]");
   if (!headerMatch) {
     return config;
   }
-  const tableStart = headerMatch.index + headerMatch[0].length;
-  const nextHeader = /^\s*\[/m.exec(config.slice(tableStart));
-  const tableEnd = nextHeader ? tableStart + nextHeader.index : config.length;
+  const tableStart = headerMatch.end;
+  const tableEnd = findNextTomlTableHeaderIndex(config, tableStart);
   const tableBody = config.slice(tableStart, tableEnd);
   const quotedVar = JSON.stringify(envVarName);
 

@@ -1537,7 +1537,7 @@ const make = Effect.gen(function* () {
               createdAt: event.payload.createdAt,
             });
             yield* clearPendingQueuedDispatch;
-            yield* drainQueuedTurnsForThread(event.payload.threadId);
+            yield* drainQueuedTurnsForSession(event.payload.threadId);
           }),
         ),
         Effect.ensuring(Effect.sync(() => editResendTurnStartKeys.delete(editResendKey))),
@@ -1618,22 +1618,27 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
-    yield* drainQueuedTurnsForThread(event.threadId);
-    // Child subagent threads queue under their own id but share the parent's
-    // provider session, and terminal runtime events carry the session-owning
-    // thread id — drain child queues bound to this session too.
+  const drainQueuedTurnsForSession = Effect.fnUntraced(function* (threadId: ThreadId) {
+    const sessionThreadId = (yield* resolveProviderSessionThread(threadId))?.id ?? threadId;
+    const queuedThreadIds = new Set<ThreadId>([threadId]);
     for (const queuedThreadId of [...queuedTurnStartsByThread.keys()]) {
-      if (queuedThreadId === (event.threadId as string)) {
-        continue;
-      }
-      const providerThread = yield* resolveProviderSessionThread(
-        ThreadId.makeUnsafe(queuedThreadId),
-      );
-      if (providerThread !== null && providerThread.id === event.threadId) {
-        yield* drainQueuedTurnsForThread(ThreadId.makeUnsafe(queuedThreadId));
+      const queuedThread = ThreadId.makeUnsafe(queuedThreadId);
+      const providerThread = yield* resolveProviderSessionThread(queuedThread);
+      const queuedSessionThreadId = providerThread?.id ?? queuedThread;
+      if (queuedSessionThreadId === sessionThreadId) {
+        queuedThreadIds.add(queuedThread);
       }
     }
+    for (const queuedThreadId of queuedThreadIds) {
+      yield* drainQueuedTurnsForThread(queuedThreadId);
+    }
+  });
+
+  const processQueueDrainEvent = Effect.fnUntraced(function* (event: ProviderQueueDrainEvent) {
+    // Child subagent threads queue under their own id but share the parent's
+    // provider session, and terminal runtime events carry the session-owning
+    // thread id — drain every queue bound to this session.
+    yield* drainQueuedTurnsForSession(event.threadId);
   });
 
   const interruptProviderTurn = Effect.fnUntraced(function* (input: {

@@ -17,9 +17,11 @@ import { randomUUID } from "node:crypto";
 
 import {
   AutomationId,
+  type AutomationDefinition,
   CommandId,
   DEFAULT_MODEL_BY_PROVIDER,
   MessageId,
+  type OrchestrationThreadShell,
   ProjectId,
   ThreadId,
   type ModelSelection,
@@ -223,6 +225,39 @@ export const makeAgentGateway = Effect.gen(function* () {
           ),
         );
       }
+    });
+
+  const requireAutomationDefinition = (automationId: string) =>
+    automationService.list({ includeArchived: true }).pipe(
+      Effect.mapError((error) => new ToolInputError(errorText(error))),
+      Effect.flatMap((result) => {
+        const definition = result.definitions.find((entry) => entry.id === automationId);
+        return definition
+          ? Effect.succeed(definition)
+          : Effect.fail(new ToolInputError(`Automation "${automationId}" was not found.`));
+      }),
+    );
+
+  // Stopping an automation changes future execution, so a gateway caller must
+  // either own it or be allowed to drive the thread it wakes.
+  const assertCallerMayCancelAutomation = (
+    caller: OrchestrationThreadShell,
+    definition: AutomationDefinition,
+  ) =>
+    Effect.gen(function* () {
+      if (definition.sourceThreadId === caller.id) {
+        return;
+      }
+      if (definition.targetThreadId) {
+        const target = yield* requireThreadShell(definition.targetThreadId);
+        yield* assertCallerMayDriveThread(caller, target);
+        return;
+      }
+      return yield* Effect.fail(
+        new ToolInputError(
+          `Automation "${definition.id}" was not created by your thread and has no target thread you can authorize against.`,
+        ),
+      );
     });
 
   // --- read tools -----------------------------------------------------------
@@ -859,7 +894,7 @@ export const makeAgentGateway = Effect.gen(function* () {
         additionalProperties: false,
       },
     },
-    handler: (args) =>
+    handler: (args, context) =>
       Effect.gen(function* () {
         const automationId = readStringArg(args, "automationId", { required: true })!;
         const modeArg = readStringArg(args, "mode") ?? "disable";
@@ -867,6 +902,9 @@ export const makeAgentGateway = Effect.gen(function* () {
           throw new ToolInputError(`Argument "mode" must be "disable" or "delete".`);
         }
         const id = AutomationId.makeUnsafe(automationId);
+        const caller = yield* requireThreadShell(context.callerThreadId);
+        const definition = yield* requireAutomationDefinition(automationId);
+        yield* assertCallerMayCancelAutomation(caller, definition);
         if (modeArg === "delete") {
           yield* automationService
             .delete({ id })

@@ -1046,7 +1046,7 @@ function mergeReadModelMessagesWithLiveHotPath(
       ...incomingMessage,
       text: previousMessage.text,
       dispatchMode: previousMessage.dispatchMode ?? incomingMessage.dispatchMode,
-      dispatchOrigin: previousMessage.dispatchOrigin ?? incomingMessage.dispatchOrigin,
+      dispatchOrigin: incomingMessage.dispatchOrigin ?? previousMessage.dispatchOrigin,
       turnId: previousMessage.turnId ?? incomingMessage.turnId ?? null,
       source: previousMessage.source ?? incomingMessage.source ?? "native",
       streaming: previousMessage.streaming,
