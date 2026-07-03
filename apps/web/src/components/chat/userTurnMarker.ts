@@ -1,6 +1,6 @@
 // FILE: userTurnMarker.ts
 // Purpose: Single predicate for the marker chip above a sent user message
-// ("Sent via Automation" / "Steering conversation"). Shared by the transcript
+// ("Sent via Automation" / "Sent by agent" / "Steering conversation"). Shared by the transcript
 // renderer (MessagesTimeline) and the row-height estimator (timelineHeight) so
 // what gets rendered and what gets measured can never drift apart.
 // Layer: web chat feature (pure logic, no I/O).

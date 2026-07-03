@@ -12,8 +12,7 @@ import { SynaraLogo } from "~/components/SynaraLogo";
 import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";
 import { ProfileAvatar } from "./ProfileAvatar";
 import { formatCompact, formatDays } from "./profileFormatting";
-import { selectProfileHeatmap } from "./profileHeatmap";
-import { selectProfileTopProvider } from "./profileUsage";
+import { selectProfileHeatmap, selectProfileTopProvider } from "./profileSelectors";
 
 export const SHARE_CARD_WIDTH = 860;
 export const SHARE_CARD_HEIGHT = 440;

@@ -178,7 +178,11 @@ function normalizeTomlTableHeaderName(line: string): string | undefined {
   if (!match) {
     return undefined;
   }
-  return match[1]
+  const tableName = match[1];
+  if (tableName === undefined) {
+    return undefined;
+  }
+  return tableName
     .split(".")
     .map((part) => part.trim())
     .join(".");
