@@ -36,6 +36,7 @@ import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState
 
 import {
   getCodexAccountOptions,
+  getProviderInstanceOptions,
   mergeProviderInstanceConfigPatch,
   normalizeCodexAccounts,
   type AppSettings,
@@ -957,9 +958,14 @@ function ProviderInstancesControl(props: {
       ProviderInstanceConfig
     >;
     const prefix = provider === "claudeAgent" ? "claude" : provider;
+    // Derived instances share this namespace with explicit entries. Reusing a
+    // derived id would mutate that account instead of creating a new profile.
+    const existingIds = new Set(
+      getProviderInstanceOptions(props.settings).map((option) => String(option.instanceId)),
+    );
     let index = 2;
     let instanceId = `${prefix}_${index}`;
-    while (Object.prototype.hasOwnProperty.call(next, instanceId)) {
+    while (existingIds.has(instanceId)) {
       index += 1;
       instanceId = `${prefix}_${index}`;
     }
