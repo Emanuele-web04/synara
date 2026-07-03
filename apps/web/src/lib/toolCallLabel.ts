@@ -78,6 +78,14 @@ function humanizeMcpToolIdentifier(value: string): string | null {
   return `${normalizedServer}: ${normalizedTool}`;
 }
 
+const WANDY_MCP_SERVER_ALIASES = new Set([
+  "wandy",
+  "computer-use",
+  "computer_use",
+  "open-computer-use",
+  "open_computer_use",
+]);
+
 function humanizeMcpServerTool(server: string, tool: string): string | null {
   const normalizedServer = humanizeMcpToken(server);
   const normalizedTool = humanizeMcpToken(tool);
@@ -220,6 +228,9 @@ function normalizeToolDescriptor(value: string | null): string | null {
 function humanizeMcpToken(value: string | undefined): string {
   if (!value) {
     return "";
+  }
+  if (WANDY_MCP_SERVER_ALIASES.has(value.toLowerCase())) {
+    return "Wandy";
   }
   const normalized = value
     .replace(/([a-z0-9])([A-Z])/g, "$1 $2")

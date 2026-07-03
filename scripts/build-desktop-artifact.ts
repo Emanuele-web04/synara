@@ -18,7 +18,9 @@ import {
   createDesktopPlatformBuildConfig,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { WANDY_APP_BUNDLE_NAME, wandyRuntimeRelativeParts } from "@t3tools/shared/wandy";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
+import { inspectMacCodeSignature } from "./lib/mac-code-signature.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
@@ -202,6 +204,84 @@ interface StagePackageJson {
     readonly electron: string;
   };
   readonly overrides: Record<string, unknown>;
+}
+
+const WANDY_PACKAGE_NAME = "@t3tools/wandy";
+const WANDY_STAGE_RELATIVE_DIR = "packages/wandy";
+const WANDY_RUNTIME_PACKAGE_ENTRIES = [
+  ["package.json"],
+  [".agents", "plugins", "marketplace.json"],
+  ["bin"],
+  ["plugins", "wandy", ".codex-plugin"],
+  ["plugins", "wandy", ".mcp.json"],
+  ["plugins", "wandy", "assets"],
+  ["plugins", "wandy", "scripts"],
+  ["scripts", "install-claude-mcp.sh"],
+  ["scripts", "install-codex-mcp.sh"],
+  ["scripts", "install-codex-plugin.sh"],
+  ["scripts", "install-config-helper.mjs"],
+  ["scripts", "install-gemini-mcp.sh"],
+  ["scripts", "install-opencode-mcp.sh"],
+  ["LICENSE"],
+] as const;
+
+const BUILD_PLATFORM_TO_NODE_PLATFORM: Record<typeof BuildPlatform.Type, NodeJS.Platform> = {
+  mac: "darwin",
+  linux: "linux",
+  win: "win32",
+};
+
+// Runtime layout comes from the shared table so build staging can never drift
+// from what launcher resolution expects at runtime.
+function wandyRuntimeParts(
+  platform: typeof BuildPlatform.Type,
+  arch: "arm64" | "x64",
+): readonly string[] {
+  const parts = wandyRuntimeRelativeParts(BUILD_PLATFORM_TO_NODE_PLATFORM[platform], arch);
+  if (!parts) {
+    throw new Error(`No bundled Wandy runtime is defined for ${platform}/${arch}.`);
+  }
+  return parts;
+}
+
+function normalizeWandyArch(arch: typeof BuildArch.Type): "arm64" | "x64" {
+  // Universal builds only exist for mac, where the app bundle covers both.
+  return arch === "arm64" ? "arm64" : "x64";
+}
+
+function wandyRuntimeBinaryParts(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): readonly string[] {
+  return wandyRuntimeParts(platform, normalizeWandyArch(arch));
+}
+
+// Each desktop artifact only ships the Wandy runtime for its own platform;
+// bundling the full dist tree would embed the macOS app bundle and both
+// Windows/Linux binary sets into every installer.
+function wandyDistEntriesForPlatform(
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+): ReadonlyArray<readonly string[]> {
+  if (platform === "mac") {
+    // ["dist", "Wandy.app"] — the whole app bundle.
+    return [wandyRuntimeParts(platform, "arm64").slice(0, 2)];
+  }
+  const arches: ReadonlyArray<"arm64" | "x64"> =
+    arch === "universal" ? ["arm64", "x64"] : [normalizeWandyArch(arch)];
+  // Binary's parent dir, e.g. ["dist", "linux", "amd64"].
+  return arches.map((entryArch) => wandyRuntimeParts(platform, entryArch).slice(0, -1));
+}
+
+function withStagedWandyDependency(dependencies: Record<string, unknown>): Record<string, unknown> {
+  if (!(WANDY_PACKAGE_NAME in dependencies)) {
+    return dependencies;
+  }
+
+  return {
+    ...dependencies,
+    [WANDY_PACKAGE_NAME]: `file:./${WANDY_STAGE_RELATIVE_DIR}`,
+  };
 }
 
 const AzureTrustedSigningOptionsConfig = Config.all({
@@ -535,6 +615,65 @@ const verifyStagedNodePty = Effect.fn("verifyStagedNodePty")(function* (
   );
 });
 
+const stageWandyPackage = Effect.fn("stageWandyPackage")(function* (
+  repoRoot: string,
+  stageAppDir: string,
+  platform: typeof BuildPlatform.Type,
+  arch: typeof BuildArch.Type,
+  requireStableCodeSignature: boolean,
+) {
+  const path = yield* Path.Path;
+  const fs = yield* FileSystem.FileSystem;
+  const sourceDir = path.join(repoRoot, "packages/wandy");
+  const runtimeBinary = path.join(sourceDir, ...wandyRuntimeBinaryParts(platform, arch));
+
+  if (!(yield* fs.exists(runtimeBinary))) {
+    const hint = platform === "mac" ? " Run 'cd packages/wandy && bun run build:macos' first." : "";
+    return yield* new BuildScriptError({
+      message: `Missing Wandy runtime at ${runtimeBinary}.${hint}`,
+    });
+  }
+
+  if (requireStableCodeSignature) {
+    const appBundlePath = path.join(sourceDir, "dist", WANDY_APP_BUNDLE_NAME);
+    const signature = inspectMacCodeSignature(appBundlePath);
+    if (!signature.isStable) {
+      return yield* new BuildScriptError({
+        message: [
+          "Signed macOS artifacts require Wandy.app to be signed with a stable Apple code-signing identity.",
+          "The current Wandy runtime is ad-hoc signed, which causes macOS Accessibility/Screen Recording permissions to reset across updates.",
+          "Build it with WANDY_CODESIGN_MODE=identity and WANDY_CODESIGN_IDENTITY before running the signed desktop artifact build.",
+          signature.details,
+        ]
+          .filter(Boolean)
+          .join(" "),
+      });
+    }
+  }
+
+  const targetDir = path.join(stageAppDir, WANDY_STAGE_RELATIVE_DIR);
+  yield* fs.makeDirectory(targetDir, { recursive: true });
+
+  const entries = [
+    ...WANDY_RUNTIME_PACKAGE_ENTRIES,
+    ...wandyDistEntriesForPlatform(platform, arch),
+  ];
+  for (const entryParts of entries) {
+    const from = path.join(sourceDir, ...entryParts);
+    if (!(yield* fs.exists(from))) {
+      continue;
+    }
+    const to = path.join(targetDir, ...entryParts);
+    yield* fs.makeDirectory(path.dirname(to), { recursive: true });
+    const stat = yield* fs.stat(from);
+    if (stat.type === "Directory") {
+      yield* fs.copy(from, to);
+      continue;
+    }
+    yield* fs.copyFile(from, to);
+  }
+});
+
 const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   platform: typeof BuildPlatform.Type,
   target: string,
@@ -609,6 +748,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!platformConfig) {
     return yield* new BuildScriptError({
       message: `Unsupported platform '${options.platform}'.`,
+    });
+  }
+  if (!platformConfig.archChoices.includes(options.arch)) {
+    return yield* new BuildScriptError({
+      message: `Unsupported arch '${options.arch}' for platform '${options.platform}'. Supported: ${platformConfig.archChoices.join(", ")}.`,
     });
   }
   const nativeBuildHostIssue = validateDesktopNativeBuildHost({
@@ -721,8 +865,22 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
+  const wandyLauncherSource = path.join(repoRoot, "apps/desktop/scripts/wandyMcp.mjs");
+  if (yield* fs.exists(wandyLauncherSource)) {
+    yield* fs.copyFile(
+      wandyLauncherSource,
+      path.join(stageAppDir, "apps/desktop/dist-electron/wandyMcp.mjs"),
+    );
+  }
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
   yield* fs.copy(distDirs.serverDist, path.join(stageAppDir, "apps/server/dist"));
+  yield* stageWandyPackage(
+    repoRoot,
+    stageAppDir,
+    options.platform,
+    options.arch,
+    options.platform === "mac" && options.signed,
+  );
 
   yield* assertPlatformBuildResources(options.platform, stageResourcesDir, options.verbose);
 
@@ -746,10 +904,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.mockUpdates,
       options.mockUpdateServerPort,
     ),
-    dependencies: {
+    dependencies: withStagedWandyDependency({
       ...resolvedServerDependencies,
       ...resolvedDesktopRuntimeDependencies,
-    },
+    }),
     devDependencies: {
       electron: electronVersion,
     },

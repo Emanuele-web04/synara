@@ -170,6 +170,18 @@ export function buildGeminiProbeEnv(env: NodeJS.ProcessEnv = process.env): NodeJ
   };
 }
 
+export function buildGeminiProbeSessionNewParams(cwd: string): {
+  readonly cwd: string;
+  readonly mcpServers: readonly [];
+} {
+  return {
+    cwd,
+    // Capability probes power status/list-model checks; do not start desktop
+    // automation helpers or other session-only MCP servers from this path.
+    mcpServers: [],
+  };
+}
+
 export function isGeminiOAuthBrowserPrompt(line: string): boolean {
   return GEMINI_OAUTH_BROWSER_PROMPT_PATTERNS.some((pattern) => pattern.test(line));
 }
@@ -433,10 +445,7 @@ export const probeGeminiCapabilities = (input: {
 
             if (!sessionNewRequested) {
               sessionNewRequested = true;
-              sendRequest(2, "session/new", {
-                cwd: input.cwd,
-                mcpServers: [],
-              });
+              sendRequest(2, "session/new", buildGeminiProbeSessionNewParams(input.cwd));
             }
             return;
           }

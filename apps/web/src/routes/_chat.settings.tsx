@@ -969,6 +969,7 @@ function SettingsRouteView() {
     defaults.enableSystemTaskCompletionNotifications
       ? ["Desktop notifications"]
       : []),
+    ...(settings.enableWandy !== defaults.enableWandy ? ["Wandy"] : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
       ? ["Assistant output"]
       : []),
@@ -2079,6 +2080,17 @@ function SettingsRouteView() {
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
       <SettingsSection title="Runtime behavior">
+        {isElectron
+          ? renderBooleanSettingRow({
+              settingKey: "enableWandy",
+              title: "Wandy",
+              description:
+                "Let Codex control desktop apps outside the in-app browser. macOS may ask for Accessibility and Screen Recording on first use.",
+              resetLabel: "Wandy",
+              ariaLabel: "Enable Wandy desktop automation",
+            })
+          : null}
+
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
           title: "Assistant output",

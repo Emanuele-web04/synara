@@ -312,6 +312,8 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.systemPrompt, {
         type: "preset",
         preset: "claude_code",
+        // Wandy is not resolvable in this harness, so the append must not
+        // carry the Wandy routing instructions.
         append: [
           "You are running inside Synara, a coding app that embeds the Claude Agent SDK.",
           "Do not present the host app as Claude Code unless the user is explicitly asking about Claude Code.",

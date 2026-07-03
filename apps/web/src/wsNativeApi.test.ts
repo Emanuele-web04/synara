@@ -286,6 +286,7 @@ describe("wsNativeApi", () => {
 
     const payload = {
       settings: {
+        enableWandy: true,
         enableAssistantStreaming: true,
         enableProviderUpdateChecks: true,
         defaultThreadEnvMode: "local",

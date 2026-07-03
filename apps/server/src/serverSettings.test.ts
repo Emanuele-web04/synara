@@ -69,6 +69,33 @@ describe("ServerSettingsService", () => {
     });
   });
 
+  it("mirrors the enableWandy setting into SYNARA_ENABLE_WANDY", async () => {
+    const previous = process.env.SYNARA_ENABLE_WANDY;
+    process.env.SYNARA_ENABLE_WANDY = "1";
+
+    try {
+      await runWithSettings(
+        Effect.gen(function* () {
+          const service = yield* ServerSettingsService;
+          yield* service.start;
+          expect(process.env.SYNARA_ENABLE_WANDY).toBe("1");
+
+          yield* service.updateSettings({ enableWandy: false });
+          expect(process.env.SYNARA_ENABLE_WANDY).toBe("0");
+
+          yield* service.updateSettings({ enableWandy: true });
+          expect(process.env.SYNARA_ENABLE_WANDY).toBe("1");
+        }),
+      );
+    } finally {
+      if (previous === undefined) {
+        delete process.env.SYNARA_ENABLE_WANDY;
+      } else {
+        process.env.SYNARA_ENABLE_WANDY = previous;
+      }
+    }
+  });
+
   it("resolves text generation selection away from disabled providers", async () => {
     const settings = await Effect.runPromise(
       Effect.gen(function* () {

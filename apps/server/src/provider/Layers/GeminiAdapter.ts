@@ -39,6 +39,7 @@ import {
   hasEffortLevel,
   resolveGeminiApiModelId,
 } from "@t3tools/shared/model";
+import { buildWandyAcpMcpServers, withSynaraWandyPromptContext } from "@t3tools/shared/wandy";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, FileSystem, Layer, Queue, Stream } from "effect";
 
@@ -1897,31 +1898,41 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
         },
       });
 
-      const startResponse = yield* input.resumeSessionId
+      const mcpServers = buildWandyAcpMcpServers();
+      // Wandy skips best-effort resume because the Gemini CLI does not honor
+      // MCP registration on session/load. Rollback (allowResumeFallback: false)
+      // must still load its cloned snapshot: dropping it would silently reset
+      // the model to an empty conversation while the UI shows truncated turns.
+      const skipResumeForWandy = input.allowResumeFallback !== false && mcpServers.length > 0;
+      if (skipResumeForWandy && input.resumeSessionId) {
+        yield* Effect.logInfo("gemini session resume skipped for Wandy MCP registration");
+      }
+      const resumeSessionId = skipResumeForWandy ? undefined : input.resumeSessionId;
+      const startResponse = yield* resumeSessionId
         ? input.allowResumeFallback !== false
           ? sendRequest<Record<string, unknown>>(context, "session/load", {
-              sessionId: input.resumeSessionId,
+              sessionId: resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             }).pipe(
               Effect.catch(() =>
                 sendRequest<Record<string, unknown>>(context, "session/new", {
                   cwd: context.session.cwd ?? process.cwd(),
-                  mcpServers: [],
+                  mcpServers,
                 }),
               ),
             )
           : sendRequest<Record<string, unknown>>(context, "session/load", {
-              sessionId: input.resumeSessionId,
+              sessionId: resumeSessionId,
               cwd: context.session.cwd ?? process.cwd(),
-              mcpServers: [],
+              mcpServers,
             })
         : sendRequest<Record<string, unknown>>(context, "session/new", {
             cwd: context.session.cwd ?? process.cwd(),
-            mcpServers: [],
+            mcpServers,
           });
 
-      context.sessionId = resolveStartedGeminiSessionId(input.resumeSessionId, startResponse) ?? "";
+      context.sessionId = resolveStartedGeminiSessionId(resumeSessionId, startResponse) ?? "";
       if (!context.sessionId) {
         return yield* new ProviderAdapterProcessError({
           provider: PROVIDER,
@@ -2016,7 +2027,7 @@ const makeGeminiAdapter = Effect.fn("makeGeminiAdapter")(function* (
     if (promptText) {
       blocks.push({
         type: "text",
-        text: promptText,
+        text: withSynaraWandyPromptContext(promptText),
       });
     }
 

@@ -181,6 +181,7 @@ export const AppSettingsSchema = Schema.Struct({
   showEnvironmentMarkers: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentInstructions: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentNotepad: Schema.Boolean.pipe(withDefaults(() => true)),
+  enableWandy: Schema.Boolean.pipe(withDefaults(() => true)),
   enableAssistantStreaming: Schema.Boolean.pipe(withDefaults(() => true)),
   enableProviderUpdateChecks: Schema.Boolean.pipe(withDefaults(() => true)),
   enableNativeFontSmoothing: Schema.Boolean.pipe(withDefaults(getDefaultNativeFontSmoothing)),
@@ -444,6 +445,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     cursorApiEndpoint: settings.providers.cursor.apiEndpoint,
     cursorBinaryPath: settings.providers.cursor.binaryPath,
     defaultThreadEnvMode: settings.defaultThreadEnvMode,
+    enableWandy: settings.enableWandy,
     enableAssistantStreaming: settings.enableAssistantStreaming,
     enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
     geminiBinaryPath: settings.providers.gemini.binaryPath,
@@ -502,6 +504,9 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
   const providers: MutableServerSettingsProvidersPatch = {};
   const serverPatch: MutableServerSettingsPatch = {};
 
+  if (hasOwn(patch, "enableWandy")) {
+    serverPatch.enableWandy = Boolean(patch.enableWandy);
+  }
   if (hasOwn(patch, "enableAssistantStreaming")) {
     serverPatch.enableAssistantStreaming = Boolean(patch.enableAssistantStreaming);
   }
@@ -644,6 +649,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "cursorApiEndpoint",
     "cursorBinaryPath",
     "defaultThreadEnvMode",
+    "enableWandy",
     "enableAssistantStreaming",
     "enableProviderUpdateChecks",
     "geminiBinaryPath",

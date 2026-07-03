@@ -61,6 +61,7 @@ import {
   toOpenCodeQuestionAnswers,
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
+import { buildWandyOpenCodeMcpConfig } from "@t3tools/shared/wandy";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { extractProposedPlanMarkdown, withProviderPlanModePrompt } from "../planMode.ts";
 
@@ -3679,6 +3680,48 @@ export function makeOpenCodeAdapterLive(options?: OpenCodeAdapterLiveOptions) {
                   cliSpec: adapterConfig.cliSpec,
                   ...(server.external && serverPassword ? { serverPassword } : {}),
                 });
+                const wandyMcp = buildWandyOpenCodeMcpConfig();
+                if (wandyMcp) {
+                  const emitWandyMcpWarning = (operation: string, cause: Cause.Cause<unknown>) =>
+                    Effect.gen(function* () {
+                      const detail = Cause.pretty(cause);
+                      yield* Effect.logWarning("opencode.wandy_mcp.connection_failed", {
+                        operation,
+                        detail,
+                      });
+                      yield* emit({
+                        ...buildEventBase({ threadId: input.threadId }),
+                        type: "runtime.warning",
+                        payload: {
+                          message: "Wandy MCP did not connect.",
+                          detail: {
+                            operation,
+                            error: detail,
+                          },
+                        },
+                      });
+                    });
+                  const addExit = yield* runOpenCodeSdk("mcp.add", () =>
+                    client.mcp.add({
+                      directory,
+                      name: wandyMcp.name,
+                      config: wandyMcp.config,
+                    }),
+                  ).pipe(Effect.exit);
+                  if (Exit.isFailure(addExit)) {
+                    yield* emitWandyMcpWarning("mcp.add", addExit.cause);
+                  } else {
+                    const connectExit = yield* runOpenCodeSdk("mcp.connect", () =>
+                      client.mcp.connect({
+                        directory,
+                        name: wandyMcp.name,
+                      }),
+                    ).pipe(Effect.exit);
+                    if (Exit.isFailure(connectExit)) {
+                      yield* emitWandyMcpWarning("mcp.connect", connectExit.cause);
+                    }
+                  }
+                }
                 const createSessionId = resumedSessionId
                   ? // Resumed sessions skip session.create, so re-apply the runtime-mode
                     // permission ruleset explicitly. Non-fatal: older servers may reject the

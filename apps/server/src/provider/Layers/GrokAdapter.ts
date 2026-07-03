@@ -86,6 +86,10 @@ import {
   makeGrokAcpRuntime,
   type GrokAcpRuntimeSettings,
 } from "../acp/GrokAcpSupport.ts";
+import {
+  shouldSkipAcpSessionResumeForWandy,
+  withSynaraWandyPromptContext,
+} from "@t3tools/shared/wandy";
 import { GrokAdapter, type GrokAdapterShape } from "../Services/GrokAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -914,7 +918,13 @@ export function makeGrokAdapter(
           );
           let ctx!: GrokSessionContext;
 
-          const resumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
+          const parsedResumeSessionId = parseGrokResume(input.resumeCursor)?.sessionId;
+          // Applies the same predicate AcpSessionRuntime uses internally: the
+          // adapter's resume bookkeeping (replay deferred, resume cursor) must
+          // match the session/new-vs-load decision the runtime will make.
+          const resumeSessionId = shouldSkipAcpSessionResumeForWandy()
+            ? undefined
+            : parsedResumeSessionId;
           const acpNativeLoggers = makeAcpNativeLoggers({
             nativeEventLogger,
             provider: PROVIDER,
@@ -942,6 +952,8 @@ export function makeGrokAdapter(
             threadId: input.threadId,
             cwd,
             resume: resumeSessionId !== undefined,
+            resumeSkippedForWandyMcp:
+              parsedResumeSessionId !== undefined && resumeSessionId === undefined,
             model: effectiveGrokSettings.model,
             reasoningEffort: effectiveGrokSettings.reasoningEffort,
             alwaysApprove: effectiveGrokSettings.alwaysApprove === true,
@@ -1371,7 +1383,7 @@ export function makeGrokAdapter(
         if (promptText) {
           promptParts.push({
             type: "text",
-            text: promptText,
+            text: withSynaraWandyPromptContext(promptText),
           });
         }
         if (input.attachments && input.attachments.length > 0) {

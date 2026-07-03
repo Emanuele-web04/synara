@@ -10,6 +10,8 @@
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { isWandyEnabledInEnv } from "@t3tools/shared/wandy";
+
 export const DPCODE_CODEX_HOME_OVERLAY_DIR = "codex-home-overlay";
 export const DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV =
   "DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN";
@@ -31,6 +33,15 @@ export function shouldDisableDpCodeBrowserPlugin(env: NodeJS.ProcessEnv): boolea
   return env[DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN_ENV] !== "0";
 }
 
+/**
+ * Single source of truth for "does Codex run against the overlay home".
+ * Must stay aligned with buildCodexProcessEnv, which prepares the overlay for
+ * the browser-plugin rewrite and/or the Wandy MCP registration.
+ */
+export function shouldUseCodexHomeOverlay(env: NodeJS.ProcessEnv): boolean {
+  return shouldDisableDpCodeBrowserPlugin(env) || isWandyEnabledInEnv(env);
+}
+
 export function resolveDpCodeCodexHomeOverlayPath(
   env: NodeJS.ProcessEnv,
   sourceHomePath: string,
@@ -42,14 +53,14 @@ export function resolveDpCodeCodexHomeOverlayPath(
 
 /**
  * Returns the home directory that the codex app-server child process actually
- * writes under. This is the overlay home when Synara wraps Codex with the
- * dpcode-browser plugin disabled (the production default), otherwise the
- * caller-supplied or env-provided home.
+ * writes under. This is the overlay home when Synara wraps Codex — for the
+ * dpcode-browser plugin rewrite (the production default) or for Wandy MCP
+ * registration — otherwise the caller-supplied or env-provided home.
  */
 export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {}): string {
   const env = input.env ?? process.env;
   const source = resolveBaseCodexHomePath(env, input.homePath);
-  if (!shouldDisableDpCodeBrowserPlugin(env)) {
+  if (!shouldUseCodexHomeOverlay(env)) {
     return source;
   }
   const overlay = resolveDpCodeCodexHomeOverlayPath(env, source);

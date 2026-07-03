@@ -165,13 +165,45 @@ describe("deriveReadableToolTitle", () => {
           data: {
             item: {
               type: "mcpToolCall",
+              server: "browser-use",
+              tool: "get_app_state",
+            },
+          },
+        },
+      }),
+    ).toBe("Browser Use: Get App State");
+  });
+
+  it("labels Wandy MCP servers (including legacy aliases) as Wandy", () => {
+    expect(
+      deriveReadableToolTitle({
+        title: "MCP tool call",
+        fallbackLabel: "MCP tool call",
+        itemType: "mcp_tool_call",
+        payload: {
+          data: {
+            item: {
+              type: "mcpToolCall",
               server: "computer-use",
               tool: "get_app_state",
             },
           },
         },
       }),
-    ).toBe("Computer Use: Get App State");
+    ).toBe("Wandy: Get App State");
+
+    expect(
+      deriveReadableToolTitle({
+        title: "MCP tool call",
+        fallbackLabel: "MCP tool call",
+        itemType: "mcp_tool_call",
+        payload: {
+          data: {
+            toolName: "mcp__wandy__screenshot",
+          },
+        },
+      }),
+    ).toBe("Wandy: Screenshot");
   });
 });
 

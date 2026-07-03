@@ -140,6 +140,10 @@
       "types": "./src/providerUsage.ts",
       "import": "./src/providerUsage.ts"
     },
+    "./wandy": {
+      "types": "./src/wandy.ts",
+      "import": "./src/wandy.ts"
+    },
     "./formatBytes": {
       "types": "./src/formatBytes.ts",
       "import": "./src/formatBytes.ts"

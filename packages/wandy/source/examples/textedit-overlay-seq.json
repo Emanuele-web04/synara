@@ -1,0 +1,74 @@
+[
+  {
+    "tool": "get_app_state",
+    "args": {
+      "app": "TextEdit"
+    }
+  },
+  {
+    "tool": "set_value",
+    "args": {
+      "app": "TextEdit",
+      "element_index": "2",
+      "value": "Overlay cursor sequence A\n\nThe first visual cursor move should start from the fresh session origin.\nThe next move should continue from the idle cursor position instead of restarting at (0,0)."
+    }
+  },
+  {
+    "tool": "get_app_state",
+    "args": {
+      "app": "TextEdit"
+    }
+  },
+  {
+    "tool": "click",
+    "args": {
+      "app": "TextEdit",
+      "element_index": "36",
+      "click_count": 1,
+      "mouse_button": "left"
+    }
+  },
+  {
+    "tool": "get_app_state",
+    "args": {
+      "app": "TextEdit"
+    }
+  },
+  {
+    "tool": "set_value",
+    "args": {
+      "app": "TextEdit",
+      "element_index": "2",
+      "value": "Overlay cursor sequence B\n\nThis set_value should move back from the toolbar click resting point.\nIf the idle lifecycle is working, the cursor should not disappear and re-enter from the lower-left origin between calls."
+    }
+  },
+  {
+    "tool": "get_app_state",
+    "args": {
+      "app": "TextEdit"
+    }
+  },
+  {
+    "tool": "click",
+    "args": {
+      "app": "TextEdit",
+      "element_index": "35",
+      "click_count": 1,
+      "mouse_button": "left"
+    }
+  },
+  {
+    "tool": "get_app_state",
+    "args": {
+      "app": "TextEdit"
+    }
+  },
+  {
+    "tool": "set_value",
+    "args": {
+      "app": "TextEdit",
+      "element_index": "2",
+      "value": "Overlay cursor sequence C\n\nFinal state after set_value -> click -> set_value -> click -> set_value.\nThe cursor should remain idle at the final text target until the process exits or a turn-ended notification clears it."
+    }
+  }
+]

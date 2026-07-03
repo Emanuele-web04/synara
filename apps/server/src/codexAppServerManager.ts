@@ -38,6 +38,10 @@ import {
   type ServerVoiceTranscriptionInput,
   type ServerVoiceTranscriptionResult,
 } from "@t3tools/contracts";
+import {
+  WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS,
+  resolveWandyMcpLauncher,
+} from "@t3tools/shared/wandy";
 import { getModelSelectionBooleanOptionValue, normalizeModelSlug } from "@t3tools/shared/model";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import { Effect, ServiceMap } from "effect";
@@ -591,6 +595,16 @@ export function buildCodexInitializeParams() {
   } as const;
 }
 
+// Wandy routing guidance only belongs in the developer instructions when the
+// wandy MCP server is actually registered for the session.
+function codexDeveloperInstructionsForMode(interactionMode: "default" | "plan"): string {
+  const base =
+    interactionMode === "plan"
+      ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
+      : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS;
+  return resolveWandyMcpLauncher() ? `${base}${WANDY_BROWSER_TOOL_ROUTING_INSTRUCTIONS}` : base;
+}
+
 function buildCodexCollaborationMode(input: {
   readonly interactionMode?: "default" | "plan";
   readonly model?: string;
@@ -614,10 +628,7 @@ function buildCodexCollaborationMode(input: {
     settings: {
       model,
       reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
-        input.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      developer_instructions: codexDeveloperInstructionsForMode(input.interactionMode),
     },
   };
 }

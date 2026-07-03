@@ -1,0 +1,7 @@
+#!/usr/bin/env node
+// Delegates to the wandy launcher, defaulting to the stdio MCP server so MCP
+// clients can configure `wandy-mcp` as their command without arguments.
+if (process.argv.length <= 2) {
+  process.argv.push("mcp");
+}
+require("./wandy");

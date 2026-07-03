@@ -16,6 +16,7 @@ import {
 } from "@t3tools/contracts";
 import { deepMerge, type DeepPartial } from "@t3tools/shared/Struct";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
+import { resolveWandyEnabledFromSettings, syncWandyEnabledEnv } from "@t3tools/shared/wandy";
 import {
   Cause,
   Deferred,
@@ -154,6 +155,21 @@ const makeServerSettings = Effect.gen(function* () {
   const emitChange = (settings: ServerSettings) =>
     PubSub.publish(changesPubSub, settings).pipe(Effect.asVoid);
 
+  // Wandy MCP registration is gated on SYNARA_ENABLE_WANDY at session start,
+  // so the persisted toggle must be mirrored into the process env. Resolve
+  // against a boot-time snapshot so re-enabling the setting restores whatever
+  // the environment allowed at launch instead of reading back our own writes.
+  const bootEnvSnapshot: NodeJS.ProcessEnv = { ...process.env };
+  const applyWandySettingToEnv = (settings: ServerSettings) =>
+    Effect.sync(() => {
+      syncWandyEnabledEnv(
+        resolveWandyEnabledFromSettings({
+          enableWandy: settings.enableWandy,
+          env: bootEnvSnapshot,
+        }),
+      );
+    });
+
   const loadSettingsFromDisk = Effect.gen(function* () {
     const exists = yield* fs.exists(settingsPath).pipe(
       Effect.mapError(
@@ -227,6 +243,7 @@ const makeServerSettings = Effect.gen(function* () {
       );
       const settings = yield* loadSettingsFromDisk;
       yield* Ref.set(settingsRef, settings);
+      yield* applyWandySettingToEnv(settings);
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -249,6 +266,7 @@ const makeServerSettings = Effect.gen(function* () {
           const next = yield* normalizeSettings(settingsPath, current, patch);
           yield* writeSettingsAtomically(next);
           yield* Ref.set(settingsRef, next);
+          yield* applyWandySettingToEnv(next);
           yield* emitChange(next);
           return resolveTextGenerationProvider(next);
         }),

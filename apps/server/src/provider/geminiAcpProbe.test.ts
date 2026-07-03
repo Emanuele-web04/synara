@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildGeminiProbeEnv,
+  buildGeminiProbeSessionNewParams,
   captureGeminiAcpProbeLogFailure,
   isGeminiCodeAssistMigrationAuthFailure,
   isGeminiOAuthBrowserPrompt,
@@ -18,6 +19,15 @@ describe("buildGeminiProbeEnv", () => {
       BROWSER: "www-browser",
       CI: "true",
       DEBIAN_FRONTEND: "noninteractive",
+    });
+  });
+});
+
+describe("buildGeminiProbeSessionNewParams", () => {
+  it("keeps capability probes free of session MCP side effects", () => {
+    expect(buildGeminiProbeSessionNewParams("/workspace")).toEqual({
+      cwd: "/workspace",
+      mcpServers: [],
     });
   });
 });

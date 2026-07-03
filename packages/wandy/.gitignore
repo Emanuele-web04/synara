@@ -1,0 +1,3 @@
+source/.build/
+npm-staging/
+*.tsbuildinfo

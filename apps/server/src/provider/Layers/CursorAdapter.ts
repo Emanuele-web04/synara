@@ -101,6 +101,7 @@ import {
   extractTodosAsPlan,
   formatCursorPlanUpdateMarkdown,
 } from "../acp/CursorAcpExtension.ts";
+import { withSynaraWandyPromptContext } from "@t3tools/shared/wandy";
 import { CursorAdapter, type CursorAdapterShape } from "../Services/CursorAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import { discoverCursorSkills } from "../cursorSkillsDiscovery.ts";
@@ -1152,7 +1153,7 @@ export function makeCursorAdapter(
         if (promptText) {
           promptParts.push({
             type: "text",
-            text: promptText,
+            text: withSynaraWandyPromptContext(promptText),
           });
         }
         if (input.attachments && input.attachments.length > 0) {
