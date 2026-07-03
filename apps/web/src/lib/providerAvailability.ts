@@ -44,6 +44,10 @@ export function normalizeProviderStatusForLocalConfig(input: {
     return status;
   }
 
+  if (status.enabled === false) {
+    return status;
+  }
+
   if (status.available || status.authStatus !== "unknown") {
     return status;
   }

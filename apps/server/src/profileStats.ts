@@ -15,7 +15,10 @@ import type {
   StatsGetProfileTokenStatsInput,
 } from "@t3tools/contracts";
 import { isBuiltInComposerSlashCommandName } from "@t3tools/shared/composerSlashCommands";
-import { inferLegacyProviderKindFromInstanceId } from "@t3tools/shared/providerInstances";
+import {
+  inferLegacyProviderKindFromInstanceId,
+  inferLegacyProviderKindFromModel,
+} from "@t3tools/shared/providerInstances";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -76,6 +79,7 @@ interface MostWorkedProjectRow {
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
+  readonly model: string | null;
   readonly tokens: number;
 }
 
@@ -391,15 +395,19 @@ function arcName(startHour: number): string {
   return "Night Owl Arc";
 }
 
-function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
+function normalizeProviderKind(value: unknown, model?: unknown): ProviderKind | "unknown" {
   const provider = nonEmptyString(value);
-  if (!provider) {
-    return "unknown";
+  if (provider) {
+    if (PROVIDER_KINDS.has(provider as ProviderKind)) {
+      return provider as ProviderKind;
+    }
+    const inferredFromInstance = inferLegacyProviderKindFromInstanceId(provider);
+    if (inferredFromInstance) {
+      return inferredFromInstance;
+    }
   }
-  if (PROVIDER_KINDS.has(provider as ProviderKind)) {
-    return provider as ProviderKind;
-  }
-  return inferLegacyProviderKindFromInstanceId(provider) ?? "unknown";
+  const modelValue = nonEmptyString(model);
+  return modelValue ? inferLegacyProviderKindFromModel(modelValue) : "unknown";
 }
 
 function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | "unknown" {
@@ -425,7 +433,7 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     }
     tokensByDay.set(day, (tokensByDay.get(day) ?? 0) + tokens);
     lifetime += tokens;
-    const provider = normalizeProviderKind(row.provider);
+    const provider = normalizeProviderKind(row.provider, row.model);
     if (provider !== "unknown") {
       tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
     }
@@ -622,15 +630,18 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             a.thread_id AS thread_id,
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             CASE
-              WHEN s.provider_name IS NOT NULL THEN s.provider_name
               WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
               THEN COALESCE(
                 json_extract(th.model_selection_json, '$.provider'),
-                json_extract(th.model_selection_json, '$.instanceId'),
-                'unknown'
+                json_extract(th.model_selection_json, '$.instanceId')
               )
+              WHEN s.provider_name IS NOT NULL THEN s.provider_name
               ELSE 'unknown'
             END AS provider,
+            CASE
+              WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+              THEN json_extract(th.model_selection_json, '$.model')
+            END AS model,
             CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
             a.sequence AS sequence,
             a.created_at AS created_at,
@@ -657,6 +668,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             day,
             provider,
+            model,
             MAX(0, tot - LAG(tot, 1, 0) OVER (
               PARTITION BY thread_id
               ORDER BY
@@ -667,9 +679,9 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             )) AS d
           FROM ev
         )
-        SELECT day, provider, SUM(d) AS tokens
+        SELECT day, provider, model, SUM(d) AS tokens
         FROM delta
-        GROUP BY day, provider
+        GROUP BY day, provider, model
       `,
     );
 
@@ -704,20 +716,20 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               WHEN json_type(e.payload_json, '$.modelSelection') = 'object'
               THEN COALESCE(
                 json_extract(e.payload_json, '$.modelSelection.provider'),
-                s.provider_name,
+                json_extract(e.payload_json, '$.modelSelection.instanceId'),
                 CASE
                   WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
                   THEN json_extract(t.model_selection_json, '$.provider')
                 END,
-                json_extract(e.payload_json, '$.modelSelection.instanceId')
+                s.provider_name
               )
               ELSE CASE
-                WHEN s.provider_name IS NOT NULL THEN s.provider_name
                 WHEN t.model_selection_json IS NOT NULL AND json_valid(t.model_selection_json)
                 THEN COALESCE(
                   json_extract(t.model_selection_json, '$.provider'),
                   json_extract(t.model_selection_json, '$.instanceId')
                 )
+                ELSE s.provider_name
               END
             END AS provider,
             CASE
@@ -1006,8 +1018,13 @@ const makeProfileStatsQuery = Effect.gen(function* () {
 
       for (const row of turnInsightRows) {
         const count = num(row.count);
-        const provider = nonEmptyString(row.provider);
-        const instanceId = nonEmptyString(row.instanceId) ?? provider;
+        const rawProvider = nonEmptyString(row.provider);
+        const providerKind = normalizeProviderKind(rawProvider, row.model);
+        const provider = providerKind === "unknown" ? rawProvider : providerKind;
+        const instanceId =
+          nonEmptyString(row.instanceId) ??
+          rawProvider ??
+          (providerKind === "unknown" ? null : providerKind);
         const model = nonEmptyString(row.model);
         const providerModelKey = `${provider ?? ""}\u0000${instanceId ?? ""}\u0000${model ?? ""}`;
         const existingProviderModel = providerModelCounts.get(providerModelKey);
@@ -1039,7 +1056,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const providerModels: ProviderModelUsage[] = providerModelRows.slice(0, 8).map((row) => {
         const count = num(row.count);
         return {
-          provider: normalizeProviderKind(row.provider),
+          provider: normalizeProviderKind(row.provider, row.model),
           instanceId: normalizeProviderInstanceId(row.instanceId),
           model: nonEmptyString(row.model) ?? "unknown",
           turnCount: count,
@@ -1051,7 +1068,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // Turn-based ranking: the token-based one lives on ProfileTokenStats so the
       // heavy token query runs once, and clients prefer it when available.
       for (const row of providerModelRows) {
-        const provider = normalizeProviderKind(row.provider);
+        const provider = normalizeProviderKind(row.provider, row.model);
         if (provider === "unknown") {
           continue;
         }
@@ -1161,7 +1178,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       // UI uses this list to say so instead of silently under-reporting them.
       const providersWithTurns = new Set<ProviderKind>();
       for (const row of turnInsightRows) {
-        const provider = normalizeProviderKind(row.provider);
+        const provider = normalizeProviderKind(row.provider, row.model);
         if (provider !== "unknown") {
           providersWithTurns.add(provider);
         }

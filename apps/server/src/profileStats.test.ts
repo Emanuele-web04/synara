@@ -538,6 +538,113 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("keeps historical provider-less turns attributed before latest session fallback", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'project-profile',
+            'Switched Provider Thread',
+            '{"instanceId":"codex_work","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T11:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-switched-provider',
+            'ready',
+            'codex',
+            'codex_work',
+            '2026-06-13T11:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-switched-claude',
+              'thread',
+              'thread-switched-provider',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T10:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"work","model":"claude-sonnet-4-6"}}',
+              '{}'
+            ),
+            (
+              'event-switched-codex',
+              'thread',
+              'thread-switched-provider',
+              2,
+              'thread.turn-start-requested',
+              '2026-06-13T11:05:00.000Z',
+              'client',
+              '{"threadId":"thread-switched-provider","modelSelection":{"instanceId":"codex_work","model":"gpt-5-codex"}}',
+              '{}'
+            )
+        `;
+
+        const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        const claudeRow = stats.providerModels.find(
+          (row) => row.provider === "claudeAgent" && row.instanceId === "work",
+        );
+        const codexRow = stats.providerModels.find(
+          (row) => row.provider === "codex" && row.instanceId === "codex_work",
+        );
+
+        expect(claudeRow).toMatchObject({
+          model: "claude-sonnet-4-6",
+          turnCount: 1,
+        });
+        expect(codexRow).toMatchObject({
+          model: "gpt-5-codex",
+          turnCount: 1,
+        });
+      }),
+    );
+  });
+
   it("counts slash skill invocations from projected thread message text and groups them with dollar usage", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

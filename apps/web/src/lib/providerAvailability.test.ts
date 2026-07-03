@@ -148,6 +148,24 @@ describe("normalizeProviderStatusForLocalConfig", () => {
     });
   });
 
+  it("does not use custom binary fallback for disabled provider instances", () => {
+    const disabledStatus: ServerProviderStatus = {
+      ...BASE_STATUS,
+      instanceId: "gemini_work",
+      displayName: "Gemini Work",
+      enabled: false,
+      message: "Provider is disabled in Synara settings.",
+    };
+
+    expect(
+      normalizeProviderStatusForLocalConfig({
+        provider: "gemini",
+        status: disabledStatus,
+        customBinaryPath: "/opt/homebrew/bin/gemini",
+      }),
+    ).toEqual(disabledStatus);
+  });
+
   it("preserves authenticated and unauthenticated statuses", () => {
     expect(
       normalizeProviderStatusForLocalConfig({

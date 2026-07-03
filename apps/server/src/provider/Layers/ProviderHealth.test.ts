@@ -334,6 +334,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(workCodex?.authLabel, undefined);
     });
 
+    it("does not project a custom instance status onto the default account", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [
+          {
+            ...cachedReadyCodexStatus,
+            instanceId: "codex_work",
+            displayName: "Codex Work",
+            authType: "chatgpt",
+            authLabel: "Work Account",
+          },
+        ],
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            codex_work: {
+              driver: "codex",
+              displayName: "Codex Work",
+              config: {
+                accountId: "work",
+              },
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+
+      const defaultCodex = statuses.find((status) => status.instanceId === "codex");
+      const workCodex = statuses.find((status) => status.instanceId === "codex_work");
+      assert.strictEqual(defaultCodex?.status, "warning");
+      assert.strictEqual(defaultCodex?.authStatus, "unknown");
+      assert.strictEqual(defaultCodex?.authLabel, undefined);
+      assert.strictEqual(workCodex?.authStatus, "authenticated");
+      assert.strictEqual(workCodex?.authLabel, "Work Account");
+    });
+
     it("projects unsupported provider instances as unavailable shadows", () => {
       const statuses = projectProviderStatusesForSettings(
         [cachedReadyCodexStatus],

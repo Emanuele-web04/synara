@@ -3,10 +3,13 @@
 // Layer: Server git text-generation tests
 // Exports: Vitest specs for ClaudeTextGenerationServiceLive
 
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
 import { Effect, Layer, Sink, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { homedir } from "node:os";
 
+import { ServerConfig } from "../../config.ts";
 import { ClaudeTextGeneration } from "../Services/TextGeneration.ts";
 import { ClaudeTextGenerationServiceLive } from "./ClaudeTextGeneration.ts";
 
@@ -72,6 +75,42 @@ function withProcessPlatform<T, E, R>(
 }
 
 describe("ClaudeTextGenerationServiceLive", () => {
+  it.effect("uses the server home as the default Claude process home", () =>
+    Effect.gen(function* () {
+      const textGeneration = yield* ClaudeTextGeneration;
+      const generated = yield* textGeneration.generateThreadTitle({
+        cwd: "/repo",
+        message: "Add provider instances",
+        modelSelection: {
+          instanceId: "claudeAgent",
+          model: "claude-sonnet-4-5",
+        },
+      });
+
+      assert.strictEqual(generated.title, "Provider instances");
+    }).pipe(
+      Effect.provide(ClaudeTextGenerationServiceLive),
+      Effect.provide(
+        mockSpawnerLayer((args, command, env) => {
+          assert.strictEqual(command, "claude");
+          assert.deepStrictEqual(args.slice(0, 2), ["-p", "--output-format"]);
+          assert.strictEqual(env?.HOME, homedir());
+          return {
+            stdout: '{"structured_output":{"title":"Provider instances"}}\n',
+            stderr: "",
+            code: 0,
+          };
+        }),
+      ),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "claude-textgen-test-",
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    ),
+  );
+
   it.effect("uses configured Claude instance home as a Windows profile environment", () =>
     withProcessPlatform(
       "win32",
@@ -120,6 +159,12 @@ describe("ClaudeTextGenerationServiceLive", () => {
           };
         }),
       ),
+      Effect.provide(
+        ServerConfig.layerTest(process.cwd(), {
+          prefix: "claude-textgen-test-",
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
     ),
   );
 });

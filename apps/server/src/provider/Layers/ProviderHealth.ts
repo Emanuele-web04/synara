@@ -2254,7 +2254,6 @@ export function projectProviderStatusesForSettings(
   const statusByInstance = new Map(
     statuses.map((status) => [providerStatusInstanceKey(status), status] as const),
   );
-  const statusByProvider = new Map(statuses.map((status) => [status.provider, status] as const));
   const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
   for (const instance of deriveProviderInstances(settings)) {
     const entries = instancesByProvider.get(instance.driver) ?? [];
@@ -2285,7 +2284,7 @@ export function projectProviderStatusesForSettings(
       }
     };
 
-    const defaultStatus = statusByInstance.get(provider) ?? statusByProvider.get(provider);
+    const defaultStatus = statusByInstance.get(provider);
     if (instances.every((instance) => !instance.enabled)) {
       const disabledStatus = makeDisabledProviderStatus(
         provider,
@@ -2328,7 +2327,7 @@ export function projectProviderStatusesForSettings(
         );
         continue;
       }
-      if (!instance.isDefault) {
+      if (!instance.isDefault || instances.length > 1) {
         projected.push(
           makeUncheckedProviderInstanceStatus(
             provider,
