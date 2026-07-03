@@ -14,6 +14,7 @@ import { useCallback, useEffect, useState } from "react";
 import { newCommandId, newMessageId, newThreadId } from "../lib/utils";
 import { readNativeApi } from "../nativeApi";
 import type { Project, Thread } from "../types";
+import { promoteThreadCreate } from "../lib/threadCreatePromotion";
 import type { ComposerTrigger } from "../composer-logic";
 import { extendReplacementRangeForTrailingSpace } from "../composerTriggerInsertion";
 import {
@@ -24,6 +25,7 @@ import {
   parseComposerSlashInvocationForCommands,
   parseFastSlashCommandAction,
   parseForkSlashCommandArgs,
+  parseGoalSlashCommand,
   type ForkSlashCommandTarget,
 } from "../composerSlashCommands";
 import { buildThreadHandoffImportedMessages } from "../lib/threadHandoff";
@@ -565,6 +567,130 @@ export function useComposerSlashCommands(input: {
     return false;
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
+  const handleGoalSlashCommand = useCallback(
+    async (args: string) => {
+      const api = readNativeApi();
+      if (!api || !activeThread || !activeProject) {
+        toastManager.add({
+          type: "warning",
+          title: "Goals need a project thread",
+          description: "Open a project before setting a goal.",
+        });
+        return;
+      }
+
+      const parsed = parseGoalSlashCommand(args);
+      const threadId = activeThread.id;
+      const createdAt = new Date().toISOString();
+
+      if (parsed.kind === "create") {
+        if (!parsed.objective) {
+          toastManager.add({
+            type: "warning",
+            title: "Goal needs an objective",
+            description: "Use /goal followed by what the agent should achieve.",
+          });
+          return;
+        }
+        editorActions.clearComposerSlashDraft();
+        if (!isServerThread) {
+          await promoteThreadCreate(
+            {
+              type: "thread.create",
+              commandId: newCommandId(),
+              threadId,
+              projectId: activeProject.id,
+              title: buildPromptThreadTitleFallback(parsed.objective),
+              modelSelection: selectedModelSelection,
+              runtimeMode,
+              interactionMode,
+              envMode: activeThread.envMode ?? (activeThread.worktreePath ? "worktree" : "local"),
+              branch: activeThread.branch,
+              worktreePath: activeThread.worktreePath,
+              associatedWorktreePath: activeThread.associatedWorktreePath ?? null,
+              associatedWorktreeBranch: activeThread.associatedWorktreeBranch ?? null,
+              associatedWorktreeRef: activeThread.associatedWorktreeRef ?? null,
+              lastKnownPr: activeThread.lastKnownPr ?? null,
+              createdAt,
+            },
+            api,
+            { force: true },
+          );
+        }
+        await api.orchestration.dispatchCommand({
+          type: "thread.goal.create",
+          commandId: newCommandId(),
+          threadId,
+          goalId: `goal-${crypto.randomUUID()}`,
+          objective: parsed.objective,
+          ...(parsed.tokenBudget !== null ? { tokenBudget: parsed.tokenBudget } : {}),
+          createdAt,
+        });
+        // Auto-start the first turn with the objective (pi-goal submits it immediately).
+        await api.orchestration.dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: parsed.objective,
+            attachments: [],
+          },
+          modelSelection: selectedModelSelection,
+          runtimeMode,
+          interactionMode,
+          createdAt,
+        });
+        return;
+      }
+
+      editorActions.clearComposerSlashDraft();
+
+      if (!isServerThread) {
+        toastManager.add({
+          type: "warning",
+          title: "Goals need a server-backed thread",
+          description: "Start a goal first before using goal controls.",
+        });
+        return;
+      }
+
+      if (parsed.kind === "status") {
+        toastManager.add({
+          type: "info",
+          title: "Goal",
+          description: "The active goal is shown in the thread's goal indicator.",
+        });
+        return;
+      }
+
+      const commandType =
+        parsed.kind === "pause"
+          ? ("thread.goal.pause" as const)
+          : parsed.kind === "resume"
+            ? ("thread.goal.resume" as const)
+            : parsed.kind === "clear"
+              ? ("thread.goal.clear" as const)
+              : ("thread.goal.complete" as const);
+      await api.orchestration.dispatchCommand({
+        type: commandType,
+        commandId: newCommandId(),
+        threadId,
+        createdAt,
+      });
+    },
+    [
+      activeProject,
+      activeThread,
+      editorActions,
+      interactionMode,
+      isServerThread,
+      runtimeMode,
+      selectedModelSelection,
+    ],
+  );
+
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {
       const fastSlashAction = parseFastSlashCommandAction(trimmed);
@@ -690,10 +816,15 @@ export function useComposerSlashCommands(input: {
         }
         return true;
       }
+      if (slashInvocation.command === "goal") {
+        await handleGoalSlashCommand(slashInvocation.args);
+        return true;
+      }
       return false;
     },
     [
       availableBuiltInSlashCommands,
+      handleGoalSlashCommand,
       checkClaudeFastSlashCommandAvailability,
       compactProviderThread,
       createForkThreadFromSlashCommand,
@@ -736,8 +867,8 @@ export function useComposerSlashCommands(input: {
         return;
       }
 
-      if (item.command === "automation") {
-        const replacement = "/automation ";
+      if (item.command === "automation" || item.command === "goal") {
+        const replacement = `/${item.command} `;
         const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
           snapshot.value,
           trigger.rangeEnd,

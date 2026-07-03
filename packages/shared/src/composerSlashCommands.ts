@@ -17,6 +17,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "subagents",
   "fast",
   "automation",
+  "goal",
 ] as const;
 
 export type BuiltInComposerSlashCommand = (typeof BUILT_IN_COMPOSER_SLASH_COMMANDS)[number];

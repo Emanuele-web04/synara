@@ -116,6 +116,7 @@ function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationTh
     deletedAt: null,
     messages: [],
     proposedPlans: [],
+    goal: null,
     activities: [],
     checkpoints: [],
   };

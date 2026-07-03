@@ -132,6 +132,7 @@ function createSnapshot(overrides?: Partial<OrchestrationReadModel["threads"][nu
         ],
         activities: [],
         proposedPlans: [],
+        goal: null,
         checkpoints: [],
         session: {
           threadId: THREAD_ID,

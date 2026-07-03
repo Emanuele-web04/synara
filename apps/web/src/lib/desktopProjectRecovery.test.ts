@@ -70,6 +70,7 @@ function makeThread(
     messages: [],
     activities: [],
     proposedPlans: [],
+    goal: null,
     checkpoints: [],
     session: null,
     ...overrides,
