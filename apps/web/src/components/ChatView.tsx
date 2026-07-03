@@ -3091,6 +3091,7 @@ export default function ChatView({
       interactionMode,
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
+  const canOfferExportCommand = isServerThread && activeThread !== undefined;
   const selectedDynamicAgents =
     selectedProvider === "claudeAgent"
       ? (claudeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
@@ -3125,6 +3126,7 @@ export default function ChatView({
     canOfferReviewCommand,
     canOfferForkCommand,
     canOfferSideCommand,
+    canOfferExportCommand,
     dynamicAgents,
   });
   const composerMenuItems = useMemo(() => {
@@ -8908,6 +8910,7 @@ export default function ChatView({
       activeThread?.session !== null &&
       activeThread?.session?.status !== "closed",
     canOfferSideCommand,
+    canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,

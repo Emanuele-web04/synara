@@ -57,6 +57,7 @@ export function useComposerSlashCommands(input: {
   supportsFastSlashCommand: boolean;
   canOfferCompactCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferExportCommand: boolean;
   supportsTextNativeReviewCommand: boolean;
   fastModeEnabled: boolean;
   providerNativeCommands: readonly ProviderNativeCommandDescriptor[];
@@ -105,6 +106,7 @@ export function useComposerSlashCommands(input: {
     supportsFastSlashCommand,
     canOfferCompactCommand,
     canOfferSideCommand,
+    canOfferExportCommand,
     supportsTextNativeReviewCommand,
     fastModeEnabled,
     providerNativeCommands,
@@ -132,6 +134,7 @@ export function useComposerSlashCommands(input: {
     canOfferReviewCommand: true,
     canOfferForkCommand: true,
     canOfferSideCommand: true,
+    canOfferExportCommand,
     providerNativeCommandNames,
   });
 

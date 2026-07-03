@@ -307,6 +307,7 @@ it.layer(testLayer)("server CLI command", (it) => {
           getThreadShellById: () => Effect.die("unused"),
           findSyntheticSubagentParentThread: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailForExportById: () => Effect.die("unused"),
           getThreadDetailSnapshotById: () => Effect.die("unused"),
         }),
         Effect.provideService(AnalyticsService, {

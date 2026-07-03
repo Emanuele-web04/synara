@@ -476,7 +476,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.text("Missing threadId parameter", { status: 400 });
 
     const snapshotQuery = yield* ProjectionSnapshotQuery;
-    const threadOption = yield* snapshotQuery.getThreadDetailById(
+    const threadOption = yield* snapshotQuery.getThreadDetailForExportById(
       ThreadId.makeUnsafe(threadIdParam),
     );
     if (Option.isNone(threadOption)) return HttpServerResponse.text("Not Found", { status: 404 });

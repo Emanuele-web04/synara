@@ -61,6 +61,7 @@ function makeLayer(input: {
         getThreadShellById: () => Effect.succeed(Option.some(input.threadShell)),
         findSyntheticSubagentParentThread: () => unsupported(),
         getThreadDetailById: () => unsupported(),
+        getThreadDetailForExportById: () => unsupported(),
         getThreadDetailSnapshotById: () => unsupported(),
       }),
     ),

@@ -660,6 +660,108 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
     }),
   );
 
+  it.effect("keeps UI thread detail capped while export detail includes all messages", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      const threadId = asThreadId("thread-export-message-cap");
+      const messageCount = 2_005;
+
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-export-message-cap',
+          'Project Export Message Cap',
+          '/tmp/project-export-message-cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-export-message-cap',
+          'project-export-message-cap',
+          'Thread Export Message Cap',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          NULL,
+          NULL,
+          NULL,
+          '2026-02-24T00:00:00.000Z',
+          '2026-02-24T00:00:00.000Z',
+          NULL
+        )
+      `;
+
+      for (let index = 0; index < messageCount; index += 1) {
+        const createdAt = new Date(Date.UTC(2026, 1, 24, 0, 0, index)).toISOString();
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id,
+            thread_id,
+            turn_id,
+            role,
+            text,
+            is_streaming,
+            created_at,
+            updated_at
+          )
+          VALUES (
+            ${`message-${index}`},
+            'thread-export-message-cap',
+            NULL,
+            'assistant',
+            ${`message ${index}`},
+            0,
+            ${createdAt},
+            ${createdAt}
+          )
+        `;
+      }
+
+      const cappedDetail = yield* snapshotQuery.getThreadDetailById(threadId);
+      const exportDetail = yield* snapshotQuery.getThreadDetailForExportById(threadId);
+
+      assert.isTrue(Option.isSome(cappedDetail));
+      assert.isTrue(Option.isSome(exportDetail));
+      const cappedMessages = Option.isSome(cappedDetail) ? cappedDetail.value.messages : [];
+      const exportMessages = Option.isSome(exportDetail) ? exportDetail.value.messages : [];
+      assert.equal(cappedMessages.length, 2_000);
+      assert.equal(cappedMessages[0]?.text, "message 5");
+      assert.equal(cappedMessages.at(-1)?.text, "message 2004");
+      assert.equal(exportMessages.length, messageCount);
+      assert.equal(exportMessages[0]?.text, "message 0");
+      assert.equal(exportMessages.at(-1)?.text, "message 2004");
+    }),
+  );
+
   it.effect("normalizes imported T3 Code model-selection shapes from projection reads", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

@@ -82,11 +82,13 @@ function shouldKeepBuiltInSlashCommandDespiteNativeCollision(
 export function shouldHideProviderNativeCommandFromComposerMenu(
   provider: ProviderKind,
   command: string,
+  options: { readonly availableAppCommands?: ReadonlySet<string> } = {},
 ): boolean {
   const normalizedCommand = normalizeComposerSlashCommandName(command);
+  const appCommandIsAvailable = options.availableAppCommands?.has(normalizedCommand) ?? true;
   return (
     normalizedCommand === "automation" ||
-    normalizedCommand === "export" ||
+    (normalizedCommand === "export" && appCommandIsAvailable) ||
     (provider === "codex" && normalizedCommand === "review")
   );
 }
@@ -352,6 +354,7 @@ export function getAvailableComposerSlashCommands(input: {
   canOfferReviewCommand: boolean;
   canOfferForkCommand: boolean;
   canOfferSideCommand: boolean;
+  canOfferExportCommand: boolean;
   providerNativeCommandNames?: ReadonlyArray<string>;
 }): ComposerSlashCommand[] {
   const collidingNativeCommandNames = new Set<ComposerSlashCommand>(
@@ -379,7 +382,7 @@ export function getAvailableComposerSlashCommands(input: {
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
           "status",
           "subagents",
-          "export",
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "automation",
         ]
       : [
@@ -388,7 +391,7 @@ export function getAvailableComposerSlashCommands(input: {
           // /export is app-level too — Synara owns the thread transcript, so the download
           // happens in the app rather than being forwarded to Claude's native /export.
           ...(input.canOfferSideCommand ? (["side"] as const) : []),
-          "export",
+          ...(input.canOfferExportCommand ? (["export"] as const) : []),
           "automation",
         ];
   return availableCommands.filter((command) => !collidingNativeCommandNames.has(command));

@@ -408,6 +408,7 @@ const projectionSnapshotQuery = {
   getThreadShellById: () => Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
   getThreadDetailById: () => Effect.succeed(threadDetail as never),
+  getThreadDetailForExportById: () => Effect.succeed(threadDetail as never),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
 } as unknown as ProjectionSnapshotQueryShape;
 

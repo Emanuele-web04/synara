@@ -156,6 +156,13 @@ export interface ProjectionSnapshotQueryShape {
   ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
 
   /**
+   * Read a single active thread detail snapshot by id with the full message history.
+   */
+  readonly getThreadDetailForExportById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThread>, ProjectionRepositoryError>;
+
+  /**
    * Read a single active thread detail snapshot and its projection cursor in one transaction.
    */
   readonly getThreadDetailSnapshotById: (
