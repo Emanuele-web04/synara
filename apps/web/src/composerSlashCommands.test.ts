@@ -66,7 +66,7 @@ describe("composerSlashCommands", () => {
     });
   });
 
-  it("leaves /goal to providers with native goal support", () => {
+  it("offers /goal for Codex discovery while leaving Claude slash UX native", () => {
     const codexCommands = getAvailableComposerSlashCommands({
       provider: "codex",
       supportsFastSlashCommand: true,
@@ -75,7 +75,7 @@ describe("composerSlashCommands", () => {
       canOfferForkCommand: true,
       canOfferSideCommand: true,
     });
-    expect(codexCommands).not.toContain("goal");
+    expect(codexCommands).toContain("goal");
 
     const claudeCommands = getAvailableComposerSlashCommands({
       provider: "claudeAgent",

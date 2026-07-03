@@ -368,6 +368,7 @@ import {
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { ChatHeader } from "./chat/ChatHeader";
+import { ComposerGoalChip } from "./chat/ComposerGoalChip";
 import { GoalIndicator } from "./chat/GoalIndicator";
 import { dispatchThreadNotes } from "~/pinnedMessages";
 import {
@@ -415,7 +416,7 @@ import {
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
-import { formatGoalCompletionSummary } from "~/lib/goalDisplay";
+import { deriveCodexNativeGoalDisplay, formatGoalCompletionSummary } from "~/lib/goalDisplay";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1427,6 +1428,46 @@ export default function ChatView({
   const browserOpen = rawSearch.panel === "browser";
   const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
   const activeThreadId = activeThread?.id ?? null;
+  const [hiddenCodexNativeGoalCommandIds, setHiddenCodexNativeGoalCommandIds] = useState<
+    ReadonlySet<string>
+  >(() => new Set());
+  const codexNativeGoalDisplay = useMemo(
+    () =>
+      activeThread?.modelSelection.provider === "codex"
+        ? deriveCodexNativeGoalDisplay(activeThread.messages)
+        : null,
+    [activeThread?.messages, activeThread?.modelSelection.provider],
+  );
+  const activeComposerGoalDisplay = useMemo(() => {
+    if (!activeThread) {
+      return null;
+    }
+    if (activeThread.modelSelection.provider === "codex") {
+      if (!codexNativeGoalDisplay) {
+        return null;
+      }
+      if (
+        codexNativeGoalDisplay.commandMessageId &&
+        hiddenCodexNativeGoalCommandIds.has(codexNativeGoalDisplay.commandMessageId)
+      ) {
+        return null;
+      }
+      return {
+        label: codexNativeGoalDisplay.objective,
+        source: "codex" as const,
+        commandMessageId: codexNativeGoalDisplay.commandMessageId,
+      };
+    }
+
+    if (!activeThread.goal || activeThread.goal.status === "cleared") {
+      return null;
+    }
+    return {
+      label: activeThread.goal.objective,
+      source: "synara" as const,
+      commandMessageId: null,
+    };
+  }, [activeThread, codexNativeGoalDisplay, hiddenCodexNativeGoalCommandIds]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
@@ -3207,6 +3248,101 @@ export default function ChatView({
     },
     [],
   );
+  const handleClearComposerGoal = useCallback(() => {
+    const api = readNativeApi();
+    if (!api || !activeThread || !activeComposerGoalDisplay) {
+      return;
+    }
+    if (!isServerThread) {
+      toastManager.add({
+        type: "warning",
+        title: "Goals need a server-backed thread",
+        description: "Start a thread before disabling this goal.",
+      });
+      return;
+    }
+
+    const createdAt = new Date().toISOString();
+    if (activeComposerGoalDisplay.source === "codex") {
+      const commandMessageId = activeComposerGoalDisplay.commandMessageId;
+      if (commandMessageId) {
+        setHiddenCodexNativeGoalCommandIds((existing) => {
+          const next = new Set(existing);
+          next.add(commandMessageId);
+          return next;
+        });
+      }
+
+      const modelSelectionForGoalClear =
+        activeThread.modelSelection.provider === selectedModelSelection.provider
+          ? selectedModelSelection
+          : activeThread.modelSelection;
+      rememberCustomBinaryPathForDispatch({
+        threadId: activeThread.id,
+        provider: modelSelectionForGoalClear.provider,
+        providerOptions: providerOptionsForDispatch,
+      });
+      void api.orchestration
+        .dispatchCommand({
+          type: "thread.turn.start",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          message: {
+            messageId: newMessageId(),
+            role: "user",
+            text: "/goal clear",
+            attachments: [],
+          },
+          modelSelection: modelSelectionForGoalClear,
+          ...(providerOptionsForDispatch ? { providerOptions: providerOptionsForDispatch } : {}),
+          assistantDeliveryMode,
+          dispatchMode: "queue",
+          runtimeMode,
+          interactionMode,
+          createdAt,
+        })
+        .catch((err: unknown) => {
+          if (commandMessageId) {
+            setHiddenCodexNativeGoalCommandIds((existing) => {
+              const next = new Set(existing);
+              next.delete(commandMessageId);
+              return next;
+            });
+          }
+          toastManager.add({
+            type: "error",
+            title: "Could not disable goal",
+            description: err instanceof Error ? err.message : "Failed to send /goal clear.",
+          });
+        });
+      return;
+    }
+
+    void api.orchestration
+      .dispatchCommand({
+        type: "thread.goal.clear",
+        commandId: newCommandId(),
+        threadId: activeThread.id,
+        createdAt,
+      })
+      .catch((err: unknown) => {
+        toastManager.add({
+          type: "error",
+          title: "Could not disable goal",
+          description: err instanceof Error ? err.message : "Failed to clear the goal.",
+        });
+      });
+  }, [
+    activeComposerGoalDisplay,
+    activeThread,
+    assistantDeliveryMode,
+    interactionMode,
+    isServerThread,
+    providerOptionsForDispatch,
+    rememberCustomBinaryPathForDispatch,
+    runtimeMode,
+    selectedModelSelection,
+  ]);
   useEffect(() => {
     const provider = activeThread?.session?.provider;
     if (!activeThread || !provider) {
@@ -9945,6 +10081,12 @@ export default function ChatView({
                                   contextWindowSelectionStatus.pendingSelectedLabel,
                               }
                             : {})}
+                        />
+                      ) : null}
+                      {!isVoiceRecording && !isVoiceTranscribing && activeComposerGoalDisplay ? (
+                        <ComposerGoalChip
+                          label={activeComposerGoalDisplay.label}
+                          onClear={handleClearComposerGoal}
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}

@@ -30,3 +30,63 @@ export function formatGoalCompletionSummary(goal: OrchestrationGoal): string | n
   const label = goal.status === "budget_limited" ? "Goal budget reached" : "Goal complete";
   return `${label} · ${formatGoalUsageSummary(goal)}`;
 }
+
+export interface CodexNativeGoalDisplay {
+  objective: string;
+  commandMessageId: string | null;
+}
+
+const CODEX_GOAL_CLEAR_COMMANDS = new Set(["clear", "complete", "pause"]);
+const CODEX_GOAL_STATUS_COMMANDS = new Set(["", "status", "resume"]);
+
+function stripCodexGoalBudgetFlag(args: string): string {
+  return args
+    .replace(/\s+--budget(?:=|\s+)\S+/giu, "")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+export function parseCodexNativeGoalCommandText(
+  text: string,
+): { kind: "set"; objective: string } | { kind: "clear" } | null {
+  const match = /^\/goal(?:\s+([\s\S]*))?$/iu.exec(text.trim());
+  if (!match) {
+    return null;
+  }
+
+  const args = (match[1] ?? "").trim();
+  const [firstToken = ""] = args.split(/\s+/u);
+  const normalizedFirstToken = firstToken.toLowerCase();
+  if (CODEX_GOAL_CLEAR_COMMANDS.has(normalizedFirstToken)) {
+    return { kind: "clear" };
+  }
+  if (CODEX_GOAL_STATUS_COMMANDS.has(normalizedFirstToken)) {
+    return null;
+  }
+
+  const objective = stripCodexGoalBudgetFlag(args);
+  return objective.length > 0 ? { kind: "set", objective } : null;
+}
+
+export function deriveCodexNativeGoalDisplay(
+  messages: ReadonlyArray<{ id?: string | null; role: string; text: string }>,
+): CodexNativeGoalDisplay | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user") {
+      continue;
+    }
+    const command = parseCodexNativeGoalCommandText(message.text);
+    if (!command) {
+      continue;
+    }
+    if (command.kind === "clear") {
+      return null;
+    }
+    return {
+      objective: command.objective,
+      commandMessageId: message.id ?? null,
+    };
+  }
+  return null;
+}
