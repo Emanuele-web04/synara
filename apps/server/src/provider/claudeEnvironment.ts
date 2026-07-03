@@ -4,6 +4,7 @@
 // Exports: claudeHomeEnvironment, buildClaudeInstanceProcessEnv
 
 import * as NodePath from "node:path";
+import { homedir } from "node:os";
 
 import { buildClaudeProcessEnv } from "./claudeProcessEnv.ts";
 
@@ -34,18 +35,30 @@ export function claudeHomeEnvironment(
   };
 }
 
+function expandClaudeHomePath(homePath: string): string {
+  if (homePath === "~") {
+    return homedir();
+  }
+  if (homePath.startsWith("~/")) {
+    return NodePath.join(homedir(), homePath.slice(2));
+  }
+  return homePath;
+}
+
 export function buildClaudeInstanceProcessEnv(
   homePath: string | null | undefined,
   environment?: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv {
   const trimmedHomePath = homePath?.trim();
+  const resolvedHomePath = trimmedHomePath ? expandClaudeHomePath(trimmedHomePath) : undefined;
   const env = {
     ...process.env,
     ...(environment ?? {}),
-    ...(trimmedHomePath ? claudeHomeEnvironment(trimmedHomePath) : {}),
+    ...(resolvedHomePath ? claudeHomeEnvironment(resolvedHomePath) : {}),
   };
   return buildClaudeProcessEnv({
     env,
-    ...(trimmedHomePath ? { homeDir: trimmedHomePath } : {}),
+    ...(resolvedHomePath ? { homeDir: resolvedHomePath } : {}),
+    preserveDirectCredentialKeys: new Set(Object.keys(environment ?? {})),
   });
 }

@@ -64,6 +64,7 @@ function resolveCursorSettings(
   return {
     ...(cursorOptions.binaryPath ? { binaryPath: cursorOptions.binaryPath } : {}),
     ...(cursorOptions.apiEndpoint ? { apiEndpoint: cursorOptions.apiEndpoint } : {}),
+    ...(cursorOptions.environment ? { environment: cursorOptions.environment } : {}),
   };
 }
 

@@ -112,6 +112,7 @@ const fakeDroidAdapter: DroidAdapterShape = {
   hasSession: vi.fn(),
   readThread: vi.fn(),
   rollbackThread: vi.fn(),
+  forkThread: vi.fn(),
   stopAll: vi.fn(),
   streamEvents: Stream.empty,
 };
@@ -409,6 +410,56 @@ layer("ProviderAdapterRegistryLive", (it) => {
 
       assert.equal(yield* cursor.hasSession(cursorThreadId), false);
       assert.equal(yield* openCode.hasSession(openCodeThreadId), false);
+    }),
+  );
+
+  it.effect("claims untagged sessions created by native instance forks", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      const workInstanceId = asProviderInstanceId("opencode_work");
+      const sourceThreadId = ThreadId.makeUnsafe("thread-opencode-source");
+      const targetThreadId = ThreadId.makeUnsafe("thread-opencode-fork");
+      const openCodeSessions = new Map<ThreadId, ProviderSession>();
+      const forkThread = fakeOpenCodeAdapter.forkThread;
+      assert.ok(forkThread);
+
+      vi.mocked(forkThread).mockImplementation((input) =>
+        Effect.sync(() => {
+          openCodeSessions.set(input.threadId, {
+            provider: "opencode",
+            status: "ready",
+            runtimeMode: input.runtimeMode,
+            threadId: input.threadId,
+            createdAt: now,
+            updatedAt: now,
+          });
+          return { threadId: input.threadId, resumeCursor: "fork-cursor" };
+        }),
+      );
+      vi.mocked(fakeOpenCodeAdapter.listSessions).mockImplementation(() =>
+        Effect.succeed([...openCodeSessions.values()]),
+      );
+
+      const registry = yield* ProviderAdapterRegistry;
+      assert.ok(registry.getByInstance);
+      const workFacade = yield* registry.getByInstance(workInstanceId);
+      const defaultFacade = yield* registry.getByInstance(asProviderInstanceId("opencode"));
+      assert.ok(workFacade.forkThread);
+
+      yield* workFacade.forkThread({
+        sourceThreadId,
+        threadId: targetThreadId,
+        runtimeMode: "full-access",
+      });
+
+      const workSessions = yield* workFacade.listSessions();
+      const defaultSessions = yield* defaultFacade.listSessions();
+      assert.deepEqual(
+        workSessions.map((session) => session.threadId),
+        [targetThreadId],
+      );
+      assert.equal(workSessions[0]?.providerInstanceId, workInstanceId);
+      assert.deepEqual(defaultSessions, []);
     }),
   );
 });

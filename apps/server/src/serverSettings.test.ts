@@ -654,4 +654,61 @@ describe("ServerSettingsService", () => {
       serverPasswordRedacted: true,
     });
   });
+
+  it("migrates plaintext provider-instance secrets from disk into redacted settings", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        yield* fs.makeDirectory(settingsPath.slice(0, settingsPath.lastIndexOf("/")), {
+          recursive: true,
+        });
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            ...DEFAULT_SERVER_SETTINGS,
+            providerInstances: {
+              grok_work: {
+                driver: "grok",
+                enabled: true,
+                environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: true }],
+              },
+              opencode_work: {
+                driver: "opencode",
+                enabled: true,
+                config: {
+                  serverUrl: "http://127.0.0.1:4096",
+                  serverPassword: "opencode-secret",
+                },
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        const raw = yield* fs.readFileString(settingsPath);
+        return { settings, parsed: JSON.parse(raw) as any, raw };
+      }),
+    );
+
+    expect(result.settings.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "secret-token", sensitive: true },
+    ]);
+    expect(result.settings.providerInstances.opencode_work?.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "opencode-secret",
+    });
+    expect(result.raw).not.toContain("secret-token");
+    expect(result.raw).not.toContain("opencode-secret");
+    expect(result.parsed.providerInstances.grok_work.environment).toEqual([
+      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+    ]);
+    expect(result.parsed.providerInstances.opencode_work.config).toEqual({
+      serverUrl: "http://127.0.0.1:4096",
+      serverPassword: "",
+      serverPasswordRedacted: true,
+    });
+  });
 });

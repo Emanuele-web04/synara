@@ -3,7 +3,11 @@ import { getDefaultModel } from "@synara/shared/model";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { startTransition, useMemo } from "react";
-import { getProviderInstanceOptions, useAppSettings } from "../appSettings";
+import {
+  getProviderInstanceOptions,
+  resolveSelectableProviderInstanceId,
+  useAppSettings,
+} from "../appSettings";
 import { prefetchModelsForNewThread } from "../lib/providerModelPrefetch";
 import { useProviderStatusesForLocalConfig } from "../hooks/useProviderStatusesForLocalConfig";
 import {
@@ -130,6 +134,7 @@ export function useHandleNewThread() {
       }
       setModelSelection(threadId, {
         provider: options.provider,
+        instanceId: resolveSelectableProviderInstanceId(settings, options.provider),
         model: defaultModel,
       });
     };

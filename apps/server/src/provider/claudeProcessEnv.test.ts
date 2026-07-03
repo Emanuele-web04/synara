@@ -10,6 +10,7 @@ import {
   readClaudeCliCredentialsContentSummary,
   resolveClaudeCredentialsPaths,
 } from "./claudeProcessEnv.ts";
+import { buildClaudeInstanceProcessEnv } from "./claudeEnvironment.ts";
 
 describe("claudeProcessEnv", () => {
   it("prefers local Claude CLI credentials over stale direct request credentials", () => {
@@ -87,6 +88,33 @@ describe("claudeProcessEnv", () => {
 
     assert.equal(result.ANTHROPIC_API_KEY, "proxy-api-key");
     assert.equal(result.ANTHROPIC_BASE_URL, "https://anthropic-proxy.example.test");
+  });
+
+  it("keeps direct credentials the provider instance sets explicitly", () => {
+    const result = buildClaudeProcessEnv({
+      env: {
+        ANTHROPIC_API_KEY: "stale-inherited-key",
+        ANTHROPIC_AUTH_TOKEN: "instance-auth-token",
+      },
+      hasClaudeCliCredentials: true,
+      preserveDirectCredentialKeys: new Set(["ANTHROPIC_AUTH_TOKEN"]),
+    });
+
+    assert.equal(result.ANTHROPIC_API_KEY, undefined);
+    assert.equal(result.ANTHROPIC_AUTH_TOKEN, "instance-auth-token");
+  });
+
+  it("overlays the provider instance home", () => {
+    const result = buildClaudeInstanceProcessEnv("/home/work-account");
+
+    assert.equal(result.HOME, "/home/work-account");
+  });
+
+  it("expands tilde provider instance homes", () => {
+    const result = buildClaudeInstanceProcessEnv("~/.claude-work");
+
+    assert.equal(result.HOME?.endsWith("/.claude-work"), true);
+    assert.equal(result.HOME?.includes("~"), false);
   });
 
   it("checks CLAUDE_CONFIG_DIR before the default Claude home", () => {
