@@ -13,7 +13,9 @@ const PREVIEW_HAD_TARGET_ATTR = "data-synara-style-preview-had-target";
 const PREVIEW_EFFECT_TARGET_ATTR = "data-synara-style-preview-effect-target";
 const PREVIEW_TARGET_VALUE = "active";
 const BROWSER_STYLE_PREVIEW_RUNTIME_KEY = "__synaraBrowserStylePreviewRuntime";
-const BROWSER_STYLE_PREVIEW_RUNTIME_VERSION = "1";
+// v2: survives page re-renders (HMR, React state updates) by re-marking the
+// preview target through a MutationObserver.
+const BROWSER_STYLE_PREVIEW_RUNTIME_VERSION = "2";
 
 const BROWSER_STYLE_PATCH_CSS_PROPERTIES: Partial<Record<keyof BrowserElementStylePatch, string>> =
   {
@@ -42,6 +44,20 @@ const BROWSER_STYLE_PATCH_CSS_PROPERTIES: Partial<Record<keyof BrowserElementSty
     animationTimingFunction: "animation-timing-function",
     animationIterationCount: "animation-iteration-count",
   };
+
+/** Formats a normalized style patch as plain CSS declarations (one per line). */
+export function browserStylePatchToCssText(patch: BrowserElementStylePatch): string {
+  const declarations: string[] = [];
+  for (const [key, cssProperty] of Object.entries(BROWSER_STYLE_PATCH_CSS_PROPERTIES) as Array<
+    [keyof BrowserElementStylePatch, string]
+  >) {
+    const value = patch[key]?.trim();
+    if (value) {
+      declarations.push(`${cssProperty}: ${value};`);
+    }
+  }
+  return declarations.join("\n");
+}
 
 function restorePreviewTargets(document: Document): void {
   for (const element of Array.from(
@@ -224,12 +240,48 @@ export function browserStylePreviewInstallExpression(): string {
         if (value) declaration.setProperty(cssProperty, value, priority);
       }
     };
+    const applyPreview = (selector, patch) => {
+      const element = document.querySelector(selector);
+      if (!(element instanceof HTMLElement)) {
+        return false;
+      }
+      restoreTargets();
+      markTarget(element);
+      const declaration = previewRule(patch.effectTarget);
+      if (!declaration) return false;
+      applyPatch(declaration, patch, "important");
+      return true;
+    };
+
+    // Page re-renders (React updates, HMR) can replace the marked element or the
+    // injected <style>, silently dropping the preview. Watch for that and re-mark
+    // the current target. rAF coalesces mutation bursts, and re-applying only when
+    // the mark or style is missing prevents observer feedback loops.
+    let activePreview = null;
+    let reapplyScheduled = false;
+    const reapplyIfLost = () => {
+      reapplyScheduled = false;
+      if (!activePreview) return;
+      const markedElement = document.querySelector("[" + targetAttr + "=\\"" + targetValue + "\\"]");
+      const styleElement = document.querySelector("style[" + styleAttr + "]");
+      if (markedElement && styleElement) return;
+      try {
+        applyPreview(activePreview.selector, activePreview.patch);
+      } catch {}
+    };
+    const observer = new MutationObserver(() => {
+      if (!activePreview || reapplyScheduled) return;
+      reapplyScheduled = true;
+      requestAnimationFrame(reapplyIfLost);
+    });
+    observer.observe(document.documentElement, { childList: true, subtree: true });
 
     window[runtimeKey] = {
       version,
       apply(input) {
         try {
           if (!input || input.mode === "clear") {
+            activePreview = null;
             clearPreview();
             return { ok: true };
           }
@@ -239,22 +291,25 @@ export function browserStylePreviewInstallExpression(): string {
           }
           const patch = input.patch || {};
           if (input.mode === "commit") {
+            activePreview = null;
             if (patch.effectTarget === "::before" || patch.effectTarget === "::after") {
               markTarget(element);
               const declaration = previewRule(patch.effectTarget);
               if (!declaration) return { ok: false };
               applyPatch(declaration, patch, "");
+              // Pseudo-element commits live in the injected stylesheet, so keep
+              // re-marking across re-renders like previews do.
+              activePreview = { selector: input.selector, patch };
               return { ok: true };
             }
             applyPatch(element.style, patch, "");
             clearPreview();
             return { ok: true };
           }
-          restoreTargets();
-          markTarget(element);
-          const declaration = previewRule(patch.effectTarget);
-          if (!declaration) return { ok: false };
-          applyPatch(declaration, patch, "important");
+          if (!applyPreview(input.selector, patch)) {
+            return { ok: false };
+          }
+          activePreview = { selector: input.selector, patch };
           return { ok: true };
         } catch (error) {
           return {

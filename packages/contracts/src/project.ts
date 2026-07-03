@@ -204,12 +204,29 @@ export const ProjectApplyStyleEditInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   element: ProjectEditableElement,
   patch: ProjectElementStylePatch,
+  // "preview" resolves the source match and returns the planned change without
+  // writing; "apply" (default) writes the change to disk.
+  mode: Schema.optional(Schema.Literals(["preview", "apply"])),
+  // Guard for confirmed previews: apply refuses to write if the resolved match
+  // no longer equals what the user confirmed.
+  expected: Schema.optional(
+    Schema.Struct({
+      relativePath: TrimmedNonEmptyString,
+      before: Schema.String,
+    }),
+  ),
 });
 export type ProjectApplyStyleEditInput = typeof ProjectApplyStyleEditInput.Type;
 
 export const ProjectApplyStyleEditResult = Schema.Struct({
   relativePath: TrimmedNonEmptyString,
   replacements: PositiveInt,
+  applied: Schema.Boolean,
+  // Matched opening tag before/after the edit plus its 1-based line, so clients
+  // can render a diff preview and safely revert an applied edit.
+  before: Schema.String,
+  after: Schema.String,
+  line: PositiveInt,
 });
 export type ProjectApplyStyleEditResult = typeof ProjectApplyStyleEditResult.Type;
 export const ProjectReadFileInput = Schema.Struct({

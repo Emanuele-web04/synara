@@ -118,6 +118,21 @@ function tabMatchesUrl(tab: BrowserTabState, url: string): boolean {
   return previewUrlKey(tab.url) === targetUrl || previewUrlKey(tabUrl(tab)) === targetUrl;
 }
 
+function sameUrlOrigin(a: string, b: string): boolean {
+  try {
+    const urlA = new URL(a.trim());
+    const urlB = new URL(b.trim());
+    return urlA.protocol === urlB.protocol && urlA.host === urlB.host;
+  } catch {
+    return false;
+  }
+}
+
+/** True when the tab already shows a page served by the preview target. */
+function tabIsOnPreviewOrigin(tab: BrowserTabState, url: string): boolean {
+  return sameUrlOrigin(tabUrl(tab) || tab.url, url);
+}
+
 function isReusableBlankTab(tab: BrowserTabState): boolean {
   return (
     tab.url === "about:blank" && (tab.lastCommittedUrl === null || tab.lastCommittedUrl === "")
@@ -128,17 +143,32 @@ function activeTab(state: ThreadBrowserState): BrowserTabState | null {
   return state.tabs.find((tab) => tab.id === state.activeTabId) ?? state.tabs[0] ?? null;
 }
 
+export interface OpenLiveEditPreviewTabOptions {
+  /**
+   * Keep the tab's current page when it is already on the preview server's
+   * origin instead of forcing a navigation back to the preview root URL.
+   * Used by passive re-routing (panel mount / state sync) so reopening the
+   * browser doesn't reload the local server and lose the user's current page.
+   */
+  preserveExistingPath?: boolean;
+}
+
 async function selectAndNavigatePreviewTab(
   api: NativeApi,
   state: ThreadBrowserState,
   target: LiveEditPreviewTabTarget,
   tab: BrowserTabState,
+  options: OpenLiveEditPreviewTabOptions = {},
 ): Promise<ThreadBrowserState> {
-  let nextState = await api.browser.navigate({
-    threadId: target.threadId,
-    tabId: tab.id,
-    url: target.url,
-  });
+  const skipNavigation =
+    options.preserveExistingPath === true && tabIsOnPreviewOrigin(tab, target.url);
+  let nextState = skipNavigation
+    ? state
+    : await api.browser.navigate({
+        threadId: target.threadId,
+        tabId: tab.id,
+        url: target.url,
+      });
   if (nextState.activeTabId !== tab.id) {
     nextState = await api.browser.selectTab({
       threadId: target.threadId,
@@ -152,6 +182,7 @@ async function selectAndNavigatePreviewTab(
 export async function openLiveEditPreviewTab(
   api: NativeApi,
   target: LiveEditPreviewTabTarget,
+  options: OpenLiveEditPreviewTabOptions = {},
 ): Promise<ThreadBrowserState> {
   const recordKey = liveEditPreviewRecordKey(target);
   const initialState = await api.browser.open({ threadId: target.threadId });
@@ -160,7 +191,7 @@ export async function openLiveEditPreviewTab(
     ? (initialState.tabs.find((tab) => tab.id === mappedRecord.tabId) ?? null)
     : null;
   if (mappedTab) {
-    return selectAndNavigatePreviewTab(api, initialState, target, mappedTab);
+    return selectAndNavigatePreviewTab(api, initialState, target, mappedTab, options);
   }
   if (mappedRecord) {
     previewTabRecordsByKey.delete(recordKey);
@@ -176,10 +207,14 @@ export async function openLiveEditPreviewTab(
       .map((record) => record.tabId),
   );
   const adoptableTab =
-    initialState.tabs.find((tab) => !trackedTabIds.has(tab.id) && tabMatchesUrl(tab, target.url)) ??
-    null;
+    initialState.tabs.find(
+      (tab) =>
+        !trackedTabIds.has(tab.id) &&
+        (tabMatchesUrl(tab, target.url) ||
+          (options.preserveExistingPath === true && tabIsOnPreviewOrigin(tab, target.url))),
+    ) ?? null;
   if (adoptableTab) {
-    return selectAndNavigatePreviewTab(api, initialState, target, adoptableTab);
+    return selectAndNavigatePreviewTab(api, initialState, target, adoptableTab, options);
   }
 
   const currentActiveTab = activeTab(initialState);
@@ -190,7 +225,7 @@ export async function openLiveEditPreviewTab(
         ? initialState.tabs[0]!
         : null;
   if (reusableTab) {
-    return selectAndNavigatePreviewTab(api, initialState, target, reusableTab);
+    return selectAndNavigatePreviewTab(api, initialState, target, reusableTab, options);
   }
 
   const nextState = await api.browser.newTab({

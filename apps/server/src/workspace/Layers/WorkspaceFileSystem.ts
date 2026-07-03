@@ -904,6 +904,13 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         const best = chooseBestElementCandidate(candidates);
 
         const openingTag = best.content.slice(best.openStart, best.openEnd);
+        if (
+          input.expected &&
+          (input.expected.relativePath !== best.relativePath ||
+            input.expected.before !== openingTag)
+        ) {
+          throw new Error("The source changed since the preview. Review the change again.");
+        }
         const nextOpeningTag = patchOpeningTagStyle(
           openingTag,
           input.patch,
@@ -913,13 +920,24 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
           throw new Error("Style edit did not change the matched source element.");
         }
 
-        await assertSourceFileUnchanged(best.absolutePath, best.content, "style edit");
-        await nodeFs.writeFile(
-          best.absolutePath,
-          `${best.content.slice(0, best.openStart)}${nextOpeningTag}${best.content.slice(best.openEnd)}`,
-          "utf8",
-        );
-        return { relativePath: best.relativePath, replacements: 1 };
+        const line = best.content.slice(0, best.openStart).split("\n").length;
+        const applied = input.mode !== "preview";
+        if (applied) {
+          await assertSourceFileUnchanged(best.absolutePath, best.content, "style edit");
+          await nodeFs.writeFile(
+            best.absolutePath,
+            `${best.content.slice(0, best.openStart)}${nextOpeningTag}${best.content.slice(best.openEnd)}`,
+            "utf8",
+          );
+        }
+        return {
+          relativePath: best.relativePath,
+          replacements: 1,
+          applied,
+          before: openingTag,
+          after: nextOpeningTag,
+          line,
+        };
       },
       catch: (cause) =>
         new WorkspaceFileSystemError({
@@ -930,7 +948,9 @@ export const makeWorkspaceFileSystem = Effect.gen(function* () {
         }),
     });
 
-    yield* workspaceEntries.invalidate(input.cwd);
+    if (result.applied) {
+      yield* workspaceEntries.invalidate(input.cwd);
+    }
     return result;
   });
 

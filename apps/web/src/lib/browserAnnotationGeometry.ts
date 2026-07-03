@@ -79,6 +79,12 @@ export function convertBrowserOverlayAnnotationsToViewport(
       ...point(annotation),
       ...(typeof annotation.boxX === "number" ? { boxX: annotation.boxX * scale.x } : {}),
       ...(typeof annotation.boxY === "number" ? { boxY: annotation.boxY * scale.y } : {}),
+      ...(typeof annotation.boxWidth === "number"
+        ? { boxWidth: annotation.boxWidth * scale.x }
+        : {}),
+      ...(typeof annotation.boxHeight === "number"
+        ? { boxHeight: annotation.boxHeight * scale.y }
+        : {}),
       ...(typeof annotation.fontSize === "number"
         ? { fontSize: annotation.fontSize * scale.y }
         : {}),

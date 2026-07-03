@@ -29,6 +29,7 @@ import {
   IconChevronRight,
   IconChevronUp,
   IconCircleCheck,
+  IconColorPicker,
   IconColumns2,
   IconDots,
   IconDownload,
@@ -153,6 +154,7 @@ export const CircleQuestionIcon: LucideIcon = centralIconWrapper("circle-questio
 export const ArrowUpCircleIcon: LucideIcon = centralIconWrapper("arrow-up-circle");
 export const CloudUploadIcon = centralIconWrapper("cloud-upload");
 export const CloudSyncIcon = centralIconWrapper("cloud-sync");
+export const ColorPickerIcon = adaptIcon(IconColorPicker);
 export const Columns2Icon = adaptIcon(IconColumns2);
 export const ChangesIcon = centralIconWrapper("changes");
 export const CopyIcon = centralIconWrapper("square-behind-square-6");

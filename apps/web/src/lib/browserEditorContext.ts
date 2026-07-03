@@ -89,6 +89,12 @@ export interface BrowserElementPayloadMetadata {
   outerHTMLTruncated: boolean;
 }
 
+export interface BrowserElementAncestor {
+  tagName: string;
+  selector: string;
+  label: string;
+}
+
 export interface BrowserElementEditorContext {
   url: string;
   title: string;
@@ -105,6 +111,8 @@ export interface BrowserElementEditorContext {
   style?: BrowserElementStyleSnapshot;
   availableFonts?: BrowserElementFontOption[];
   effects?: BrowserElementEffectSnapshot[];
+  /** Parent chain (closest first) for breadcrumb navigation in the editor. */
+  ancestors?: BrowserElementAncestor[];
 }
 
 export interface BrowserElementHoverContext {
@@ -143,6 +151,9 @@ export interface BrowserTextAnnotation {
   text: string;
   boxX?: number;
   boxY?: number;
+  /** User-resized box size; when absent the box auto-sizes to its text. */
+  boxWidth?: number;
+  boxHeight?: number;
   fontSize?: number;
 }
 
@@ -304,6 +315,51 @@ function selectorForElement(target: Element): string {
     current = parent;
   }
   return parts.join(" > ");
+}
+
+// Compact identity label ("div#hero", "button.btn.primary") shared by the
+// fallback context reader and panel UI so element identity renders identically
+// everywhere.
+export function browserElementShortLabel(input: {
+  tagName: string;
+  id?: string | null | undefined;
+  classNames?: readonly string[] | undefined;
+}): string {
+  const tag = input.tagName.toLowerCase();
+  if (input.id?.trim()) {
+    return `${tag}#${input.id.trim()}`;
+  }
+  const classes = (input.classNames ?? []).filter(Boolean).slice(0, 2);
+  return classes.length > 0 ? `${tag}.${classes.join(".")}` : tag;
+}
+
+export function browserElementContextLabel(context: {
+  tagName: string;
+  attributes: Record<string, string>;
+}): string {
+  return browserElementShortLabel({
+    tagName: context.tagName,
+    id: context.attributes.id,
+    classNames: (context.attributes.class ?? "").split(/\s+/).filter(Boolean),
+  });
+}
+
+function collectElementAncestors(element: Element): BrowserElementAncestor[] {
+  const ancestors: BrowserElementAncestor[] = [];
+  let current = element.parentElement;
+  while (current && current.localName !== "html" && ancestors.length < 5) {
+    ancestors.push({
+      tagName: current.tagName,
+      selector: selectorForElement(current),
+      label: browserElementShortLabel({
+        tagName: current.tagName,
+        id: current.id,
+        classNames: Array.from(current.classList),
+      }),
+    });
+    current = current.parentElement;
+  }
+  return ancestors;
 }
 
 function redactAttribute(name: string, value: string): string {
@@ -799,9 +855,47 @@ export function readBrowserElementContextFromDocumentAtPoint(input: {
   title?: string;
   viewport?: BrowserViewport;
 }): BrowserElementEditorContext | null {
+  return buildBrowserElementContextFromDocumentElement({
+    document: input.document,
+    element: input.document.elementFromPoint(input.point.x, input.point.y),
+    ...(input.url !== undefined ? { url: input.url } : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.viewport !== undefined ? { viewport: input.viewport } : {}),
+  });
+}
+
+export function readBrowserElementContextFromDocumentBySelector(input: {
+  document: Document;
+  selector: string;
+  url?: string;
+  title?: string;
+  viewport?: BrowserViewport;
+}): BrowserElementEditorContext | null {
+  let element: Element | null = null;
+  try {
+    element = input.document.querySelector(input.selector);
+  } catch {
+    return null;
+  }
+  return buildBrowserElementContextFromDocumentElement({
+    document: input.document,
+    element,
+    ...(input.url !== undefined ? { url: input.url } : {}),
+    ...(input.title !== undefined ? { title: input.title } : {}),
+    ...(input.viewport !== undefined ? { viewport: input.viewport } : {}),
+  });
+}
+
+function buildBrowserElementContextFromDocumentElement(input: {
+  document: Document;
+  element: Element | null;
+  url?: string;
+  title?: string;
+  viewport?: BrowserViewport;
+}): BrowserElementEditorContext | null {
   const ownerWindow = input.document.defaultView;
   const ElementCtor = ownerWindow?.Element ?? Element;
-  const element = input.document.elementFromPoint(input.point.x, input.point.y);
+  const element = input.element;
   if (!element || !(element instanceof ElementCtor)) {
     return null;
   }
@@ -847,6 +941,7 @@ export function readBrowserElementContextFromDocumentAtPoint(input: {
     style,
     availableFonts: readAvailableFontOptions(ownerWindow ?? null, style.fontFamily),
     effects,
+    ancestors: collectElementAncestors(element),
   };
 }
 
@@ -944,17 +1039,28 @@ export function cdpElementContextExpression(
   x: number,
   y: number,
   overlayGeometry?: { overlayWidth: number; overlayHeight: number },
+  target?: { selector: string },
 ): string {
   return `(() => {
     const rawX = ${JSON.stringify(x)};
     const rawY = ${JSON.stringify(y)};
+    const targetSelector = ${JSON.stringify(target?.selector ?? null)};
     const overlayWidth = ${JSON.stringify(overlayGeometry?.overlayWidth ?? null)};
     const overlayHeight = ${JSON.stringify(overlayGeometry?.overlayHeight ?? null)};
     const viewportWidth = (window.visualViewport && window.visualViewport.width) || window.innerWidth || document.documentElement.clientWidth || overlayWidth || 1;
     const viewportHeight = (window.visualViewport && window.visualViewport.height) || window.innerHeight || document.documentElement.clientHeight || overlayHeight || 1;
     const x = overlayWidth && overlayWidth > 0 ? Math.max(0, Math.min(viewportWidth, rawX * viewportWidth / overlayWidth)) : rawX;
     const y = overlayHeight && overlayHeight > 0 ? Math.max(0, Math.min(viewportHeight, rawY * viewportHeight / overlayHeight)) : rawY;
-    const element = document.elementFromPoint(x, y);
+    let element = null;
+    if (targetSelector) {
+      try {
+        element = document.querySelector(targetSelector);
+      } catch {
+        element = null;
+      }
+    } else {
+      element = document.elementFromPoint(x, y);
+    }
     if (!element || !(element instanceof Element)) {
       return null;
     }
@@ -1201,6 +1307,22 @@ export function cdpElementContextExpression(
       effectFromStyle(window.getComputedStyle(element, "::before"), "::before"),
       effectFromStyle(window.getComputedStyle(element, "::after"), "::after"),
     ].filter(Boolean).slice(0, 6);
+    const elementLabel = (target) => {
+      const tag = (target.localName || target.tagName || "").toLowerCase();
+      if (target.id) return tag + "#" + target.id;
+      const classes = Array.from(target.classList || []).slice(0, 2);
+      return classes.length > 0 ? tag + "." + classes.join(".") : tag;
+    };
+    const ancestors = [];
+    let ancestorElement = element.parentElement;
+    while (ancestorElement && ancestorElement.localName !== "html" && ancestors.length < 5) {
+      ancestors.push({
+        tagName: ancestorElement.tagName,
+        selector: selectorFor(ancestorElement),
+        label: elementLabel(ancestorElement),
+      });
+      ancestorElement = ancestorElement.parentElement;
+    }
     const rect = element.getBoundingClientRect();
     const rawText = "innerText" in element ? element.innerText : element.textContent;
     const text = truncatePayloadValue(rawText, maxTextPayloadLength);
@@ -1267,6 +1389,7 @@ export function cdpElementContextExpression(
       },
       availableFonts: collectFonts(computedStyle.fontFamily),
       effects,
+      ancestors,
     };
   })()`;
 }
@@ -1395,11 +1518,15 @@ function formatTextAnnotation(annotation: BrowserTextAnnotation): string {
     typeof annotation.boxX === "number" && typeof annotation.boxY === "number"
       ? `, box: x=${Math.round(annotation.boxX)}, y=${Math.round(annotation.boxY)}`
       : "";
+  const boxSize =
+    typeof annotation.boxWidth === "number" && typeof annotation.boxHeight === "number"
+      ? `, boxSize: width=${Math.round(annotation.boxWidth)}, height=${Math.round(annotation.boxHeight)}`
+      : "";
   const fontSize =
     typeof annotation.fontSize === "number"
       ? `, fontSize: ${Math.round(annotation.fontSize)}px`
       : "";
-  return `x=${Math.round(annotation.x)}, y=${Math.round(annotation.y)}${boxPosition}${fontSize}, text: ${text || "(empty)"}`;
+  return `x=${Math.round(annotation.x)}, y=${Math.round(annotation.y)}${boxPosition}${boxSize}${fontSize}, text: ${text || "(empty)"}`;
 }
 
 function formatArrowSummary(arrow: BrowserAnnotationArrow): string {

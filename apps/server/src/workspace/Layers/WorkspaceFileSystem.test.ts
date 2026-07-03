@@ -451,10 +451,77 @@ it.layer(TestLayer)("WorkspaceFileSystemLive", (it) => {
           .readFileString(path.join(cwd, "src/App.tsx"))
           .pipe(Effect.orDie);
 
-        expect(result).toEqual({ relativePath: "src/App.tsx", replacements: 1 });
+        expect(result).toEqual({
+          relativePath: "src/App.tsx",
+          replacements: 1,
+          applied: true,
+          before: '<h1 id="hero-title">',
+          after: '<h1 id="hero-title" style={{ color: "rgb(17, 19, 24)", fontSize: "72px" }}>',
+          line: 1,
+        });
         expect(saved).toContain(
           '<h1 id="hero-title" style={{ color: "rgb(17, 19, 24)", fontSize: "72px" }}>Original title</h1>',
         );
+      }),
+    );
+
+    it.effect("preview mode plans the edit without writing the file", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const original =
+          'export function App() { return <h1 id="hero-title">Original title</h1>; }\n';
+        yield* writeTextFile(cwd, "src/App.tsx", original);
+
+        const result = yield* workspaceFileSystem.applyStyleEdit({
+          cwd,
+          element: {
+            tagName: "h1",
+            text: "Original title",
+            attributes: { id: "hero-title" },
+          },
+          patch: { color: "red" },
+          mode: "preview",
+        });
+        const saved = yield* fileSystem
+          .readFileString(path.join(cwd, "src/App.tsx"))
+          .pipe(Effect.orDie);
+
+        expect(result.applied).toBe(false);
+        expect(result.before).toBe('<h1 id="hero-title">');
+        expect(result.after).toBe('<h1 id="hero-title" style={{ color: "red" }}>');
+        expect(result.line).toBe(1);
+        expect(saved).toBe(original);
+      }),
+    );
+
+    it.effect("refuses to apply when the source drifted from the confirmed preview", () =>
+      Effect.gen(function* () {
+        const workspaceFileSystem = yield* WorkspaceFileSystem;
+        const cwd = yield* makeTempDir;
+        yield* writeTextFile(
+          cwd,
+          "src/App.tsx",
+          'export function App() { return <h1 id="hero-title" class="big">Original title</h1>; }\n',
+        );
+
+        const error = yield* workspaceFileSystem
+          .applyStyleEdit({
+            cwd,
+            element: {
+              tagName: "h1",
+              text: "Original title",
+              attributes: { id: "hero-title" },
+            },
+            patch: { color: "red" },
+            mode: "apply",
+            expected: { relativePath: "src/App.tsx", before: '<h1 id="hero-title">' },
+          })
+          .pipe(Effect.flip);
+
+        expect(error.message).toContain("The source changed since the preview.");
       }),
     );
 

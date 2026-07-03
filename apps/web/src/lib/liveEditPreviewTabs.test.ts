@@ -136,6 +136,68 @@ describe("live edit preview tabs", () => {
     );
   });
 
+  it("keeps the current page when passively re-routing a tab already on the preview origin", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-live-edit-preserve-path");
+    const api = createBrowserApiMock(threadId);
+    const projectId = ProjectId.makeUnsafe("project-live-edit-preserve-path");
+    const target = {
+      threadId,
+      cwd: "/tmp/preserve-path-project",
+      projectId,
+      url: "http://127.0.0.1:5173/",
+    };
+
+    const openedState = await openLiveEditPreviewTab(api, target);
+    const previewTabId = openedState.activeTabId;
+    expect(previewTabId).not.toBeNull();
+
+    // The user browses to a deeper page inside the preview server.
+    await api.browser.navigate({
+      threadId,
+      tabId: previewTabId!,
+      url: "http://127.0.0.1:5173/settings/profile",
+    });
+
+    const preservedState = await openLiveEditPreviewTab(api, target, {
+      preserveExistingPath: true,
+    });
+    expect(preservedState.tabs.find((tab) => tab.id === previewTabId)?.url).toBe(
+      "http://127.0.0.1:5173/settings/profile",
+    );
+
+    // Without the flag (explicit preview open) the root URL still wins.
+    const explicitState = await openLiveEditPreviewTab(api, target);
+    expect(explicitState.tabs.find((tab) => tab.id === previewTabId)?.url).toBe(
+      "http://127.0.0.1:5173/",
+    );
+  });
+
+  it("adopts an untracked same-origin tab when preserving the existing path", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-live-edit-adopt-origin");
+    const api = createBrowserApiMock(threadId);
+
+    // Simulates a page reload: the tab exists on a deeper preview page but the
+    // in-memory record map has no entry for it.
+    await api.browser.open({
+      threadId,
+      initialUrl: "http://127.0.0.1:5175/dashboard",
+    });
+
+    const state = await openLiveEditPreviewTab(
+      api,
+      {
+        threadId,
+        cwd: "/tmp/adopt-origin-project",
+        projectId: ProjectId.makeUnsafe("project-live-edit-adopt-origin"),
+        url: "http://127.0.0.1:5175/",
+      },
+      { preserveExistingPath: true },
+    );
+
+    expect(state.tabs).toHaveLength(1);
+    expect(state.tabs[0]?.url).toBe("http://127.0.0.1:5175/dashboard");
+  });
+
   it("does not reuse another project tab only because the preview URL matches", async () => {
     const threadId = ThreadId.makeUnsafe("thread-live-edit-same-url-tabs");
     const api = createBrowserApiMock(threadId);

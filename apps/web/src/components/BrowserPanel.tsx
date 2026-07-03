@@ -65,6 +65,7 @@ import { readNativeApi } from "~/nativeApi";
 import type { DockPaneRuntimeMode } from "~/lib/dockPaneActivation";
 import { IMAGE_SIZE_LIMIT_LABEL } from "~/lib/composerSend";
 import { APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME } from "./chat/composerPickerStyles";
+import { BROWSER_GLASS_SURFACE_CLASS_NAME } from "~/lib/glassSurface";
 import { Kbd } from "./ui/kbd";
 import { PANEL_RESIZE_OVERLAY_SYNC_EVENT } from "~/lib/panelResize";
 import { serverLocalServersQueryOptions } from "~/lib/serverReactQuery";
@@ -103,6 +104,7 @@ import {
   isBrowserElementHoverContext,
   normalizeBrowserElementStylePatch,
   readBrowserElementContextFromDocumentAtPoint,
+  readBrowserElementContextFromDocumentBySelector,
   readBrowserElementHoverContextFromDocumentAtPoint,
   removeBrowserAnnotationContextPrompt,
   type BrowserAnnotationArrow,
@@ -125,6 +127,11 @@ import {
   browserStylePreviewInvokeExpression,
   type BrowserStylePreviewMode,
 } from "../lib/browserStylePreview";
+import {
+  revertBrowserStyleEdit,
+  type AppliedBrowserStyleEdit,
+  type BrowserStyleEditSourcePlan,
+} from "../lib/browserStyleSourceEdit";
 import {
   browserAddressDisplayValue,
   buildBrowserAddressSuggestions,
@@ -250,17 +257,17 @@ function isLoopbackPreviewUrl(value: string): boolean {
 
 function liveEditorPreviewLabel(value: string | null | undefined): string {
   if (!value || value === BROWSER_BLANK_URL) {
-    return "Localhost";
+    return "Local preview";
   }
   try {
     const url = new URL(value);
     const host = url.hostname.toLowerCase();
     if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0" || host === "::1") {
-      return url.port ? `Localhost: ${url.port}` : "Localhost";
+      return url.port ? `Port ${url.port}` : "Local preview";
     }
-    return url.port ? `${url.hostname}: ${url.port}` : url.hostname;
+    return url.port ? `${url.hostname}:${url.port}` : url.hostname;
   } catch {
-    return "Localhost";
+    return "Local preview";
   }
 }
 
@@ -306,7 +313,9 @@ function loadBrowserWebviewUrl(webview: BrowserWebviewElement, url: string): voi
 
   if (shouldBypassCache) {
     try {
-      const loadPromise = webview.loadURL?.(nextUrl, { extraHeaders: BROWSER_NO_CACHE_HEADERS });
+      const loadPromise = webview.loadURL?.(nextUrl, {
+        extraHeaders: BROWSER_NO_CACHE_HEADERS,
+      });
       if (loadPromise) {
         void loadPromise.catch(() => undefined);
       } else {
@@ -349,7 +358,11 @@ const LIVE_EDITOR_MODE_SHORTCUTS = [
   { mode: "inspect", key: "i", label: "⌘I" },
   { mode: "draw", key: "d", label: "⌘D" },
   { mode: "text", key: "t", label: "⌘T" },
-] as const satisfies readonly { mode: BrowserEditorMode; key: string; label: string }[];
+] as const satisfies readonly {
+  mode: BrowserEditorMode;
+  key: string;
+  label: string;
+}[];
 
 interface BrowserToolbarAnchorRect {
   left: number;
@@ -473,7 +486,10 @@ function applyBrowserInlineTextEditRuntime(
   }
 
   if (runtimeWindow[stateKey]?.selector === input.selector) {
-    runtimeWindow[stateKey]?.cleanup("cancel", { silent: true, restoreText: true });
+    runtimeWindow[stateKey]?.cleanup("cancel", {
+      silent: true,
+      restoreText: true,
+    });
   }
   clearResult();
 
@@ -590,6 +606,7 @@ interface BrowserEditorVisibleStateSnapshot {
   selectedTextAnnotationId: string | null;
   selectedAnnotationArrowId: string | null;
   stylePropertiesPanelOpen: boolean;
+  stylePanelElementContext: BrowserElementEditorContext | null;
   stylePanelPositionOverride: BrowserStylePanelPosition | null;
   styleEditorInitialPatch: BrowserElementStylePatch | null;
 }
@@ -708,8 +725,12 @@ const BROWSER_TOOLBAR_DIVIDER_CLASS_NAME = "h-5 w-px shrink-0 bg-border/60";
 const BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME =
   "flex h-6 w-7 items-center justify-center rounded-[5px] border border-black/10 bg-white/62 text-slate-950 shadow-[0_8px_24px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.62)] backdrop-blur-xl transition hover:bg-white/76 dark:border-white/18 dark:bg-slate-950/82 dark:text-white dark:shadow-[0_8px_24px_rgba(0,0,0,0.22)] dark:hover:bg-slate-900";
 // Tool flyouts are pickers, so they wear the app's shared translucent popup shell
-// instead of a bespoke glass surface.
-const BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME = `pointer-events-auto fixed z-[80] w-48 rounded-xl p-2.5 shadow-xl ${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME}`;
+// instead of a bespoke glass surface. The shared shell sets `position: relative`
+// (anchoring its frosted ::before layer), which overrides `fixed` when both land on
+// one element — so positioning lives on an outer wrapper and the shell on an inner
+// surface div, mirroring the tooltip positioner/popup split.
+const BROWSER_TOOL_OPTIONS_POSITIONER_CLASS_NAME = "pointer-events-auto fixed z-[80] w-48";
+const BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME = `rounded-xl p-2.5 shadow-xl ${APP_TRANSLUCENT_POPUP_SURFACE_BASE_CLASS_NAME}`;
 // Floating shortcut chips reuse the shared <Kbd> chrome; this only shrinks it and
 // adds a border + blur so the chip stays legible over arbitrary page content.
 const BROWSER_SHORTCUT_HINT_CLASS_NAME =
@@ -724,6 +745,9 @@ const BROWSER_STYLE_PANEL_WIDTH = 352;
 const BROWSER_STYLE_PANEL_MAX_HEIGHT = 672;
 const BROWSER_STYLE_PANEL_GAP = 12;
 const BROWSER_STYLE_PANEL_VIEWPORT_PADDING = 8;
+// Minimum sliver of the properties panel that must stay inside the overlay
+// after the browser pane resizes, so its drag handle remains grabbable.
+const BROWSER_STYLE_PANEL_EDGE_GRAB_MARGIN = 48;
 const BROWSER_DRAWING_CONTRAST_STROKE_COLOR = "#ffffff";
 const BROWSER_DRAWING_GRADIENT_COLOR_SETS = [
   ["#ff2d55", "#ffcc00", "#00e5ff", "#7c3aed", "#39ff14"],
@@ -752,6 +776,16 @@ const BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH = 84;
 const BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH = 360;
 const BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT = 30;
 const BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT = 180;
+// Manual resize may exceed the auto-size caps but stays bounded so a stray drag
+// cannot blow the box up beyond the overlay.
+const BROWSER_TEXT_ANNOTATION_BOX_MAX_CUSTOM_WIDTH = 640;
+const BROWSER_TEXT_ANNOTATION_BOX_MAX_CUSTOM_HEIGHT = 480;
+const BROWSER_TEXT_ANNOTATION_BORDER_WIDTH = 1;
+// Single source for the annotation font: canvas measurement, DOM rendering, and
+// screenshot export must all use the same stack, otherwise wrap estimates drift
+// from the rendered text and the box clips vertically. This also defeats the
+// global `textarea { font-family: mono }` reset on the edit textareas.
+const BROWSER_TEXT_ANNOTATION_FONT_FAMILY = "ui-sans-serif, system-ui, sans-serif";
 const BROWSER_TEXT_ANNOTATION_FONT_WEIGHT = 600;
 const BROWSER_TEXT_ANNOTATION_FONT_SIZE = 12;
 const BROWSER_TEXT_ANNOTATION_LINE_HEIGHT = 16;
@@ -759,8 +793,6 @@ const BROWSER_TEXT_ANNOTATION_MIN_FONT_SIZE = 10;
 const BROWSER_TEXT_ANNOTATION_MAX_FONT_SIZE = 24;
 const BROWSER_TEXT_ANNOTATION_PADDING_X = 10;
 const BROWSER_TEXT_ANNOTATION_PADDING_Y = 6;
-const BROWSER_TEXT_ANNOTATION_OFFSET_X = 10;
-const BROWSER_TEXT_ANNOTATION_ANCHOR_GAP = 4;
 const BROWSER_TEXT_ANNOTATION_PLACEHOLDER = "Add note";
 const BROWSER_ARROW_MIN_LENGTH = 8;
 const BROWSER_ANNOTATION_ARROW_HEAD_LENGTH = 11;
@@ -980,7 +1012,7 @@ function estimateTextAnnotationTextWidth(
 }
 
 function textAnnotationMeasureFont(fontSize = BROWSER_TEXT_ANNOTATION_FONT_SIZE): string {
-  return `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+  return `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ${BROWSER_TEXT_ANNOTATION_FONT_FAMILY}`;
 }
 
 function getTextAnnotationMeasureContext(): CanvasRenderingContext2D | null {
@@ -1015,12 +1047,18 @@ function normalizeTextAnnotationText(text: string): string {
   return text.trim().replace(/\s+/g, " ");
 }
 
-function maxVisibleTextAnnotationLines(fontSize = BROWSER_TEXT_ANNOTATION_FONT_SIZE): number {
+function maxVisibleTextAnnotationLines(
+  fontSize = BROWSER_TEXT_ANNOTATION_FONT_SIZE,
+  maxBoxHeight = BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT,
+): number {
   const lineHeight = browserTextAnnotationLineHeight(fontSize);
   return Math.max(
     1,
     Math.floor(
-      (BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT - BROWSER_TEXT_ANNOTATION_PADDING_Y * 2) / lineHeight,
+      (maxBoxHeight -
+        BROWSER_TEXT_ANNOTATION_PADDING_Y * 2 -
+        BROWSER_TEXT_ANNOTATION_BORDER_WIDTH * 2) /
+        lineHeight,
     ),
   );
 }
@@ -1122,20 +1160,53 @@ function textAnnotationLines(
   return { lines, hasOverflow };
 }
 
+function clampTextAnnotationBoxWidth(width: number): number {
+  return Math.round(
+    Math.max(
+      BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH,
+      Math.min(BROWSER_TEXT_ANNOTATION_BOX_MAX_CUSTOM_WIDTH, width),
+    ),
+  );
+}
+
+function clampTextAnnotationBoxHeight(height: number): number {
+  return Math.round(
+    Math.max(
+      BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT,
+      Math.min(BROWSER_TEXT_ANNOTATION_BOX_MAX_CUSTOM_HEIGHT, height),
+    ),
+  );
+}
+
 function textAnnotationBoxMetrics(
   text: string,
   fontSize = BROWSER_TEXT_ANNOTATION_FONT_SIZE,
+  box?: { width?: number | undefined; height?: number | undefined },
 ): BrowserTextAnnotationBoxMetrics {
-  const cacheKey = `${fontSize}:${text}`;
+  const customWidth =
+    typeof box?.width === "number" ? clampTextAnnotationBoxWidth(box.width) : null;
+  const customHeight =
+    typeof box?.height === "number" ? clampTextAnnotationBoxHeight(box.height) : null;
+  const cacheKey = `${fontSize}:${customWidth ?? ""}:${customHeight ?? ""}:${text}`;
   const cached = textAnnotationMetricsCache.get(cacheKey);
   if (cached) {
     return cached;
   }
+  // The DOM box is `box-border` with a 1px border, so the border participates in
+  // width/height. Leaving it out shorted the content area by 2px and clipped the
+  // last text line vertically.
+  const chromeX = BROWSER_TEXT_ANNOTATION_PADDING_X * 2 + BROWSER_TEXT_ANNOTATION_BORDER_WIDTH * 2;
+  const chromeY = BROWSER_TEXT_ANNOTATION_PADDING_Y * 2 + BROWSER_TEXT_ANNOTATION_BORDER_WIDTH * 2;
   const displayText = text.trim().length > 0 ? text : BROWSER_TEXT_ANNOTATION_PLACEHOLDER;
-  const maxContentWidth =
-    BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH - BROWSER_TEXT_ANNOTATION_PADDING_X * 2;
+  const maxBoxWidth = customWidth ?? BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH;
+  const maxBoxHeight =
+    customHeight ??
+    (customWidth !== null
+      ? BROWSER_TEXT_ANNOTATION_BOX_MAX_CUSTOM_HEIGHT
+      : BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT);
+  const maxContentWidth = Math.max(24, maxBoxWidth - chromeX);
   const lineWrap = textAnnotationLines(displayText, maxContentWidth, {
-    maxLines: maxVisibleTextAnnotationLines(fontSize),
+    maxLines: maxVisibleTextAnnotationLines(fontSize, maxBoxHeight),
     measureText: (line) => measureTextAnnotationTextWidth(line, fontSize),
   });
   const lines = lineWrap.hasOverflow
@@ -1147,26 +1218,21 @@ function textAnnotationBoxMetrics(
         (maxWidth, line) => Math.max(maxWidth, measureTextAnnotationTextWidth(line, fontSize)),
         0,
       );
-  const width = Math.ceil(
-    Math.max(
-      BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH,
-      Math.min(
-        BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH,
-        contentWidth + BROWSER_TEXT_ANNOTATION_PADDING_X * 2,
+  const width =
+    customWidth ??
+    Math.ceil(
+      Math.max(
+        BROWSER_TEXT_ANNOTATION_BOX_MIN_WIDTH,
+        Math.min(BROWSER_TEXT_ANNOTATION_BOX_MAX_WIDTH, contentWidth + chromeX),
       ),
-    ),
-  );
-  const rawHeight = Math.max(
-    BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT,
-    lines.length * browserTextAnnotationLineHeight(fontSize) +
-      BROWSER_TEXT_ANNOTATION_PADDING_Y * 2,
-  );
-  const height = Math.ceil(
+    );
+  const autoHeight = Math.ceil(
     Math.max(
       BROWSER_TEXT_ANNOTATION_BOX_MIN_HEIGHT,
-      Math.min(BROWSER_TEXT_ANNOTATION_BOX_MAX_HEIGHT, rawHeight),
+      Math.min(maxBoxHeight, lines.length * browserTextAnnotationLineHeight(fontSize) + chromeY),
     ),
   );
+  const height = customHeight ?? autoHeight;
   const metrics = { width, height, lines, hasOverflow: lineWrap.hasOverflow };
   if (textAnnotationMetricsCache.size >= TEXT_ANNOTATION_METRICS_CACHE_MAX) {
     const oldestKey = textAnnotationMetricsCache.keys().next().value;
@@ -1181,27 +1247,38 @@ function textAnnotationBoxMetrics(
 function browserTextAnnotationMetrics(
   annotation: BrowserTextAnnotation,
 ): BrowserTextAnnotationBoxMetrics {
-  return textAnnotationBoxMetrics(annotation.text, browserTextAnnotationFontSize(annotation));
+  return textAnnotationBoxMetrics(annotation.text, browserTextAnnotationFontSize(annotation), {
+    width: annotation.boxWidth,
+    height: annotation.boxHeight,
+  });
+}
+
+function textAnnotationBoxTopLeftForCenter(
+  center: BrowserDrawingPoint,
+  metrics: BrowserTextAnnotationBoxMetrics,
+): BrowserDrawingPoint {
+  return {
+    x: center.x - metrics.width / 2,
+    y: center.y - metrics.height / 2,
+  };
 }
 
 function textAnnotationBoxPosition(
   annotation: BrowserTextAnnotation,
   metrics = browserTextAnnotationMetrics(annotation),
 ): BrowserDrawingPoint {
-  return {
-    x: annotation.boxX ?? Math.max(8, annotation.x + BROWSER_TEXT_ANNOTATION_OFFSET_X),
-    y:
-      annotation.boxY ??
-      Math.max(8, annotation.y - metrics.height - BROWSER_TEXT_ANNOTATION_ANCHOR_GAP),
-  };
+  if (typeof annotation.boxX === "number" && typeof annotation.boxY === "number") {
+    return { x: annotation.boxX, y: annotation.boxY };
+  }
+  // x/y is the spawn anchor (double-click point); center the box on it.
+  return textAnnotationBoxTopLeftForCenter({ x: annotation.x, y: annotation.y }, metrics);
 }
 
-function clampTextAnnotationBoxPosition(
+function clampTextAnnotationBoxPositionToRect(
   position: BrowserDrawingPoint,
-  overlay: HTMLElement | null,
-  metrics: BrowserTextAnnotationBoxMetrics = textAnnotationBoxMetrics(""),
+  rect: Pick<DOMRect, "width" | "height"> | null | undefined,
+  metrics: BrowserTextAnnotationBoxMetrics,
 ): BrowserDrawingPoint {
-  const rect = overlay?.getBoundingClientRect();
   const maxX = rect ? Math.max(8, rect.width - metrics.width - 8) : position.x;
   const maxY = rect ? Math.max(8, rect.height - metrics.height - 8) : position.y;
   return {
@@ -1210,18 +1287,25 @@ function clampTextAnnotationBoxPosition(
   };
 }
 
-function textAnnotationHandlePoint(
-  annotation: BrowserTextAnnotation,
+function clampTextAnnotationBoxPosition(
+  position: BrowserDrawingPoint,
+  overlay: HTMLElement | null,
+  metrics: BrowserTextAnnotationBoxMetrics = textAnnotationBoxMetrics(""),
+): BrowserDrawingPoint {
+  return clampTextAnnotationBoxPositionToRect(position, overlay?.getBoundingClientRect(), metrics);
+}
+
+function textAnnotationHandlePointForBox(
+  position: BrowserDrawingPoint,
+  size: { width: number; height: number },
   handle: BrowserAnnotationArrowHandle,
 ): BrowserDrawingPoint {
-  const metrics = browserTextAnnotationMetrics(annotation);
-  const position = textAnnotationBoxPosition(annotation, metrics);
   const left = position.x;
   const top = position.y;
-  const centerX = left + metrics.width / 2;
-  const centerY = top + metrics.height / 2;
-  const right = left + metrics.width;
-  const bottom = top + metrics.height;
+  const centerX = left + size.width / 2;
+  const centerY = top + size.height / 2;
+  const right = left + size.width;
+  const bottom = top + size.height;
   switch (handle) {
     case "top-left":
       return { x: left, y: top };
@@ -1241,6 +1325,18 @@ function textAnnotationHandlePoint(
       return { x: left, y: centerY };
   }
   return { x: centerX, y: centerY };
+}
+
+function textAnnotationHandlePoint(
+  annotation: BrowserTextAnnotation,
+  handle: BrowserAnnotationArrowHandle,
+): BrowserDrawingPoint {
+  const metrics = browserTextAnnotationMetrics(annotation);
+  return textAnnotationHandlePointForBox(
+    textAnnotationBoxPosition(annotation, metrics),
+    metrics,
+    handle,
+  );
 }
 
 function closestTextAnnotationHandle(
@@ -1367,6 +1463,44 @@ function browserAnnotationArrowSegments(
   ];
 }
 
+const BROWSER_ARROW_SEGMENT_DOM_PARTS = ["selected", "contrast", "gradient", "glint"] as const;
+
+// Dragging/resizing a text note moves attached arrow endpoints every frame.
+// Patching the already-rendered SVG directly keeps that hot path off React —
+// re-rendering the whole panel per frame is what made box dragging drop
+// frames. React re-commits the same final values when the gesture ends.
+function applyBrowserAnnotationArrowDomPatch(
+  group: SVGGElement,
+  arrow: BrowserAnnotationArrow,
+): void {
+  const setLine = (part: string, x1: number, y1: number, x2: number, y2: number) => {
+    const line = group.querySelector<SVGLineElement>(`[data-arrow-part="${part}"]`);
+    if (!line) {
+      return;
+    }
+    line.setAttribute("x1", String(x1));
+    line.setAttribute("y1", String(y1));
+    line.setAttribute("x2", String(x2));
+    line.setAttribute("y2", String(y2));
+  };
+  setLine("hit", arrow.from.x, arrow.from.y, arrow.to.x, arrow.to.y);
+  browserAnnotationArrowSegments(arrow).forEach((segment, segmentIndex) => {
+    for (const part of BROWSER_ARROW_SEGMENT_DOM_PARTS) {
+      setLine(`${part}-${segmentIndex}`, segment.x1, segment.y1, segment.x2, segment.y2);
+    }
+  });
+  const sourceCircle = group.querySelector<SVGCircleElement>('[data-arrow-part="source"]');
+  if (sourceCircle) {
+    sourceCircle.setAttribute("cx", String(arrow.from.x));
+    sourceCircle.setAttribute("cy", String(arrow.from.y));
+  }
+  const targetCircle = group.querySelector<SVGCircleElement>('[data-arrow-part="target"]');
+  if (targetCircle) {
+    targetCircle.setAttribute("cx", String(arrow.to.x));
+    targetCircle.setAttribute("cy", String(arrow.to.y));
+  }
+}
+
 function unionBrowserCaptureRect(
   current: BrowserCaptureRect | null,
   rect: BrowserCaptureRect,
@@ -1410,7 +1544,12 @@ function browserAnnotationViewportBounds(input: {
     const metrics = browserTextAnnotationMetrics(annotation);
     const position = textAnnotationBoxPosition(annotation, metrics);
     addPoint(annotation);
-    addRect({ x: position.x, y: position.y, width: metrics.width, height: metrics.height });
+    addRect({
+      x: position.x,
+      y: position.y,
+      width: metrics.width,
+      height: metrics.height,
+    });
   }
   for (const arrow of input.arrows) {
     if (browserAnnotationArrowLength(arrow) >= BROWSER_ARROW_MIN_LENGTH) {
@@ -1423,6 +1562,86 @@ function browserAnnotationViewportBounds(input: {
 
 function clampBrowserNumber(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+interface BrowserOverlayBoxRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+// Picks the least-obstructive default position for the element properties
+// panel next to the anchor box: prefer beside it, fall back below/above, and
+// score candidates by how much they overlap the anchor after clamping.
+function browserStylePanelPlacement(
+  anchorBox: BrowserOverlayBoxRect,
+  overlayWidth: number,
+  overlayHeight: number,
+): BrowserStylePanelPosition {
+  const viewportWidth = Math.max(1, overlayWidth);
+  const viewportHeight = Math.max(1, overlayHeight);
+  const panelHeight = Math.min(
+    BROWSER_STYLE_PANEL_MAX_HEIGHT,
+    Math.max(240, viewportHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING * 2),
+  );
+  const panelMaxLeft = Math.max(
+    BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+    viewportWidth - BROWSER_STYLE_PANEL_WIDTH - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+  );
+  const panelMaxTop = Math.max(
+    BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+    viewportHeight - panelHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+  );
+  const boxRight = anchorBox.x + anchorBox.width;
+  const boxBottom = anchorBox.y + anchorBox.height;
+  const panelCandidates = [
+    {
+      left: boxRight + BROWSER_STYLE_PANEL_GAP,
+      top: anchorBox.y + anchorBox.height / 2 - panelHeight / 2,
+    },
+    {
+      left: anchorBox.x - BROWSER_STYLE_PANEL_WIDTH - BROWSER_STYLE_PANEL_GAP,
+      top: anchorBox.y + anchorBox.height / 2 - panelHeight / 2,
+    },
+    {
+      left: boxRight - BROWSER_STYLE_PANEL_WIDTH,
+      top: boxBottom + BROWSER_STYLE_PANEL_GAP,
+    },
+    {
+      left: boxRight - BROWSER_STYLE_PANEL_WIDTH,
+      top: anchorBox.y - panelHeight - BROWSER_STYLE_PANEL_GAP,
+    },
+  ];
+  const panel = panelCandidates
+    .map((candidate, priority) => {
+      const left = clampBrowserNumber(
+        candidate.left,
+        BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+        panelMaxLeft,
+      );
+      const top = clampBrowserNumber(
+        candidate.top,
+        BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
+        panelMaxTop,
+      );
+      const overlapWidth = Math.max(
+        0,
+        Math.min(left + BROWSER_STYLE_PANEL_WIDTH, boxRight) - Math.max(left, anchorBox.x),
+      );
+      const overlapHeight = Math.max(
+        0,
+        Math.min(top + panelHeight, boxBottom) - Math.max(top, anchorBox.y),
+      );
+      const clampDistance = Math.abs(left - candidate.left) + Math.abs(top - candidate.top);
+      return {
+        left,
+        top,
+        score: overlapWidth * overlapHeight * 1000 + clampDistance + priority / 100,
+      };
+    })
+    .reduce((best, candidate) => (candidate.score < best.score ? candidate : best));
+  return { left: panel.left, top: panel.top };
 }
 
 function browserNeutralRangeStyle(value: number, min: number, max: number): CSSProperties {
@@ -1636,14 +1855,37 @@ function browserGradientStopColorValues(colors: readonly string[]): string[] {
   );
 }
 
-interface BrowserGradientRenderData {
+interface BrowserSharedGradientDef {
   gradientId: string;
   colors: readonly string[];
   stopColorValues: string[];
   animationBegin: string;
+  animated: boolean;
 }
 
-interface BrowserDrawStrokeRenderItem extends BrowserGradientRenderData {
+// Gradients use objectBoundingBox units, so a single def can paint every shape
+// that shares a color set. Sharing keeps the number of always-running SMIL
+// animations constant (per color set) instead of growing 6-per-annotation,
+// which is what degraded FPS as strokes accumulated.
+function browserSharedGradientDef(input: {
+  idPrefix: string;
+  scope: "stroke" | "arrow";
+  setIndex: number;
+  animated: boolean;
+}): BrowserSharedGradientDef {
+  const colors = gradientColorsForStroke(input.setIndex);
+  return {
+    gradientId: `browser-${input.scope}-gradient-${input.idPrefix}-set-${input.setIndex}${
+      input.animated ? "" : "-static"
+    }`,
+    colors,
+    stopColorValues: browserGradientStopColorValues(colors),
+    animationBegin: `${input.setIndex * 0.13}s`,
+    animated: input.animated,
+  };
+}
+
+interface BrowserDrawStrokeRenderItem {
   stroke: BrowserDrawingStroke;
   points: string;
   isActive: boolean;
@@ -1651,11 +1893,13 @@ interface BrowserDrawStrokeRenderItem extends BrowserGradientRenderData {
   contrastStrokeWidth: number;
   gradientStrokeWidth: number;
   glintStrokeWidth: number;
+  gradientId: string;
 }
 
-interface BrowserAnnotationArrowRenderItem extends BrowserGradientRenderData {
+interface BrowserAnnotationArrowRenderItem {
   arrow: BrowserAnnotationArrow;
   segments: BrowserAnnotationArrowSegment[];
+  gradientId: string;
 }
 
 function drawingStrokePoints(stroke: BrowserDrawingStroke): string {
@@ -2432,7 +2676,7 @@ function drawCanvasTextAnnotation(
 
   context.save();
   const palette = browserCanvasTextAnnotationPalette();
-  context.font = `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ui-sans-serif, system-ui, sans-serif`;
+  context.font = `${BROWSER_TEXT_ANNOTATION_FONT_WEIGHT} ${fontSize}px ${BROWSER_TEXT_ANNOTATION_FONT_FAMILY}`;
 
   context.globalCompositeOperation = "source-over";
   context.fillStyle = palette.fill;
@@ -2499,7 +2743,13 @@ function drawCanvasAnnotationArrow(
   context.globalCompositeOperation = "difference";
   context.strokeStyle = "#ffffff";
   context.lineWidth = Math.max(2, BROWSER_DRAWING_CONTRAST_STROKE_WIDTH * input.fitScale);
-  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  drawCanvasAnnotationArrowPath(context, {
+    fromX,
+    fromY,
+    toX,
+    toY,
+    headLength,
+  });
   context.stroke();
   context.restore();
 
@@ -2509,7 +2759,13 @@ function drawCanvasAnnotationArrow(
   context.globalCompositeOperation = "source-over";
   context.strokeStyle = gradient;
   context.lineWidth = Math.max(1.5, BROWSER_DRAWING_GRADIENT_STROKE_WIDTH * input.fitScale);
-  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  drawCanvasAnnotationArrowPath(context, {
+    fromX,
+    fromY,
+    toX,
+    toY,
+    headLength,
+  });
   context.stroke();
   context.restore();
 
@@ -2520,7 +2776,13 @@ function drawCanvasAnnotationArrow(
   context.strokeStyle = "#ffffff";
   context.lineWidth = Math.max(1, BROWSER_DRAWING_GLINT_STROKE_WIDTH * input.fitScale);
   context.globalAlpha = 0.72;
-  drawCanvasAnnotationArrowPath(context, { fromX, fromY, toX, toY, headLength });
+  drawCanvasAnnotationArrowPath(context, {
+    fromX,
+    fromY,
+    toX,
+    toY,
+    headLength,
+  });
   context.stroke();
   context.restore();
 }
@@ -3046,6 +3308,7 @@ export function BrowserPanel({
     id: string;
     pointerId: number;
     metrics: BrowserTextAnnotationBoxMetrics;
+    overlayRect: DOMRect | null;
     startClientX: number;
     startClientY: number;
     startBoxX: number;
@@ -3054,6 +3317,21 @@ export function BrowserPanel({
     pendingBoxY: number;
     frameId: number | null;
   } | null>(null);
+  const textAnnotationResizeRef = useRef<{
+    id: string;
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    boxX: number;
+    boxY: number;
+    startWidth: number;
+    startHeight: number;
+    pendingWidth: number;
+    pendingHeight: number;
+    frameId: number | null;
+  } | null>(null);
+  const textAnnotationBoxElementsRef = useRef(new Map<string, HTMLDivElement>());
+  const annotationArrowElementsRef = useRef(new Map<string, SVGGElement>());
   const arrowDraftDragRef = useRef<{ id: string; pointerId: number } | null>(null);
   const arrowTargetDragRef = useRef<{ id: string; pointerId: number } | null>(null);
   const arrowSourceDragRef = useRef<{ id: string; pointerId: number } | null>(null);
@@ -3071,6 +3349,8 @@ export function BrowserPanel({
     draw: null,
     text: null,
   });
+  const editorToolbarUndoButtonRef = useRef<HTMLButtonElement | null>(null);
+  const editorToolbarClearButtonRef = useRef<HTMLButtonElement | null>(null);
   const liveEditorToolbarStripRef = useRef<HTMLDivElement | null>(null);
   const annotationUpdateTimeoutRef = useRef<number | null>(null);
   const annotationUpdateRequestIdRef = useRef(0);
@@ -3080,10 +3360,13 @@ export function BrowserPanel({
   const annotationStateInitializedRef = useRef(false);
   const editorClearUndoSnapshotRef = useRef<BrowserEditorVisibleStateSnapshot | null>(null);
   const stylePreviewRuntimeKeysByTabRef = useRef(new Map<string, string>());
-  const stylePreviewTargetRef = useRef<{ selector: string; tabId: string; url: string } | null>(
-    null,
-  );
+  const stylePreviewTargetRef = useRef<{
+    selector: string;
+    tabId: string;
+    url: string;
+  } | null>(null);
   const previousStyleTargetKeyRef = useRef<string>("");
+  const previousStylePanelKeyRef = useRef<string>("");
   const editorPageKeyRef = useRef<string>("");
   const previewAutoStartedCwdRef = useRef<string | null>(null);
   const previewLastRoutedKeyRef = useRef<string | null>(null);
@@ -3121,14 +3404,29 @@ export function BrowserPanel({
   const [hoveredTextAnnotationId, setHoveredTextAnnotationId] = useState<string | null>(null);
   const [hoveredAnnotationArrowId, setHoveredAnnotationArrowId] = useState<string | null>(null);
   const [draggingTextAnnotationId, setDraggingTextAnnotationId] = useState<string | null>(null);
+  const [resizingTextAnnotationId, setResizingTextAnnotationId] = useState<string | null>(null);
   const [editingTextAnnotationId, setEditingTextAnnotationId] = useState<string | null>(null);
-  const [editingTextAnnotationValue, setEditingTextAnnotationValue] = useState("");
+  // Live textarea contents stay out of React state: a keystroke only updates
+  // these refs and patches box geometry in the DOM, because re-rendering the
+  // whole panel per keystroke caused visible typing stutter.
+  const editingTextAnnotationValueRef = useRef("");
+  const textAnnotationDraftTextRef = useRef("");
   const [textAnnotationDraft, setTextAnnotationDraft] = useState<BrowserTextAnnotation | null>(
     null,
   );
   const [selectedElementContext, setSelectedElementContext] =
     useState<BrowserElementEditorContext | null>(null);
   const [stylePropertiesPanelOpen, setStylePropertiesPanelOpen] = useState(false);
+  // Element shown by the properties panel. Captured when the panel opens (or is
+  // explicitly refreshed via the edit button) so breadcrumb traversal can move
+  // the page selection without rebuilding the panel or its path.
+  const [stylePanelElementContext, setStylePanelElementContextState] =
+    useState<BrowserElementEditorContext | null>(null);
+  const stylePanelElementContextRef = useRef<BrowserElementEditorContext | null>(null);
+  const setStylePanelElementContext = useCallback((context: BrowserElementEditorContext | null) => {
+    stylePanelElementContextRef.current = context;
+    setStylePanelElementContextState(context);
+  }, []);
   const [inlineTextEditor, setInlineTextEditor] = useState<BrowserInlineTextEditorState | null>(
     null,
   );
@@ -3153,6 +3451,12 @@ export function BrowserPanel({
   const [browserEditorPointerInside, setBrowserEditorPointerInside] = useState(false);
   const [showEditorShortcutHints, setShowEditorShortcutHints] = useState(false);
   const [openToolOptions, setOpenToolOptions] = useState<BrowserToolOptionsPanel | null>(null);
+  const [openToolOptionsAnchorRect, setOpenToolOptionsAnchorRect] =
+    useState<BrowserToolbarAnchorRect | null>(null);
+  const [editorToolbarUndoAnchorRect, setEditorToolbarUndoAnchorRect] =
+    useState<BrowserToolbarAnchorRect | null>(null);
+  const [editorToolbarClearAnchorRect, setEditorToolbarClearAnchorRect] =
+    useState<BrowserToolbarAnchorRect | null>(null);
   const [editorToolbarAnchorRects, setEditorToolbarAnchorRects] = useState<
     Record<BrowserEditorMode, BrowserToolbarAnchorRect | null>
   >({
@@ -3257,7 +3561,10 @@ export function BrowserPanel({
         return;
       }
       previewLastRoutedKeyRef.current = routeKey;
-      const state = await openLiveEditPreviewTab(api, target);
+      // Passive re-route (panel mount / preview state sync): make sure a tab for
+      // the preview exists, but never yank a tab that is already browsing the
+      // preview server back to its root URL.
+      const state = await openLiveEditPreviewTab(api, target, { preserveExistingPath: true });
       upsertThreadState(state);
     },
     [activeProjectId, api, previewCwd, threadId, upsertThreadState],
@@ -3879,6 +4186,39 @@ export function BrowserPanel({
     [activeTab, api, hasNativeBrowserBridge, threadId],
   );
 
+  const readElementContextBySelector = useCallback(
+    async (selector: string): Promise<BrowserElementEditorContext | null> => {
+      if (!api || !activeTab) {
+        return null;
+      }
+      if (!hasNativeBrowserBridge) {
+        const frameDocument = browserFallbackFrameRef.current?.contentDocument;
+        if (!frameDocument) {
+          return null;
+        }
+        return readBrowserElementContextFromDocumentBySelector({
+          document: frameDocument,
+          selector,
+        });
+      }
+      const response = (await api.browser.executeCdp({
+        threadId,
+        tabId: activeTab.id,
+        method: "Runtime.evaluate",
+        params: {
+          expression: cdpElementContextExpression(0, 0, undefined, {
+            selector,
+          }),
+          returnByValue: true,
+          awaitPromise: false,
+        },
+      })) as RuntimeEvaluateResult;
+      const value = response.result?.value;
+      return isBrowserElementEditorContext(value) ? value : null;
+    },
+    [activeTab, api, hasNativeBrowserBridge, threadId],
+  );
+
   const runStylePreviewAction = useCallback(
     async (input: {
       selector: string;
@@ -3981,7 +4321,12 @@ export function BrowserPanel({
         },
       })) as RuntimeEvaluateResult;
       const value = response.result?.value as
-        | { ok?: unknown; action?: unknown; text?: unknown; outerHTML?: unknown }
+        | {
+            ok?: unknown;
+            action?: unknown;
+            text?: unknown;
+            outerHTML?: unknown;
+          }
         | undefined;
       return {
         ok: value?.ok === true,
@@ -4024,7 +4369,10 @@ export function BrowserPanel({
 
   const applySelectedStylePreview = useCallback(
     async (patch: BrowserElementStylePatch, mode: BrowserStylePreviewMode = "preview") => {
-      if (!selectedElementContext || !activeTab) {
+      // Preview patches come from the properties panel, so they must target the
+      // panel's (possibly frozen) element rather than the live page selection.
+      const targetContext = stylePanelElementContext ?? selectedElementContext;
+      if (!targetContext || !activeTab) {
         return false;
       }
       const normalizedPatch = normalizeBrowserElementStylePatch(patch);
@@ -4034,13 +4382,13 @@ export function BrowserPanel({
         return true;
       }
       const ok = await runStylePreviewAction({
-        selector: selectedElementContext.selector,
+        selector: targetContext.selector,
         patch: normalizedPatch,
         mode,
       });
       if (ok && mode !== "clear") {
         stylePreviewTargetRef.current = {
-          selector: selectedElementContext.selector,
+          selector: targetContext.selector,
           tabId: activeTab.id,
           url: activeTab.lastCommittedUrl ?? activeTab.url,
         };
@@ -4052,7 +4400,13 @@ export function BrowserPanel({
       }
       return ok;
     },
-    [activeTab, clearBrowserStylePreview, runStylePreviewAction, selectedElementContext],
+    [
+      activeTab,
+      clearBrowserStylePreview,
+      runStylePreviewAction,
+      selectedElementContext,
+      stylePanelElementContext,
+    ],
   );
 
   const updateSelectedElementTextContext = useCallback(
@@ -4151,6 +4505,7 @@ export function BrowserPanel({
     }
     void clearBrowserStylePreview();
     setStylePropertiesPanelOpen(false);
+    setStylePanelElementContext(null);
     setStylePanelPositionOverride(null);
     setEditorMode("browse");
     const initialText = selectedContext.text || selectedContext.accessibleName || "";
@@ -4191,7 +4546,7 @@ export function BrowserPanel({
       inlineTextEditorRef.current = nextEditor;
       setInlineTextEditor(nextEditor);
     });
-  }, [activeTab, clearBrowserStylePreview, runInlineTextEditAction]);
+  }, [activeTab, clearBrowserStylePreview, runInlineTextEditAction, setStylePanelElementContext]);
 
   const commitInlineTextEditing = useCallback(() => {
     const editor = inlineTextEditorRef.current;
@@ -4349,6 +4704,8 @@ export function BrowserPanel({
     }
   }, [previewState?.status, previewState?.url, scheduleStylePreviewReapply]);
 
+  // Inline text editing always follows the live selection, so moving the
+  // selection (inspect click or breadcrumb traversal) cancels a pending editor.
   useEffect(() => {
     const targetKey = `${activeTab?.id ?? ""}\u0000${selectedElementContext?.selector ?? ""}`;
     if (previousStyleTargetKeyRef.current === "") {
@@ -4359,17 +4716,29 @@ export function BrowserPanel({
       return;
     }
     previousStyleTargetKeyRef.current = targetKey;
+    cancelInlineTextEditing();
+  }, [activeTab?.id, cancelInlineTextEditing, selectedElementContext?.selector]);
+
+  // The properties panel is frozen to the element it opened on, so selection
+  // changes (breadcrumb traversal, inspect clicks) keep it alive. It only tears
+  // down when the selection is cleared entirely or the tab changes.
+  const hasSelectedElement = selectedElementContext !== null;
+  useEffect(() => {
+    const panelKey = `${activeTab?.id ?? ""}\u0000${hasSelectedElement ? "1" : "0"}`;
+    if (previousStylePanelKeyRef.current === "") {
+      previousStylePanelKeyRef.current = panelKey;
+      return;
+    }
+    if (previousStylePanelKeyRef.current === panelKey) {
+      return;
+    }
+    previousStylePanelKeyRef.current = panelKey;
     void clearBrowserStylePreview();
     setStylePropertiesPanelOpen(false);
+    setStylePanelElementContext(null);
     setStylePanelPositionOverride(null);
     setStyleEditorInitialPatch(null);
-    cancelInlineTextEditing();
-  }, [
-    activeTab?.id,
-    cancelInlineTextEditing,
-    clearBrowserStylePreview,
-    selectedElementContext?.selector,
-  ]);
+  }, [activeTab?.id, clearBrowserStylePreview, hasSelectedElement, setStylePanelElementContext]);
 
   const setInspectHoverBoxIfChanged = useCallback((nextBox: BrowserInspectHoverBox | null) => {
     setInspectHoverBox((currentBox) => {
@@ -4635,12 +5004,41 @@ export function BrowserPanel({
     workspaceReady,
   ]);
 
-  const updateActiveDrawStrokeElements = useCallback((stroke: BrowserDrawingStroke) => {
-    const points = drawingStrokePoints(stroke);
-    activeDrawContrastPolylineRef.current?.setAttribute("points", points);
-    activeDrawGradientPolylineRef.current?.setAttribute("points", points);
-    activeDrawGlintPolylineRef.current?.setAttribute("points", points);
-  }, []);
+  // Live drawing updates bypass React and mutate the three active polylines
+  // directly. Appending just the new points keeps each pointer move O(new
+  // points); re-serializing the whole `points` string made long strokes O(n²)
+  // and dropped FPS the longer a stroke ran.
+  const appendActiveDrawStrokePoints = useCallback(
+    (stroke: BrowserDrawingStroke, appendedPoints: BrowserDrawingPoint[]) => {
+      const polylines = [
+        activeDrawContrastPolylineRef.current,
+        activeDrawGradientPolylineRef.current,
+        activeDrawGlintPolylineRef.current,
+      ];
+      for (const polyline of polylines) {
+        if (!polyline) {
+          continue;
+        }
+        const ownerSvg = polyline.ownerSVGElement;
+        if (
+          ownerSvg &&
+          polyline.points.numberOfItems + appendedPoints.length === stroke.points.length
+        ) {
+          for (const point of appendedPoints) {
+            const svgPoint = ownerSvg.createSVGPoint();
+            svgPoint.x = point.x;
+            svgPoint.y = point.y;
+            polyline.points.appendItem(svgPoint);
+          }
+          continue;
+        }
+        // The rendered list drifted from the stroke (e.g. a React re-render
+        // landed mid-gesture); resync with the full serialized points.
+        polyline.setAttribute("points", drawingStrokePoints(stroke));
+      }
+    },
+    [],
+  );
 
   const resetActiveDrawStroke = useCallback(() => {
     activeDrawStrokeRef.current = null;
@@ -4705,26 +5103,43 @@ export function BrowserPanel({
     toolOptionsCloseTimeoutRef.current = null;
   }, []);
 
-  const measureEditorToolbarAnchors = useCallback(() => {
-    const nextStripRect = browserToolbarAnchorRectFromElement(liveEditorToolbarStripRef.current);
-    const next = {
-      browse: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.browse),
-      inspect: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.inspect),
-      draw: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.draw),
-      text: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.text),
-    } satisfies Record<BrowserEditorMode, BrowserToolbarAnchorRect | null>;
-    setEditorToolbarStripRect((current) =>
-      browserToolbarAnchorRectsMatch(current, nextStripRect) ? current : nextStripRect,
-    );
-    setEditorToolbarAnchorRects((current) =>
-      browserToolbarAnchorRectsMatch(current.browse, next.browse) &&
-      browserToolbarAnchorRectsMatch(current.inspect, next.inspect) &&
-      browserToolbarAnchorRectsMatch(current.draw, next.draw) &&
-      browserToolbarAnchorRectsMatch(current.text, next.text)
-        ? current
-        : next,
-    );
-  }, []);
+  const measureEditorToolbarAnchors = useCallback(
+    (toolOptionsPanel?: BrowserToolOptionsPanel | null) => {
+      const nextStripRect = browserToolbarAnchorRectFromElement(liveEditorToolbarStripRef.current);
+      const next = {
+        browse: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.browse),
+        inspect: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.inspect),
+        draw: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.draw),
+        text: browserToolbarAnchorRectFromElement(editorToolbarButtonRefs.current.text),
+      } satisfies Record<BrowserEditorMode, BrowserToolbarAnchorRect | null>;
+      const nextUndoRect = browserToolbarAnchorRectFromElement(editorToolbarUndoButtonRef.current);
+      const nextClearRect = browserToolbarAnchorRectFromElement(
+        editorToolbarClearButtonRef.current,
+      );
+      setEditorToolbarStripRect((current) =>
+        browserToolbarAnchorRectsMatch(current, nextStripRect) ? current : nextStripRect,
+      );
+      setEditorToolbarUndoAnchorRect((current) =>
+        browserToolbarAnchorRectsMatch(current, nextUndoRect) ? current : nextUndoRect,
+      );
+      setEditorToolbarClearAnchorRect((current) =>
+        browserToolbarAnchorRectsMatch(current, nextClearRect) ? current : nextClearRect,
+      );
+      setEditorToolbarAnchorRects((current) =>
+        browserToolbarAnchorRectsMatch(current.browse, next.browse) &&
+        browserToolbarAnchorRectsMatch(current.inspect, next.inspect) &&
+        browserToolbarAnchorRectsMatch(current.draw, next.draw) &&
+        browserToolbarAnchorRectsMatch(current.text, next.text)
+          ? current
+          : next,
+      );
+      if (toolOptionsPanel !== undefined) {
+        setOpenToolOptionsAnchorRect(toolOptionsPanel ? next[toolOptionsPanel] : null);
+      }
+      return next;
+    },
+    [],
+  );
 
   const scheduleToolOptionsOpen = useCallback(
     (panel: BrowserToolOptionsPanel) => {
@@ -4732,7 +5147,10 @@ export function BrowserPanel({
       clearToolOptionsCloseTimeout();
       toolOptionsHoverTimeoutRef.current = window.setTimeout(() => {
         toolOptionsHoverTimeoutRef.current = null;
-        measureEditorToolbarAnchors();
+        const anchors = measureEditorToolbarAnchors(panel);
+        if (!anchors[panel]) {
+          return;
+        }
         setOpenToolOptions(panel);
       }, BROWSER_TOOL_OPTIONS_HOVER_DELAY_MS);
     },
@@ -4742,6 +5160,7 @@ export function BrowserPanel({
   const closeToolOptions = useCallback(() => {
     clearToolOptionsHoverTimeout();
     clearToolOptionsCloseTimeout();
+    setOpenToolOptionsAnchorRect(null);
     setOpenToolOptions(null);
   }, [clearToolOptionsCloseTimeout, clearToolOptionsHoverTimeout]);
 
@@ -4750,6 +5169,7 @@ export function BrowserPanel({
     clearToolOptionsCloseTimeout();
     toolOptionsCloseTimeoutRef.current = window.setTimeout(() => {
       toolOptionsCloseTimeoutRef.current = null;
+      setOpenToolOptionsAnchorRect(null);
       setOpenToolOptions(null);
     }, BROWSER_TOOL_OPTIONS_CLOSE_DELAY_MS);
   }, [clearToolOptionsCloseTimeout, clearToolOptionsHoverTimeout]);
@@ -5542,7 +5962,10 @@ export function BrowserPanel({
     }
     void clipboard.writeText(url).then(
       () => {
-        toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+        toastManager.add({
+          type: "success",
+          title: BROWSER_COPY_LINK_TOAST_TITLE,
+        });
       },
       () => {
         // Clipboard writes can reject without user gesture; nothing actionable to surface.
@@ -5591,7 +6014,10 @@ export function BrowserPanel({
       if (event.threadId !== threadId) {
         return;
       }
-      toastManager.add({ type: "success", title: BROWSER_COPY_LINK_TOAST_TITLE });
+      toastManager.add({
+        type: "success",
+        title: BROWSER_COPY_LINK_TOAST_TITLE,
+      });
     });
   }, [api, isLiveRuntime, threadId]);
 
@@ -5652,13 +6078,36 @@ export function BrowserPanel({
     [editorMode, readElementContextAtPoint, scheduleBrowserAnnotationAttachmentUpdate],
   );
 
+  // Breadcrumb navigation in the element properties panel: re-select an
+  // ancestor (or any element) by selector without needing a click point.
+  const selectElementBySelector = useCallback(
+    (selector: string) => {
+      void readElementContextBySelector(selector)
+        .then((context) => {
+          if (!context) {
+            setLocalError("Could not select that element anymore. The page may have changed.");
+            return;
+          }
+          selectedElementContextRef.current = context;
+          setSelectedElementContext(context);
+          scheduleBrowserAnnotationAttachmentUpdate(0);
+          setLocalError(null);
+        })
+        .catch((error) => {
+          setLocalError(formatBrowserActionError(error));
+        });
+    },
+    [readElementContextBySelector, scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
   const commitTextAnnotationDraft = useCallback(
     (draft = textAnnotationDraft) => {
       if (!draft) {
         return;
       }
       setTextAnnotationDraft(null);
-      const text = draft.text.trim();
+      const text = textAnnotationDraftTextRef.current.trim();
+      textAnnotationDraftTextRef.current = "";
       if (text.length === 0) {
         return;
       }
@@ -5668,7 +6117,12 @@ export function BrowserPanel({
         browserEditorOverlayRef.current,
         metrics,
       );
-      const annotation = { ...draft, text, boxX: boxPosition.x, boxY: boxPosition.y };
+      const annotation = {
+        ...draft,
+        text,
+        boxX: boxPosition.x,
+        boxY: boxPosition.y,
+      };
       setTextAnnotations((current) => {
         const next = [...current, annotation];
         textAnnotationsRef.current = next;
@@ -5703,9 +6157,11 @@ export function BrowserPanel({
       commitTextAnnotationDraft();
       setSelectedAnnotationArrowId(null);
       setSelectedTextAnnotationId(null);
+      const point = pointFromOverlayEvent(event);
+      textAnnotationDraftTextRef.current = "";
       setTextAnnotationDraft({
         id: crypto.randomUUID(),
-        ...pointFromOverlayEvent(event),
+        ...point,
         text: "",
         fontSize: textAnnotationFontSize,
       });
@@ -5854,6 +6310,67 @@ export function BrowserPanel({
     [],
   );
 
+  // Re-anchors handle-attached arrows after anything that changes a note's
+  // box geometry (text commit, resize, font size change).
+  const reanchorTextAnnotationArrows = useCallback((sourceAnnotation: BrowserTextAnnotation) => {
+    if (
+      !annotationArrowsRef.current.some(
+        (arrow) => arrow.sourceTextAnnotationId === sourceAnnotation.id && arrow.sourceHandle,
+      )
+    ) {
+      return;
+    }
+    const updatedArrows = annotationArrowsRef.current.map((arrow) =>
+      arrow.sourceTextAnnotationId === sourceAnnotation.id && arrow.sourceHandle
+        ? {
+            ...arrow,
+            from: textAnnotationHandlePoint(sourceAnnotation, arrow.sourceHandle),
+          }
+        : arrow,
+    );
+    annotationArrowsRef.current = updatedArrows;
+    setAnnotationArrows(updatedArrows);
+  }, []);
+
+  // Live drag/resize frames bypass React entirely: the box element and any
+  // attached arrow SVG parts are patched in place, and state is committed once
+  // when the gesture ends. Rendering the whole panel per pointer frame is what
+  // made box dragging visibly lag behind the cursor.
+  const applyTextAnnotationBoxDomFrame = useCallback(
+    (input: {
+      annotationId: string;
+      position: BrowserDrawingPoint;
+      size: { width: number; height: number };
+      moveDeltaX: number;
+      moveDeltaY: number;
+    }) => {
+      const boxElement = textAnnotationBoxElementsRef.current.get(input.annotationId);
+      if (boxElement) {
+        boxElement.style.left = `${input.position.x}px`;
+        boxElement.style.top = `${input.position.y}px`;
+        boxElement.style.width = `${input.size.width}px`;
+        boxElement.style.height = `${input.size.height}px`;
+      }
+      for (const arrow of annotationArrowsRef.current) {
+        if (arrow.sourceTextAnnotationId !== input.annotationId) {
+          continue;
+        }
+        const group = annotationArrowElementsRef.current.get(arrow.id);
+        if (!group) {
+          continue;
+        }
+        const from = arrow.sourceHandle
+          ? textAnnotationHandlePointForBox(input.position, input.size, arrow.sourceHandle)
+          : {
+              x: arrow.from.x + input.moveDeltaX,
+              y: arrow.from.y + input.moveDeltaY,
+            };
+        applyBrowserAnnotationArrowDomPatch(group, { ...arrow, from });
+      }
+    },
+    [],
+  );
+
   const scheduleTextAnnotationDragPosition = useCallback(
     (drag: NonNullable<typeof textAnnotationDragRef.current>, position: BrowserDrawingPoint) => {
       drag.pendingBoxX = position.x;
@@ -5867,13 +6384,19 @@ export function BrowserPanel({
           return;
         }
         activeDrag.frameId = null;
-        moveTextAnnotationBox(activeDrag.id, {
-          x: activeDrag.pendingBoxX,
-          y: activeDrag.pendingBoxY,
+        applyTextAnnotationBoxDomFrame({
+          annotationId: activeDrag.id,
+          position: { x: activeDrag.pendingBoxX, y: activeDrag.pendingBoxY },
+          size: {
+            width: activeDrag.metrics.width,
+            height: activeDrag.metrics.height,
+          },
+          moveDeltaX: activeDrag.pendingBoxX - activeDrag.startBoxX,
+          moveDeltaY: activeDrag.pendingBoxY - activeDrag.startBoxY,
         });
       });
     },
-    [moveTextAnnotationBox],
+    [applyTextAnnotationBoxDomFrame],
   );
 
   const beginTextAnnotationEdit = useCallback(
@@ -5885,7 +6408,7 @@ export function BrowserPanel({
       textAnnotationEditCancelledRef.current = false;
       setSelectedTextAnnotationId(annotation.id);
       setEditingTextAnnotationId(annotation.id);
-      setEditingTextAnnotationValue(annotation.text);
+      editingTextAnnotationValueRef.current = annotation.text;
     },
     [commitTextAnnotationDraft],
   );
@@ -5893,8 +6416,30 @@ export function BrowserPanel({
   const cancelTextAnnotationEdit = useCallback(() => {
     textAnnotationEditCancelledRef.current = true;
     setEditingTextAnnotationId(null);
-    setEditingTextAnnotationValue("");
+    editingTextAnnotationValueRef.current = "";
   }, []);
+
+  // Per-keystroke box growth while editing goes straight to the DOM (box size
+  // plus attached arrow anchors); React state is only touched on commit.
+  const handleTextAnnotationEditInput = useCallback(
+    (annotation: BrowserTextAnnotation, text: string) => {
+      editingTextAnnotationValueRef.current = text;
+      const metrics = textAnnotationBoxMetrics(text, browserTextAnnotationFontSize(annotation), {
+        width: annotation.boxWidth,
+        height: annotation.boxHeight,
+      });
+      const basePosition = textAnnotationBoxPosition(annotation);
+      const position = textAnnotationBoxPosition({ ...annotation, text }, metrics);
+      applyTextAnnotationBoxDomFrame({
+        annotationId: annotation.id,
+        position,
+        size: { width: metrics.width, height: metrics.height },
+        moveDeltaX: position.x - basePosition.x,
+        moveDeltaY: position.y - basePosition.y,
+      });
+    },
+    [applyTextAnnotationBoxDomFrame],
+  );
 
   const commitTextAnnotationEdit = useCallback(() => {
     const annotationId = editingTextAnnotationId;
@@ -5906,9 +6451,9 @@ export function BrowserPanel({
       return;
     }
 
-    const text = editingTextAnnotationValue.trim();
+    const text = editingTextAnnotationValueRef.current.trim();
     setEditingTextAnnotationId(null);
-    setEditingTextAnnotationValue("");
+    editingTextAnnotationValueRef.current = "";
 
     if (text.length === 0) {
       const updatedAnnotations = textAnnotationsRef.current.filter(
@@ -5943,6 +6488,10 @@ export function BrowserPanel({
     const metrics = textAnnotationBoxMetrics(
       text,
       browserTextAnnotationFontSize(previousAnnotation),
+      {
+        width: previousAnnotation?.boxWidth,
+        height: previousAnnotation?.boxHeight,
+      },
     );
     let updatedAnnotation: BrowserTextAnnotation | null = null;
     const updatedAnnotations = textAnnotationsRef.current.map((annotation) => {
@@ -5965,24 +6514,14 @@ export function BrowserPanel({
     textAnnotationsRef.current = updatedAnnotations;
     setTextAnnotations(updatedAnnotations);
 
-    const sourceAnnotation = updatedAnnotation;
-    if (sourceAnnotation) {
-      const updatedArrows = annotationArrowsRef.current.map((arrow) =>
-        arrow.sourceTextAnnotationId === annotationId && arrow.sourceHandle
-          ? {
-              ...arrow,
-              from: textAnnotationHandlePoint(sourceAnnotation, arrow.sourceHandle),
-            }
-          : arrow,
-      );
-      annotationArrowsRef.current = updatedArrows;
-      setAnnotationArrows(updatedArrows);
+    if (updatedAnnotation) {
+      reanchorTextAnnotationArrows(updatedAnnotation);
     }
 
     scheduleBrowserAnnotationAttachmentUpdate(0);
   }, [
     editingTextAnnotationId,
-    editingTextAnnotationValue,
+    reanchorTextAnnotationArrows,
     scheduleBrowserAnnotationAttachmentUpdate,
   ]);
 
@@ -6002,6 +6541,8 @@ export function BrowserPanel({
         id: annotation.id,
         pointerId: event.pointerId,
         metrics,
+        // Measured once so per-move clamping never forces a layout read.
+        overlayRect: browserEditorOverlayRef.current?.getBoundingClientRect() ?? null,
         startClientX: event.clientX,
         startClientY: event.clientY,
         startBoxX: boxPosition.x,
@@ -6023,12 +6564,12 @@ export function BrowserPanel({
         return;
       }
       event.preventDefault();
-      const next = clampTextAnnotationBoxPosition(
+      const next = clampTextAnnotationBoxPositionToRect(
         {
           x: drag.startBoxX + event.clientX - drag.startClientX,
           y: drag.startBoxY + event.clientY - drag.startClientY,
         },
-        browserEditorOverlayRef.current,
+        drag.overlayRect,
         drag.metrics,
       );
       scheduleTextAnnotationDragPosition(drag, next);
@@ -6044,12 +6585,12 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
-      const next = clampTextAnnotationBoxPosition(
+      const next = clampTextAnnotationBoxPositionToRect(
         {
           x: drag.startBoxX + event.clientX - drag.startClientX,
           y: drag.startBoxY + event.clientY - drag.startClientY,
         },
-        browserEditorOverlayRef.current,
+        drag.overlayRect,
         drag.metrics,
       );
       if (drag.frameId !== null) {
@@ -6066,6 +6607,165 @@ export function BrowserPanel({
       }
     },
     [moveTextAnnotationBox, scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  const resizeTextAnnotationBox = useCallback(
+    (annotationId: string, size: { width: number; height: number }) => {
+      const previousAnnotation = textAnnotationsRef.current.find(
+        (annotation) => annotation.id === annotationId,
+      );
+      if (!previousAnnotation) {
+        return;
+      }
+      const boxWidth = clampTextAnnotationBoxWidth(size.width);
+      const boxHeight = clampTextAnnotationBoxHeight(size.height);
+      if (previousAnnotation.boxWidth === boxWidth && previousAnnotation.boxHeight === boxHeight) {
+        return;
+      }
+      let updatedAnnotation: BrowserTextAnnotation | null = null;
+      const updatedAnnotations = textAnnotationsRef.current.map((annotation) => {
+        if (annotation.id !== annotationId) {
+          return annotation;
+        }
+        updatedAnnotation = { ...annotation, boxWidth, boxHeight };
+        return updatedAnnotation;
+      });
+      textAnnotationsRef.current = updatedAnnotations;
+      setTextAnnotations(updatedAnnotations);
+
+      if (updatedAnnotation) {
+        reanchorTextAnnotationArrows(updatedAnnotation);
+      }
+    },
+    [reanchorTextAnnotationArrows],
+  );
+
+  const applyTextAnnotationFontSize = useCallback(
+    (annotationId: string, fontSize: number) => {
+      let updatedAnnotation: BrowserTextAnnotation | null = null;
+      const updatedAnnotations = textAnnotationsRef.current.map((annotation) => {
+        if (
+          annotation.id !== annotationId ||
+          browserTextAnnotationFontSize(annotation) === fontSize
+        ) {
+          return annotation;
+        }
+        updatedAnnotation = { ...annotation, fontSize };
+        return updatedAnnotation;
+      });
+      if (!updatedAnnotation) {
+        return;
+      }
+      textAnnotationsRef.current = updatedAnnotations;
+      setTextAnnotations(updatedAnnotations);
+      reanchorTextAnnotationArrows(updatedAnnotation);
+      scheduleBrowserAnnotationAttachmentUpdate(0);
+    },
+    [reanchorTextAnnotationArrows, scheduleBrowserAnnotationAttachmentUpdate],
+  );
+
+  const scheduleTextAnnotationResizeSize = useCallback(
+    (
+      drag: NonNullable<typeof textAnnotationResizeRef.current>,
+      size: { width: number; height: number },
+    ) => {
+      drag.pendingWidth = size.width;
+      drag.pendingHeight = size.height;
+      if (drag.frameId !== null) {
+        return;
+      }
+      drag.frameId = window.requestAnimationFrame(() => {
+        const activeDrag = textAnnotationResizeRef.current;
+        if (!activeDrag || activeDrag.id !== drag.id) {
+          return;
+        }
+        activeDrag.frameId = null;
+        applyTextAnnotationBoxDomFrame({
+          annotationId: activeDrag.id,
+          position: { x: activeDrag.boxX, y: activeDrag.boxY },
+          size: {
+            width: clampTextAnnotationBoxWidth(activeDrag.pendingWidth),
+            height: clampTextAnnotationBoxHeight(activeDrag.pendingHeight),
+          },
+          moveDeltaX: 0,
+          moveDeltaY: 0,
+        });
+      });
+    },
+    [applyTextAnnotationBoxDomFrame],
+  );
+
+  const beginTextAnnotationResize = useCallback(
+    (annotation: BrowserTextAnnotation, event: ReactPointerEvent<HTMLDivElement>) => {
+      if (event.button !== 0) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      commitTextAnnotationDraft();
+      setSelectedAnnotationArrowId(null);
+      setSelectedTextAnnotationId(annotation.id);
+      const metrics = browserTextAnnotationMetrics(annotation);
+      const boxPosition = textAnnotationBoxPosition(annotation, metrics);
+      textAnnotationResizeRef.current = {
+        id: annotation.id,
+        pointerId: event.pointerId,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        boxX: boxPosition.x,
+        boxY: boxPosition.y,
+        startWidth: metrics.width,
+        startHeight: metrics.height,
+        pendingWidth: metrics.width,
+        pendingHeight: metrics.height,
+        frameId: null,
+      };
+      setResizingTextAnnotationId(annotation.id);
+      event.currentTarget.setPointerCapture(event.pointerId);
+    },
+    [commitTextAnnotationDraft],
+  );
+
+  const moveTextAnnotationResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = textAnnotationResizeRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      scheduleTextAnnotationResizeSize(drag, {
+        width: drag.startWidth + event.clientX - drag.startClientX,
+        height: drag.startHeight + event.clientY - drag.startClientY,
+      });
+    },
+    [scheduleTextAnnotationResizeSize],
+  );
+
+  const finishTextAnnotationResize = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = textAnnotationResizeRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      if (drag.frameId !== null) {
+        window.cancelAnimationFrame(drag.frameId);
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+      textAnnotationResizeRef.current = null;
+      setResizingTextAnnotationId(null);
+      const width = drag.startWidth + event.clientX - drag.startClientX;
+      const height = drag.startHeight + event.clientY - drag.startClientY;
+      resizeTextAnnotationBox(drag.id, { width, height });
+      if (Math.abs(width - drag.startWidth) >= 0.5 || Math.abs(height - drag.startHeight) >= 0.5) {
+        scheduleBrowserAnnotationAttachmentUpdate(0);
+      }
+    },
+    [resizeTextAnnotationBox, scheduleBrowserAnnotationAttachmentUpdate],
   );
 
   const cancelAnnotationArrowDraftFrame = useCallback(() => {
@@ -6087,7 +6787,19 @@ export function BrowserPanel({
     }
     annotationArrowDraftFrameRef.current = window.requestAnimationFrame(() => {
       annotationArrowDraftFrameRef.current = null;
-      setAnnotationArrowDraft(annotationArrowDraftRef.current);
+      const draft = annotationArrowDraftRef.current;
+      if (!draft) {
+        return;
+      }
+      // Same React-bypass as text box drags: once the arrow group is mounted,
+      // endpoint moves are patched straight into the SVG. State only commits
+      // when the gesture ends.
+      const group = annotationArrowElementsRef.current.get(draft.id);
+      if (group) {
+        applyBrowserAnnotationArrowDomPatch(group, draft);
+        return;
+      }
+      setAnnotationArrowDraft(draft);
     });
   }, []);
 
@@ -6200,7 +6912,9 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
-      updateAnnotationArrowDraftTarget(event.clientX, event.clientY, { flush: true });
+      updateAnnotationArrowDraftTarget(event.clientX, event.clientY, {
+        flush: true,
+      });
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -6264,7 +6978,9 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
-      updateAnnotationArrowDraftTarget(event.clientX, event.clientY, { flush: true });
+      updateAnnotationArrowDraftTarget(event.clientX, event.clientY, {
+        flush: true,
+      });
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -6328,7 +7044,9 @@ export function BrowserPanel({
       }
       event.preventDefault();
       event.stopPropagation();
-      updateAnnotationArrowDraftSourceHandle(event.clientX, event.clientY, { flush: true });
+      updateAnnotationArrowDraftSourceHandle(event.clientX, event.clientY, {
+        flush: true,
+      });
       if (event.currentTarget.hasPointerCapture(event.pointerId)) {
         event.currentTarget.releasePointerCapture(event.pointerId);
       }
@@ -6409,6 +7127,14 @@ export function BrowserPanel({
         }
         textAnnotationDragRef.current = null;
         setDraggingTextAnnotationId(null);
+      }
+      const activeTextAnnotationResize = textAnnotationResizeRef.current;
+      if (activeTextAnnotationResize?.id === annotationId) {
+        if (activeTextAnnotationResize.frameId !== null) {
+          window.cancelAnimationFrame(activeTextAnnotationResize.frameId);
+        }
+        textAnnotationResizeRef.current = null;
+        setResizingTextAnnotationId(null);
       }
 
       if (annotationArrowDraftRef.current?.sourceTextAnnotationId === annotationId) {
@@ -6558,23 +7284,22 @@ export function BrowserPanel({
       const nativeEvent = event.nativeEvent as PointerEvent & {
         getCoalescedEvents?: () => PointerEvent[];
       };
-      let changed = false;
+      const appendedPoints: BrowserDrawingPoint[] = [];
       for (const pointerEvent of nativeEvent.getCoalescedEvents?.() ?? [nativeEvent]) {
-        changed =
-          appendDrawingPoint(
-            stroke,
-            pointFromOverlayRect(
-              activeDrawOverlayRectRef.current,
-              pointerEvent.clientX,
-              pointerEvent.clientY,
-            ),
-          ) || changed;
+        const point = pointFromOverlayRect(
+          activeDrawOverlayRectRef.current,
+          pointerEvent.clientX,
+          pointerEvent.clientY,
+        );
+        if (appendDrawingPoint(stroke, point)) {
+          appendedPoints.push(point);
+        }
       }
-      if (changed) {
-        updateActiveDrawStrokeElements(stroke);
+      if (appendedPoints.length > 0) {
+        appendActiveDrawStrokePoints(stroke, appendedPoints);
       }
     },
-    [editorMode, updateActiveDrawStrokeElements],
+    [appendActiveDrawStrokePoints, editorMode],
   );
 
   const onDrawPointerUp = useCallback(
@@ -6693,6 +7418,14 @@ export function BrowserPanel({
       window.cancelAnimationFrame(activeTextAnnotationDrag.frameId);
     }
     textAnnotationDragRef.current = null;
+    const activeTextAnnotationResize = textAnnotationResizeRef.current;
+    if (
+      activeTextAnnotationResize?.frameId !== null &&
+      activeTextAnnotationResize?.frameId !== undefined
+    ) {
+      window.cancelAnimationFrame(activeTextAnnotationResize.frameId);
+    }
+    textAnnotationResizeRef.current = null;
     selectedElementContextRef.current = null;
     inlineTextEditorRef.current = null;
     setDrawStrokes([]);
@@ -6704,9 +7437,11 @@ export function BrowserPanel({
     setHoveredTextAnnotationId(null);
     setHoveredAnnotationArrowId(null);
     setDraggingTextAnnotationId(null);
+    setResizingTextAnnotationId(null);
     setEditingTextAnnotationId(null);
-    setEditingTextAnnotationValue("");
+    editingTextAnnotationValueRef.current = "";
     setTextAnnotationDraft(null);
+    textAnnotationDraftTextRef.current = "";
     setSelectedElementContext(null);
     setInlineTextEditor(null);
     setLocalError(null);
@@ -6799,8 +7534,32 @@ export function BrowserPanel({
   const closeStylePropertiesPanel = useCallback(() => {
     void clearBrowserStylePreview();
     setStylePropertiesPanelOpen(false);
+    setStylePanelElementContext(null);
+    setStylePanelPositionOverride(null);
     setStylePanelDragging(false);
-  }, [clearBrowserStylePreview]);
+  }, [clearBrowserStylePreview, setStylePanelElementContext]);
+
+  // Edit-button behavior: opens the panel on the current selection, refreshes
+  // an open panel onto a traversed selection (updating content + path), and
+  // toggles closed when the panel already shows the selected element.
+  const toggleStylePropertiesPanel = useCallback(() => {
+    const selected = selectedElementContextRef.current;
+    if (!selected) {
+      return;
+    }
+    const panelElement = stylePanelElementContextRef.current;
+    if (stylePropertiesPanelOpen && panelElement && panelElement.selector === selected.selector) {
+      closeStylePropertiesPanel();
+      return;
+    }
+    // A stale initial patch from a previous panel element must not seed the
+    // refreshed panel.
+    if (panelElement?.selector !== selected.selector) {
+      setStyleEditorInitialPatch(null);
+    }
+    setStylePanelElementContext(selected);
+    setStylePropertiesPanelOpen(true);
+  }, [closeStylePropertiesPanel, setStylePanelElementContext, stylePropertiesPanelOpen]);
 
   const resetStylePropertiesPreview = useCallback(() => {
     void clearBrowserStylePreview();
@@ -6819,7 +7578,9 @@ export function BrowserPanel({
           ...stroke,
           points: stroke.points.slice(),
         })),
-        textAnnotations: textAnnotationsRef.current.map((annotation) => ({ ...annotation })),
+        textAnnotations: textAnnotationsRef.current.map((annotation) => ({
+          ...annotation,
+        })),
         annotationArrows: annotationArrowsRef.current.map((arrow) => ({
           ...arrow,
           from: { ...arrow.from },
@@ -6829,6 +7590,7 @@ export function BrowserPanel({
         selectedTextAnnotationId,
         selectedAnnotationArrowId,
         stylePropertiesPanelOpen,
+        stylePanelElementContext: stylePanelElementContextRef.current,
         stylePanelPositionOverride,
         styleEditorInitialPatch:
           Object.keys(normalizedStylePatch).length > 0 ? normalizedStylePatch : null,
@@ -6876,13 +7638,16 @@ export function BrowserPanel({
     setHoveredTextAnnotationId(null);
     setHoveredAnnotationArrowId(null);
     setDraggingTextAnnotationId(null);
+    setResizingTextAnnotationId(null);
     setEditingTextAnnotationId(null);
-    setEditingTextAnnotationValue("");
+    editingTextAnnotationValueRef.current = "";
     setTextAnnotationDraft(null);
+    textAnnotationDraftTextRef.current = "";
     setInspectHoverBox(null);
     setSelectedElementContext(null);
     setInlineTextEditor(null);
     setStylePropertiesPanelOpen(false);
+    setStylePanelElementContext(null);
     setStylePanelPositionOverride(null);
     setStyleEditorInitialPatch(null);
     void clearBrowserStylePreview();
@@ -6894,6 +7659,7 @@ export function BrowserPanel({
     cancelAnnotationArrowDraftFrame,
     cancelInlineTextEditing,
     resetActiveDrawStroke,
+    setStylePanelElementContext,
   ]);
 
   const clearVisibleBrowserEditorStateWithUndo = useCallback(
@@ -6923,6 +7689,16 @@ export function BrowserPanel({
     setSelectedTextAnnotationId(snapshot.selectedTextAnnotationId);
     setSelectedAnnotationArrowId(snapshot.selectedAnnotationArrowId);
     setStylePropertiesPanelOpen(snapshot.stylePropertiesPanelOpen);
+    setStylePanelElementContext(
+      snapshot.stylePropertiesPanelOpen
+        ? (snapshot.stylePanelElementContext ?? snapshot.selectedElementContext)
+        : null,
+    );
+    // Prime the teardown key so the restored selection is not read as a fresh
+    // selection change that would immediately close the restored panel.
+    previousStylePanelKeyRef.current = `${activeTab?.id ?? ""}\u0000${
+      snapshot.selectedElementContext ? "1" : "0"
+    }`;
     setStylePanelPositionOverride(snapshot.stylePanelPositionOverride);
     setStyleEditorInitialPatch(snapshot.styleEditorInitialPatch);
     setLocalError(null);
@@ -6953,7 +7729,25 @@ export function BrowserPanel({
       });
     }
     return true;
-  }, [activeTab, resetActiveDrawStroke, runStylePreviewAction]);
+  }, [activeTab, resetActiveDrawStroke, runStylePreviewAction, setStylePanelElementContext]);
+
+  const isEditorShortcutSurfaceActive = useCallback((event: KeyboardEvent) => {
+    if (browserEditorFocusedRef.current) {
+      return true;
+    }
+    if (
+      isBrowserEditorSurfaceEventTarget(event.target) ||
+      isBrowserEditorChromeEventTarget(event.target)
+    ) {
+      return true;
+    }
+    const activeElement = document.activeElement;
+    return (
+      activeElement instanceof Element &&
+      (Boolean(activeElement.closest(BROWSER_EDITOR_SURFACE_SELECTOR)) ||
+        Boolean(activeElement.closest(BROWSER_EDITOR_CHROME_SELECTOR)))
+    );
+  }, []);
 
   useEffect(() => {
     if (!isLiveRuntime || !workspaceReady) {
@@ -6966,7 +7760,20 @@ export function BrowserPanel({
       if (!isBrowserEditorRestoreEvent(event) || isEditableKeyboardEventTarget(event.target)) {
         return;
       }
-      if (!restoreVisibleBrowserEditorState()) {
+      // With visible annotations, Cmd+Z steps them back one at a time — but only
+      // while the live editor surface is active, so it never hijacks undo from
+      // the composer or other app inputs. The clear-all snapshot restore stays
+      // as the fallback once nothing is left to step through.
+      const hasUndoableAnnotation =
+        annotationArrowsRef.current.length > 0 ||
+        drawStrokesRef.current.some((stroke) => stroke.points.length > 1) ||
+        textAnnotationsRef.current.length > 0;
+      if (hasUndoableAnnotation) {
+        if (!isEditorShortcutSurfaceActive(event)) {
+          return;
+        }
+        undoLastDrawingStroke();
+      } else if (!restoreVisibleBrowserEditorState()) {
         return;
       }
       event.preventDefault();
@@ -6976,29 +7783,18 @@ export function BrowserPanel({
     return () => {
       window.removeEventListener("keydown", onKeyDown, true);
     };
-  }, [isLiveRuntime, restoreVisibleBrowserEditorState, workspaceReady]);
+  }, [
+    isEditorShortcutSurfaceActive,
+    isLiveRuntime,
+    restoreVisibleBrowserEditorState,
+    undoLastDrawingStroke,
+    workspaceReady,
+  ]);
 
   useEffect(() => {
     if (!isLiveRuntime || !workspaceReady) {
       return;
     }
-    const isEditorShortcutSurfaceActive = (event: KeyboardEvent) => {
-      if (browserEditorFocusedRef.current) {
-        return true;
-      }
-      if (
-        isBrowserEditorSurfaceEventTarget(event.target) ||
-        isBrowserEditorChromeEventTarget(event.target)
-      ) {
-        return true;
-      }
-      const activeElement = document.activeElement;
-      return (
-        activeElement instanceof Element &&
-        (Boolean(activeElement.closest(BROWSER_EDITOR_SURFACE_SELECTOR)) ||
-          Boolean(activeElement.closest(BROWSER_EDITOR_CHROME_SELECTOR)))
-      );
-    };
     const onKeyDown = (event: KeyboardEvent) => {
       if (!isEditorShortcutSurfaceActive(event)) {
         return;
@@ -7032,7 +7828,7 @@ export function BrowserPanel({
       window.removeEventListener("keyup", onKeyUp, true);
       window.removeEventListener("blur", onBlur);
     };
-  }, [isLiveRuntime, workspaceReady]);
+  }, [isEditorShortcutSurfaceActive, isLiveRuntime, workspaceReady]);
 
   useEffect(() => {
     if (!api || !isLiveRuntime || !isLiveEditorVariant || !workspaceReady) {
@@ -7074,7 +7870,7 @@ export function BrowserPanel({
 
   useLayoutEffect(() => {
     if (showEditorShortcutHints || openToolOptions) {
-      measureEditorToolbarAnchors();
+      measureEditorToolbarAnchors(openToolOptions ?? undefined);
     }
   }, [measureEditorToolbarAnchors, openToolOptions, showEditorShortcutHints]);
 
@@ -7083,7 +7879,7 @@ export function BrowserPanel({
       return;
     }
     const updateAnchors = () => {
-      measureEditorToolbarAnchors();
+      measureEditorToolbarAnchors(openToolOptions ?? undefined);
     };
     window.addEventListener("resize", updateAnchors);
     window.addEventListener("scroll", updateAnchors, true);
@@ -7192,7 +7988,8 @@ export function BrowserPanel({
 
   const attachStyleEditContext = useCallback(
     (patch: BrowserElementStylePatch, manualOverride: boolean) => {
-      const selectedContext = selectedElementContextRef.current;
+      const selectedContext =
+        stylePanelElementContextRef.current ?? selectedElementContextRef.current;
       if (!selectedContext) {
         setLocalError("Select an element before attaching style context.");
         return;
@@ -7239,54 +8036,134 @@ export function BrowserPanel({
     [activeTab, threadId],
   );
 
-  const applyStyleEditToSource = useCallback(
+  // Shared validation for planning/applying a source style edit. Throws with a
+  // user-readable message that the properties panel surfaces inline.
+  const resolveStyleEditRequest = useCallback(
     (patch: BrowserElementStylePatch) => {
-      void (async () => {
-        const selectedContext = selectedElementContextRef.current;
-        const cwd = previewState?.targetCwd ?? previewCwd;
-        const normalizedPatch = normalizeBrowserElementStylePatch(patch);
-        if (!selectedContext) {
-          setLocalError("Select an element before applying a source style edit.");
-          return;
-        }
-        if (!api || !cwd) {
-          setLocalError("Could not apply the style edit because no project source is active.");
-          return;
-        }
-        if (Object.keys(normalizedPatch).length === 0) {
-          setLocalError("Change a style value before applying it to source.");
-          return;
-        }
+      const selectedContext =
+        stylePanelElementContextRef.current ?? selectedElementContextRef.current;
+      const cwd = previewState?.targetCwd ?? previewCwd;
+      const normalizedPatch = normalizeBrowserElementStylePatch(patch);
+      if (!selectedContext) {
+        throw new Error("Select an element before applying a source style edit.");
+      }
+      if (!api || !cwd) {
+        throw new Error("Could not apply the style edit because no project source is active.");
+      }
+      if (Object.keys(normalizedPatch).length === 0) {
+        throw new Error("Change a style value before applying it to source.");
+      }
+      return {
+        api,
+        cwd,
+        input: {
+          cwd,
+          element: {
+            tagName: selectedContext.tagName,
+            text: selectedContext.text.slice(0, 4_000),
+            outerHTML: selectedContext.outerHTML.slice(0, 12_000),
+            attributes: selectedContext.attributes,
+          },
+          patch: normalizedPatch,
+        },
+      };
+    },
+    [api, previewCwd, previewState?.targetCwd],
+  );
 
-        try {
-          const result = await api.projects.applyStyleEdit({
-            cwd,
-            element: {
-              tagName: selectedContext.tagName,
-              text: selectedContext.text.slice(0, 4_000),
-              outerHTML: selectedContext.outerHTML.slice(0, 12_000),
-              attributes: selectedContext.attributes,
-            },
-            patch: normalizedPatch,
-          });
+  const planStyleEditToSource = useCallback(
+    async (patch: BrowserElementStylePatch): Promise<BrowserStyleEditSourcePlan> => {
+      const request = resolveStyleEditRequest(patch);
+      try {
+        const result = await request.api.projects.applyStyleEdit({
+          ...request.input,
+          mode: "preview",
+        });
+        return {
+          relativePath: result.relativePath,
+          line: result.line,
+          before: result.before,
+          after: result.after,
+        };
+      } catch (error) {
+        throw new Error(
+          formatEditorActionError(error, "Could not locate the element in project source."),
+        );
+      }
+    },
+    [resolveStyleEditRequest],
+  );
+
+  const undoStyleEditToSource = useCallback(
+    (edit: AppliedBrowserStyleEdit) => {
+      if (!api) {
+        return;
+      }
+      void revertBrowserStyleEdit(api.projects, edit)
+        .then(() => {
           toastManager.add({
             type: "success",
-            title: "Source style edit applied",
-            description: `Updated ${result.relativePath}.`,
+            title: "Style edit reverted",
+            description: `Restored ${edit.relativePath}.`,
           });
-          setStylePropertiesPanelOpen(false);
-          setLocalError(null);
-          window.setTimeout(() => {
-            void clearBrowserStylePreview();
-          }, 250);
-        } catch (error) {
-          setLocalError(
-            formatEditorActionError(error, "Could not apply the style edit to source."),
-          );
-        }
-      })();
+        })
+        .catch((error: unknown) => {
+          toastManager.add({
+            type: "error",
+            title: "Could not undo the style edit",
+            description: formatEditorActionError(error, "Could not undo the style edit."),
+          });
+        });
     },
-    [api, clearBrowserStylePreview, previewCwd, previewState?.targetCwd],
+    [api],
+  );
+
+  const applyStyleEditToSource = useCallback(
+    async (patch: BrowserElementStylePatch, plan: BrowserStyleEditSourcePlan): Promise<void> => {
+      const request = resolveStyleEditRequest(patch);
+      let result;
+      try {
+        result = await request.api.projects.applyStyleEdit({
+          ...request.input,
+          mode: "apply",
+          // Refuse the write if the match drifted from the confirmed preview.
+          expected: { relativePath: plan.relativePath, before: plan.before },
+        });
+      } catch (error) {
+        throw new Error(
+          formatEditorActionError(error, "Could not apply the style edit to source."),
+        );
+      }
+      const undoTarget: AppliedBrowserStyleEdit = {
+        cwd: request.cwd,
+        relativePath: result.relativePath,
+        line: result.line,
+        before: result.before,
+        after: result.after,
+      };
+      toastManager.add({
+        type: "success",
+        title: "Source style edit applied",
+        description: `Updated ${result.relativePath}:${result.line}.`,
+        actionProps: {
+          children: "Undo",
+          onClick: () => undoStyleEditToSource(undoTarget),
+        },
+      });
+      setStylePropertiesPanelOpen(false);
+      setStylePanelElementContext(null);
+      setStylePanelPositionOverride(null);
+      setLocalError(null);
+      window.setTimeout(() => {
+        void clearBrowserStylePreview();
+      }, 250);
+    },
+    [
+      clearBrowserStylePreview,
+      resolveStyleEditRequest,
+      setStylePanelElementContext,
+      undoStyleEditToSource,
+    ],
   );
 
   const addDrawingToPrompt = useCallback(() => {
@@ -7330,20 +8207,22 @@ export function BrowserPanel({
   const renderedDrawStrokeItems = useMemo<BrowserDrawStrokeRenderItem[]>(
     () =>
       renderedDrawStrokes.map((stroke, strokeIndex) => {
-        const colors = gradientColorsForStroke(strokeIndex);
         const widths = browserDrawingStrokeWidths(stroke);
+        const animated = stroke.animated !== false;
         return {
           stroke,
           points: drawingStrokePoints(stroke),
           isActive: activeDrawStroke?.id === stroke.id,
-          animated: stroke.animated !== false,
+          animated,
           contrastStrokeWidth: widths.contrast,
           gradientStrokeWidth: widths.gradient,
           glintStrokeWidth: widths.glint,
-          gradientId: `browser-drawing-gradient-${browserSvgIdPrefix}-${svgFragmentId(stroke.id)}`,
-          colors,
-          stopColorValues: browserGradientStopColorValues(colors),
-          animationBegin: `${strokeIndex * 0.13}s`,
+          gradientId: browserSharedGradientDef({
+            idPrefix: browserSvgIdPrefix,
+            scope: "stroke",
+            setIndex: strokeIndex % BROWSER_DRAWING_GRADIENT_COLOR_SETS.length,
+            animated,
+          }).gradientId,
         };
       }),
     [
@@ -7353,6 +8232,21 @@ export function BrowserPanel({
       renderedDrawStrokes,
     ],
   );
+  const renderedDrawStrokeGradients = useMemo<BrowserSharedGradientDef[]>(() => {
+    const defs = new Map<string, BrowserSharedGradientDef>();
+    renderedDrawStrokes.forEach((stroke, strokeIndex) => {
+      const def = browserSharedGradientDef({
+        idPrefix: browserSvgIdPrefix,
+        scope: "stroke",
+        setIndex: strokeIndex % BROWSER_DRAWING_GRADIENT_COLOR_SETS.length,
+        animated: stroke.animated !== false,
+      });
+      if (!defs.has(def.gradientId)) {
+        defs.set(def.gradientId, def);
+      }
+    });
+    return [...defs.values()];
+  }, [browserSvgIdPrefix, renderedDrawStrokes]);
   const selectedAnnotationViewportBox = useMemo(
     () =>
       selectedElementContext
@@ -7400,74 +8294,12 @@ export function BrowserPanel({
             });
             const viewportWidth = Math.max(1, overlayGeometry.overlayWidth);
             const viewportHeight = Math.max(1, overlayGeometry.overlayHeight);
-            const panelHeight = Math.min(
-              BROWSER_STYLE_PANEL_MAX_HEIGHT,
-              Math.max(240, viewportHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING * 2),
-            );
-            const panelMaxLeft = Math.max(
-              BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-              viewportWidth - BROWSER_STYLE_PANEL_WIDTH - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-            );
-            const panelMaxTop = Math.max(
-              BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-              viewportHeight - panelHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-            );
             const buttonWidth = 28;
             const buttonHeight = 24;
             const buttonGap = 2;
             const buttonGroupWidth = buttonWidth * 2 + buttonGap;
             const buttonTop = selectedAnnotationBox.y - buttonHeight - buttonGap;
             const buttonBottom = selectedAnnotationBox.y + selectedAnnotationBox.height + buttonGap;
-            const boxRight = selectedAnnotationBox.x + selectedAnnotationBox.width;
-            const boxBottom = selectedAnnotationBox.y + selectedAnnotationBox.height;
-            const panelCandidates = [
-              {
-                left: boxRight + BROWSER_STYLE_PANEL_GAP,
-                top: selectedAnnotationBox.y + selectedAnnotationBox.height / 2 - panelHeight / 2,
-              },
-              {
-                left: selectedAnnotationBox.x - BROWSER_STYLE_PANEL_WIDTH - BROWSER_STYLE_PANEL_GAP,
-                top: selectedAnnotationBox.y + selectedAnnotationBox.height / 2 - panelHeight / 2,
-              },
-              {
-                left: boxRight - BROWSER_STYLE_PANEL_WIDTH,
-                top: boxBottom + BROWSER_STYLE_PANEL_GAP,
-              },
-              {
-                left: boxRight - BROWSER_STYLE_PANEL_WIDTH,
-                top: selectedAnnotationBox.y - panelHeight - BROWSER_STYLE_PANEL_GAP,
-              },
-            ];
-            const panel = panelCandidates
-              .map((candidate, priority) => {
-                const left = clampBrowserNumber(
-                  candidate.left,
-                  BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-                  panelMaxLeft,
-                );
-                const top = clampBrowserNumber(
-                  candidate.top,
-                  BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-                  panelMaxTop,
-                );
-                const overlapWidth = Math.max(
-                  0,
-                  Math.min(left + BROWSER_STYLE_PANEL_WIDTH, boxRight) -
-                    Math.max(left, selectedAnnotationBox.x),
-                );
-                const overlapHeight = Math.max(
-                  0,
-                  Math.min(top + panelHeight, boxBottom) - Math.max(top, selectedAnnotationBox.y),
-                );
-                const clampDistance =
-                  Math.abs(left - candidate.left) + Math.abs(top - candidate.top);
-                return {
-                  left,
-                  top,
-                  score: overlapWidth * overlapHeight * 1000 + clampDistance + priority / 100,
-                };
-              })
-              .reduce((best, candidate) => (candidate.score < best.score ? candidate : best));
             return {
               button: {
                 left: clampBrowserNumber(
@@ -7481,20 +8313,85 @@ export function BrowserPanel({
                   Math.max(8, viewportHeight - buttonHeight - 8),
                 ),
               },
-              panel: {
-                left: panel.left,
-                top: panel.top,
-              },
             };
           })()
         : null,
     [selectedAnnotationBox, selectedElementContext],
   );
+  // The panel's default position anchors to the element the panel shows (which
+  // stays frozen during breadcrumb traversal), not to the live selection.
+  const stylePanelDefaultPosition = useMemo(() => {
+    if (!stylePanelElementContext) {
+      return null;
+    }
+    const overlayGeometry = browserAnnotationGeometryFromViewport({
+      overlay: browserEditorOverlayRef.current,
+      viewport: browserViewportRef.current,
+      viewportSize: stylePanelElementContext.viewport,
+    });
+    const anchorBox = browserViewportBoxToOverlayBox(
+      {
+        x: stylePanelElementContext.rect.x,
+        y: stylePanelElementContext.rect.y,
+        width: stylePanelElementContext.rect.width,
+        height: stylePanelElementContext.rect.height,
+        label: stylePanelElementContext.selector,
+        viewport: stylePanelElementContext.viewport,
+      },
+      overlayGeometry,
+    );
+    return browserStylePanelPlacement(
+      anchorBox,
+      overlayGeometry.overlayWidth,
+      overlayGeometry.overlayHeight,
+    );
+  }, [stylePanelElementContext]);
   const stylePropertiesPanelPosition =
-    stylePanelPositionOverride ?? selectedStyleEditorAnchor?.panel ?? null;
+    stylePanelPositionOverride ?? stylePanelDefaultPosition ?? null;
+  const stylePropertiesPanelPositionRef = useRef<BrowserStylePanelPosition | null>(null);
+  stylePropertiesPanelPositionRef.current = stylePropertiesPanelPosition;
+  // When the browser pane resizes while the panel is open, pull the panel's
+  // current position (default or dragged) back inside the overlay far enough
+  // that the drag handle stays reachable.
+  useEffect(() => {
+    if (!stylePropertiesPanelOpen) {
+      return;
+    }
+    const overlay = browserEditorOverlayRef.current;
+    if (!overlay) {
+      return;
+    }
+    const clampPanelToOverlay = () => {
+      const rect = overlay.getBoundingClientRect();
+      const position = stylePropertiesPanelPositionRef.current;
+      if (rect.width <= 0 || rect.height <= 0 || !position) {
+        return;
+      }
+      const left = clampBrowserNumber(
+        position.left,
+        BROWSER_STYLE_PANEL_EDGE_GRAB_MARGIN - BROWSER_STYLE_PANEL_WIDTH,
+        Math.max(0, rect.width - BROWSER_STYLE_PANEL_EDGE_GRAB_MARGIN),
+      );
+      const top = clampBrowserNumber(
+        position.top,
+        0,
+        Math.max(0, rect.height - BROWSER_STYLE_PANEL_EDGE_GRAB_MARGIN),
+      );
+      if (left !== position.left || top !== position.top) {
+        setStylePanelPositionOverride({ left, top });
+      }
+    };
+    const observer = new ResizeObserver(clampPanelToOverlay);
+    observer.observe(overlay);
+    window.addEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, clampPanelToOverlay);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener(PANEL_RESIZE_OVERLAY_SYNC_EVENT, clampPanelToOverlay);
+    };
+  }, [stylePropertiesPanelOpen]);
   const beginStylePropertiesPanelDrag = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
-      if (event.button !== 0 || !selectedElementContext || !selectedStyleEditorAnchor) {
+      if (event.button !== 0 || !stylePropertiesPanelPosition) {
         return;
       }
       event.preventDefault();
@@ -7506,23 +8403,7 @@ export function BrowserPanel({
       } catch {
         // Some embedded-browser pointer paths do not expose capture consistently.
       }
-      const startPosition = stylePanelPositionOverride ?? selectedStyleEditorAnchor.panel;
-      const viewportWidth = Math.max(1, selectedElementContext.viewport.width);
-      const viewportHeight = Math.max(1, selectedElementContext.viewport.height);
-      const panelHeight = Math.min(
-        BROWSER_STYLE_PANEL_MAX_HEIGHT,
-        Math.max(240, viewportHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING * 2),
-      );
-      const minLeft = BROWSER_STYLE_PANEL_VIEWPORT_PADDING;
-      const maxLeft = Math.max(
-        minLeft,
-        viewportWidth - BROWSER_STYLE_PANEL_WIDTH - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-      );
-      const minTop = BROWSER_STYLE_PANEL_VIEWPORT_PADDING;
-      const maxTop = Math.max(
-        minTop,
-        viewportHeight - panelHeight - BROWSER_STYLE_PANEL_VIEWPORT_PADDING,
-      );
+      const startPosition = stylePropertiesPanelPosition;
       const startClientX = event.clientX;
       const startClientY = event.clientY;
       const applyDragPosition = (nextPosition: BrowserStylePanelPosition) => {
@@ -7535,17 +8416,23 @@ export function BrowserPanel({
       setStylePanelDragging(true);
       const onPointerMove = (moveEvent: PointerEvent) => {
         moveEvent.preventDefault();
+        // The panel may travel exactly as far as the pointer can inside the
+        // overlay: clamping the pointer (not the panel rect) lets the panel
+        // hang past the edges while the grabbed handle stays reachable, and
+        // measuring the overlay per move keeps the bounds correct when the
+        // browser pane is resized mid-drag.
+        const overlayRect = browserEditorOverlayRef.current?.getBoundingClientRect();
+        const pointerX =
+          overlayRect && overlayRect.width > 0
+            ? clampBrowserNumber(moveEvent.clientX, overlayRect.left, overlayRect.right)
+            : moveEvent.clientX;
+        const pointerY =
+          overlayRect && overlayRect.height > 0
+            ? clampBrowserNumber(moveEvent.clientY, overlayRect.top, overlayRect.bottom)
+            : moveEvent.clientY;
         applyDragPosition({
-          left: clampBrowserNumber(
-            startPosition.left + moveEvent.clientX - startClientX,
-            minLeft,
-            maxLeft,
-          ),
-          top: clampBrowserNumber(
-            startPosition.top + moveEvent.clientY - startClientY,
-            minTop,
-            maxTop,
-          ),
+          left: startPosition.left + pointerX - startClientX,
+          top: startPosition.top + pointerY - startClientY,
         });
       };
       const onPointerUp = () => {
@@ -7572,7 +8459,7 @@ export function BrowserPanel({
       window.addEventListener("pointercancel", onPointerUp, { once: true });
       window.addEventListener("blur", onPointerUp, { once: true });
     },
-    [selectedElementContext, selectedStyleEditorAnchor, stylePanelPositionOverride],
+    [stylePropertiesPanelPosition],
   );
   const visibleInspectHoverBox =
     editorMode === "inspect" &&
@@ -7601,19 +8488,33 @@ export function BrowserPanel({
   );
   const visibleAnnotationArrowItems = useMemo<BrowserAnnotationArrowRenderItem[]>(
     () =>
-      visibleAnnotationArrows.map((arrow, arrowIndex) => {
-        const colors = gradientColorsForStroke(drawStrokes.length + arrowIndex);
-        return {
-          arrow,
-          segments: browserAnnotationArrowSegments(arrow),
-          gradientId: `browser-annotation-arrow-gradient-${browserSvgIdPrefix}-${svgFragmentId(arrow.id)}`,
-          colors,
-          stopColorValues: browserGradientStopColorValues(colors),
-          animationBegin: `${arrowIndex * 0.13}s`,
-        };
-      }),
+      visibleAnnotationArrows.map((arrow, arrowIndex) => ({
+        arrow,
+        segments: browserAnnotationArrowSegments(arrow),
+        gradientId: browserSharedGradientDef({
+          idPrefix: browserSvgIdPrefix,
+          scope: "arrow",
+          setIndex: (drawStrokes.length + arrowIndex) % BROWSER_DRAWING_GRADIENT_COLOR_SETS.length,
+          animated: true,
+        }).gradientId,
+      })),
     [browserSvgIdPrefix, drawStrokes.length, visibleAnnotationArrows],
   );
+  const visibleAnnotationArrowGradients = useMemo<BrowserSharedGradientDef[]>(() => {
+    const defs = new Map<string, BrowserSharedGradientDef>();
+    visibleAnnotationArrows.forEach((_, arrowIndex) => {
+      const def = browserSharedGradientDef({
+        idPrefix: browserSvgIdPrefix,
+        scope: "arrow",
+        setIndex: (drawStrokes.length + arrowIndex) % BROWSER_DRAWING_GRADIENT_COLOR_SETS.length,
+        animated: true,
+      });
+      if (!defs.has(def.gradientId)) {
+        defs.set(def.gradientId, def);
+      }
+    });
+    return [...defs.values()];
+  }, [browserSvgIdPrefix, drawStrokes.length, visibleAnnotationArrows]);
   const previewStatusLabel =
     previewState?.status === "running"
       ? "Preview running"
@@ -7680,54 +8581,44 @@ export function BrowserPanel({
           onPointerEnter={() => scheduleToolOptionsOpen("draw")}
           onPointerLeave={scheduleToolOptionsClose}
         >
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  ref={(node) => {
-                    editorToolbarButtonRefs.current.draw = node;
-                  }}
-                  type="button"
-                  className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-                  data-active={editorMode === "draw"}
-                  onClick={() => {
-                    setEditorMode("draw");
-                  }}
-                >
-                  <PencilIcon className="size-3.5" />
-                  <span className="sr-only">Draw</span>
-                </button>
-              }
-            />
-            <TooltipPopup side="bottom">Draw (⌘D)</TooltipPopup>
-          </Tooltip>
+          <button
+            ref={(node) => {
+              editorToolbarButtonRefs.current.draw = node;
+            }}
+            type="button"
+            className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+            data-active={editorMode === "draw"}
+            title="Draw (⌘D)"
+            aria-label="Draw"
+            onClick={() => {
+              setEditorMode("draw");
+            }}
+          >
+            <PencilIcon className="size-3.5" />
+            <span className="sr-only">Draw</span>
+          </button>
         </div>
         <div
           className="flex items-center"
           onPointerEnter={() => scheduleToolOptionsOpen("text")}
           onPointerLeave={scheduleToolOptionsClose}
         >
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  ref={(node) => {
-                    editorToolbarButtonRefs.current.text = node;
-                  }}
-                  type="button"
-                  className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
-                  data-active={editorMode === "text"}
-                  onClick={() => {
-                    setEditorMode("text");
-                  }}
-                >
-                  <TextIcon className="size-3.5" />
-                  <span className="sr-only">Text annotation</span>
-                </button>
-              }
-            />
-            <TooltipPopup side="bottom">Text annotation (⌘T)</TooltipPopup>
-          </Tooltip>
+          <button
+            ref={(node) => {
+              editorToolbarButtonRefs.current.text = node;
+            }}
+            type="button"
+            className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
+            data-active={editorMode === "text"}
+            title="Text annotation (⌘T)"
+            aria-label="Text annotation"
+            onClick={() => {
+              setEditorMode("text");
+            }}
+          >
+            <TextIcon className="size-3.5" />
+            <span className="sr-only">Text annotation</span>
+          </button>
         </div>
       </div>
       <div aria-hidden="true" className={BROWSER_TOOLBAR_DIVIDER_CLASS_NAME} />
@@ -7736,6 +8627,7 @@ export function BrowserPanel({
           <TooltipTrigger
             render={
               <button
+                ref={editorToolbarUndoButtonRef}
                 type="button"
                 className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
                 disabled={!canUndoAnnotation}
@@ -7752,6 +8644,7 @@ export function BrowserPanel({
           <TooltipTrigger
             render={
               <button
+                ref={editorToolbarClearButtonRef}
                 type="button"
                 className={BROWSER_EDITOR_MODE_BUTTON_CLASS_NAME}
                 disabled={!hasBrowserAnnotation}
@@ -7899,12 +8792,10 @@ export function BrowserPanel({
                 className="size-6"
                 disabled={!previewState?.url}
                 onClick={() => {
-                  if (previewState?.url) {
-                    void navigateBrowserToPreviewUrl(
-                      previewState.url,
-                      previewState.targetCwd ?? null,
-                    );
+                  if (!api || !previewState?.url) {
+                    return;
                   }
+                  void api.shell.openExternal(previewState.url);
                 }}
               >
                 <ExternalLinkIcon className="size-3" />
@@ -7917,10 +8808,22 @@ export function BrowserPanel({
       </div>
     </>
   ) : null;
-  const editorToolbarShortcutItems = LIVE_EDITOR_MODE_SHORTCUTS;
+  const editorToolbarShortcutChips: readonly {
+    key: string;
+    label: string;
+    rect: BrowserToolbarAnchorRect | null;
+  }[] = [
+    ...LIVE_EDITOR_MODE_SHORTCUTS.map((item) => ({
+      key: item.mode,
+      label: item.label,
+      rect: editorToolbarAnchorRects[item.mode],
+    })),
+    { key: "undo", label: "⌘Z", rect: editorToolbarUndoAnchorRect },
+    { key: "clear", label: "Esc", rect: editorToolbarClearAnchorRect },
+  ];
   const editorToolbarShortcutHints = showEditorShortcutHints
-    ? editorToolbarShortcutItems.flatMap((item) => {
-        const rect = editorToolbarAnchorRects[item.mode];
+    ? editorToolbarShortcutChips.flatMap((item) => {
+        const rect = item.rect;
         if (!rect) {
           return [];
         }
@@ -7934,7 +8837,8 @@ export function BrowserPanel({
           : null;
         return [
           <div
-            key={item.mode}
+            key={item.key}
+            data-browser-editor-chrome="true"
             className="pointer-events-none fixed z-[80] flex justify-center"
             style={{
               left: position.left,
@@ -7947,7 +8851,9 @@ export function BrowserPanel({
         ];
       })
     : null;
-  const openToolOptionsAnchor = openToolOptions ? editorToolbarAnchorRects[openToolOptions] : null;
+  const openToolOptionsAnchor = openToolOptions
+    ? (openToolOptionsAnchorRect ?? editorToolbarAnchorRects[openToolOptions])
+    : null;
   const openToolOptionsPosition =
     openToolOptionsAnchor && openToolOptions
       ? browserToolbarFloatingPosition(openToolOptionsAnchor, {
@@ -7956,94 +8862,120 @@ export function BrowserPanel({
           gap: 9,
         })
       : null;
+  const openToolOptionsTop =
+    openToolOptionsPosition && editorToolbarStripRect
+      ? Math.max(
+          openToolOptionsPosition.top,
+          editorToolbarStripRect.top + editorToolbarStripRect.height + 3,
+        )
+      : (openToolOptionsPosition?.top ?? null);
+  // When a note is selected (or being edited), the font-size slider targets
+  // that note; otherwise it sets the default for new notes.
+  const fontSizeTargetAnnotationId = editingTextAnnotationId ?? selectedTextAnnotationId;
+  const fontSizeTargetAnnotation = fontSizeTargetAnnotationId
+    ? (textAnnotations.find((annotation) => annotation.id === fontSizeTargetAnnotationId) ?? null)
+    : null;
+  const activeTextAnnotationFontSize = fontSizeTargetAnnotation
+    ? browserTextAnnotationFontSize(fontSizeTargetAnnotation)
+    : textAnnotationFontSize;
   const editorToolbarToolOptions =
-    openToolOptions && openToolOptionsPosition ? (
+    openToolOptions && openToolOptionsPosition && openToolOptionsTop !== null ? (
       <div
-        className={BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME}
+        data-browser-editor-chrome="true"
+        className={BROWSER_TOOL_OPTIONS_POSITIONER_CLASS_NAME}
         style={{
           left: openToolOptionsPosition.left,
-          top: openToolOptionsPosition.top,
+          top: openToolOptionsTop,
           transform: "translateX(-50%)",
         }}
         onPointerEnter={keepToolOptionsOpen}
         onPointerLeave={scheduleToolOptionsClose}
       >
-        {openToolOptions === "draw" ? (
-          <>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-medium text-muted-foreground">Stroke</span>
-              <span className="text-[11px] font-semibold text-foreground">
-                {drawStrokeSize.toFixed(1)}px
-              </span>
-            </div>
-            <input
-              type="range"
-              min={BROWSER_DRAWING_MIN_STROKE_WIDTH}
-              max={BROWSER_DRAWING_MAX_STROKE_WIDTH}
-              step="0.5"
-              value={drawStrokeSize}
-              className={BROWSER_TOOL_OPTIONS_RANGE_CLASS_NAME}
-              style={browserNeutralRangeStyle(
-                drawStrokeSize,
-                BROWSER_DRAWING_MIN_STROKE_WIDTH,
-                BROWSER_DRAWING_MAX_STROKE_WIDTH,
-              )}
-              onChange={(event) => {
-                setDrawStrokeSize(Number(event.currentTarget.value));
-              }}
-            />
-            <button
-              type="button"
-              className="mt-2 flex w-full items-center justify-between rounded-lg border border-black/10 bg-white/42 px-2 py-1.5 text-[11px] font-medium text-slate-950 transition hover:bg-white/58 dark:border-white/10 dark:bg-white/[0.04] dark:text-foreground dark:hover:bg-white/[0.08]"
-              aria-pressed={drawStrokeAnimated}
-              onClick={() => setDrawStrokeAnimated((current) => !current)}
-            >
-              <span>Animated color</span>
-              <span
-                className={cn(
-                  BROWSER_EDITOR_SWITCH_CLASS_NAME,
-                  drawStrokeAnimated
-                    ? "border-black/20 bg-gradient-to-r from-slate-50/95 to-slate-200/88 dark:border-white/22 dark:from-white/26 dark:to-white/14"
-                    : "border-black/15 bg-slate-200/72 dark:border-white/16 dark:bg-white/10",
+        <div className={BROWSER_TOOL_OPTIONS_PANEL_CLASS_NAME}>
+          {openToolOptions === "draw" ? (
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[11px] font-medium text-muted-foreground">Stroke</span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {drawStrokeSize.toFixed(1)}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={BROWSER_DRAWING_MIN_STROKE_WIDTH}
+                max={BROWSER_DRAWING_MAX_STROKE_WIDTH}
+                step="0.5"
+                value={drawStrokeSize}
+                className={BROWSER_TOOL_OPTIONS_RANGE_CLASS_NAME}
+                style={browserNeutralRangeStyle(
+                  drawStrokeSize,
+                  BROWSER_DRAWING_MIN_STROKE_WIDTH,
+                  BROWSER_DRAWING_MAX_STROKE_WIDTH,
                 )}
+                onChange={(event) => {
+                  setDrawStrokeSize(Number(event.currentTarget.value));
+                }}
+              />
+              <button
+                type="button"
+                className="mt-2 flex w-full items-center justify-between rounded-lg border border-black/10 bg-white/42 px-2 py-1.5 text-[11px] font-medium text-slate-950 transition hover:bg-white/58 dark:border-white/10 dark:bg-white/[0.04] dark:text-foreground dark:hover:bg-white/[0.08]"
+                aria-pressed={drawStrokeAnimated}
+                onClick={() => setDrawStrokeAnimated((current) => !current)}
               >
+                <span>Animated color</span>
                 <span
                   className={cn(
-                    BROWSER_EDITOR_SWITCH_THUMB_CLASS_NAME,
+                    BROWSER_EDITOR_SWITCH_CLASS_NAME,
                     drawStrokeAnimated
-                      ? "left-[13px] dark:border-white/80 dark:bg-slate-100"
-                      : "left-[3px] bg-slate-400 dark:border-white/65 dark:bg-white/66",
+                      ? "border-black/20 bg-gradient-to-r from-slate-50/95 to-slate-200/88 dark:border-white/22 dark:from-white/26 dark:to-white/14"
+                      : "border-black/15 bg-slate-200/72 dark:border-white/16 dark:bg-white/10",
                   )}
-                />
-              </span>
-            </button>
-          </>
-        ) : (
-          <>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-[11px] font-medium text-muted-foreground">Font size</span>
-              <span className="text-[11px] font-semibold text-foreground">
-                {textAnnotationFontSize}px
-              </span>
-            </div>
-            <input
-              type="range"
-              min={BROWSER_TEXT_ANNOTATION_MIN_FONT_SIZE}
-              max={BROWSER_TEXT_ANNOTATION_MAX_FONT_SIZE}
-              step="1"
-              value={textAnnotationFontSize}
-              className={BROWSER_TOOL_OPTIONS_RANGE_CLASS_NAME}
-              style={browserNeutralRangeStyle(
-                textAnnotationFontSize,
-                BROWSER_TEXT_ANNOTATION_MIN_FONT_SIZE,
-                BROWSER_TEXT_ANNOTATION_MAX_FONT_SIZE,
-              )}
-              onChange={(event) => {
-                setTextAnnotationFontSize(Number(event.currentTarget.value));
-              }}
-            />
-          </>
-        )}
+                >
+                  <span
+                    className={cn(
+                      BROWSER_EDITOR_SWITCH_THUMB_CLASS_NAME,
+                      drawStrokeAnimated
+                        ? "left-[13px] dark:border-white/80 dark:bg-slate-100"
+                        : "left-[3px] bg-slate-400 dark:border-white/65 dark:bg-white/66",
+                    )}
+                  />
+                </span>
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-[11px] font-medium text-muted-foreground">
+                  {fontSizeTargetAnnotation ? "Font size (note)" : "Font size"}
+                </span>
+                <span className="text-[11px] font-semibold text-foreground">
+                  {activeTextAnnotationFontSize}px
+                </span>
+              </div>
+              <input
+                type="range"
+                min={BROWSER_TEXT_ANNOTATION_MIN_FONT_SIZE}
+                max={BROWSER_TEXT_ANNOTATION_MAX_FONT_SIZE}
+                step="1"
+                value={activeTextAnnotationFontSize}
+                className={BROWSER_TOOL_OPTIONS_RANGE_CLASS_NAME}
+                style={browserNeutralRangeStyle(
+                  activeTextAnnotationFontSize,
+                  BROWSER_TEXT_ANNOTATION_MIN_FONT_SIZE,
+                  BROWSER_TEXT_ANNOTATION_MAX_FONT_SIZE,
+                )}
+                onChange={(event) => {
+                  const value = Number(event.currentTarget.value);
+                  if (fontSizeTargetAnnotation) {
+                    applyTextAnnotationFontSize(fontSizeTargetAnnotation.id, value);
+                    return;
+                  }
+                  setTextAnnotationFontSize(value);
+                }}
+              />
+            </>
+          )}
+        </div>
       </div>
     ) : null;
   const editorToolbarFloatingLayer = isLiveRuntime ? (
@@ -8054,7 +8986,6 @@ export function BrowserPanel({
   ) : null;
   const activePreviewUrl =
     previewState?.url ?? activeTab?.lastCommittedUrl ?? activeTab?.url ?? BROWSER_BLANK_URL;
-  const canOpenActivePreviewUrl = activePreviewUrl !== BROWSER_BLANK_URL && Boolean(previewCwd);
   const liveEditorHeader = (
     <div
       data-browser-editor-chrome="true"
@@ -8067,7 +8998,7 @@ export function BrowserPanel({
         ref={liveEditorToolbarStripRef}
         className={cn(
           BROWSER_TOOLBAR_STRIP_CLASS_NAME,
-          "group/live-editor-toolbar max-w-full overflow-x-auto",
+          "group/live-editor-toolbar max-w-full overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
       >
         {editorToolbar}
@@ -8076,19 +9007,12 @@ export function BrowserPanel({
         ) : null}
         {previewToolbar}
         <div aria-hidden="true" className={BROWSER_TOOLBAR_DIVIDER_CLASS_NAME} />
-        <button
-          type="button"
-          className="max-w-[16rem] shrink-0 truncate rounded-sm px-1.5 text-left text-[11px] text-muted-foreground outline-none transition-[background-color,color,text-decoration-color] hover:bg-accent/45 hover:text-foreground hover:underline hover:decoration-foreground/50 focus-visible:bg-accent/55 focus-visible:text-foreground focus-visible:underline focus-visible:decoration-foreground/60 disabled:pointer-events-none disabled:opacity-60"
-          title={activePreviewUrl}
-          disabled={!canOpenActivePreviewUrl}
-          onClick={() => {
-            if (canOpenActivePreviewUrl) {
-              void navigateBrowserToPreviewUrl(activePreviewUrl, previewState?.targetCwd ?? null);
-            }
-          }}
+        <span
+          aria-hidden="true"
+          className="max-w-[16rem] shrink-0 truncate px-1.5 text-[11px] text-muted-foreground select-none pointer-events-none"
         >
           {liveEditorPreviewLabel(activePreviewUrl)}
-        </button>
+        </span>
       </div>
       {editorToolbarFloatingLayer}
     </div>
@@ -8545,7 +9469,13 @@ export function BrowserPanel({
               ) : null}
               {isLiveEditorVariant &&
               selectedAnnotationBox &&
-              !stylePropertiesPanelOpen &&
+              // While the panel is open the ring only shows when breadcrumb
+              // traversal moved the selection away from the panel's element,
+              // so the traversed target is visible on the page.
+              (!stylePropertiesPanelOpen ||
+                (stylePanelElementContext &&
+                  selectedElementContext &&
+                  stylePanelElementContext.selector !== selectedElementContext.selector)) &&
               !inlineTextEditor ? (
                 <div className="pointer-events-none absolute inset-0 z-20">
                   <BrowserAnnotationBoxOverlay box={selectedAnnotationBox} variant="selected" />
@@ -8589,16 +9519,16 @@ export function BrowserPanel({
                       aria-hidden="true"
                     >
                       <defs>
-                        {renderedDrawStrokeItems.map((item) => (
+                        {renderedDrawStrokeGradients.map((gradient) => (
                           <linearGradient
-                            key={item.gradientId}
-                            id={item.gradientId}
+                            key={gradient.gradientId}
+                            id={gradient.gradientId}
                             x1="0%"
                             y1="0%"
                             x2="100%"
                             y2="100%"
                           >
-                            {item.animated ? (
+                            {gradient.animated ? (
                               <animateTransform
                                 attributeName="gradientTransform"
                                 type="rotate"
@@ -8611,14 +9541,14 @@ export function BrowserPanel({
                               <stop
                                 key={offset}
                                 offset={offset}
-                                stopColor={item.colors[stopIndex]!}
+                                stopColor={gradient.colors[stopIndex]!}
                               >
-                                {item.animated ? (
+                                {gradient.animated ? (
                                   <animate
                                     attributeName="stop-color"
-                                    values={item.stopColorValues[stopIndex]}
+                                    values={gradient.stopColorValues[stopIndex]}
                                     dur="8s"
-                                    begin={item.animationBegin}
+                                    begin={gradient.animationBegin}
                                     repeatCount="indefinite"
                                   />
                                 ) : null}
@@ -8671,10 +9601,10 @@ export function BrowserPanel({
                   {visibleAnnotationArrowItems.length > 0 ? (
                     <svg className="absolute inset-0 h-full w-full" aria-hidden="true">
                       <defs>
-                        {visibleAnnotationArrowItems.map((item) => (
+                        {visibleAnnotationArrowGradients.map((gradient) => (
                           <linearGradient
-                            key={item.gradientId}
-                            id={item.gradientId}
+                            key={gradient.gradientId}
+                            id={gradient.gradientId}
                             x1="0%"
                             y1="0%"
                             x2="100%"
@@ -8691,13 +9621,13 @@ export function BrowserPanel({
                               <stop
                                 key={offset}
                                 offset={offset}
-                                stopColor={item.colors[stopIndex]!}
+                                stopColor={gradient.colors[stopIndex]!}
                               >
                                 <animate
                                   attributeName="stop-color"
-                                  values={item.stopColorValues[stopIndex]}
+                                  values={gradient.stopColorValues[stopIndex]}
                                   dur="8s"
-                                  begin={item.animationBegin}
+                                  begin={gradient.animationBegin}
                                   repeatCount="indefinite"
                                 />
                               </stop>
@@ -8716,8 +9646,18 @@ export function BrowserPanel({
                           (showArrowEndpointHandles ||
                             hoveredTextAnnotationId === arrow.sourceTextAnnotationId);
                         return (
-                          <g key={arrow.id}>
+                          <g
+                            key={arrow.id}
+                            ref={(node) => {
+                              if (node) {
+                                annotationArrowElementsRef.current.set(arrow.id, node);
+                              } else {
+                                annotationArrowElementsRef.current.delete(arrow.id);
+                              }
+                            }}
+                          >
                             <line
+                              data-arrow-part="hit"
                               x1={arrow.from.x}
                               y1={arrow.from.y}
                               x2={arrow.to.x}
@@ -8759,6 +9699,7 @@ export function BrowserPanel({
                               ? segments.map((segment, segmentIndex) => (
                                   <line
                                     key={`selected-${segmentIndex}`}
+                                    data-arrow-part={`selected-${segmentIndex}`}
                                     className="pointer-events-none"
                                     x1={segment.x1}
                                     y1={segment.y1}
@@ -8775,6 +9716,7 @@ export function BrowserPanel({
                             {segments.map((segment, segmentIndex) => (
                               <line
                                 key={`contrast-${segmentIndex}`}
+                                data-arrow-part={`contrast-${segmentIndex}`}
                                 className="pointer-events-none mix-blend-difference"
                                 x1={segment.x1}
                                 y1={segment.y1}
@@ -8790,6 +9732,7 @@ export function BrowserPanel({
                             {segments.map((segment, segmentIndex) => (
                               <line
                                 key={`gradient-${segmentIndex}`}
+                                data-arrow-part={`gradient-${segmentIndex}`}
                                 className="pointer-events-none"
                                 x1={segment.x1}
                                 y1={segment.y1}
@@ -8804,6 +9747,7 @@ export function BrowserPanel({
                             {segments.map((segment, segmentIndex) => (
                               <line
                                 key={`glint-${segmentIndex}`}
+                                data-arrow-part={`glint-${segmentIndex}`}
                                 className="pointer-events-none mix-blend-difference"
                                 x1={segment.x1}
                                 y1={segment.y1}
@@ -8818,6 +9762,7 @@ export function BrowserPanel({
                             ))}
                             {arrow.sourceTextAnnotationId && arrow.sourceHandle ? (
                               <circle
+                                data-arrow-part="source"
                                 className={cn(
                                   "cursor-grab fill-black/80 stroke-cyan-200 transition-opacity duration-150 ease-out active:cursor-grabbing",
                                   showSourceHandle
@@ -8858,6 +9803,7 @@ export function BrowserPanel({
                               />
                             ) : null}
                             <circle
+                              data-arrow-part="target"
                               className={cn(
                                 "cursor-crosshair fill-black/80 stroke-cyan-200 transition-opacity duration-150 ease-out",
                                 showArrowEndpointHandles
@@ -8903,21 +9849,42 @@ export function BrowserPanel({
                   {textAnnotations.map((annotation) => {
                     const isSelected = selectedTextAnnotationId === annotation.id;
                     const isEditing = editingTextAnnotationId === annotation.id;
-                    const visibleText = isEditing ? editingTextAnnotationValue : annotation.text;
+                    // While editing, live text lives in editingTextAnnotationValueRef and
+                    // box growth is DOM-patched per keystroke; render stays on the
+                    // committed text so re-renders never fight the patched geometry.
+                    const visibleText = annotation.text;
                     const annotationFontSize = browserTextAnnotationFontSize(annotation);
                     const annotationLineHeight =
                       browserTextAnnotationLineHeight(annotationFontSize);
-                    const boxMetrics = textAnnotationBoxMetrics(visibleText, annotationFontSize);
+                    const boxMetrics = textAnnotationBoxMetrics(visibleText, annotationFontSize, {
+                      width: annotation.boxWidth,
+                      height: annotation.boxHeight,
+                    });
                     const boxPosition = textAnnotationBoxPosition(annotation, boxMetrics);
+                    const isResizing = resizingTextAnnotationId === annotation.id;
                     const showSourceHandles =
                       !isEditing &&
+                      !isResizing &&
                       (hoveredTextAnnotationId === annotation.id ||
                         draggingTextAnnotationId === annotation.id ||
                         annotationArrowDraft?.sourceTextAnnotationId === annotation.id);
+                    const showResizeHandle =
+                      !isEditing &&
+                      (isSelected ||
+                        isResizing ||
+                        hoveredTextAnnotationId === annotation.id ||
+                        draggingTextAnnotationId === annotation.id);
 
                     return (
                       <div key={annotation.id} className="pointer-events-none absolute inset-0">
                         <div
+                          ref={(node) => {
+                            if (node) {
+                              textAnnotationBoxElementsRef.current.set(annotation.id, node);
+                            } else {
+                              textAnnotationBoxElementsRef.current.delete(annotation.id);
+                            }
+                          }}
                           className="group pointer-events-auto absolute"
                           style={{
                             left: boxPosition.x,
@@ -8931,13 +9898,15 @@ export function BrowserPanel({
                         >
                           <div
                             className={cn(
-                              "box-border h-full w-full whitespace-pre-wrap rounded-lg border border-black/10 bg-white/56 px-2.5 py-1.5 font-semibold text-slate-950 shadow-[0_12px_36px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.62)] backdrop-blur-2xl dark:border-white/18 dark:bg-slate-950/78 dark:text-white dark:shadow-[0_12px_36px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)]",
+                              BROWSER_GLASS_SURFACE_CLASS_NAME,
+                              "box-border h-full w-full whitespace-pre-wrap rounded-lg px-2.5 py-1.5 font-semibold text-slate-950 dark:text-white",
                               isEditing
                                 ? "cursor-text ring-2 ring-cyan-300/80"
                                 : "cursor-grab active:cursor-grabbing",
                               isSelected && !isEditing ? "ring-2 ring-cyan-300/80" : "",
                             )}
                             style={{
+                              fontFamily: BROWSER_TEXT_ANNOTATION_FONT_FAMILY,
                               fontSize: `${annotationFontSize}px`,
                               lineHeight: `${annotationLineHeight}px`,
                               overflowWrap: "anywhere",
@@ -8970,10 +9939,11 @@ export function BrowserPanel({
                               <textarea
                                 ref={editTextAnnotationInputRef}
                                 data-browser-text-annotation-input="true"
-                                value={editingTextAnnotationValue}
+                                defaultValue={editingTextAnnotationValueRef.current}
                                 rows={1}
                                 className="h-full w-full resize-none bg-transparent p-0 font-semibold text-slate-950 outline-none dark:text-white"
                                 style={{
+                                  fontFamily: BROWSER_TEXT_ANNOTATION_FONT_FAMILY,
                                   fontSize: `${annotationFontSize}px`,
                                   lineHeight: `${annotationLineHeight}px`,
                                   overflowWrap: "anywhere",
@@ -8991,7 +9961,10 @@ export function BrowserPanel({
                                   event.stopPropagation();
                                 }}
                                 onChange={(event) => {
-                                  setEditingTextAnnotationValue(event.currentTarget.value);
+                                  handleTextAnnotationEditInput(
+                                    annotation,
+                                    event.currentTarget.value,
+                                  );
                                 }}
                                 onBlur={commitTextAnnotationEdit}
                                 onKeyDown={(event) => {
@@ -9008,6 +9981,49 @@ export function BrowserPanel({
                             ) : (
                               annotation.text
                             )}
+                          </div>
+                          {/* Inset like a native textarea grip, with a 2px gap
+                              to the corner so the bottom-right arrow junction
+                              dot (centered on the corner itself) stays
+                              clickable for drawing arrows. */}
+                          <div
+                            className={cn(
+                              "absolute bottom-0.5 right-0.5 z-20 flex size-3.5 cursor-nwse-resize items-end justify-end transition-opacity duration-150 ease-out",
+                              showResizeHandle
+                                ? "pointer-events-auto opacity-100"
+                                : "pointer-events-none opacity-0",
+                            )}
+                            title="Resize note"
+                            onPointerEnter={() => {
+                              showTextAnnotationControls(annotation.id);
+                            }}
+                            onPointerLeave={() => {
+                              scheduleHideTextAnnotationControls(annotation.id);
+                            }}
+                            onPointerDown={(event) => beginTextAnnotationResize(annotation, event)}
+                            onPointerMove={moveTextAnnotationResize}
+                            onPointerUp={finishTextAnnotationResize}
+                            onPointerCancel={finishTextAnnotationResize}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                            }}
+                            onDoubleClick={(event) => {
+                              event.stopPropagation();
+                            }}
+                          >
+                            <svg
+                              viewBox="0 0 8 8"
+                              aria-hidden="true"
+                              className="size-2 text-slate-950/60 drop-shadow-[0_0_2px_rgba(255,255,255,0.55)] dark:text-white/75 dark:drop-shadow-[0_0_2px_rgba(0,0,0,0.6)]"
+                            >
+                              <path
+                                d="M7.2 1.4 1.4 7.2 M7.2 4.6 4.6 7.2"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="1.2"
+                                strokeLinecap="round"
+                              />
+                            </svg>
                           </div>
                           {isSelected
                             ? BROWSER_ANNOTATION_ARROW_HANDLES.map((handle) => {
@@ -9056,30 +10072,36 @@ export function BrowserPanel({
                   })}
                   {textAnnotationDraft
                     ? (() => {
-                        const draftFontSize = browserTextAnnotationFontSize(textAnnotationDraft);
+                        const draft = textAnnotationDraft;
+                        const draftFontSize = browserTextAnnotationFontSize(draft);
                         const draftLineHeight = browserTextAnnotationLineHeight(draftFontSize);
                         const draftMetrics = textAnnotationBoxMetrics(
-                          textAnnotationDraft.text,
+                          textAnnotationDraftTextRef.current,
                           draftFontSize,
                         );
                         const draftPosition = clampTextAnnotationBoxPosition(
-                          textAnnotationBoxPosition(textAnnotationDraft, draftMetrics),
+                          textAnnotationBoxPosition(draft, draftMetrics),
                           browserEditorOverlayRef.current,
                           draftMetrics,
                         );
                         return (
                           <textarea
+                            key={draft.id}
                             ref={textAnnotationInputRef}
                             data-browser-text-annotation-input="true"
-                            value={textAnnotationDraft.text}
+                            defaultValue={textAnnotationDraftTextRef.current}
                             rows={1}
-                            className="absolute z-10 box-border resize-none whitespace-pre-wrap rounded-lg border border-black/10 bg-white/58 px-2.5 py-1.5 font-semibold text-slate-950 shadow-[0_12px_36px_rgba(15,23,42,0.18),inset_0_1px_0_rgba(255,255,255,0.62)] outline-none backdrop-blur-2xl placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-300/70 dark:border-white/18 dark:bg-slate-950/82 dark:text-white dark:placeholder:text-muted-foreground dark:shadow-[0_12px_36px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.08)]"
+                            className={cn(
+                              BROWSER_GLASS_SURFACE_CLASS_NAME,
+                              "absolute z-10 box-border resize-none whitespace-pre-wrap rounded-lg px-2.5 py-1.5 font-semibold text-slate-950 outline-none placeholder:text-slate-500 focus:ring-2 focus:ring-cyan-300/70 dark:text-white dark:placeholder:text-muted-foreground",
+                            )}
                             placeholder={BROWSER_TEXT_ANNOTATION_PLACEHOLDER}
                             style={{
                               left: draftPosition.x,
                               top: draftPosition.y,
                               width: draftMetrics.width,
                               height: draftMetrics.height,
+                              fontFamily: BROWSER_TEXT_ANNOTATION_FONT_FAMILY,
                               fontSize: `${draftFontSize}px`,
                               lineHeight: `${draftLineHeight}px`,
                               overflowWrap: "anywhere",
@@ -9094,10 +10116,22 @@ export function BrowserPanel({
                               event.stopPropagation();
                             }}
                             onChange={(event) => {
+                              // Grow the draft box via direct style writes; committing
+                              // text to state on every keystroke re-rendered the whole
+                              // panel and stuttered.
                               const text = event.currentTarget.value;
-                              setTextAnnotationDraft((current) =>
-                                current ? { ...current, text } : current,
+                              textAnnotationDraftTextRef.current = text;
+                              const metrics = textAnnotationBoxMetrics(text, draftFontSize);
+                              const position = clampTextAnnotationBoxPosition(
+                                textAnnotationBoxPosition({ ...draft, text }, metrics),
+                                browserEditorOverlayRef.current,
+                                metrics,
                               );
+                              const element = event.currentTarget;
+                              element.style.left = `${position.x}px`;
+                              element.style.top = `${position.y}px`;
+                              element.style.width = `${metrics.width}px`;
+                              element.style.height = `${metrics.height}px`;
                             }}
                             onBlur={() => {
                               commitTextAnnotationDraft();
@@ -9109,6 +10143,7 @@ export function BrowserPanel({
                               } else if (event.key === "Escape") {
                                 event.preventDefault();
                                 event.stopPropagation();
+                                textAnnotationDraftTextRef.current = "";
                                 setTextAnnotationDraft(null);
                               }
                             }}
@@ -9128,82 +10163,85 @@ export function BrowserPanel({
                 />
               ) : null}
               {selectedStyleEditorAnchor && selectedElementContext ? (
-                <>
-                  <div
-                    data-browser-editor-chrome="true"
-                    className="absolute z-40 flex items-center gap-0.5"
-                    style={selectedStyleEditorAnchor.button}
-                  >
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              void startInlineTextEditing();
-                            }}
-                          >
-                            <PencilIcon className="size-3.5" />
-                            <span className="sr-only">Edit text inline</span>
-                          </button>
-                        }
-                      />
-                      <TooltipPopup side="bottom">Edit text inline</TooltipPopup>
-                    </Tooltip>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <button
-                            type="button"
-                            className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              if (inlineTextEditorRef.current) {
-                                commitInlineTextEditing();
-                              }
-                              setStylePropertiesPanelOpen((current) => !current);
-                            }}
-                          >
-                            <AdjustmentsIcon className="size-3.5" />
-                            <span className="sr-only">Edit element properties</span>
-                          </button>
-                        }
-                      />
-                      <TooltipPopup side="bottom">Edit element properties</TooltipPopup>
-                    </Tooltip>
-                  </div>
-                  {stylePropertiesPanelOpen && stylePropertiesPanelPosition ? (
-                    <div
-                      data-browser-editor-chrome="true"
-                      ref={stylePanelElementRef}
-                      className="absolute left-0 top-0 z-50 will-change-transform"
-                      style={{
-                        transform: `translate3d(${stylePropertiesPanelPosition.left}px, ${stylePropertiesPanelPosition.top}px, 0)`,
-                      }}
-                      onPointerDown={(event) => {
-                        event.stopPropagation();
-                      }}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                      }}
-                    >
-                      <ElementPropertiesPanel
-                        element={selectedElementContext}
-                        initialPatch={styleEditorInitialPatch ?? undefined}
-                        onPreviewPatch={scheduleSelectedStylePreview}
-                        onAttachContext={attachStyleEditContext}
-                        onApplySourceEdit={applyStyleEditToSource}
-                        onResetPreview={resetStylePropertiesPreview}
-                        onClose={closeStylePropertiesPanel}
-                        onDragHandlePointerDown={beginStylePropertiesPanelDrag}
-                      />
-                    </div>
-                  ) : null}
-                </>
+                <div
+                  data-browser-editor-chrome="true"
+                  className="absolute z-40 flex items-center gap-0.5"
+                  style={selectedStyleEditorAnchor.button}
+                >
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            void startInlineTextEditing();
+                          }}
+                        >
+                          <PencilIcon className="size-3.5" />
+                          <span className="sr-only">Edit text inline</span>
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="bottom">Edit text inline</TooltipPopup>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <button
+                          type="button"
+                          className={BROWSER_ELEMENT_EDIT_BUTTON_CLASS_NAME}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            if (inlineTextEditorRef.current) {
+                              commitInlineTextEditing();
+                            }
+                            toggleStylePropertiesPanel();
+                          }}
+                        >
+                          <AdjustmentsIcon className="size-3.5" />
+                          <span className="sr-only">Edit element properties</span>
+                        </button>
+                      }
+                    />
+                    <TooltipPopup side="bottom">Edit element properties</TooltipPopup>
+                  </Tooltip>
+                </div>
+              ) : null}
+              {stylePropertiesPanelOpen &&
+              stylePanelElementContext &&
+              stylePropertiesPanelPosition ? (
+                <div
+                  data-browser-editor-chrome="true"
+                  ref={stylePanelElementRef}
+                  className="absolute left-0 top-0 z-50 will-change-transform"
+                  style={{
+                    transform: `translate3d(${stylePropertiesPanelPosition.left}px, ${stylePropertiesPanelPosition.top}px, 0)`,
+                  }}
+                  onPointerDown={(event) => {
+                    event.stopPropagation();
+                  }}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                  }}
+                >
+                  <ElementPropertiesPanel
+                    element={stylePanelElementContext}
+                    selectedSelector={selectedElementContext?.selector}
+                    initialPatch={styleEditorInitialPatch ?? undefined}
+                    onPreviewPatch={scheduleSelectedStylePreview}
+                    onAttachContext={attachStyleEditContext}
+                    onPlanSourceEdit={planStyleEditToSource}
+                    onApplySourceEdit={applyStyleEditToSource}
+                    onSelectElement={selectElementBySelector}
+                    onResetPreview={resetStylePropertiesPreview}
+                    onClose={closeStylePropertiesPanel}
+                    onDragHandlePointerDown={beginStylePropertiesPanelDrag}
+                  />
+                </div>
               ) : null}
             </div>
           ) : null}
