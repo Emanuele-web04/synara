@@ -34,7 +34,11 @@ import {
   isFileChangeWorkLogEntry,
   type WorkLogEntry,
 } from "../../session-logic";
-import { type TurnDiffSummary } from "../../types";
+import {
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 import ChatMarkdown from "../ChatMarkdown";
 import { InlineLinkChip } from "../InlineLinkChip";
 import {
@@ -43,11 +47,13 @@ import {
   CheckIcon,
   ChangesIcon,
   CircleAlertIcon,
+  CircleCheckIcon,
   CircleQuestionIcon,
   ClockIcon,
   EyeIcon,
   GitHubIcon,
   HammerIcon,
+  LoaderIcon,
   type LucideIcon,
   McpIcon,
   NewThreadIcon,
@@ -59,6 +65,7 @@ import {
   TerminalIcon,
   Undo2Icon,
   WebSearchIcon,
+  WorktreeIcon,
   ZapIcon,
 } from "~/lib/icons";
 import { pinActionLabel } from "~/lib/pin";
@@ -288,11 +295,85 @@ function findVisibleThreadMarkerElement(elements: readonly HTMLElement[]): HTMLE
   return null;
 }
 
+// Per-step status glyph for the worktree setup stepper. Mirrors the active
+// task-list card: spinner while active, check when done, hollow node pending.
+function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"] }) {
+  if (status === "done") {
+    // Foreground (black) check, same box as the spinner so done/active nodes match.
+    return <CircleCheckIcon className="size-2.5 text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "active") {
+    // Spinner sized to match the pending nodes, in foreground (black) so the
+    // active step reads as the current work rather than an accent flourish.
+    return <LoaderIcon className="size-2.5 animate-spin text-[var(--color-text-foreground)]" />;
+  }
+  if (status === "error") {
+    return <CircleAlertIcon className="size-2.5 text-destructive" />;
+  }
+  // Lucide circles render at ~83% of their box, so an 8px ring matches the
+  // visible diameter of the size-2.5 spinner/check glyphs.
+  return <span className="block size-2 rounded-full border border-[color:var(--color-border)]" />;
+}
+
+// Transient "Preparing worktree..." panel: a compact bordered card with a
+// git-branch header and a connected stepper. Hugs its content so it reads as a
+// status chip rather than a full-width block.
+function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+  return (
+    <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
+      <div className="flex items-center gap-2">
+        <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
+        <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
+          Preparing worktree...
+        </span>
+      </div>
+      <ol className="mt-2 flex flex-col">
+        {steps.map((step, index) => {
+          const isLast = index === steps.length - 1;
+          return (
+            <li key={step.id} className="relative flex items-center gap-2.5 py-[3px]">
+              {isLast ? null : (
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "absolute left-[6.5px] top-1/2 h-full w-px",
+                    step.status === "done"
+                      ? "bg-[var(--color-text-foreground)]"
+                      : "bg-[color:var(--color-border)]",
+                  )}
+                />
+              )}
+              <span className="relative z-10 flex size-3.5 shrink-0 items-center justify-center rounded-full bg-[var(--color-background-elevated-primary)]">
+                <WorktreeSetupStepGlyph status={step.status} />
+              </span>
+              <span
+                className={cn(
+                  "text-[13px] leading-5",
+                  step.status === "active" || step.status === "done"
+                    ? "text-[var(--color-text-foreground)]"
+                    : step.status === "error"
+                      ? "text-destructive"
+                      : "text-[var(--color-text-foreground-tertiary)] opacity-70",
+                )}
+              >
+                {step.label}
+                {step.status === "error" ? " — failed" : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 interface MessagesTimelineProps {
   hasMessages: boolean;
   isWorking: boolean;
   activeTurnInProgress: boolean;
   activeTurnStartedAt: string | null;
+  /** Transient "New worktree" setup progress; rendered as an ephemeral step card at the tail. */
+  worktreeSetup?: WorktreeSetupSnapshot | null;
   followLiveOutput?: boolean;
   emptyStateContent?: ReactNode;
   listRef?: RefObject<LegendListRef | null>;
@@ -356,6 +437,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isWorking,
   activeTurnInProgress,
   activeTurnStartedAt,
+  worktreeSetup = null,
   followLiveOutput = false,
   listRef,
   controllerRef,
@@ -497,11 +579,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [bottomSpacerHeightPx],
   );
 
+  const presentedWorktreeSetup = useWorktreeSetupPresentation(worktreeSetup);
   const rawRows = useMemo(
     () =>
       deriveMessagesTimelineRows({
         timelineEntries,
         isWorking,
+        worktreeSetup: presentedWorktreeSetup?.snapshot ?? null,
+        worktreeSetupOpen: presentedWorktreeSetup?.open ?? false,
         activeTurnInProgress,
         activeTurnId,
         activeTurnStartedAt,
@@ -511,6 +596,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [
       timelineEntries,
       isWorking,
+      presentedWorktreeSetup,
       activeTurnInProgress,
       activeTurnId,
       activeTurnStartedAt,
@@ -678,7 +764,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const tailContentRowId = useMemo(() => {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index]!;
-      if (row.kind !== "working") return row.id;
+      if (row.kind !== "working" && row.kind !== "worktree-setup") return row.id;
     }
     return null;
   }, [rows]);
@@ -1694,10 +1780,21 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           )}
         </div>
       )}
+
+      {row.kind === "worktree-setup" && (
+        <DisclosureRegion open={row.open}>
+          <div className="pt-0.5 pb-1">
+            <WorktreeSetupCard steps={row.steps} />
+          </div>
+        </DisclosureRegion>
+      )}
     </div>
   );
 
-  if (!hasMessages && !isWorking) {
+  // Transient rows (for example failed first-send worktree setup) must be able
+  // to render even when there are no persisted chat messages yet.
+  const hasRenderableTranscriptContent = hasMessages || rows.length > 0;
+  if (!hasRenderableTranscriptContent && !isWorking) {
     if (emptyStateContent) {
       return <div className="flex h-full items-center justify-center">{emptyStateContent}</div>;
     }
@@ -1885,6 +1982,60 @@ function useMessageSendEnterAnimations(
   );
 
   return enteringRowIds;
+}
+
+interface WorktreeSetupPresentation {
+  snapshot: WorktreeSetupSnapshot;
+  open: boolean;
+}
+
+// Keeps the transient worktree-setup card mounted through one shared-disclosure
+// close animation after ChatView clears the snapshot, mirroring
+// useSettledTurnCollapseTransitions' rAF-flip + delayed-cleanup shape.
+function useWorktreeSetupPresentation(
+  worktreeSetup: WorktreeSetupSnapshot | null,
+): WorktreeSetupPresentation | null {
+  const [presented, setPresented] = useState<WorktreeSetupPresentation | null>(null);
+  const closeFrameRef = useRef<number | null>(null);
+  const cleanupTimeoutRef = useRef<number | null>(null);
+
+  const clearCloseTimers = useCallback(() => {
+    if (closeFrameRef.current !== null) {
+      window.cancelAnimationFrame(closeFrameRef.current);
+      closeFrameRef.current = null;
+    }
+    if (cleanupTimeoutRef.current !== null) {
+      window.clearTimeout(cleanupTimeoutRef.current);
+      cleanupTimeoutRef.current = null;
+    }
+  }, []);
+
+  useLayoutEffect(() => {
+    if (worktreeSetup) {
+      clearCloseTimers();
+      setPresented((current) =>
+        current?.open && current.snapshot === worktreeSetup
+          ? current
+          : { snapshot: worktreeSetup, open: true },
+      );
+      return;
+    }
+    if (!presented?.open || closeFrameRef.current !== null) {
+      return;
+    }
+    closeFrameRef.current = window.requestAnimationFrame(() => {
+      closeFrameRef.current = null;
+      setPresented((current) => (current?.open ? { ...current, open: false } : current));
+      cleanupTimeoutRef.current = window.setTimeout(() => {
+        cleanupTimeoutRef.current = null;
+        setPresented(null);
+      }, TRANSCRIPT_DISCLOSURE_TRANSITION_MS + TRANSCRIPT_DISCLOSURE_CLEANUP_BUFFER_MS);
+    });
+  }, [worktreeSetup, presented, clearCloseTimers]);
+
+  useLayoutEffect(() => clearCloseTimers, [clearCloseTimers]);
+
+  return presented;
 }
 
 // Keeps newly folded turn details mounted for one shared-disclosure close

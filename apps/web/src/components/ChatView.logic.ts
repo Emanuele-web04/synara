@@ -20,6 +20,8 @@ import {
   type Thread,
   type ThreadPrimarySurface,
   type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStepId,
 } from "../types";
 import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
@@ -447,9 +449,51 @@ export interface PullRequestDialogState {
   key: number;
 }
 
+// Ordered client-side phases of the "New worktree" first-send setup. The
+// labels surface verbatim in the transcript's transient setup row.
+export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
+  id: WorktreeSetupStepId;
+  label: string;
+}> = [
+  { id: "create-worktree", label: "Creating branch and worktree" },
+  { id: "prepare-thread", label: "Linking thread workspace" },
+  { id: "start-session", label: "Starting session" },
+];
+
+// How long a failed setup step stays visible before the row is dismissed, so
+// the error state can paint instead of being batched away with the reset.
+export const WORKTREE_SETUP_ERROR_HOLD_MS = 1200;
+
+export function createWorktreeSetupSnapshot(
+  activeStepId: WorktreeSetupStepId,
+): WorktreeSetupSnapshot {
+  const activeIndex = WORKTREE_SETUP_STEP_DEFINITIONS.findIndex((step) => step.id === activeStepId);
+  return {
+    steps: WORKTREE_SETUP_STEP_DEFINITIONS.map((step, index) => ({
+      ...step,
+      status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
+    })),
+  };
+}
+
+export function failWorktreeSetupSnapshot(snapshot: WorktreeSetupSnapshot): WorktreeSetupSnapshot {
+  if (!snapshot.steps.some((step) => step.status === "active")) {
+    return snapshot;
+  }
+  return {
+    steps: snapshot.steps.map((step) =>
+      step.status === "active" ? { ...step, status: "error" } : step,
+    ),
+  };
+}
+
+export function worktreeSetupHasError(snapshot: WorktreeSetupSnapshot | null): boolean {
+  return snapshot?.steps.some((step) => step.status === "error") ?? false;
+}
+
 export interface LocalDispatchSnapshot {
   startedAt: string;
-  preparingWorktree: boolean;
+  worktreeSetup: WorktreeSetupSnapshot | null;
   latestTurnTurnId: Thread["latestTurn"] extends infer T
     ? T extends { turnId: infer U }
       ? U | null
@@ -468,13 +512,15 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { preparingWorktree?: boolean },
+  options?: { worktreeSetupStepId?: WorktreeSetupStepId },
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
   return {
     startedAt: new Date().toISOString(),
-    preparingWorktree: Boolean(options?.preparingWorktree),
+    worktreeSetup: options?.worktreeSetupStepId
+      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId)
+      : null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,

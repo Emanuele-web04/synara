@@ -12,7 +12,7 @@ import {
   type StableMessagesTimelineRowsState,
 } from "./MessagesTimeline.logic";
 import type { TimelineEntry } from "../../session-logic";
-import type { TurnDiffSummary } from "../../types";
+import type { TurnDiffSummary, WorktreeSetupSnapshot } from "../../types";
 
 function makeSummary(
   overrides: Omit<Partial<TurnDiffSummary>, "turnId"> & { turnId: string },
@@ -226,6 +226,30 @@ describe("computeStableMessagesTimelineRows", () => {
 
     expect(second).not.toBe(first);
     expect(second.result[0]).toBe(enrichedRows[0]);
+  });
+
+  it("reuses worktree-setup rows until a step status or open state changes", () => {
+    const makeRow = (
+      status: "active" | "done",
+      open: boolean,
+    ): Extract<MessagesTimelineRow, { kind: "worktree-setup" }> => ({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      open,
+      steps: [{ id: "create-worktree", label: "Creating branch and worktree", status }],
+    });
+
+    const first = computeStableMessagesTimelineRows([makeRow("active", true)], emptyStableRows());
+    const unchanged = computeStableMessagesTimelineRows([makeRow("active", true)], first);
+    expect(unchanged).toBe(first);
+
+    const statusChanged = computeStableMessagesTimelineRows([makeRow("done", true)], unchanged);
+    expect(statusChanged).not.toBe(unchanged);
+    expect(statusChanged.result[0]).not.toBe(unchanged.result[0]);
+
+    const openChanged = computeStableMessagesTimelineRows([makeRow("done", false)], statusChanged);
+    expect(openChanged).not.toBe(statusChanged);
+    expect(openChanged.result[0]).not.toBe(statusChanged.result[0]);
   });
 
   it("replaces work rows when the activity kind changes", () => {
@@ -606,6 +630,8 @@ describe("deriveMessagesTimelineRows", () => {
 
   const baseInput = {
     isWorking: false,
+    worktreeSetup: null as WorktreeSetupSnapshot | null,
+    worktreeSetupOpen: false,
     activeTurnStartedAt: null as string | null,
     turnDiffSummaryByAssistantMessageId: new Map(),
     revertTurnCountByUserMessageId: new Map(),
@@ -896,5 +922,56 @@ describe("deriveMessagesTimelineRows", () => {
 
     expect(rows.some((row) => row.kind === "proposed-plan")).toBe(true);
     expect(collapsedSignature(messageRow(rows, "a2")!)).toEqual(["narration:a1", "work:w1"]);
+  });
+
+  const worktreeSetupSnapshot = (): WorktreeSetupSnapshot => ({
+    steps: [
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ],
+  });
+
+  it("appends an open worktree-setup row and suppresses the generic working shimmer", () => {
+    const setup = worktreeSetupSnapshot();
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      worktreeSetup: setup,
+      worktreeSetupOpen: true,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    const setupRow = rows.at(-1);
+    expect(setupRow).toMatchObject({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      open: true,
+      steps: setup.steps,
+    });
+    expect(rows.some((row) => row.kind === "working")).toBe(false);
+  });
+
+  it("restores the working shimmer while the worktree-setup row animates closed", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      worktreeSetup: worktreeSetupSnapshot(),
+      worktreeSetupOpen: false,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "worktree-setup", "working"]);
+    expect(rows.find((row) => row.kind === "worktree-setup")).toMatchObject({ open: false });
+  });
+
+  it("omits the worktree-setup row entirely once the snapshot is gone", () => {
+    const rows = deriveMessagesTimelineRows({
+      ...baseInput,
+      isWorking: true,
+      timelineEntries: [userEntry("u1", "2026-01-01T00:00:00Z")],
+    });
+
+    expect(rows.map((row) => row.kind)).toEqual(["message", "working"]);
   });
 });

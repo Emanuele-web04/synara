@@ -39,10 +39,12 @@ function envFlagEnabled(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
 }
 
-export function isClaudeCredentialKeepaliveEnabled(input: {
-  readonly platform?: NodeJS.Platform;
-  readonly env?: NodeJS.ProcessEnv;
-} = {}): boolean {
+export function isClaudeCredentialKeepaliveEnabled(
+  input: {
+    readonly platform?: NodeJS.Platform;
+    readonly env?: NodeJS.ProcessEnv;
+  } = {},
+): boolean {
   const platform = input.platform ?? process.platform;
   const env = input.env ?? process.env;
   return platform === "darwin" && envFlagEnabled(env.T3CODE_CLAUDE_KEEPALIVE);

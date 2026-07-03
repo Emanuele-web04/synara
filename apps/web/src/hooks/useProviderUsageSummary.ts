@@ -50,7 +50,7 @@ export function useProviderUsageSummary(input: {
   const allProviderUsageQuery = useQuery(
     serverAllProviderUsageQueryOptions({
       enabled: shouldFetchLiveProviderUsage,
-      provider: input.provider,
+      provider: input.provider ?? null,
     }),
   );
   const localUsageSnapshotQuery = useQuery(

@@ -31,10 +31,10 @@ const viewNames = (sql: SqlClient.SqlClient) =>
 layer("automation migration", (it) => {
   it.effect("registers automation backlog migration in the Synara lineage", () =>
     Effect.sync(() => {
-      assert.deepStrictEqual(migrationEntries[migrationEntries.length - 1]?.slice(0, 2), [
-        48,
-        "AutomationCompletionEvaluationBacklog",
-      ]);
+      // Look the entry up by id: asserting on the lineage tail would break
+      // every time an unrelated migration lands after it.
+      const entry = migrationEntries.find(([id]) => id === 48);
+      assert.deepStrictEqual(entry?.slice(0, 2), [48, "AutomationCompletionEvaluationBacklog"]);
     }),
   );
 

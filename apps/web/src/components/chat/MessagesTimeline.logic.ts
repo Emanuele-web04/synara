@@ -6,7 +6,13 @@
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 import { type TimelineEntry, type WorkLogEntry, formatElapsed } from "../../session-logic";
 import { normalizeCompactToolLabel as normalizeCompactToolLabelValue } from "../../lib/toolCallLabel";
-import { type ChatMessage, type ProposedPlan, type TurnDiffSummary } from "../../types";
+import {
+  type ChatMessage,
+  type ProposedPlan,
+  type TurnDiffSummary,
+  type WorktreeSetupSnapshot,
+  type WorktreeSetupStep,
+} from "../../types";
 
 export const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 
@@ -65,7 +71,16 @@ export type MessagesTimelineRow =
       createdAt: string;
       proposedPlan: ProposedPlan;
     }
-  | { kind: "working"; id: string; createdAt: string | null };
+  | { kind: "working"; id: string; createdAt: string | null }
+  | {
+      // Transient "Preparing worktree..." step card shown during the New
+      // worktree first-send setup. `open` drives the shared disclosure close
+      // animation while the presentation hook keeps the row mounted.
+      kind: "worktree-setup";
+      id: string;
+      steps: ReadonlyArray<WorktreeSetupStep>;
+      open: boolean;
+    };
 
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
@@ -203,6 +218,8 @@ export function deriveTerminalAssistantMessageIds(
 export function deriveMessagesTimelineRows(input: {
   timelineEntries: ReadonlyArray<TimelineEntry>;
   isWorking: boolean;
+  worktreeSetup: WorktreeSetupSnapshot | null;
+  worktreeSetupOpen: boolean;
   activeTurnInProgress?: boolean;
   activeTurnId?: TurnId | null | undefined;
   activeTurnStartedAt: string | null;
@@ -344,7 +361,19 @@ export function deriveMessagesTimelineRows(input: {
   // completed chat does not end with a detached tool-log footer.
   flushPendingWorkGroup();
 
-  if (input.isWorking) {
+  if (input.worktreeSetup) {
+    nextRows.push({
+      kind: "worktree-setup",
+      id: "worktree-setup-row",
+      steps: input.worktreeSetup.steps,
+      open: input.worktreeSetupOpen,
+    });
+  }
+
+  // The generic "Working..." shimmer yields to the setup card only while the
+  // card is open; once the card starts its close animation the turn's own
+  // shimmer is already rendering after it, so the handoff has no gap.
+  if (input.isWorking && !(input.worktreeSetup && input.worktreeSetupOpen)) {
     nextRows.push({
       kind: "working",
       id: "working-indicator-row",
@@ -683,6 +712,18 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
   switch (a.kind) {
     case "working":
       return a.createdAt === (b as typeof a).createdAt;
+
+    case "worktree-setup": {
+      const bw = b as typeof a;
+      return (
+        a.open === bw.open &&
+        a.steps.length === bw.steps.length &&
+        a.steps.every((step, index) => {
+          const other = bw.steps[index]!;
+          return step.id === other.id && step.status === other.status && step.label === other.label;
+        })
+      );
+    }
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;

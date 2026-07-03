@@ -237,6 +237,7 @@ import {
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
   type Thread,
+  type WorktreeSetupStepId,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -489,9 +490,13 @@ import {
   shouldRenderTerminalWorkspace,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
+  createWorktreeSetupSnapshot,
   deriveComposerSendState,
+  failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   hasServerAcknowledgedLocalDispatch,
+  WORKTREE_SETUP_ERROR_HOLD_MS,
+  worktreeSetupHasError,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
@@ -2436,7 +2441,8 @@ export default function ChatView({
     ],
   );
   const isSendBusy = localDispatch !== null && !serverAcknowledgedLocalDispatch;
-  const isPreparingWorktree = localDispatch?.preparingWorktree ?? false;
+  const activeWorktreeSetup = localDispatch?.worktreeSetup ?? null;
+  const isPreparingWorktree = activeWorktreeSetup !== null;
   const hasLiveTurn = phase === "running";
   hasLiveTurnRef.current = hasLiveTurn;
   const isWorking = hasLiveTurn || isSendBusy || isConnecting || isRevertingCheckpoint;
@@ -5268,13 +5274,19 @@ export default function ChatView({
   });
 
   const beginLocalDispatch = useCallback(
-    (options?: { preparingWorktree?: boolean }) => {
-      const preparingWorktree = Boolean(options?.preparingWorktree);
+    (options?: { worktreeSetupStepId?: WorktreeSetupStepId }) => {
+      const worktreeSetupStepId = options?.worktreeSetupStepId;
       setLocalDispatch((current) => {
         if (current) {
-          return current.preparingWorktree === preparingWorktree
+          if (!worktreeSetupStepId) {
+            return current;
+          }
+          const alreadyActive = current.worktreeSetup?.steps.some(
+            (step) => step.id === worktreeSetupStepId && step.status === "active",
+          );
+          return alreadyActive
             ? current
-            : { ...current, preparingWorktree };
+            : { ...current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
         }
         return createLocalDispatchSnapshot(activeThread, options);
       });
@@ -5282,16 +5294,44 @@ export default function ChatView({
     [activeThread],
   );
 
+  const failLocalDispatchWorktreeSetup = useCallback(() => {
+    setLocalDispatch((current) => {
+      if (!current?.worktreeSetup) {
+        return current;
+      }
+      const failed = failWorktreeSetupSnapshot(current.worktreeSetup);
+      return failed === current.worktreeSetup ? current : { ...current, worktreeSetup: failed };
+    });
+  }, []);
+
   const resetLocalDispatch = useCallback(() => {
     setLocalDispatch(null);
   }, []);
 
+  // Fallback cleanup for a failed worktree setup: clears the dispatch after the
+  // error hold unless a newer dispatch (no error step) already replaced it.
+  const scheduleFailedWorktreeSetupDispatchReset = useCallback(() => {
+    window.setTimeout(() => {
+      setLocalDispatch((current) =>
+        worktreeSetupHasError(current?.worktreeSetup ?? null) ? null : current,
+      );
+    }, WORKTREE_SETUP_ERROR_HOLD_MS);
+  }, []);
+
+  const localDispatchWorktreeSetupFailed = worktreeSetupHasError(activeWorktreeSetup);
   useEffect(() => {
     if (!serverAcknowledgedLocalDispatch) {
       return;
     }
+    // A failed worktree setup would otherwise reset in the same commit that
+    // painted the error (thread errors count as acknowledgement), so hold the
+    // row briefly before letting it animate out.
+    if (localDispatchWorktreeSetupFailed) {
+      const holdTimeout = window.setTimeout(resetLocalDispatch, WORKTREE_SETUP_ERROR_HOLD_MS);
+      return () => window.clearTimeout(holdTimeout);
+    }
     resetLocalDispatch();
-  }, [resetLocalDispatch, serverAcknowledgedLocalDispatch]);
+  }, [localDispatchWorktreeSetupFailed, resetLocalDispatch, serverAcknowledgedLocalDispatch]);
 
   useEffect(() => {
     if (!activeThreadId) return;
@@ -7047,7 +7087,9 @@ export default function ChatView({
     }
 
     sendInFlightRef.current = true;
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    beginLocalDispatch(
+      baseBranchForWorktree ? { worktreeSetupStepId: "create-worktree" } : undefined,
+    );
 
     const composerImagesSnapshot = [...composerImagesForSend];
     const composerFilesSnapshot = [...composerFilesForSend];
@@ -7173,12 +7215,12 @@ export default function ChatView({
     await (async () => {
       // On first message: lock in branch + create worktree if needed.
       if (baseBranchForWorktree) {
-        beginLocalDispatch({ preparingWorktree: true });
         const result = await createWorktreeMutation.mutateAsync({
           cwd: targetProjectCwdForSend,
           branch: baseBranchForWorktree,
           newBranch: buildTemporaryWorktreeBranchName(),
         });
+        beginLocalDispatch({ worktreeSetupStepId: "prepare-thread" });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
         const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
@@ -7300,7 +7342,9 @@ export default function ChatView({
         });
       }
 
-      beginLocalDispatch();
+      beginLocalDispatch(
+        baseBranchForWorktree ? { worktreeSetupStepId: "start-session" } : undefined,
+      );
       const turnAttachments = await turnAttachmentsPromise;
       rememberCustomBinaryPathForDispatch({
         threadId: threadIdForSend,
@@ -7346,6 +7390,9 @@ export default function ChatView({
         setRestoredQueuedSourceProposedPlan(threadIdForSend, null);
       }
     })().catch(async (err: unknown) => {
+      // Surface the failure on whichever setup step was active (no-op for
+      // sends without a worktree setup in flight).
+      failLocalDispatchWorktreeSetup();
       if (createdServerThreadForLocalDraft && !turnStartSucceeded) {
         // This rollback cleans up a retryable draft promotion; do not tombstone the draft id.
         await api.orchestration
@@ -7406,7 +7453,11 @@ export default function ChatView({
     });
     sendInFlightRef.current = false;
     if (!turnStartSucceeded) {
-      resetLocalDispatch();
+      if (baseBranchForWorktree) {
+        scheduleFailedWorktreeSetupDispatchReset();
+      } else {
+        resetLocalDispatch();
+      }
     }
     return turnStartSucceeded;
   };
@@ -9914,11 +9965,6 @@ export default function ChatView({
                         isVoiceRecording || isVoiceTranscribing ? "min-w-0 flex-1" : "shrink-0",
                       )}
                     >
-                      {isPreparingWorktree ? (
-                        <span className="text-[length:var(--app-font-size-ui-xs,10px)] text-[var(--color-text-foreground-secondary)]">
-                          Preparing worktree...
-                        </span>
-                      ) : null}
                       {!isVoiceRecording &&
                       !isVoiceTranscribing &&
                       runtimeUsageContextWindow &&
@@ -10377,6 +10423,7 @@ export default function ChatView({
                     agentActivityDetail={openAgentActivityDetail}
                     hasMessages={timelineEntries.length > 0}
                     isWorking={isWorking}
+                    worktreeSetup={activeWorktreeSetup}
                     activeTurnInProgress={activeTurnInProgress}
                     activeTurnStartedAt={activeWorkStartedAt}
                     listRef={legendListRef}

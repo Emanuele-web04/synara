@@ -6657,7 +6657,6 @@ export default function Sidebar() {
         )}
         {!isOnSettings && chatsSectionVisible ? (
           <SidebarGroup className="px-1.5 pt-1 pb-2">
-            <div className="mx-2 mb-1.5 h-px bg-border/60" />
             <div className="group/collapsible">
               <div className="group/project-header relative">
                 <SidebarMenuButton
