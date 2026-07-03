@@ -55,6 +55,7 @@ interface ChatTranscriptPaneProps {
   canPinMessage?: (messageId: MessageId) => boolean;
   onTogglePinMessage?: (messageId: MessageId) => void;
   threadMarkers?: readonly ThreadMarker[];
+  goalCompletionSummary?: ComponentProps<typeof MessagesTimeline>["goalCompletionSummary"];
   enteringUserMessageIds?: ComponentProps<typeof MessagesTimeline>["enteringUserMessageIds"];
   markdownCwd: string | undefined;
   onExpandTimelineImage: (preview: ExpandedImagePreview) => void;
@@ -110,6 +111,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers,
+  goalCompletionSummary,
   enteringUserMessageIds,
   markdownCwd,
   onExpandTimelineImage,
@@ -203,6 +205,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
             {...(canPinMessage ? { canPinMessage } : {})}
             {...(onTogglePinMessage ? { onTogglePinMessage } : {})}
             {...(threadMarkers ? { threadMarkers } : {})}
+            {...(goalCompletionSummary ? { goalCompletionSummary } : {})}
             {...(enteringUserMessageIds ? { enteringUserMessageIds } : {})}
             timelineEntries={timelineEntries}
             turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}

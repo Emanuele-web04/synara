@@ -11,6 +11,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { resolveLatestTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+import { stripGoalCompletionSentinel } from "@t3tools/shared/orchestrationGoals";
 import { pluralize } from "@t3tools/shared/text";
 import { LegendList, type LegendListRef } from "@legendapp/list/react";
 import {
@@ -306,6 +307,8 @@ interface MessagesTimelineProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
+  /** Custom summary shown when a hidden goal-completion marker ends an assistant message. */
+  goalCompletionSummary?: string | null;
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
@@ -363,6 +366,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   canPinMessage,
   onTogglePinMessage,
   threadMarkers = [],
+  goalCompletionSummary = null,
   enteringUserMessageIds = EMPTY_MESSAGE_ID_SET,
   timelineEntries,
   turnDiffSummaryByAssistantMessageId,
@@ -1150,7 +1154,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const sentinelDisplay = stripGoalCompletionSentinel(row.message.text);
+          const messageText =
+            sentinelDisplay.hadSentinel && sentinelDisplay.text.trim().length > 0
+              ? `${sentinelDisplay.text}\n\n${goalCompletionSummary ?? "Goal complete."}`
+              : sentinelDisplay.hadSentinel
+                ? (goalCompletionSummary ?? "Goal complete.")
+                : row.message.text || (row.message.streaming ? "" : "(empty response)");
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
@@ -1203,7 +1213,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   ...inlineWorkDisplay.statusEntries,
                 ]);
           const assistantCopyState = resolveAssistantMessageCopyState({
-            text: row.message.text ?? null,
+            text: messageText === "(empty response)" ? null : messageText,
             showCopyButton: row.showAssistantCopyButton,
             streaming: row.assistantCopyStreaming,
           });

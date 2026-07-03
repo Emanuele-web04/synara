@@ -1,6 +1,6 @@
 import type { OrchestrationGoal } from "@t3tools/contracts";
 
-import { formatContextWindowTokens } from "~/lib/contextWindow";
+import { formatGoalUsageSummary } from "~/lib/goalDisplay";
 import { cn } from "~/lib/utils";
 import { ComposerStackedPanel } from "./ComposerStackedPanel";
 import {
@@ -18,26 +18,9 @@ const GOAL_STATUS_LABEL: Record<OrchestrationGoal["status"], string> = {
   cleared: "cleared",
 };
 
-function formatGoalDuration(seconds: number): string {
-  const safeSeconds = Math.max(0, Math.floor(Number.isFinite(seconds) ? seconds : 0));
-  if (safeSeconds < 60) {
-    return `${safeSeconds}s`;
-  }
-  const minutes = Math.floor(safeSeconds / 60);
-  const remainingSeconds = safeSeconds % 60;
-  if (minutes < 60) {
-    return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  const remainingMinutes = minutes % 60;
-  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
-}
-
 function goalMetaLabel(goal: OrchestrationGoal): string {
   if (goal.status === "complete" || goal.status === "budget_limited") {
-    return `${formatContextWindowTokens(goal.tokensUsed)} tokens · ${formatGoalDuration(
-      goal.timeUsedSeconds,
-    )}`;
+    return formatGoalUsageSummary(goal);
   }
   return `${goal.turnCount} turns`;
 }

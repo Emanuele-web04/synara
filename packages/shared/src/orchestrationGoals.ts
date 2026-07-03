@@ -1,4 +1,8 @@
-import type { OrchestrationGoal, OrchestrationGoalStatus } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_GOAL_COMPLETION_SENTINEL,
+  type OrchestrationGoal,
+  type OrchestrationGoalStatus,
+} from "@t3tools/contracts";
 
 function goalElapsedSeconds(createdAt: string, completedAt: string): number {
   const start = Date.parse(createdAt);
@@ -88,5 +92,19 @@ export function transitionGoalStatus(
       ? goalElapsedSeconds(goal.createdAt, updatedAt)
       : goal.timeUsedSeconds,
     updatedAt,
+  };
+}
+
+export function stripGoalCompletionSentinel(text: string): {
+  readonly text: string;
+  readonly hadSentinel: boolean;
+} {
+  const lines = text.trimEnd().split(/\r?\n/);
+  if (lines.at(-1)?.trim() !== ORCHESTRATION_GOAL_COMPLETION_SENTINEL) {
+    return { text, hadSentinel: false };
+  }
+  return {
+    text: lines.slice(0, -1).join("\n").trimEnd(),
+    hadSentinel: true,
   };
 }

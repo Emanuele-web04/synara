@@ -1,7 +1,6 @@
 import {
   CommandId,
   MessageId,
-  ORCHESTRATION_GOAL_COMPLETION_SENTINEL,
   type OrchestrationEvent,
   type OrchestrationThread,
   type ThreadId,
@@ -9,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { stripGoalCompletionSentinel } from "@t3tools/shared/orchestrationGoals";
 
 import { renderGoalContinuationPrompt } from "../goalContinuationPrompt.ts";
 import {
@@ -153,8 +153,7 @@ const make = Effect.gen(function* () {
     // Completion: the model emitted the sentinel as the final line of its reply after the
     // completion audit. Require an exact last-line match (not a substring) so quoting the
     // sentinel in prose, a code block, or a blocker explanation does not falsely complete.
-    const lastLine = assistantMessage.text.trimEnd().split(/\r?\n/).at(-1)?.trim();
-    if (lastLine === ORCHESTRATION_GOAL_COMPLETION_SENTINEL) {
+    if (stripGoalCompletionSentinel(assistantMessage.text).hadSentinel) {
       yield* orchestrationEngine.dispatch({
         type: "thread.goal.complete",
         commandId: serverCommandId("goal-complete"),
