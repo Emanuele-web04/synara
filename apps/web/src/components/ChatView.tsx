@@ -2697,17 +2697,14 @@ export default function ChatView({
     pendingAutomationConversation,
     threadId,
   ]);
-  const promptHistory = useMemo(
-    () => {
-      const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
-      const activeMessageIds = new Set(activeMessages.map((message) => message.id));
-      const pendingOptimisticMessages = optimisticUserMessages.filter(
-        (message) => !activeMessageIds.has(message.id),
-      );
-      return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
-    },
-    [activeThread?.messages, optimisticUserMessages],
-  );
+  const promptHistory = useMemo(() => {
+    const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+    const activeMessageIds = new Set(activeMessages.map((message) => message.id));
+    const pendingOptimisticMessages = optimisticUserMessages.filter(
+      (message) => !activeMessageIds.has(message.id),
+    );
+    return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
+  }, [activeThread?.messages, optimisticUserMessages]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
