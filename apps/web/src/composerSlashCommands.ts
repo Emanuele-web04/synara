@@ -374,8 +374,9 @@ export function getAvailableComposerSlashCommands(input: {
           "status",
           "subagents",
           "automation",
-          // Claude ships a native /goal; other providers get Synara's agent-agnostic one.
-          "goal",
+          // Codex owns /goal natively and writes its result into the provider output.
+          // Other non-native providers get Synara's agent-agnostic goal loop.
+          ...(input.provider === "codex" ? [] : (["goal"] as const)),
         ]
       : [
           // Claude owns most slash-command UX natively; sidechat remains app-level because it

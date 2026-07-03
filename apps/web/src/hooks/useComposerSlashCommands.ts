@@ -817,6 +817,9 @@ export function useComposerSlashCommands(input: {
         return true;
       }
       if (slashInvocation.command === "goal") {
+        if (selectedProvider === "codex") {
+          return false;
+        }
         await handleGoalSlashCommand(slashInvocation.args);
         return true;
       }

@@ -10392,7 +10392,11 @@ export default function ChatView({
                     onTogglePinMessage={handleTogglePinMessageGuarded}
                     threadMarkers={threadMarkers}
                     goalCompletionSummary={
-                      activeThread.goal ? formatGoalCompletionSummary(activeThread.goal) : null
+                      activeThread.modelSelection.provider === "codex"
+                        ? null
+                        : activeThread.goal
+                          ? (formatGoalCompletionSummary(activeThread.goal) ?? "Goal complete.")
+                          : "Goal complete."
                     }
                     enteringUserMessageIds={enteringUserMessageIds}
                     timelineEntries={timelineEntries}

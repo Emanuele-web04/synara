@@ -66,7 +66,7 @@ describe("composerSlashCommands", () => {
     });
   });
 
-  it("offers /goal to non-Claude providers but not Claude (which has a native /goal)", () => {
+  it("leaves /goal to providers with native goal support", () => {
     const codexCommands = getAvailableComposerSlashCommands({
       provider: "codex",
       supportsFastSlashCommand: true,
@@ -75,7 +75,7 @@ describe("composerSlashCommands", () => {
       canOfferForkCommand: true,
       canOfferSideCommand: true,
     });
-    expect(codexCommands).toContain("goal");
+    expect(codexCommands).not.toContain("goal");
 
     const claudeCommands = getAvailableComposerSlashCommands({
       provider: "claudeAgent",
@@ -86,6 +86,16 @@ describe("composerSlashCommands", () => {
       canOfferSideCommand: true,
     });
     expect(claudeCommands).not.toContain("goal");
+
+    const piCommands = getAvailableComposerSlashCommands({
+      provider: "pi",
+      supportsFastSlashCommand: true,
+      canOfferCompactCommand: true,
+      canOfferReviewCommand: true,
+      canOfferForkCommand: true,
+      canOfferSideCommand: true,
+    });
+    expect(piCommands).toContain("goal");
   });
 
   it("parses slash invocations with optional arguments", () => {

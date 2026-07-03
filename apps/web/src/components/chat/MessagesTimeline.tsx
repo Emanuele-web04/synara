@@ -307,7 +307,7 @@ interface MessagesTimelineProps {
   onTogglePinMessage?: (messageId: MessageId) => void;
   /** Text markers for assistant messages in the active thread. */
   threadMarkers?: readonly ThreadMarker[];
-  /** Custom summary shown when a hidden goal-completion marker ends an assistant message. */
+  /** Custom summary shown when a Synara hidden goal-completion marker ends an assistant message. */
   goalCompletionSummary?: string | null;
   /** User messages inserted locally by send actions, eligible for the subtle enter affordance. */
   enteringUserMessageIds?: ReadonlySet<MessageId>;
@@ -1154,13 +1154,15 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const sentinelDisplay = stripGoalCompletionSentinel(row.message.text);
-          const messageText =
-            sentinelDisplay.hadSentinel && sentinelDisplay.text.trim().length > 0
-              ? `${sentinelDisplay.text}\n\n${goalCompletionSummary ?? "Goal complete."}`
-              : sentinelDisplay.hadSentinel
-                ? (goalCompletionSummary ?? "Goal complete.")
-                : row.message.text || (row.message.streaming ? "" : "(empty response)");
+          let messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          if (goalCompletionSummary !== null) {
+            const sentinelDisplay = stripGoalCompletionSentinel(row.message.text);
+            messageText = sentinelDisplay.hadSentinel
+              ? sentinelDisplay.text.trim().length > 0
+                ? `${sentinelDisplay.text}\n\n${goalCompletionSummary}`
+                : goalCompletionSummary
+              : messageText;
+          }
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
