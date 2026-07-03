@@ -86,6 +86,13 @@ export const SETTINGS_SEARCH_ENTRIES: readonly SettingsSearchEntry[] = [
     keywords: "Show the GitHub repository link in the chat Environment panel. git changes worktree",
   },
   {
+    id: "general:environment-pull-request",
+    section: "general",
+    title: "Pull request",
+    keywords:
+      "Show the open pull request CI checks and review comments in the chat Environment panel. pr fix github",
+  },
+  {
     id: "general:environment-editor",
     section: "general",
     title: "Editor",

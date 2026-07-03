@@ -768,6 +768,11 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           rpcEffect(gitManager.resolvePullRequest(input), "Failed to resolve pull request"),
+        [WS_METHODS.gitPullRequestSnapshot]: (input) =>
+          rpcEffect(
+            gitManager.pullRequestSnapshot(input),
+            "Failed to load pull request checks and comments",
+          ),
         [WS_METHODS.gitPreparePullRequestThread]: (input) =>
           rpcEffect(
             gitManager
