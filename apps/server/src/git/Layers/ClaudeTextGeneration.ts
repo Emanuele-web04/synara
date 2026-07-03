@@ -31,6 +31,7 @@ import {
   sanitizeThreadRecap,
   toJsonSchemaObject,
 } from "../textGenerationShared.ts";
+import { ServerConfig } from "../../config.ts";
 import { buildClaudeInstanceProcessEnv } from "../../provider/claudeEnvironment.ts";
 
 const CLAUDE_TIMEOUT_MS = 180_000;
@@ -82,9 +83,13 @@ function resolveClaudeEnvironment(input: {
   readonly providerOptions?: Parameters<
     TextGenerationShape["generateThreadTitle"]
   >[0]["providerOptions"];
+  readonly homeDir: string;
 }): NodeJS.ProcessEnv {
   const claudeOptions = input.providerOptions?.claudeAgent;
-  return buildClaudeInstanceProcessEnv(claudeOptions?.homePath, claudeOptions?.environment);
+  return buildClaudeInstanceProcessEnv(
+    claudeOptions?.homePath ?? input.homeDir,
+    claudeOptions?.environment,
+  );
 }
 
 function resolveClaudeEffort(
@@ -99,6 +104,7 @@ function resolveClaudeEffort(
 
 const makeClaudeTextGeneration = Effect.gen(function* () {
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const serverConfig = yield* ServerConfig;
 
   const readStreamAsString = <E>(
     operation: TextGenerationOperation,
@@ -139,7 +145,7 @@ const makeClaudeTextGeneration = Effect.gen(function* () {
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
       const binaryPath = resolveClaudeBinaryPath({ providerOptions });
-      const env = resolveClaudeEnvironment({ providerOptions });
+      const env = resolveClaudeEnvironment({ providerOptions, homeDir: serverConfig.homeDir });
       const jsonSchema = JSON.stringify(toJsonSchemaObject(outputSchemaJson));
       const effort = resolveClaudeEffort(modelSelection);
       const args = [
