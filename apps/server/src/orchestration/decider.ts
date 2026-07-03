@@ -1695,6 +1695,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.goal.upsert": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        }),
+        type: "thread.goal-created",
+        payload: {
+          threadId: command.threadId,
+          goal: command.goal,
+        },
+      };
+    }
+
     case "thread.goal.pause": {
       const thread = yield* requireThread({
         readModel,

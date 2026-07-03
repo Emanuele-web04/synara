@@ -416,7 +416,7 @@ import {
 import { ChatTranscriptPane } from "./chat/ChatTranscriptPane";
 import type { MessagesTimelineController } from "./chat/MessagesTimeline";
 import { buildTurnDiffSummaryByAssistantMessageId } from "./chat/MessagesTimeline.logic";
-import { deriveCodexNativeGoalDisplay, formatGoalCompletionSummary } from "~/lib/goalDisplay";
+import { formatGoalCompletionSummary } from "~/lib/goalDisplay";
 import { deriveAgentActivityTimelineState } from "./chat/agentActivity.logic";
 import { ComposerSlashStatusDialog } from "./chat/ComposerSlashStatusDialog";
 import { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -1428,46 +1428,16 @@ export default function ChatView({
   const browserOpen = rawSearch.panel === "browser";
   const resolvedDiffOpen = panelState ? panelState.panel === "diff" : diffOpen;
   const activeThreadId = activeThread?.id ?? null;
-  const [hiddenCodexNativeGoalCommandIds, setHiddenCodexNativeGoalCommandIds] = useState<
-    ReadonlySet<string>
-  >(() => new Set());
-  const codexNativeGoalDisplay = useMemo(
-    () =>
-      activeThread?.modelSelection.provider === "codex"
-        ? deriveCodexNativeGoalDisplay(activeThread.messages)
-        : null,
-    [activeThread?.messages, activeThread?.modelSelection.provider],
-  );
   const activeComposerGoalDisplay = useMemo(() => {
-    if (!activeThread) {
-      return null;
-    }
-    if (activeThread.modelSelection.provider === "codex") {
-      if (!codexNativeGoalDisplay) {
-        return null;
-      }
-      if (
-        codexNativeGoalDisplay.commandMessageId &&
-        hiddenCodexNativeGoalCommandIds.has(codexNativeGoalDisplay.commandMessageId)
-      ) {
-        return null;
-      }
-      return {
-        label: codexNativeGoalDisplay.objective,
-        source: "codex" as const,
-        commandMessageId: codexNativeGoalDisplay.commandMessageId,
-      };
-    }
-
-    if (!activeThread.goal || activeThread.goal.status === "cleared") {
+    if (!activeThread?.goal || activeThread.goal.status === "cleared") {
       return null;
     }
     return {
       label: activeThread.goal.objective,
-      source: "synara" as const,
-      commandMessageId: null,
+      source:
+        activeThread.modelSelection.provider === "codex" ? ("codex" as const) : ("synara" as const),
     };
-  }, [activeThread, codexNativeGoalDisplay, hiddenCodexNativeGoalCommandIds]);
+  }, [activeThread?.goal, activeThread?.modelSelection.provider]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const hasLiveTurnTail = hasLiveTurnTailWork({
@@ -3264,15 +3234,6 @@ export default function ChatView({
 
     const createdAt = new Date().toISOString();
     if (activeComposerGoalDisplay.source === "codex") {
-      const commandMessageId = activeComposerGoalDisplay.commandMessageId;
-      if (commandMessageId) {
-        setHiddenCodexNativeGoalCommandIds((existing) => {
-          const next = new Set(existing);
-          next.add(commandMessageId);
-          return next;
-        });
-      }
-
       const modelSelectionForGoalClear =
         activeThread.modelSelection.provider === selectedModelSelection.provider
           ? selectedModelSelection
@@ -3302,13 +3263,6 @@ export default function ChatView({
           createdAt,
         })
         .catch((err: unknown) => {
-          if (commandMessageId) {
-            setHiddenCodexNativeGoalCommandIds((existing) => {
-              const next = new Set(existing);
-              next.delete(commandMessageId);
-              return next;
-            });
-          }
           toastManager.add({
             type: "error",
             title: "Could not disable goal",

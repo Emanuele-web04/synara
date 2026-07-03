@@ -299,6 +299,59 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("projects provider-native Codex goal updates without using the Synara goal reactor", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "thread.goal.updated",
+      eventId: asEventId("evt-thread-goal-updated"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-goal"),
+      createdAt: now,
+      payload: {
+        goal: {
+          providerThreadId: "provider-thread-1",
+          objective: "Explore docs",
+          status: "complete",
+          tokenBudget: 5000,
+          tokensUsed: 1234,
+          timeUsedSeconds: 37,
+          createdAt: "2026-07-03T11:00:00.000Z",
+          updatedAt: "2026-07-03T11:00:37.000Z",
+        },
+      },
+    });
+    await harness.drain();
+
+    let thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.goal?.objective === "Explore docs" &&
+        entry.goal.status === "complete" &&
+        entry.goal.tokensUsed === 1234 &&
+        entry.goal.timeUsedSeconds === 37,
+    );
+    expect(thread.goal?.id).toBe("provider:codex:goal:provider-thread-1");
+    expect(thread.goal?.tokenBudget).toBe(5000);
+
+    harness.emit({
+      type: "thread.goal.cleared",
+      eventId: asEventId("evt-thread-goal-cleared"),
+      provider: "codex",
+      threadId: asThreadId("thread-1"),
+      createdAt: new Date().toISOString(),
+      payload: {
+        providerThreadId: "provider-thread-1",
+      },
+    });
+    await harness.drain();
+
+    thread = await waitForThread(harness.engine, (entry) => entry.goal?.status === "cleared");
+    expect(thread.goal?.objective).toBe("Explore docs");
+  });
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = new Date().toISOString();

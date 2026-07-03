@@ -18,6 +18,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderRuntimeEvent,
   type ServerVoiceTranscriptionResult,
+  type ThreadGoalSnapshot,
   type ThreadTokenUsageSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
@@ -150,6 +151,79 @@ function asArray(value: unknown): unknown[] | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asNonNegativeInt(value: unknown): number | undefined {
+  const number = asNumber(value);
+  if (number === undefined || number < 0) {
+    return undefined;
+  }
+  return Math.floor(number);
+}
+
+function asPositiveIntOrNull(value: unknown): number | null {
+  const number = asNumber(value);
+  if (number === undefined || number <= 0) {
+    return null;
+  }
+  return Math.floor(number);
+}
+
+function codexEpochSecondsToIso(value: unknown): string | undefined {
+  const seconds = asNumber(value);
+  if (seconds === undefined) {
+    return undefined;
+  }
+  const date = new Date(seconds * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
+function normalizeCodexGoalStatus(value: unknown): ThreadGoalSnapshot["status"] | undefined {
+  switch (value) {
+    case "active":
+    case "paused":
+    case "complete":
+      return value;
+    case "budgetLimited":
+      return "budget_limited";
+    default:
+      return undefined;
+  }
+}
+
+function normalizeCodexThreadGoal(value: unknown): ThreadGoalSnapshot | undefined {
+  const goal = asObject(value);
+  const providerThreadId = asString(goal?.threadId);
+  const objective = asString(goal?.objective);
+  const status = normalizeCodexGoalStatus(goal?.status);
+  const tokensUsed = asNonNegativeInt(goal?.tokensUsed);
+  const timeUsedSeconds = asNonNegativeInt(goal?.timeUsedSeconds);
+  const createdAt = codexEpochSecondsToIso(goal?.createdAt);
+  const updatedAt = codexEpochSecondsToIso(goal?.updatedAt);
+  if (
+    !providerThreadId ||
+    !objective ||
+    !status ||
+    tokensUsed === undefined ||
+    timeUsedSeconds === undefined ||
+    !createdAt ||
+    !updatedAt
+  ) {
+    return undefined;
+  }
+  return {
+    providerThreadId,
+    objective,
+    status,
+    tokenBudget: asPositiveIntOrNull(goal?.tokenBudget),
+    tokensUsed,
+    timeUsedSeconds,
+    createdAt,
+    updatedAt,
+  };
 }
 
 // Keep manager-emitted stderr lines visible without escalating them into a fatal thread error.
@@ -1002,6 +1076,33 @@ function mapToRuntimeEvents(
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           usage: normalizedUsage,
+        },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/updated") {
+    const goal = normalizeCodexThreadGoal(payload?.goal);
+    if (!goal) {
+      return [];
+    }
+    return [
+      {
+        type: "thread.goal.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        ...(event.turnId ? { turnId: event.turnId } : {}),
+        payload: { goal },
+      },
+    ];
+  }
+
+  if (event.method === "thread/goal/cleared") {
+    return [
+      {
+        type: "thread.goal.cleared",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          ...(asString(payload?.threadId) ? { providerThreadId: asString(payload?.threadId) } : {}),
         },
       },
     ];

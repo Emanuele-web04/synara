@@ -1132,6 +1132,53 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
     }),
   );
 
+  it.effect("maps Codex thread goal notifications to canonical goal events", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-codex-thread-goal-updated"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-1"),
+        createdAt: new Date().toISOString(),
+        method: "thread/goal/updated",
+        payload: {
+          threadId: "provider-thread-1",
+          turnId: "turn-1",
+          goal: {
+            threadId: "provider-thread-1",
+            objective: "Explore docs",
+            status: "budgetLimited",
+            tokenBudget: 1000,
+            tokensUsed: 1000,
+            timeUsedSeconds: 37,
+            createdAt: 1_700_000_000,
+            updatedAt: 1_700_000_037,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "thread.goal.updated");
+      if (firstEvent.value.type !== "thread.goal.updated") {
+        return;
+      }
+      assert.equal(firstEvent.value.payload.goal.objective, "Explore docs");
+      assert.equal(firstEvent.value.payload.goal.status, "budget_limited");
+      assert.equal(firstEvent.value.payload.goal.tokensUsed, 1000);
+      assert.equal(firstEvent.value.payload.goal.timeUsedSeconds, 37);
+      assert.equal(firstEvent.value.payload.goal.createdAt, "2023-11-14T22:13:20.000Z");
+      assert.equal(firstEvent.value.payload.goal.updatedAt, "2023-11-14T22:13:57.000Z");
+    }),
+  );
+
   it.effect("maps thread/compacting notifications to context compaction progress events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;

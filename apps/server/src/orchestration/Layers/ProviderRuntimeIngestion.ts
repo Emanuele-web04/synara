@@ -13,6 +13,7 @@ import {
   type OrchestrationThreadActivity,
   type OrchestrationThread,
   type OrchestrationThreadShell,
+  type OrchestrationGoal,
   type ProviderRuntimeEvent,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -137,6 +138,8 @@ function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationTh
  */
 function eventNeedsHeavyThreadDetail(event: ProviderRuntimeEvent): boolean {
   switch (event.type) {
+    case "thread.goal.updated":
+    case "thread.goal.cleared":
     case "turn.proposed.completed":
     case "turn.completed":
     case "turn.aborted":
@@ -180,6 +183,30 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function providerRuntimeGoalToOrchestrationGoal(
+  event: Extract<ProviderRuntimeEvent, { type: "thread.goal.updated" }>,
+  existingGoal: OrchestrationGoal | null | undefined,
+): OrchestrationGoal {
+  const goal = event.payload.goal;
+  return {
+    id: existingGoal?.id ?? `provider:${event.provider}:goal:${goal.providerThreadId}`,
+    objective: goal.objective,
+    status: goal.status,
+    tokenBudget: goal.tokenBudget,
+    tokensUsed: goal.tokensUsed,
+    usage: {
+      inputTokens: existingGoal?.usage.inputTokens ?? 0,
+      outputTokens: existingGoal?.usage.outputTokens ?? 0,
+      totalTokens: goal.tokensUsed,
+    },
+    turnCount: existingGoal?.turnCount ?? 0,
+    continuationCount: existingGoal?.continuationCount ?? 0,
+    timeUsedSeconds: goal.timeUsedSeconds,
+    createdAt: goal.createdAt,
+    updatedAt: goal.updatedAt,
+  };
 }
 
 function inferRuntimeModeFromUserInputAnswers(
@@ -2149,6 +2176,29 @@ const make = Effect.gen(function* () {
             )
           : { threadId: parentThread.id, thread: parentThread };
       const thread = targetThreadResolution.thread;
+      if (event.type === "thread.goal.updated") {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.goal.upsert",
+          commandId: providerCommandId(event, "thread-goal-upsert"),
+          threadId: thread.id,
+          goal: providerRuntimeGoalToOrchestrationGoal(event, thread.goal),
+          createdAt: now,
+        });
+        return;
+      }
+
+      if (event.type === "thread.goal.cleared") {
+        if (thread.goal && thread.goal.status !== "cleared") {
+          yield* orchestrationEngine.dispatch({
+            type: "thread.goal.clear",
+            commandId: providerCommandId(event, "thread-goal-clear"),
+            threadId: thread.id,
+            createdAt: now,
+          });
+        }
+        return;
+      }
+
       const activeTurnId = thread.session?.activeTurnId ?? null;
       const eventTurnId = resolveTerminalTurnId(event, activeTurnId);
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";

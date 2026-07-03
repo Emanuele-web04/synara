@@ -1247,6 +1247,14 @@ const ThreadGoalCreateCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadGoalUpsertCommand = Schema.Struct({
+  type: Schema.Literal("thread.goal.upsert"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  goal: OrchestrationGoal,
+  createdAt: IsoDateTime,
+});
+
 const ThreadGoalPauseCommand = Schema.Struct({
   type: Schema.Literal("thread.goal.pause"),
   commandId: CommandId,
@@ -1304,6 +1312,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadGoalCreateCommand,
+  ThreadGoalUpsertCommand,
   ThreadGoalPauseCommand,
   ThreadGoalResumeCommand,
   ThreadGoalClearCommand,
@@ -1342,6 +1351,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMessageEditAndResendCommand,
   ThreadActivityAppendCommand,
   ThreadGoalCreateCommand,
+  ThreadGoalUpsertCommand,
   ThreadGoalPauseCommand,
   ThreadGoalResumeCommand,
   ThreadGoalClearCommand,

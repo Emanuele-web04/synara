@@ -107,6 +107,10 @@ const make = Effect.gen(function* () {
       lastHandledTurnId.delete(threadId);
       return;
     }
+    if (thread.modelSelection.provider === "codex") {
+      lastHandledTurnId.delete(threadId);
+      return;
+    }
 
     // Only act on a turn that has actually completed.
     const latestTurn = thread.latestTurn;
