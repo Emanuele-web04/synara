@@ -27,10 +27,7 @@ function makeApproval(overrides: Partial<PendingApproval> = {}): PendingApproval
   };
 }
 
-async function mountApprovalPanel(input?: {
-  approval?: PendingApproval;
-  isResponding?: boolean;
-}) {
+async function mountApprovalPanel(input?: { approval?: PendingApproval; isResponding?: boolean }) {
   const onRespond = vi.fn(
     async (_requestId: ApprovalRequestId, _decision: ProviderApprovalDecision) => undefined,
   );
