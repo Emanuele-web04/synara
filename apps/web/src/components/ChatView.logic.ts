@@ -197,7 +197,7 @@ export function resolvePromptHistoryNavigation(input: {
         handled: false,
         prompt: input.currentPrompt,
         cursor: input.currentCursor,
-        state: input.state,
+        state: null,
       };
     }
     const nextState: PromptHistoryNavigationState = input.state
@@ -242,7 +242,7 @@ export function resolvePromptHistoryNavigation(input: {
       handled: false,
       prompt: input.currentPrompt,
       cursor: input.currentCursor,
-      state: input.state,
+      state: null,
     };
   }
   if (input.state.index > 0) {

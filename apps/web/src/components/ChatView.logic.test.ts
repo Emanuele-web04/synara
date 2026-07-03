@@ -294,6 +294,40 @@ describe("prompt history navigation", () => {
       }).handled,
     ).toBe(false);
   });
+
+  it("resets stale history state when the active entry no longer matches history", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(older).toEqual({
+      handled: false,
+      prompt: "old prompt",
+      cursor: 0,
+      state: null,
+    });
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentCursor: "old prompt".length,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(newer).toEqual({
+      handled: false,
+      prompt: "old prompt",
+      cursor: "old prompt".length,
+      state: null,
+    });
+  });
 });
 
 describe("composer pasted text collapse", () => {
