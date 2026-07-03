@@ -271,9 +271,10 @@ layer("GitHubCliLive", (it) => {
           "number=42",
         ]),
       );
-      expect(args?.some((arg) => arg.includes("reviewThreads(first: 100, after: $after)"))).toBe(
+      expect(args?.some((arg) => arg.includes("reviewThreads(first: $first, after: $after)"))).toBe(
         true,
       );
+      expect(args).toEqual(expect.arrayContaining(["-F", "first=50"]));
     }),
   );
 
@@ -374,6 +375,155 @@ layer("GitHubCliLive", (it) => {
       expect(mockedRunProcess.mock.calls[1]?.[1]).toEqual(
         expect.arrayContaining(["-F", "after=cursor-1"]),
       );
+    }),
+  );
+
+  it.effect("stops review-thread pagination after the bounded comment preview", () =>
+    Effect.gen(function* () {
+      const unresolvedThreads = Array.from({ length: 20 }, (_, index) => ({
+        isResolved: false,
+        comments: {
+          nodes: [
+            {
+              id: `PRRC_${index}`,
+              body: `Finding ${index}`,
+              path: "bounded.ts",
+              url: `https://github.com/o/r/pull/42#discussion_r${index}`,
+              createdAt: "2026-07-01T10:00:00Z",
+              author: { login: "bot" },
+            },
+          ],
+        },
+      }));
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: unresolvedThreads,
+                  pageInfo: {
+                    hasNextPage: true,
+                    endCursor: "cursor-1",
+                  },
+                },
+              },
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getPullRequestReviewComments({
+          cwd: "/repo",
+          host: "github.com",
+          owner: "o",
+          repo: "r",
+          number: 42,
+        });
+      });
+
+      assert.equal(result.length, 20);
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("stops review-thread pagination at the page-count limit", () =>
+    Effect.gen(function* () {
+      for (let page = 1; page <= 5; page += 1) {
+        mockedRunProcess.mockResolvedValueOnce({
+          stdout: JSON.stringify({
+            data: {
+              repository: {
+                pullRequest: {
+                  reviewThreads: {
+                    nodes: [
+                      {
+                        isResolved: true,
+                        comments: {
+                          nodes: [
+                            {
+                              id: `PRRC_resolved_${page}`,
+                              body: `Already handled ${page}`,
+                              path: "bounded.ts",
+                              url: `https://github.com/o/r/pull/42#discussion_r${page}`,
+                              createdAt: "2026-07-01T10:00:00Z",
+                              author: { login: "bot" },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                    pageInfo: {
+                      hasNextPage: true,
+                      endCursor: `cursor-${page}`,
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          timedOut: false,
+        });
+      }
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getPullRequestReviewComments({
+          cwd: "/repo",
+          host: "github.com",
+          owner: "o",
+          repo: "r",
+          number: 42,
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+      expect(mockedRunProcess).toHaveBeenCalledTimes(5);
+      expect(mockedRunProcess.mock.calls[4]?.[1]).toEqual(
+        expect.arrayContaining(["-F", "after=cursor-4"]),
+      );
+    }),
+  );
+
+  it.effect("surfaces GraphQL errors from review-thread queries", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          errors: [{ message: "Field 'reviewThreads' does not exist" }],
+          data: {
+            repository: {
+              pullRequest: null,
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const error = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getPullRequestReviewComments({
+          cwd: "/repo",
+          host: "github.com",
+          owner: "o",
+          repo: "r",
+          number: 42,
+        });
+      }).pipe(Effect.flip);
+
+      assert.equal(error.message.includes("GitHub GraphQL returned errors"), true);
+      assert.equal(error.message.includes("Field 'reviewThreads' does not exist"), true);
     }),
   );
 

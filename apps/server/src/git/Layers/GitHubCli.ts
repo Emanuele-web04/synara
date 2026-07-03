@@ -131,13 +131,16 @@ const RawPullRequestChecksSchema = Schema.Struct({
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupItemSchema))),
 });
 
-// GraphQL review-threads query: unresolved threads with their root comment only. This is
-// the source of truth for "open review comments" — resolved threads and replies never
-// reach the client. Owner/repo are explicit variables so fork checkouts stay correct.
-const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $after: String) {
+const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
+const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
+const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
+
+// GraphQL review-threads query: resolved threads are filtered after fetch because GitHub's
+// reviewThreads connection does not expose an unresolved-only argument.
+const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $first: Int!, $after: String) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      reviewThreads(first: 100, after: $after) {
+      reviewThreads(first: $first, after: $after) {
         nodes {
           isResolved
           comments(first: 1) {
@@ -159,6 +162,10 @@ const PULL_REQUEST_REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!
     }
   }
 }`;
+
+const RawGraphQlErrorSchema = Schema.Struct({
+  message: Schema.optional(Schema.NullOr(Schema.String)),
+});
 
 const RawReviewThreadCommentSchema = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -189,6 +196,7 @@ const RawReviewThreadSchema = Schema.Struct({
 });
 
 const RawReviewThreadsResponseSchema = Schema.Struct({
+  errors: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawGraphQlErrorSchema)))),
   data: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
@@ -333,6 +341,19 @@ function normalizePullRequestReviewComments(
   return comments;
 }
 
+function getGraphQlErrorDetail(
+  raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
+): string | null {
+  const messages =
+    raw.errors
+      ?.flatMap((error) => {
+        const message = error?.message?.trim();
+        return message ? [message] : [];
+      })
+      .join("; ") ?? "";
+  return messages.length > 0 ? `GitHub GraphQL returned errors: ${messages}` : null;
+}
+
 function getPullRequestReviewThreadsPageInfo(
   raw: Schema.Schema.Type<typeof RawReviewThreadsResponseSchema>,
 ): { hasNextPage: boolean; endCursor: string | null } {
@@ -460,8 +481,10 @@ const makeGitHubCli = Effect.sync(() => {
       Effect.gen(function* () {
         const comments: GitPullRequestComment[] = [];
         let after: string | null = null;
+        let fetchedPages = 0;
 
         do {
+          fetchedPages += 1;
           const args = [
             "api",
             "graphql",
@@ -475,6 +498,8 @@ const makeGitHubCli = Effect.sync(() => {
             `repo=${input.repo}`,
             "-F",
             `number=${input.number}`,
+            "-F",
+            `first=${PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE}`,
             ...(after ? ["-F", `after=${after}`] : []),
           ];
 
@@ -487,10 +512,27 @@ const makeGitHubCli = Effect.sync(() => {
             "getPullRequestReviewComments",
             "GitHub CLI returned invalid review threads JSON.",
           );
-          comments.push(...normalizePullRequestReviewComments(decoded));
+          const errorDetail = getGraphQlErrorDetail(decoded);
+          if (errorDetail) {
+            return yield* Effect.fail(
+              new GitHubCliError({
+                operation: "getPullRequestReviewComments",
+                detail: errorDetail,
+              }),
+            );
+          }
+
+          const remaining = PULL_REQUEST_REVIEW_COMMENT_LIMIT - comments.length;
+          comments.push(...normalizePullRequestReviewComments(decoded).slice(0, remaining));
 
           const pageInfo = getPullRequestReviewThreadsPageInfo(decoded);
-          after = pageInfo.hasNextPage ? pageInfo.endCursor : null;
+          after =
+            pageInfo.hasNextPage &&
+            pageInfo.endCursor !== null &&
+            comments.length < PULL_REQUEST_REVIEW_COMMENT_LIMIT &&
+            fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT
+              ? pageInfo.endCursor
+              : null;
         } while (after !== null);
 
         return comments;

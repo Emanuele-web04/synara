@@ -118,6 +118,15 @@ const FIX_PROMPT_COMMENT_BODY_MAX_LENGTH = 1_500;
 // Keeps the pasted prompt bounded (~30KB worst case) even on PRs with 100 open threads.
 export const FIX_PROMPT_MAX_COMMENTS = 20;
 
+function formatFixPromptCommentHeading(comment: GitPullRequestComment): string {
+  const context = [
+    comment.path ? `on \`${comment.path}\`` : null,
+    comment.url ? `at ${comment.url}` : null,
+    comment.author ? `by ${comment.author}` : null,
+  ].filter((part): part is string => part !== null);
+  return context.length > 0 ? `Comment ${context.join(" ")}` : "Comment";
+}
+
 // The prompt embeds comment bodies directly so the agent does not need `gh` access to act.
 export function buildFixReviewCommentsPrompt(input: {
   prNumber: number;
@@ -130,10 +139,8 @@ export function buildFixReviewCommentsPrompt(input: {
   ].join("\n");
   const included = input.comments.slice(0, FIX_PROMPT_MAX_COMMENTS);
   const items = included.map((comment, index) => {
-    const location = comment.path ? ` on \`${comment.path}\`` : "";
-    const author = comment.author ? ` by ${comment.author}` : "";
     const body = truncate(comment.body.trim(), FIX_PROMPT_COMMENT_BODY_MAX_LENGTH);
-    return `${index + 1}. Comment${location}${author}:\n> ${body.replace(/\n/g, "\n> ")}`;
+    return `${index + 1}. ${formatFixPromptCommentHeading(comment)}:\n> ${body.replace(/\n/g, "\n> ")}`;
   });
   const overflow = input.comments.length - included.length;
   const footer =
