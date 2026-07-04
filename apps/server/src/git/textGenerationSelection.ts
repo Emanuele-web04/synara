@@ -35,3 +35,25 @@ export function resolveTextGenerationInputForSelection(
     ...(providerOptions ? { providerOptions } : {}),
   };
 }
+
+export function buildGitTextGenerationCallInput(input: {
+  readonly textGenerationModel?: string | undefined;
+  readonly textGenerationModelSelection?: ModelSelection | undefined;
+  readonly codexHomePath?: string | undefined;
+  readonly providerOptions?: ProviderStartOptions | undefined;
+}): {
+  readonly model?: string;
+  readonly modelSelection?: ModelSelection;
+  readonly codexHomePath?: string;
+  readonly providerOptions?: ProviderStartOptions;
+} {
+  const modelSelection = input.textGenerationModelSelection;
+  const model = input.textGenerationModel?.trim() || modelSelection?.model;
+
+  return {
+    ...(model ? { model } : {}),
+    ...(modelSelection ? { modelSelection } : {}),
+    ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+    ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+  };
+}

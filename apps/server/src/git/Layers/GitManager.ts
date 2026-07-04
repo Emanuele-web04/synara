@@ -6,6 +6,7 @@ import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitStackedAction,
+  ModelSelection,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import {
@@ -25,6 +26,7 @@ import {
 import { GitCore } from "../Services/GitCore.ts";
 import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
+import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
@@ -73,6 +75,13 @@ interface BranchHeadContext {
   headRepositoryNameWithOwner: string | null;
   headRepositoryOwnerLogin: string | null;
   isCrossRepository: boolean;
+}
+
+interface GitTextGenerationParams {
+  textGenerationModel?: string | undefined;
+  textGenerationModelSelection?: ModelSelection | undefined;
+  codexHomePath?: string | undefined;
+  providerOptions?: ProviderStartOptions | undefined;
 }
 
 interface FailedLocalHandoffRecovery {
@@ -1156,17 +1165,16 @@ export const makeGitManager = Effect.gen(function* () {
       return "main";
     });
 
-  const resolveCommitAndBranchSuggestion = (input: {
-    cwd: string;
-    branch: string | null;
-    commitMessage?: string;
-    codexHomePath?: string;
-    providerOptions?: ProviderStartOptions;
-    /** When true, also produce a semantic feature branch name. */
-    includeBranch?: boolean;
-    filePaths?: readonly string[];
-    model?: string;
-  }) =>
+  const resolveCommitAndBranchSuggestion = (
+    input: {
+      cwd: string;
+      branch: string | null;
+      commitMessage?: string;
+      /** When true, also produce a semantic feature branch name. */
+      includeBranch?: boolean;
+      filePaths?: readonly string[];
+    } & GitTextGenerationParams,
+  ) =>
     Effect.gen(function* () {
       const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
       if (!context) {
@@ -1191,10 +1199,8 @@ export const makeGitManager = Effect.gen(function* () {
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
-          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
-          ...(input.model ? { model: input.model } : {}),
+          ...buildGitTextGenerationCallInput(input),
         })
         .pipe(
           Effect.map((result) => sanitizeCommitMessage(result)),
@@ -1227,9 +1233,7 @@ export const makeGitManager = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
   ) =>
@@ -1259,9 +1263,7 @@ export const makeGitManager = Effect.gen(function* () {
           branch,
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
-          ...(codexHomePath ? { codexHomePath } : {}),
-          ...(providerOptions ? { providerOptions } : {}),
-          ...(model ? { model } : {}),
+          ...(textGenerationParams ?? {}),
         });
       }
       if (!suggestion) {
@@ -1341,9 +1343,7 @@ export const makeGitManager = Effect.gen(function* () {
   const runPrStep = (
     cwd: string,
     fallbackBranch: string | null,
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1394,9 +1394,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
-        ...(model ? { model } : {}),
+        ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 
       const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
@@ -1508,9 +1506,12 @@ export const makeGitManager = Effect.gen(function* () {
     const generated = yield* textGeneration.generateDiffSummary({
       cwd: input.cwd,
       patch,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+      ...buildGitTextGenerationCallInput({
+        textGenerationModel: input.textGenerationModel,
+        textGenerationModelSelection: input.textGenerationModelSelection,
+        codexHomePath: input.codexHomePath,
+        providerOptions: input.providerOptions,
+      }),
     });
 
     return {
@@ -2476,9 +2477,7 @@ The local stash entry was kept for recovery.`,
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     options?: FeatureBranchStepOptions,
   ) =>
     Effect.gen(function* () {
@@ -2487,10 +2486,8 @@ The local stash entry was kept for recovery.`,
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
         includeBranch: true,
-        ...(model ? { model } : {}),
+        ...(textGenerationParams ?? {}),
       });
       if (!suggestion && !options?.allowCommittedHead) {
         return yield* gitManagerError(
@@ -2612,6 +2609,12 @@ The local stash entry was kept for recovery.`,
 
       const runAction = Effect.gen(function* () {
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const textGenerationParams: GitTextGenerationParams = {
+          textGenerationModel: input.textGenerationModel,
+          textGenerationModelSelection: input.textGenerationModelSelection,
+          codexHomePath: input.codexHomePath,
+          providerOptions: input.providerOptions,
+        };
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
           input.action === "push" ||
@@ -2677,9 +2680,7 @@ The local stash entry was kept for recovery.`,
             initialStatus.branch,
             input.commitMessage,
             input.filePaths,
-            input.codexHomePath,
-            input.providerOptions,
-            input.textGenerationModel,
+            textGenerationParams,
             {
               allowCommittedHead: !wantsCommit,
               restoreOriginalBranchRef: committedHeadRestoreRef,
@@ -2704,9 +2705,7 @@ The local stash entry was kept for recovery.`,
                 commitMessageForStep,
                 preResolvedCommitSuggestion,
                 input.filePaths,
-                input.codexHomePath,
-                input.providerOptions,
-                input.textGenerationModel,
+                textGenerationParams,
                 options?.progressReporter,
                 progress.actionId,
               );
@@ -2741,13 +2740,7 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(
-                      input.cwd,
-                      currentBranch,
-                      input.codexHomePath,
-                      input.providerOptions,
-                      input.textGenerationModel,
-                    );
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
                   }),
                 ),
               )

@@ -773,6 +773,19 @@ export function getAppModelOptions(
   return options;
 }
 
+type GitTextGenerationDiscoveredProvider = "codex" | "kilo" | "opencode";
+
+export function mapCatalogModelOptionsToAppModelOptions(
+  provider: GitTextGenerationDiscoveredProvider,
+  options: ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>,
+): AppModelOption[] {
+  return options.map((option) => ({
+    ...option,
+    provider,
+    isCustom: option.isCustom ?? false,
+  }));
+}
+
 export function getGitTextGenerationModelOptions(
   settings: Pick<
     AppSettings,
@@ -782,11 +795,23 @@ export function getGitTextGenerationModelOptions(
     | "textGenerationModel"
     | "textGenerationProvider"
   >,
+  discoveredOptionsByProvider?: Partial<
+    Record<
+      GitTextGenerationDiscoveredProvider,
+      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
+    >
+  >,
 ): AppModelOption[] {
   const options = [
-    ...getAppModelOptions("codex", settings.customCodexModels),
-    ...getAppModelOptions("kilo", settings.customKiloModels),
-    ...getAppModelOptions("opencode", settings.customOpenCodeModels),
+    ...(discoveredOptionsByProvider?.codex
+      ? mapCatalogModelOptionsToAppModelOptions("codex", discoveredOptionsByProvider.codex)
+      : getAppModelOptions("codex", settings.customCodexModels)),
+    ...(discoveredOptionsByProvider?.kilo
+      ? mapCatalogModelOptionsToAppModelOptions("kilo", discoveredOptionsByProvider.kilo)
+      : getAppModelOptions("kilo", settings.customKiloModels)),
+    ...(discoveredOptionsByProvider?.opencode
+      ? mapCatalogModelOptionsToAppModelOptions("opencode", discoveredOptionsByProvider.opencode)
+      : getAppModelOptions("opencode", settings.customOpenCodeModels)),
   ];
   const deduped: AppModelOption[] = [];
   const seen = new Set<string>();
