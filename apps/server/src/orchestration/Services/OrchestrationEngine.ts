@@ -19,7 +19,10 @@ import { ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
-import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type {
+  OrchestrationEventStoreError,
+  ProjectionRepositoryError,
+} from "../../persistence/Errors.ts";
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -65,6 +68,16 @@ export interface OrchestrationEngineShape {
   readonly repairState: () => Effect.Effect<
     OrchestrationReadModel,
     OrchestrationDispatchError | OrchestrationEventStoreError,
+    never
+  >;
+
+  /**
+   * Reload the command-facing read model from projection tables after
+   * maintenance code mutates projection state outside the command queue.
+   */
+  readonly refreshCommandReadModel: () => Effect.Effect<
+    OrchestrationReadModel,
+    OrchestrationDispatchError | ProjectionRepositoryError,
     never
   >;
 

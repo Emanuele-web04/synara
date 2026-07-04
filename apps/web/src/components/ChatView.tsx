@@ -5281,7 +5281,9 @@ export default function ChatView({
   const beginLocalDispatch = useCallback(
     (options?: { worktreeSetupStepId?: WorktreeSetupStepId }) => {
       setLocalDispatch((current) => {
-        const next = resolveNextLocalDispatchSnapshot({ current, activeThread, options });
+        const next = resolveNextLocalDispatchSnapshot(
+          options ? { current, activeThread, options } : { current, activeThread },
+        );
         if (next !== current) {
           failedWorktreeSetupDispatchStartedAtRef.current = null;
         }

@@ -26,6 +26,7 @@ import { ServerAuthPolicyLive } from "./auth/Layers/ServerAuthPolicy";
 import { ServerSecretStoreLive } from "./auth/Layers/ServerSecretStore";
 import { SessionCredentialServiceLive } from "./auth/Layers/SessionCredentialService";
 import { ProfileStatsQueryLive } from "./profileStats";
+import { ProfileStatsArchiveLive } from "./profileStatsArchive";
 import { ServerLifecycleEventsLive } from "./serverLifecycleEvents";
 import { ServerRuntimeStartupLive } from "./serverRuntimeStartup";
 import { ServerSettingsLive } from "./serverSettings";
@@ -63,12 +64,16 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
+    Layer.provideMerge(checkpointStoreLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
   );
   const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
+    Layer.provideMerge(profileStatsArchiveLayer),
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );
@@ -115,6 +120,7 @@ export function makeServerRuntimeServicesLayer() {
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    AutomationRepositoryLive,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

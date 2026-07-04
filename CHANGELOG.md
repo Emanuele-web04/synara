@@ -1,5 +1,45 @@
 # Changelog
 
+## 0.3.8 - 2026-07-03
+
+### Added
+
+- Added ACP/Grok resume and compaction hardening so resumed sessions drop unsafe replay before consumers attach, seed quiet windows from response timing, and avoid memory-heavy replay loops.
+- Added explicit worktree setup progress/failure state in local dispatch snapshots, transcript rows, and browser coverage.
+- Added automation dispatch-origin persistence and a "Sent via Automation" transcript label for scheduled and heartbeat-triggered user turns.
+- Added approval panel browser coverage for allow/deny decisions and shared choice-row presentation for pending approvals.
+- Added focused tests for collapsed transcript work-duration grouping, failed worktree setup reset behavior, session lifecycle handling, provider/runtime ingestion, and profile/sidebar presentation helpers.
+
+### Changed
+
+- Bumped Synara release package versions to `0.3.8` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Refined ACP session runtime and Grok adapter handling around resume replay, compaction, JSON-RPC ordering, provider runtime ingestion, and provider service session state.
+- Refined worktree setup timeline rendering so setup rows expose active/failed/done state more predictably and failed local dispatches clear on the next send.
+- Reworked pending approval UI around the shared `ComposerChoiceRow` structure, trimming duplicate action styling and aligning it with pending input panels.
+- Gated Claude credential keepalive/startup refresh behavior and refined provider usage/query invalidation paths so app startup does less surprise provider work.
+- Refined transcript, sidebar, profile stats, share-card, and timeline-height logic around dispatch origins and folded work rows.
+
+### Fixed
+
+- Fixed Grok/ACP resume replay ordering that could attach replay before the event consumer and make resumed or compacted sessions unstable.
+- Fixed failed worktree setup dispatch state lingering into a new local turn instead of resetting when the user sends again.
+- Fixed collapsed turn "Worked for" timing so folded transcript segments report a duration spanning the whole folded section.
+- Fixed automation-origin turns missing a durable transcript projection marker.
+- Fixed a release-gate `exactOptionalPropertyTypes` error in `apps/web/src/components/ChatView.tsx` by omitting the optional dispatch `options` property when there is no worktree setup step.
+- Fixed backend Node option handling around unsupported `--js-flags` forwarding while keeping covered desktop startup behavior.
+
+### Verification
+
+- `bun run fmt:check` passed across 1518 files.
+- `bun run lint` passed with 162 warnings, 0 errors.
+- Initial `bun run typecheck` failed in `@t3tools/web` on `apps/web/src/components/ChatView.tsx` because `beginLocalDispatch` passed an explicit `options: undefined` into an exact-optional helper; after the targeted fix, `bun run typecheck` passed across all 8 packages with the existing TS44 informational JSON/schema-preference messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
+- `bun run build` passed: 6 tasks successful in 23.921s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, Rolldown/Babel plugin timing, and large Vite chunk warnings.
+- Initial full `bun run test` failed in `@t3tools/web` with one timeout: `apps/web/src/components/ChatMarkdown.test.tsx > ChatMarkdown > uses the theme foreground token for markdown text`. No stale duplicate test processes were present; the targeted rerun `bun run test src/components/ChatMarkdown.test.tsx -t "uses the theme foreground token for markdown text"` from `apps/web` passed in 1.01s.
+- Final full `bun run test` passed: 10 tasks successful in 9m28.476s. `@t3tools/web` passed 193 files / 2308 tests, `t3` passed 140 files with 1 skipped file, 1547 passed tests, and 6 skipped tests.
+- `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.3.8`, and `npm run lint` passed.
+
 ## 0.3.7 - 2026-07-02
 
 ### Added

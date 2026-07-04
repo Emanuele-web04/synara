@@ -943,7 +943,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       className={cn(
         CHAT_COLUMN_FRAME_CLASS_NAME,
         "px-1 transition-colors duration-500",
-        row.kind === "work" || (row.kind === "message" && row.message.role === "assistant")
+        row.kind === "work" ||
+          row.kind === "working-header" ||
+          (row.kind === "message" && row.message.role === "assistant")
           ? "pb-2"
           : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -1761,23 +1763,32 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         </div>
       )}
 
+      {row.kind === "working-header" && (
+        <div>
+          {/* Non-collapsible twin of the settled "Worked for" header: same label
+              tone, size, and full-width divider, but counting up live. -ml-0.5
+              optically aligns the leading "W" with the reply text below. */}
+          <div
+            className="-ml-0.5 pb-2 text-muted-foreground/70"
+            style={{ fontSize: chatTypographyStyle.fontSize }}
+          >
+            Working for{" "}
+            {nowIso ? (
+              (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
+            ) : (
+              <WorkingTimer createdAt={row.createdAt} />
+            )}
+          </div>
+          <div className="h-px w-full bg-border" />
+        </div>
+      )}
+
       {row.kind === "working" && (
         <div
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          {row.createdAt ? (
-            <>
-              Working for{" "}
-              {nowIso ? (
-                (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
-              ) : (
-                <WorkingTimer createdAt={row.createdAt} />
-              )}
-            </>
-          ) : (
-            "Working..."
-          )}
+          Thinking
         </div>
       )}
 

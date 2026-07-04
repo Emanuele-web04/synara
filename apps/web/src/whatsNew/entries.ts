@@ -22,18 +22,56 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
-    // Next release: 0.3.7 already shipped, so features landing now go here — a
-    // late addition to a released version would never re-open the dialog.
     version: "0.3.8",
-    date: "Jul 2",
+    date: "Jul 3",
     features: [
       {
+        id: "grok-resume-replay-resilience",
+        title: "Grok resume handles long sessions more safely",
+        description:
+          "Grok and other ACP-backed sessions are better at resuming after compaction or reconnects without replaying messages into the wrong runtime or growing memory unexpectedly.",
+        details:
+          "ACP resume now drops replay before the event consumer is attached, seeds compaction quiet windows from response timing, hardens provider/runtime ingestion, and covers JSON-RPC/session-runtime edge cases that previously made resume replay fragile.",
+      },
+      {
+        id: "worktree-setup-status",
+        title: "Worktree setup failures recover cleanly",
+        description:
+          "When a worktree setup step fails, Synara now shows the failed setup state, keeps the timeline from looking stuck, and resets the local dispatch when you send again.",
+        details:
+          "ChatView and timeline setup snapshots now carry explicit setup step status, targeted cleanup for failed local dispatches, and focused browser/unit coverage for new-turn reset and setup rows.",
+      },
+      {
         id: "automation-sent-label",
-        title: "⏱ Automation messages are labeled",
+        title: "Automation messages are labeled",
         description:
           "Prompts sent by an automation now carry a lightweight 'Sent via Automation' label above the bubble, so you can tell at a glance which turns you typed and which a scheduled or heartbeat run kicked off.",
         details:
           "User turns dispatched by the automation engine now persist a `dispatchOrigin` on the message end to end (command → event → projection → snapshot), and the transcript renders a clock-marked chip that mirrors the existing steering label.",
+      },
+      {
+        id: "approval-choice-polish",
+        title: "Approval prompts are easier to answer",
+        description:
+          "Pending approvals now use a clearer shared choice-row layout, with steadier panel behavior and browser coverage for allow/deny decisions.",
+        details:
+          "ComposerPendingApprovalPanel now shares ComposerChoiceRow structure with pending inputs, tracks decision actions in browser tests, and trims duplicated action styling.",
+      },
+      {
+        id: "startup-keepalive-gating",
+        title: "Startup does less surprise work",
+        description:
+          "Synara avoids unnecessary provider refresh work during startup and gates Claude keepalive behavior more carefully, so opening the app is calmer and less likely to fight credential checks.",
+        details:
+          "Server startup no longer runs provider refresh eagerly, Claude keepalive respects auth-state timing, provider usage hooks handle inactive summaries more predictably, and related settings/server query invalidation paths have tests.",
+      },
+      {
+        id: "collapsed-work-timing",
+        title: "Folded work rows report time more accurately",
+        description:
+          "Collapsed transcript segments now show a 'Worked for' duration that spans the whole folded section, not just a single row inside it.",
+        details:
+          "Timeline duration grouping now tracks folded row boundaries and tests the aggregate timing behavior so compact transcripts better match what actually happened.",
       },
     ],
   },
