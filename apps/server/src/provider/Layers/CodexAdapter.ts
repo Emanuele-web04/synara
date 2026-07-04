@@ -64,6 +64,7 @@ import {
   extractCodexGeneratedImageReference,
   firstStringValue,
   isCodexGeneratedImageItemType,
+  resolveCodexHomePath,
   sanitizeNestedCodexGeneratedImagePayloads,
 } from "../../codexGeneratedImages.ts";
 import {
@@ -2278,6 +2279,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
     const listSessions: CodexAdapterShape["listSessions"] = () =>
       Effect.sync(() => manager.listSessions());
 
+    const listGeneratedImageHomePaths: NonNullable<
+      CodexAdapterShape["listGeneratedImageHomePaths"]
+    > = () =>
+      Effect.sync(() => {
+        const homePaths = new Set<string>();
+        for (const session of manager.listSessions()) {
+          homePaths.add(resolveCodexHomePath(manager.getSessionCodexOptions(session.threadId)));
+        }
+        return [...homePaths];
+      });
+
     const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
       Effect.sync(() => manager.hasSession(threadId));
 
@@ -2564,6 +2576,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       respondToUserInput,
       stopSession,
       listSessions,
+      listGeneratedImageHomePaths,
       hasSession,
       stopAll,
       getComposerCapabilities,

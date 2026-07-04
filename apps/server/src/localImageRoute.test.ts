@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeHttpServer from "@effect/platform-node/NodeHttpServer";
-import { DateTime, Effect, Exit, Layer, Scope } from "effect";
+import { DateTime, Effect, Exit, Layer, Scope, Stream } from "effect";
 import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -22,6 +22,9 @@ import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http"
 import { createLocalPreviewGrant } from "./localImageFiles";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
+import type { ProviderAdapterError } from "./provider/Errors.ts";
+import type { ProviderAdapterShape } from "./provider/Services/ProviderAdapter.ts";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry.ts";
 
 const tempDirs: string[] = [];
 
@@ -115,13 +118,54 @@ function makeFakeServerAuth(): ServerAuthShape {
   } satisfies ServerAuthShape;
 }
 
+function makeGeneratedImageHomeRegistry(
+  homePaths: readonly string[],
+): typeof ProviderAdapterRegistry.Service {
+  const adapter: ProviderAdapterShape<ProviderAdapterError> = {
+    provider: "codex",
+    capabilities: { sessionModelSwitch: "in-session" },
+    startSession: () => Effect.die("unused"),
+    sendTurn: () => Effect.die("unused"),
+    interruptTurn: () => Effect.void,
+    respondToRequest: () => Effect.void,
+    respondToUserInput: () => Effect.void,
+    stopSession: () => Effect.void,
+    listSessions: () => Effect.succeed([]),
+    listGeneratedImageHomePaths: () => Effect.succeed(homePaths),
+    hasSession: () => Effect.succeed(false),
+    readThread: () => Effect.die("unused"),
+    rollbackThread: () => Effect.die("unused"),
+    stopAll: () => Effect.void,
+    streamEvents: Stream.empty,
+  };
+  return {
+    getByProvider: () => Effect.succeed(adapter),
+    listProviders: () => Effect.succeed(["codex"]),
+  };
+}
+
 async function withEffectServer(
   config: ServerConfigShape,
   routeLayer: typeof localImageEffectRouteLayer | typeof attachmentsEffectRouteLayer,
   run: (origin: string) => Promise<void>,
+  options: { readonly providerRegistry?: typeof ProviderAdapterRegistry.Service } = {},
 ): Promise<void> {
   const scope = await Effect.runPromise(Scope.make("sequential"));
   let nodeServer: http.Server | null = null;
+  const servicesLayer = options.providerRegistry
+    ? Layer.mergeAll(
+        Layer.succeed(ServerConfig, config),
+        Layer.succeed(ServerAuth, makeFakeServerAuth()),
+        Layer.succeed(ProviderAdapterRegistry, options.providerRegistry),
+        ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+        NodeHttpServer.layerHttpServices,
+      )
+    : Layer.mergeAll(
+        Layer.succeed(ServerConfig, config),
+        Layer.succeed(ServerAuth, makeFakeServerAuth()),
+        ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+        NodeHttpServer.layerHttpServices,
+      );
   try {
     await Effect.runPromise(
       Scope.provide(
@@ -137,16 +181,7 @@ async function withEffectServer(
             ? HttpRouter.toHttpEffect(localImageEffectRouteLayer)
             : HttpRouter.toHttpEffect(attachmentsEffectRouteLayer);
           yield* httpServer.serve(httpApp);
-        }).pipe(
-          Effect.provide(
-            Layer.mergeAll(
-              Layer.succeed(ServerConfig, config),
-              Layer.succeed(ServerAuth, makeFakeServerAuth()),
-              ManagedAttachmentRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-              NodeHttpServer.layerHttpServices,
-            ),
-          ),
-        ),
+        }).pipe(Effect.provide(servicesLayer)),
         scope,
       ),
     );
@@ -341,6 +376,30 @@ describe("localImageEffectRouteLayer", () => {
       const response = await fetch(`${origin}/api/local-image?${params}`);
       expect(response.status).toBe(404);
     });
+  });
+
+  it("serves generated images from live Codex session homes after settings drift", async () => {
+    const workspace = makeTempDir("dpcode-effect-image-live-session-workspace-");
+    writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
+    const liveCodexHome = makeTempDir("dpcode-live-codex-home-");
+    const generatedDir = path.join(liveCodexHome, "generated_images", "thread-live");
+    mkdirSync(generatedDir, { recursive: true });
+    const imagePath = path.join(generatedDir, "call-live.png");
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const config = makeServerConfig({ cwd: workspace });
+
+    await withEffectServer(
+      config,
+      localImageEffectRouteLayer,
+      async (origin) => {
+        const params = new URLSearchParams({ path: imagePath, cwd: workspace });
+        const response = await fetch(`${origin}/api/local-image?${params}`);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get("content-type")).toContain("image/png");
+      },
+      { providerRegistry: makeGeneratedImageHomeRegistry([liveCodexHome]) },
+    );
   });
 
   it("returns 404 for missing files", async () => {
