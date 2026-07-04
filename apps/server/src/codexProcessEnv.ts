@@ -670,9 +670,12 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
   readonly appendConfigToml?: string;
 }): Promise<string | undefined> {
   const sourceHomePath = resolveBaseCodexHomePath(input.env, input.homePath);
-  // An explicitly configured home is the account's own home; private state may
-  // mirror it. Env-derived homes are shared and must never leak private state.
-  const hasDedicatedAccountHome = Boolean(input.homePath?.trim());
+  // A genuinely distinct explicit home belongs to the account and may mirror
+  // private state. Repeating the shared CODEX_HOME explicitly must not turn it
+  // into an account-owned home or leak the default account's credentials.
+  const hasDedicatedAccountHome =
+    Boolean(input.homePath?.trim()) &&
+    path.resolve(sourceHomePath) !== path.resolve(resolveBaseCodexHomePath(input.env));
   const shadowHomePath = input.shadowHomePath
     ? resolveBaseCodexHomePath(input.env, input.shadowHomePath)
     : undefined;
