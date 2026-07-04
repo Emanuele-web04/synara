@@ -7263,6 +7263,76 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("does not reuse stale provider options when the configured title fallback is gone", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: "antigravity",
+        model: "auto-gemini-3",
+      },
+      serverSettings: {
+        textGenerationModelSelection: {
+          instanceId: "codex_removed_textgen",
+          model: "gpt-5-codex",
+        },
+        providers: {
+          codex: { enabled: false },
+          claudeAgent: { enabled: false },
+          cursor: { enabled: false },
+          antigravity: { enabled: false },
+          opencode: { enabled: false },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-title-missing-fallback"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New thread",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-missing-fallback-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-missing-fallback-title-1"),
+          role: "user",
+          text: "Summarize provider startup failures without Codex",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: "antigravity",
+          model: "auto-gemini-3",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"))?.title ===
+        "Summarize provider startup failures without Codex"
+      );
+    });
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
+  });
+
   it("uses a local fallback title when configured text generation fails", async () => {
     const harness = await createHarness({
       threadModelSelection: {
@@ -7308,6 +7378,107 @@ describe("ProviderCommandReactor", () => {
         "Summarize provider startup failures without Codex",
     );
     expect(harness.generateThreadTitle).toHaveBeenCalledTimes(1);
+  });
+
+  it("merges live provider instance options before first-turn title generation", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        instanceId: "opencode_work",
+        model: "openai/gpt-5",
+      },
+      serverSettings: {
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            enabled: true,
+            environment: [
+              { name: "OPENCODE_API_KEY", value: "live-opencode-key", sensitive: true },
+            ],
+            config: {
+              serverUrl: "http://127.0.0.1:5099",
+              serverPassword: "live-opencode-password",
+            },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+    harness.generateThreadTitle.mockImplementation(() =>
+      Effect.succeed({
+        title: "Plan release work",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-opencode-title-options"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "opencode",
+          providerInstanceId: "opencode_work",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-title-opencode-live-options"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        title: "New thread",
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-opencode-live-options-title"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-opencode-live-options-title-1"),
+          role: "user",
+          text: "Plan the release workflow and deployment checklist",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: "opencode_work",
+          model: "openai/gpt-5",
+        },
+        providerOptions: {
+          opencode: {
+            serverUrl: "http://127.0.0.1:4096",
+            serverPassword: "stale-opencode-password",
+            environment: {
+              OPENCODE_API_KEY: "stale-opencode-key",
+            },
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0]).toMatchObject({
+      providerOptions: {
+        opencode: {
+          serverUrl: "http://127.0.0.1:5099",
+          serverPassword: "live-opencode-password",
+          environment: {
+            OPENCODE_API_KEY: "live-opencode-key",
+          },
+        },
+      },
+    });
   });
 
   it("renames temporary worktree branches and keeps associated worktree metadata in sync", async () => {

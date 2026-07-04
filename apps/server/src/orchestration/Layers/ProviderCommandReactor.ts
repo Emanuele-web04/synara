@@ -1248,23 +1248,22 @@ const make = Effect.gen(function* () {
       ? thread.session.providerName
       : undefined;
     let selectionProviderOptions = providerOptions;
-    if (!selectionProvider && modelSelection) {
-      // Fresh threads have no session bound yet (first-turn worktree branch
-      // naming runs before startSession), so route by the selection's
-      // provider instance instead of skipping AI text generation entirely.
+    if (modelSelection) {
       const settings = yield* serverSettings.getSettings;
       const instance = resolveProviderInstance(settings, {
         instanceId: resolveModelSelectionInstanceId(modelSelection),
       });
       if (instance) {
-        selectionProvider = instance.driver;
+        selectionProvider ??= instance.driver;
         // Client-supplied options never carry redacted per-instance
         // environment/secrets, so the server-side instance options must win
-        // (same "instance" precedence startSession applies later).
-        selectionProviderOptions = mergeProviderStartOptions(
-          providerOptions,
-          providerStartOptionsFromInstance(instance),
-        );
+        // whenever the selected instance matches the routed provider.
+        if (selectionProvider === instance.driver) {
+          selectionProviderOptions = mergeProviderStartOptions(
+            providerOptions,
+            providerStartOptionsFromInstance(instance),
+          );
+        }
       }
     }
     const threadTextGenerationInput = resolveTextGenerationInputForSelection(
@@ -1279,19 +1278,27 @@ const make = Effect.gen(function* () {
     // Non-generating chat providers still get AI titles via the configured git-writing model.
     // Skip the configured fallback when its provider is currently unavailable.
     const settings = yield* serverSettings.getSettings;
+    const fallbackInstance = resolveProviderInstance(settings, {
+      provider: settings.textGenerationModelSelection.provider,
+      instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+    });
+    if (!fallbackInstance) {
+      return null;
+    }
     const statuses = yield* providerHealth.getStatuses;
-    const selectedProviderInstanceId = resolveModelSelectionInstanceId(
-      settings.textGenerationModelSelection,
-    );
+    const selectedProviderInstanceId = fallbackInstance.instanceId;
     const fallbackStatus = statuses.find(
       (status) =>
-        (status.driver ?? status.provider) === settings.textGenerationModelSelection.provider &&
+        (status.driver ?? status.provider) === fallbackInstance.driver &&
         (status.instanceId ?? status.provider) === selectedProviderInstanceId,
     );
     if (fallbackStatus && !fallbackStatus.available) {
       return null;
     }
-    return yield* resolveConfiguredTextGenerationInput();
+    return resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      providerStartOptionsFromInstance(fallbackInstance),
+    );
   });
 
   const appendProviderFailureActivity = (input: {
