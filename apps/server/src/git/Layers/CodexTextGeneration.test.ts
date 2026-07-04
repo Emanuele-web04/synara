@@ -1,8 +1,14 @@
+import { symlinkSync } from "node:fs";
+
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path } from "effect";
 import { expect } from "vitest";
 
+import {
+  resolveCodexHomeOverlayAccountSegment,
+  resolveDpCodeCodexHomeOverlayPath,
+} from "../../codexHomePaths.ts";
 import { ServerConfig } from "../../config.ts";
 import { CodexTextGenerationLive } from "./CodexTextGeneration.ts";
 import { TextGenerationError } from "../Errors.ts";
@@ -915,6 +921,73 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
           path.join(sharedCodexHome, "auth.json"),
           '{"access_token":"default-account"}',
         );
+        const previousCodexHome = process.env.CODEX_HOME;
+        process.env.CODEX_HOME = sharedCodexHome;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (previousCodexHome === undefined) {
+              delete process.env.CODEX_HOME;
+            } else {
+              process.env.CODEX_HOME = previousCodexHome;
+            }
+          }),
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: {
+              accountId: "work",
+            },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not copy symlinked account-overlay auth into text-generation homes", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({
+          subject: "Add important change",
+          body: "",
+        }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shared-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+
+        const accountSegment = resolveCodexHomeOverlayAccountSegment({
+          homePath: sharedCodexHome,
+          accountId: "work",
+        });
+        expect(accountSegment).toBeDefined();
+        const accountOverlayHome = resolveDpCodeCodexHomeOverlayPath(
+          process.env,
+          sharedCodexHome,
+          accountSegment,
+        );
+        yield* fs.makeDirectory(accountOverlayHome, { recursive: true });
+        symlinkSync(
+          path.join(sharedCodexHome, "auth.json"),
+          path.join(accountOverlayHome, "auth.json"),
+        );
+
         const previousCodexHome = process.env.CODEX_HOME;
         process.env.CODEX_HOME = sharedCodexHome;
         yield* Effect.addFinalizer(() =>

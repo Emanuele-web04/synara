@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { lstat } from "node:fs/promises";
 
 import { Effect, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -181,6 +182,23 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const safeRemoveDirectory = (directoryPath: string): Effect.Effect<void, never> =>
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
+  const readRealAuthFile = (authFilePath: string): Effect.Effect<string | null, never> =>
+    Effect.gen(function* () {
+      const fileInfo = yield* Effect.promise(async () => {
+        try {
+          return await lstat(authFilePath);
+        } catch {
+          return null;
+        }
+      });
+      if (!fileInfo || fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
+        return null;
+      }
+      return yield* fileSystem
+        .readFileString(authFilePath)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+    });
+
   const prepareIsolatedCodexHome = (
     operation: TextGenerationOperation,
     sourceHomePath?: string,
@@ -267,9 +285,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
         ];
         const sourceAuth = yield* Effect.gen(function* () {
           for (const authHome of authHomeCandidates) {
-            const content = yield* fileSystem
-              .readFileString(path.join(authHome, "auth.json"))
-              .pipe(Effect.catch(() => Effect.succeed(null)));
+            const content = yield* readRealAuthFile(path.join(authHome, "auth.json"));
             if (content !== null) {
               return content;
             }
