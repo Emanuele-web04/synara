@@ -22,6 +22,60 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.3.9",
+    date: "Jul 5",
+    features: [
+      {
+        id: "thread-export-zip",
+        title: "Export a thread as a ZIP",
+        description:
+          "Type `/export` in a saved, idle chat to download a portable archive with the full thread projection and a readable Markdown transcript.",
+        details:
+          "The export route streams `thread.json` and `transcript.md` through the server with shared eligibility checks, desktop-friendly CORS/error handling, large-thread history hydration, and browser download support from both typed slash commands and the command menu.",
+      },
+      {
+        id: "archived-profile-stats",
+        title: "Archived stats survive cleanup",
+        description:
+          "Deleting or purging old threads no longer erases their lifetime contribution to profile stats, so cleanup keeps your usage history intact.",
+        details:
+          "Thread deletion now snapshots profile aggregates before purging rows, merges archived stats back into profile queries, preserves command receipts, cleans checkpoint refs carefully, and includes a migration plus purge/retention regression coverage.",
+      },
+      {
+        id: "active-turn-working-header",
+        title: "Active turns show steady work timing",
+        description:
+          "While an agent is working, the transcript now keeps a stable 'Working for' header at the top of the active turn instead of relying only on a transient shimmer row.",
+        details:
+          "MessagesTimeline now inserts a stable active-turn header for duration display while preserving the existing setup shimmer, making live turns easier to scan and less jumpy during layout updates.",
+      },
+      {
+        id: "terminal-shutdown-escalation",
+        title: "Terminal shutdown is more reliable",
+        description:
+          "Synara is better at shutting down stubborn terminal process trees without returning early while child processes are still alive.",
+        details:
+          "TerminalManager now routes shutdown through a dedicated process-tree killer with SIGTERM-to-SIGKILL escalation, cancellation when processes exit cleanly, nested process activity coverage, and tests for disposal timing.",
+      },
+      {
+        id: "acp-resume-message-ids",
+        title: "Resumed ACP replies stay distinct",
+        description:
+          "ACP-backed sessions are less likely to lose assistant replies after a restart or resume because fallback assistant message IDs no longer collide across runtime instances.",
+        details:
+          "A per-runtime instance ID is included in fallback ACP assistant item IDs, preventing resumed sessions with the same provider session ID and segment index from overwriting earlier transcript messages.",
+      },
+      {
+        id: "git-writing-model-picker",
+        title: "Git writing respects OpenCode and Kilo models",
+        description:
+          "Git commit, diff summary, and PR text generation now honor runtime-discovered OpenCode and Kilo model selections from Settings.",
+        details:
+          "Settings now persists discovered Git-writing model options, git actions pass the chosen provider/model through the shared contracts, and query cache keys include the text-generation selection so generated commit/PR text routes to the intended backend.",
+      },
+    ],
+  },
+  {
     version: "0.3.8",
     date: "Jul 3",
     features: [
