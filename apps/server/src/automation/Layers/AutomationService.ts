@@ -121,6 +121,14 @@ function providerOptionsForSelectedInstance(
   return instanceOptions && hasProviderStartOptions(instanceOptions) ? instanceOptions : undefined;
 }
 
+function resolveEnabledProviderInstance(
+  settings: ServerSettings,
+  input: Parameters<typeof resolveProviderInstance>[1],
+): ResolvedProviderInstance | null {
+  const instance = resolveProviderInstance(settings, input);
+  return instance?.enabled ? instance : null;
+}
+
 export function resolveAutomationDefinitionProviderOptionsForSettings(
   definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
   settings: ServerSettings,
@@ -129,7 +137,7 @@ export function resolveAutomationDefinitionProviderOptionsForSettings(
   if (!definition.modelSelection) {
     return definition.providerOptions;
   }
-  const selectionInstance = resolveProviderInstance(settings, {
+  const selectionInstance = resolveEnabledProviderInstance(settings, {
     instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
   });
   return selectionInstance ? providerOptionsForSelectedInstance(selectionInstance) : undefined;
@@ -153,6 +161,13 @@ function resolveAutomationTurnProviderOptionsForSettings(
       }),
     );
   }
+  if (!selectionInstance.enabled) {
+    return Effect.fail(
+      new AutomationServiceError({
+        message: `Automation provider instance '${selectionInstanceId}' is disabled.`,
+      }),
+    );
+  }
   return Effect.succeed(providerOptionsForSelectedInstance(selectionInstance));
 }
 
@@ -163,7 +178,7 @@ export function resolveAutomationCompletionTextGenerationInputForSettings(
   // Stored definitions can outlive provider-instance edits, so completion
   // evaluation launch options come from the live settings snapshot.
   const selectionInstance = definition.modelSelection
-    ? resolveProviderInstance(settings, {
+    ? resolveEnabledProviderInstance(settings, {
         instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
       })
     : null;
@@ -182,7 +197,7 @@ export function resolveAutomationCompletionTextGenerationInputForSettings(
     return directInput;
   }
 
-  const fallbackInstance = resolveProviderInstance(settings, {
+  const fallbackInstance = resolveEnabledProviderInstance(settings, {
     instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
   });
   const fallbackProviderOptions = fallbackInstance
