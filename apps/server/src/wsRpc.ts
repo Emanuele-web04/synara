@@ -804,6 +804,7 @@ const makeWsRpcHandlersLayer = () =>
         projectionSnapshotQuery: projectionReadModelQuery,
         providerAdapterRegistry,
         providerService,
+        serverConfig: config,
         serverSettings,
       });
       const projectImports = makeProjectImportHandlers({

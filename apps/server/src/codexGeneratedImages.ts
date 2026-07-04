@@ -20,6 +20,7 @@ import {
 } from "@synara/shared/providerInstances";
 
 import {
+  type CodexHomePathsInput,
   resolveActiveCodexHomeWritePath,
   resolveCodexHomeAllowlistCandidates,
 } from "./codexHomePaths.ts";
@@ -87,22 +88,50 @@ export interface CodexGeneratedImageHomeContext {
   readonly environment?: Readonly<Record<string, string>> | undefined;
 }
 
+export type CodexGeneratedImageHomeCandidate = string | CodexGeneratedImageHomeContext;
+
+const CODEX_HOME_CONTEXT_ENV_KEYS = [
+  "CODEX_HOME",
+  "SYNARA_HOME",
+] as const;
+
+function codexHomePathsInputFromContext(
+  codexHome?: CodexGeneratedImageHomeCandidate,
+): CodexHomePathsInput {
+  const context: CodexGeneratedImageHomeContext =
+    typeof codexHome === "string" ? { homePath: codexHome } : (codexHome ?? {});
+  return {
+    ...(context.homePath?.trim() ? { homePath: context.homePath } : {}),
+    ...(context.shadowHomePath?.trim() ? { shadowHomePath: context.shadowHomePath } : {}),
+    ...(context.accountId?.trim() ? { accountId: context.accountId } : {}),
+    // The child runs with the instance environment layered over the server's,
+    // so the write-home decision must see the same merged view.
+    ...(context.environment ? { env: { ...process.env, ...context.environment } } : {}),
+  };
+}
+
+function codexHomeCandidateKey(candidate: CodexGeneratedImageHomeCandidate): string {
+  if (typeof candidate === "string") {
+    return `path:${candidate.trim()}`;
+  }
+  const envKey = CODEX_HOME_CONTEXT_ENV_KEYS.map(
+    (key) => `${key}=${candidate.environment?.[key] ?? ""}`,
+  ).join("\0");
+  return JSON.stringify([
+    candidate.homePath?.trim() ?? "",
+    candidate.shadowHomePath?.trim() ?? "",
+    candidate.accountId?.trim() ?? "",
+    envKey,
+  ]);
+}
+
 /**
  * Resolves the home directory the codex app-server child process actually
  * writes images under for the current process env. Synara uses its isolated
  * Codex overlay, not the user's source `~/.codex` directory.
  */
 export function resolveCodexHomePath(codexHome?: string | CodexGeneratedImageHomeContext): string {
-  const context: CodexGeneratedImageHomeContext =
-    typeof codexHome === "string" ? { homePath: codexHome } : (codexHome ?? {});
-  return resolveActiveCodexHomeWritePath({
-    ...(context.homePath?.trim() ? { homePath: context.homePath } : {}),
-    ...(context.shadowHomePath?.trim() ? { shadowHomePath: context.shadowHomePath } : {}),
-    ...(context.accountId?.trim() ? { accountId: context.accountId } : {}),
-    // The child runs with the instance environment layered over the server's,
-    // so overlay prediction must see the same merged view.
-    ...(context.environment ? { env: { ...process.env, ...context.environment } } : {}),
-  });
+  return resolveActiveCodexHomeWritePath(codexHomePathsInputFromContext(codexHome));
 }
 
 /** The single generated-images directory we predict against (overlay-aware). */
@@ -117,46 +146,44 @@ export function resolveCodexGeneratedImagesRoot(
  * dedicated homes). Dedicated homes anchor their own overlay roots, so the
  * local-image route must enumerate them to allowlist those accounts' images.
  */
-export function codexConfiguredHomePathsFromSettings(settings: ServerSettings): readonly string[] {
-  const homePaths = new Set<string>();
+export function codexConfiguredHomePathsFromSettings(
+  settings: ServerSettings,
+): readonly CodexGeneratedImageHomeCandidate[] {
+  const candidates = new Map<string, CodexGeneratedImageHomeCandidate>();
+  const addCandidate = (candidate: CodexGeneratedImageHomeCandidate | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    if (typeof candidate === "string" && !candidate.trim()) {
+      return;
+    }
+    candidates.set(codexHomeCandidateKey(candidate), candidate);
+  };
+
   const defaultHomePath = settings.providers.codex.homePath?.trim();
   if (defaultHomePath) {
-    homePaths.add(defaultHomePath);
+    addCandidate(defaultHomePath);
   }
   for (const instance of deriveProviderInstances(settings)) {
     if (instance.driver !== "codex") {
       continue;
     }
-    const instanceHomePath = instance.config.homePath;
-    if (typeof instanceHomePath === "string" && instanceHomePath.trim()) {
-      homePaths.add(instanceHomePath.trim());
-    }
-    // With the browser-plugin overlay disabled, shadow-home accounts run with
-    // the shadow directory as CODEX_HOME and write images beneath it.
-    const instanceShadowHomePath = instance.config.shadowHomePath;
-    if (typeof instanceShadowHomePath === "string" && instanceShadowHomePath.trim()) {
-      homePaths.add(instanceShadowHomePath.trim());
-    }
-    // Instances write under the home their launch options and per-instance
-    // environment resolve to (env vars can relocate CODEX_HOME or the overlay
-    // root). Add that write home so predicted image paths stay allowlisted —
-    // this mirrors the resolution generated-image events use.
+    // Keep the full account/shadow/environment context. Collapsing this to a
+    // plain home path loses the instance-specific overlay root.
     const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
-    if (codexOptions) {
-      homePaths.add(resolveCodexHomePath(codexOptions));
-    }
+    addCandidate(codexOptions);
   }
-  return [...homePaths];
+  return [...candidates.values()];
 }
 
 /**
  * All generated-images directories the local-image route should treat as
- * legitimate. Includes both the source `~/.codex/generated_images` and the
- * overlay `<SYNARA_HOME>/codex-home-overlay/generated_images` so we serve
- * images regardless of which home Codex wrote them under.
+ * legitimate for one configured home or account context.
  */
-export function resolveCodexGeneratedImagesRoots(homePath?: string): readonly string[] {
-  return resolveCodexHomeAllowlistCandidates(homePath?.trim() ? { homePath } : {}).map((home) =>
+export function resolveCodexGeneratedImagesRoots(
+  homePath?: CodexGeneratedImageHomeCandidate,
+): readonly string[] {
+  return resolveCodexHomeAllowlistCandidates(codexHomePathsInputFromContext(homePath)).map((home) =>
     path.join(home, "generated_images"),
   );
 }
