@@ -6,11 +6,12 @@
 // Layer: Chat composer UI
 // Exports: ComposerQueuedHeader
 
-import { memo } from "react";
+import { memo, useEffect, useRef } from "react";
 
 import type { QueuedComposerTurn } from "../../composerDraftStore";
-import { SteerIcon } from "~/lib/icons";
+import { ClockIcon, SteerIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { formatClockElapsed } from "~/session-logic";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   ComposerStackedPanelRow,
@@ -57,6 +58,49 @@ export function compactQueuedComposerPreviewMarkdown(value: string): string {
   return normalized.length > 0 ? normalized : "Queued follow-up";
 }
 
+export function formatQueuedComposerWaitTimer(startIso: string, endIso: string): string {
+  return formatClockElapsed(startIso, endIso) ?? "0s";
+}
+
+function formatQueuedComposerWaitTimerNow(startIso: string): string {
+  return formatQueuedComposerWaitTimer(startIso, new Date().toISOString());
+}
+
+const QueuedComposerReadyTimer = memo(function QueuedComposerReadyTimer({
+  createdAt,
+}: {
+  createdAt: string;
+}) {
+  const textRef = useRef<HTMLSpanElement>(null);
+  const initialText = formatQueuedComposerWaitTimerNow(createdAt);
+
+  useEffect(() => {
+    const updateText = () => {
+      if (textRef.current) {
+        textRef.current.textContent = formatQueuedComposerWaitTimerNow(createdAt);
+      }
+    };
+    updateText();
+    const intervalId = window.setInterval(updateText, 1000);
+    return () => window.clearInterval(intervalId);
+  }, [createdAt]);
+
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[color:var(--color-border-light)] bg-[var(--composer-surface)] px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground"
+      title="Ready to send when the current turn finishes"
+      aria-label={`Ready to send, waiting ${initialText}`}
+    >
+      <ClockIcon className="size-3" aria-hidden />
+      <span className="hidden sm:inline">Ready</span>
+      <span aria-hidden className="hidden sm:inline">
+        ·
+      </span>
+      <span ref={textRef}>{initialText}</span>
+    </span>
+  );
+});
+
 interface ComposerQueuedHeaderProps {
   queuedTurns: QueuedComposerTurn[];
   onSteer: (queuedTurn: QueuedComposerTurn) => void;
@@ -90,6 +134,7 @@ export const ComposerQueuedHeader = memo(function ComposerQueuedHeader({
         >
           <ComposerStackedPanelRowMain>
             <SteerIcon className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
+            <QueuedComposerReadyTimer createdAt={queuedTurn.createdAt} />
             <ChatMarkdown
               text={compactQueuedComposerPreviewMarkdown(queuedTurn.previewText)}
               cwd={cwd}
