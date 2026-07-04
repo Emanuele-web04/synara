@@ -123,4 +123,46 @@ describe("Codex home paths", () => {
       path.join("/synara/runtime", "codex-home-overlay"),
     ]);
   });
+
+  it("keeps explicit shared homes isolated when a legacy plugin toggle is enabled", () => {
+    const env = {
+      CODEX_HOME: "/users/me/.codex",
+      SYNARA_HOME: "/synara/runtime",
+      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+    };
+    const segment = resolveCodexHomeOverlayAccountSegment({
+      accountId: "codex_2",
+      homePath: "/users/me/.codex",
+    });
+
+    assert.equal(
+      resolveActiveCodexHomeWritePath({
+        env,
+        homePath: "/users/me/.codex",
+        accountId: "codex_2",
+      }),
+      path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
+    );
+  });
+
+  it("keeps dedicated account homes inside their own isolated overlay", () => {
+    const homePath = "/users/me/.codex-work";
+    const segment = resolveCodexHomeOverlayAccountSegment({
+      accountId: "codex_2",
+      homePath,
+    });
+
+    assert.equal(
+      resolveActiveCodexHomeWritePath({
+        env: {
+          CODEX_HOME: "/users/me/.codex",
+          SYNARA_HOME: "/synara/runtime",
+          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+        },
+        homePath,
+        accountId: "codex_2",
+      }),
+      path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
+    );
+  });
 });

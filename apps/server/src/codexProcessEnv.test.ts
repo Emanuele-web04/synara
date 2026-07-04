@@ -391,6 +391,64 @@ describe("buildCodexProcessEnv account overlays", () => {
     }
   });
 
+  it("keeps an explicitly repeated shared home isolated when a legacy plugin toggle is enabled", async () => {
+    const fixture = makeAccountFixture();
+    const sharedEnv = {
+      ...fixture.env,
+      CODEX_HOME: fixture.homePath,
+      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+    };
+    writeFileSync(path.join(fixture.homePath, "config.toml"), 'model = "gpt-5.4"\n', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: sharedEnv,
+        homePath: fixture.homePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const accountHomePath = env.CODEX_HOME;
+      expect(accountHomePath).toBeTruthy();
+      expect(path.resolve(accountHomePath!)).not.toBe(path.resolve(fixture.homePath));
+      expect(() => lstatSync(path.join(accountHomePath!, "auth.json"))).toThrow();
+      expect(readFileSync(path.join(accountHomePath!, "config.toml"), "utf8")).toContain(
+        'model = "gpt-5.4"',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("mirrors private state only from a distinct dedicated home with a legacy plugin toggle", async () => {
+    const fixture = makeAccountFixture();
+    const dedicatedHomePath = path.join(fixture.root, "codex-work-home");
+    mkdirSync(dedicatedHomePath, { recursive: true });
+    writeFileSync(path.join(dedicatedHomePath, "auth.json"), '{"account":"work"}', "utf8");
+
+    try {
+      const env = await buildCodexProcessEnv({
+        env: {
+          ...fixture.env,
+          CODEX_HOME: fixture.homePath,
+          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+        },
+        homePath: dedicatedHomePath,
+        accountId: "work",
+        platform: "win32",
+      });
+
+      const accountHomePath = env.CODEX_HOME;
+      expect(accountHomePath).toBeTruthy();
+      expect(path.resolve(accountHomePath!)).not.toBe(path.resolve(dedicatedHomePath));
+      expect(readFileSync(path.join(accountHomePath!, "auth.json"), "utf8")).toBe(
+        '{"account":"work"}',
+      );
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps shared auth out of account overlays without a shadow home", async () => {
     const fixture = makeAccountFixture();
     const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
