@@ -4,23 +4,23 @@
 //          mirroring the `/export` affordance of agent CLIs.
 // Layer: Orchestration utility (plain async module; HTTP composes it through
 //          Stream.fromAsyncIterable). ZIP is produced with node:zlib and a
-//          hand-written central directory, streamed one entry at a time so the
-//          server never holds the whole archive in memory.
+//          hand-written central directory. Entries are serialized and deflated
+//          incrementally (per-message chunks through a streaming deflater with
+//          a running CRC), so the server never materializes a full entry
+//          string or uncompressed buffer — peak memory is bounded by the
+//          compressed bytes of one entry.
 // Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName.
 // The export-eligibility guard lives in @t3tools/shared/threadExport so the
 // web composer and the HTTP route share one predicate.
 
 import zlib from "node:zlib";
-import { promisify } from "node:util";
 
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { OrchestrationMessage, OrchestrationThread } from "@t3tools/contracts";
 
 export interface ThreadArchiveEntry {
   readonly name: string;
-  readonly data: string;
+  readonly chunks: Iterable<string>;
 }
-
-const crc32 = (buf: Buffer): number => zlib.crc32(buf) >>> 0;
 
 const u16 = (value: number): Buffer => {
   const buffer = Buffer.alloc(2);
@@ -35,7 +35,40 @@ const u32 = (value: number): Buffer => {
 };
 
 const UTF8_FLAG = 0x0800;
-const deflateRaw = promisify(zlib.deflateRaw);
+
+interface DeflatedEntryData {
+  readonly compressed: Buffer;
+  readonly crc: number;
+  readonly uncompressedSize: number;
+}
+
+// Streams entry chunks through a raw deflater while keeping a running CRC-32,
+// so only the compressed bytes are retained (needed up front: the ZIP local
+// header stores the compressed size and CRC before the payload).
+async function deflateEntryChunks(chunks: Iterable<string>): Promise<DeflatedEntryData> {
+  const deflater = zlib.createDeflateRaw();
+  const compressedChunks: Buffer[] = [];
+  deflater.on("data", (chunk: Buffer) => compressedChunks.push(chunk));
+  const finished = new Promise<void>((resolve, reject) => {
+    deflater.once("end", resolve);
+    deflater.once("error", reject);
+  });
+
+  let crc = 0;
+  let uncompressedSize = 0;
+  for (const chunk of chunks) {
+    const buffer = Buffer.from(chunk, "utf8");
+    crc = zlib.crc32(buffer, crc) >>> 0;
+    uncompressedSize += buffer.length;
+    if (!deflater.write(buffer)) {
+      await new Promise<void>((resolve) => deflater.once("drain", resolve));
+    }
+  }
+  deflater.end();
+  await finished;
+
+  return { compressed: Buffer.concat(compressedChunks), crc, uncompressedSize };
+}
 
 interface ZipEntryRecord {
   readonly localChunk: Buffer;
@@ -43,31 +76,28 @@ interface ZipEntryRecord {
 }
 
 // Zeroed DOS time/date (1980-01-01 00:00) keeps exports deterministic without
-// adding date conversion code to the archive writer.
+// adding date conversion code to the archive writer. Entries are always
+// deflated: text transcripts compress well, and tiny entries stay valid ZIP
+// even when deflate adds a few bytes.
 async function buildZipEntry(entry: ThreadArchiveEntry): Promise<ZipEntryRecord> {
   const nameBuffer = Buffer.from(entry.name, "utf8");
-  const data = Buffer.from(entry.data, "utf8");
-  const crc = crc32(data);
-
-  const compressed = await deflateRaw(data);
-  const useDeflate = compressed.length < data.length;
-  const stored = useDeflate ? compressed : data;
-  const method = useDeflate ? 8 : 0;
+  const { compressed, crc, uncompressedSize } = await deflateEntryChunks(entry.chunks);
+  const method = 8;
 
   const localChunk = Buffer.concat([
     u32(0x04034b50), // local file header signature
     u16(20), // version needed to extract
     u16(UTF8_FLAG), // general purpose: UTF-8 names
-    u16(method), // compression method (8 deflate, 0 store)
+    u16(method), // compression method (8 deflate)
     u16(0), // last mod time
     u16(0), // last mod date
     u32(crc), // CRC-32
-    u32(stored.length), // compressed size
-    u32(data.length), // uncompressed size
+    u32(compressed.length), // compressed size
+    u32(uncompressedSize), // uncompressed size
     u16(nameBuffer.length), // file name length
     u16(0), // extra field length
     nameBuffer,
-    stored,
+    compressed,
   ]);
 
   const centralRecord = (offset: number): Buffer =>
@@ -80,8 +110,8 @@ async function buildZipEntry(entry: ThreadArchiveEntry): Promise<ZipEntryRecord>
       u16(0), // last mod time
       u16(0), // last mod date
       u32(crc), // CRC-32
-      u32(stored.length), // compressed size
-      u32(data.length), // uncompressed size
+      u32(compressed.length), // compressed size
+      u32(uncompressedSize), // uncompressed size
       u16(nameBuffer.length), // file name length
       u16(0), // extra field length
       u16(0), // file comment length
@@ -101,20 +131,37 @@ const MESSAGE_ROLE_HEADING: Record<string, string> = {
   system: "System",
 };
 
-function buildTranscriptMarkdown(thread: OrchestrationThread): string {
-  const lines: string[] = [`# ${thread.title}`, "", `> Exported from Synara.`, ""];
-
+// One chunk for the header, then one chunk per message; nothing accumulates.
+function* transcriptMarkdownChunks(thread: OrchestrationThread): Generator<string> {
+  yield `# ${thread.title}\n\n> Exported from Synara.\n`;
   for (const message of thread.messages) {
     const heading = MESSAGE_ROLE_HEADING[message.role] ?? "Message";
-    const timestamp = ` \`${message.createdAt}\``;
-    lines.push(`## ${heading}${timestamp}`, "", message.text, "");
+    yield `\n## ${heading} \`${message.createdAt}\`\n\n${message.text}\n`;
   }
-
-  return lines.join("\n");
 }
 
-function buildThreadJson(thread: OrchestrationThread): string {
-  return JSON.stringify(
+function exportMessageProjection(message: OrchestrationMessage): Record<string, unknown> {
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    source: message.source,
+    // Attachment/skill/mention references are part of the user's input for a
+    // turn; keep them in the structured export (metadata only — the archive
+    // does not bundle the referenced files).
+    ...(message.attachments?.length ? { attachments: message.attachments } : {}),
+    ...(message.skills?.length ? { skills: message.skills } : {}),
+    ...(message.mentions?.length ? { mentions: message.mentions } : {}),
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
+  };
+}
+
+// Emits the thread metadata object once, then appends the messages array one
+// serialized message at a time so the full JSON document never exists as a
+// single string.
+function* threadJsonChunks(thread: OrchestrationThread): Generator<string> {
+  const metadata = JSON.stringify(
     {
       threadId: thread.id,
       title: thread.title,
@@ -122,36 +169,35 @@ function buildThreadJson(thread: OrchestrationThread): string {
       runtimeMode: thread.runtimeMode,
       createdAt: thread.createdAt,
       updatedAt: thread.updatedAt,
-      messages: thread.messages.map((message) => ({
-        id: message.id,
-        role: message.role,
-        text: message.text,
-        source: message.source,
-        // Attachment/skill/mention references are part of the user's input for a
-        // turn; keep them in the structured export (metadata only — the archive
-        // does not bundle the referenced files).
-        ...(message.attachments?.length ? { attachments: message.attachments } : {}),
-        ...(message.skills?.length ? { skills: message.skills } : {}),
-        ...(message.mentions?.length ? { mentions: message.mentions } : {}),
-        createdAt: message.createdAt,
-        updatedAt: message.updatedAt,
-      })),
     },
     null,
     2,
   );
+  // Drop the closing "\n}" so the messages array can be appended incrementally.
+  yield `${metadata.slice(0, -2)},\n  "messages": [`;
+
+  let first = true;
+  for (const message of thread.messages) {
+    const messageJson = JSON.stringify(exportMessageProjection(message), null, 2)
+      .split("\n")
+      .map((line) => `    ${line}`)
+      .join("\n");
+    yield `${first ? "" : ","}\n${messageJson}`;
+    first = false;
+  }
+
+  yield "\n  ]\n}";
 }
 
-// Lazy per-entry generation: each entry's string is materialized only while
-// that entry is being compressed and emitted, then becomes collectible.
-function* threadArchiveEntries(thread: OrchestrationThread): Generator<ThreadArchiveEntry> {
-  yield { name: "thread.json", data: buildThreadJson(thread) };
-  yield { name: "transcript.md", data: buildTranscriptMarkdown(thread) };
+function threadArchiveEntries(thread: OrchestrationThread): ThreadArchiveEntry[] {
+  return [
+    { name: "thread.json", chunks: threadJsonChunks(thread) },
+    { name: "transcript.md", chunks: transcriptMarkdownChunks(thread) },
+  ];
 }
 
 // Streams the ZIP as it is produced: one local header+payload chunk per entry,
-// then the central directory and end record. Peak memory is bounded by a single
-// entry (its text, compressed copy, and header), never the whole archive.
+// then the central directory and end record.
 export async function* threadArchiveChunks(thread: OrchestrationThread): AsyncGenerator<Buffer> {
   const centralRecords: Buffer[] = [];
   let offset = 0;

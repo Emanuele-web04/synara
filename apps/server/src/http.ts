@@ -469,20 +469,29 @@ const threadExportEffectRouteLayer = HttpRouter.add(
       yield* requireAuthenticatedRequest;
     }
 
+    // Error responses need the trusted-origin CORS headers too: the desktop
+    // app fetches cross-origin (t3://app), and without them the browser masks
+    // a 400/404/409 body as an opaque network failure.
+    const corsHeaders = localPreviewCorsHeaders({ config, request, url });
+
     const threadIdParam = url.searchParams.get("threadId")?.trim();
     if (!threadIdParam)
-      return HttpServerResponse.text("Missing threadId parameter", { status: 400 });
+      return HttpServerResponse.text("Missing threadId parameter", {
+        status: 400,
+        headers: corsHeaders,
+      });
 
     const snapshotQuery = yield* ProjectionSnapshotQuery;
     const threadOption = yield* snapshotQuery.getThreadDetailForExportById(
       ThreadId.makeUnsafe(threadIdParam),
     );
-    if (Option.isNone(threadOption)) return HttpServerResponse.text("Not Found", { status: 404 });
+    if (Option.isNone(threadOption))
+      return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
     const thread = threadOption.value;
 
     const blockedReason = threadExportBlockedReason(thread);
     if (blockedReason !== null) {
-      return HttpServerResponse.text(blockedReason, { status: 409 });
+      return HttpServerResponse.text(blockedReason, { status: 409, headers: corsHeaders });
     }
 
     const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
@@ -494,7 +503,7 @@ const threadExportEffectRouteLayer = HttpRouter.add(
         headers: {
           "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
           "Cache-Control": "no-store",
-          ...localPreviewCorsHeaders({ config, request, url }),
+          ...corsHeaders,
           "Access-Control-Expose-Headers": "Content-Disposition",
         },
       },
