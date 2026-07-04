@@ -141,13 +141,15 @@ export function requireThread(input: {
   readonly threadId: ThreadId;
 }): Effect.Effect<OrchestrationThread, OrchestrationCommandInvariantError> {
   const thread = findThreadById(input.readModel, input.threadId);
-  if (thread) {
+  if (thread && thread.deletedAt === null) {
     return Effect.succeed(thread);
   }
   return Effect.fail(
     invariantError(
       input.command.type,
-      `Thread '${input.threadId}' does not exist for command '${input.command.type}'.`,
+      thread
+        ? `Thread '${input.threadId}' was deleted and cannot handle command '${input.command.type}'.`
+        : `Thread '${input.threadId}' does not exist for command '${input.command.type}'.`,
     ),
   );
 }
