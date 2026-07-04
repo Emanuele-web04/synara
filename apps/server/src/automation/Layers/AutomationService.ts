@@ -131,6 +131,27 @@ export function resolveAutomationDefinitionProviderOptionsForSettings(
   return selectionInstance ? providerOptionsForSelectedInstance(selectionInstance) : undefined;
 }
 
+function resolveAutomationTurnProviderOptionsForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): Effect.Effect<ProviderStartOptions | undefined, AutomationServiceError> {
+  if (!definition.modelSelection) {
+    return Effect.succeed(definition.providerOptions);
+  }
+  const selectionInstanceId = resolveModelSelectionInstanceId(definition.modelSelection);
+  const selectionInstance = resolveProviderInstance(settings, {
+    instanceId: selectionInstanceId,
+  });
+  if (!selectionInstance) {
+    return Effect.fail(
+      new AutomationServiceError({
+        message: `Automation provider instance '${selectionInstanceId}' is no longer configured.`,
+      }),
+    );
+  }
+  return Effect.succeed(providerOptionsForSelectedInstance(selectionInstance));
+}
+
 export function resolveAutomationCompletionTextGenerationInputForSettings(
   definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
   settings: ServerSettings,
@@ -1144,12 +1165,11 @@ export const AutomationServiceLive = Layer.effect(
           acknowledgedRisks: definition.acknowledgedRisks,
           now,
         });
-        const automationTurnProviderOptions = yield* serverSettings.getSettings.pipe(
-          Effect.map((settings) =>
-            resolveAutomationDefinitionProviderOptionsForSettings(definition, settings),
-          ),
+        const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load automation provider settings.")),
         );
+        const automationTurnProviderOptions =
+          yield* resolveAutomationTurnProviderOptionsForSettings(definition, settings);
 
         const [memoryOption, lastRunOption] = yield* Effect.all([
           automationRepository

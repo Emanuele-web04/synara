@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import {
-  ApprovalRequestId,
   EventId,
+  ApprovalRequestId,
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
@@ -25,7 +25,7 @@ import {
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
 import { CodexSessionStartError } from "../../codexErrorClassification.ts";
-import { resolveCodexHomePath } from "../../codexGeneratedImages.ts";
+import { resolveCodexGeneratedImagesRoots } from "../../codexGeneratedImages.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -325,20 +325,14 @@ validationLayer("CodexAdapterLive validation", (it) => {
   it.effect("lists generated-image homes from live session Codex options", () =>
     Effect.gen(function* () {
       const now = new Date().toISOString();
+      const originalSynaraHome = process.env.SYNARA_HOME;
+      process.env.SYNARA_HOME = "/tmp/synara-live-generated-images";
       validationManager.sessionSnapshots = [
         {
           provider: "codex",
           status: "ready",
           runtimeMode: "full-access",
           threadId: asThreadId("thread-live-work"),
-          createdAt: now,
-          updatedAt: now,
-        },
-        {
-          provider: "codex",
-          status: "ready",
-          runtimeMode: "full-access",
-          threadId: asThreadId("thread-live-default"),
           createdAt: now,
           updatedAt: now,
         },
@@ -354,17 +348,27 @@ validationLayer("CodexAdapterLive validation", (it) => {
         throw new Error("Expected Codex adapter to expose generated-image home paths.");
       }
 
-      const homes = yield* listGeneratedImageHomePaths();
+      try {
+        const homes = yield* listGeneratedImageHomePaths();
 
-      assert.deepStrictEqual(
-        new Set(homes),
-        new Set([
-          resolveCodexHomePath({ homePath: "/tmp/codex-live-work", accountId: "work" }),
-          resolveCodexHomePath(undefined),
-        ]),
-      );
-      validationManager.sessionSnapshots = [];
-      validationManager.codexOptionsByThreadId.clear();
+        assert.deepStrictEqual(homes, [
+          {
+            homePath: "/tmp/codex-live-work",
+            accountId: "work",
+          },
+        ]);
+        const roots = homes.flatMap((home) => resolveCodexGeneratedImagesRoots(home));
+        assert.ok(roots.includes(path.join("/tmp/codex-live-work", "generated_images")));
+        assert.ok(roots.some((root) => root.includes(path.join("codex-home-overlay", "accounts"))));
+      } finally {
+        if (originalSynaraHome === undefined) {
+          delete process.env.SYNARA_HOME;
+        } else {
+          process.env.SYNARA_HOME = originalSynaraHome;
+        }
+        validationManager.sessionSnapshots = [];
+        validationManager.codexOptionsByThreadId.clear();
+      }
     }),
   );
 });

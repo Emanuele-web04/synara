@@ -828,9 +828,9 @@ export const localImageEffectRouteLayer = HttpRouter.add(
           Effect.flatMap((adapter) =>
             adapter.listGeneratedImageHomePaths
               ? adapter.listGeneratedImageHomePaths()
-              : Effect.succeed<readonly string[]>([]),
+              : Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([]),
           ),
-          Effect.catch(() => Effect.succeed<readonly string[]>([])),
+          Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
         )
       : [];
     const codexHomePaths: readonly CodexGeneratedImageHomeCandidate[] = [

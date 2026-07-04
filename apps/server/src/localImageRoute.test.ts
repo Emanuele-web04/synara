@@ -20,6 +20,7 @@ import {
 } from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
 import { createLocalPreviewGrant } from "./localImageFiles";
+import type { CodexGeneratedImageHomeCandidate } from "./codexGeneratedImages.ts";
 import { ManagedAttachmentRepositoryLive } from "./persistence/Layers/ManagedAttachments";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import type { ProviderAdapterError } from "./provider/Errors.ts";
@@ -119,7 +120,7 @@ function makeFakeServerAuth(): ServerAuthShape {
 }
 
 function makeGeneratedImageHomeRegistry(
-  homePaths: readonly string[],
+  homePaths: readonly CodexGeneratedImageHomeCandidate[],
 ): typeof ProviderAdapterRegistry.Service {
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
     provider: "codex",

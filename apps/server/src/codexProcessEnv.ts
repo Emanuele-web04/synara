@@ -798,17 +798,13 @@ async function prepareSynaraCodexHomeOverlayUnlocked(input: {
         );
       }
       const targetPath = path.join(overlayHomePath, entry);
-      try {
-        await ensureCodexOverlaySymlink({
-          entryName: entry,
-          sourcePath,
-          targetPath,
-          type: sourceStat.isDirectory() ? "dir" : "file",
-          force: true,
-        });
-      } catch {
-        // Transient overlay filesystem races must not block session start.
-      }
+      await ensureCodexOverlaySymlink({
+        entryName: entry,
+        sourcePath,
+        targetPath,
+        type: sourceStat.isDirectory() ? "dir" : "file",
+        force: true,
+      });
     }
   }
 
