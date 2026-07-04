@@ -366,9 +366,28 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* checkpointStore.deleteCheckpointRefs({ cwd, checkpointRefs });
       }
 
-      // Hard delete: every table that stores rows for this thread. The event
-      // delete mirrors the snapshot scope above (stream id OR payload threadId,
-      // thread aggregate only) so no snapshotted event can survive the purge.
+      // Hard delete: every table that stores rows for this thread. The delete
+      // command receipts must survive because they are the retry idempotency
+      // record after the thread row and its delete event are gone.
+      yield* sql`
+        DELETE FROM orchestration_command_receipts
+        WHERE aggregate_kind = 'thread'
+          AND aggregate_id = ${threadId}
+          AND command_id NOT IN (
+            SELECT command_id
+            FROM orchestration_events
+            WHERE aggregate_kind = 'thread'
+              AND event_type = 'thread.deleted'
+              AND command_id IS NOT NULL
+              AND (
+                stream_id = ${threadId}
+                OR json_extract(payload_json, '$.threadId') = ${threadId}
+              )
+          )
+      `;
+      // The event delete mirrors the snapshot scope above (stream id OR
+      // payload threadId, thread aggregate only) so no snapshotted event can
+      // survive the purge.
       yield* sql`
         DELETE FROM orchestration_events
         WHERE aggregate_kind = 'thread'
@@ -376,11 +395,6 @@ const makeProfileStatsArchive = Effect.gen(function* () {
             stream_id = ${threadId}
             OR json_extract(payload_json, '$.threadId') = ${threadId}
           )
-      `;
-      yield* sql`
-        DELETE FROM orchestration_command_receipts
-        WHERE aggregate_kind = 'thread'
-          AND aggregate_id = ${threadId}
       `;
       yield* sql`DELETE FROM checkpoint_diff_blobs WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM provider_session_runtime WHERE thread_id = ${threadId}`;
@@ -399,14 +413,15 @@ const makeProfileStatsArchive = Effect.gen(function* () {
     input,
   ) => sql.withTransaction(snapshotAndPurgeThread(input.threadId));
 
-  const purgeSoftDeletedManualThreads: ProfileStatsArchiveShape["purgeSoftDeletedManualThreads"] =
-    (input) =>
-      Effect.gen(function* () {
-        // Classify by the LATEST thread.deleted event: only threads whose most
-        // recent delete came from retention stay hidden-but-kept. Soft-deleted
-        // threads without any recorded delete event (legacy imports) count as
-        // manual deletes and get purged too.
-        const candidates = yield* sql<{ readonly threadId: string }>`
+  const purgeSoftDeletedManualThreads: ProfileStatsArchiveShape["purgeSoftDeletedManualThreads"] = (
+    input,
+  ) =>
+    Effect.gen(function* () {
+      // Classify by the LATEST thread.deleted event: only threads whose most
+      // recent delete came from retention stay hidden-but-kept. Soft-deleted
+      // threads without any recorded delete event (legacy imports) count as
+      // manual deletes and get purged too.
+      const candidates = yield* sql<{ readonly threadId: string }>`
           SELECT t.thread_id AS threadId
           FROM projection_threads t
           WHERE t.deleted_at IS NOT NULL
@@ -423,35 +438,35 @@ const makeProfileStatsArchive = Effect.gen(function* () {
             ) NOT LIKE ${`${THREAD_RETENTION_COMMAND_ID_PREFIX}%`}
         `;
 
-        let purgedCount = 0;
-        yield* Effect.forEach(
-          candidates,
-          (candidate) =>
-            Effect.gen(function* () {
-              const shouldPurge = input?.beforePurge
-                ? yield* input.beforePurge(candidate.threadId)
-                : true;
-              if (!shouldPurge) {
-                return;
-              }
-              const purged = yield* purgeThreadWithStatsSnapshot({
+      let purgedCount = 0;
+      yield* Effect.forEach(
+        candidates,
+        (candidate) =>
+          Effect.gen(function* () {
+            const shouldPurge = input?.beforePurge
+              ? yield* input.beforePurge(candidate.threadId)
+              : true;
+            if (!shouldPurge) {
+              return;
+            }
+            const purged = yield* purgeThreadWithStatsSnapshot({
+              threadId: candidate.threadId,
+            });
+            if (purged) {
+              purgedCount += 1;
+            }
+          }).pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("profile stats archive failed to purge soft-deleted thread", {
                 threadId: candidate.threadId,
-              });
-              if (purged) {
-                purgedCount += 1;
-              }
-            }).pipe(
-              Effect.catch((error) =>
-                Effect.logWarning("profile stats archive failed to purge soft-deleted thread", {
-                  threadId: candidate.threadId,
-                  error: error instanceof Error ? error.message : String(error),
-                }),
-              ),
+                error: error instanceof Error ? error.message : String(error),
+              }),
             ),
-          { concurrency: 1, discard: true },
-        );
-        return purgedCount;
-      });
+          ),
+        { concurrency: 1, discard: true },
+      );
+      return purgedCount;
+    });
 
   return {
     purgeThreadWithStatsSnapshot,

@@ -127,25 +127,31 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
   yield* sql`
     INSERT INTO orchestration_events (
       event_id, aggregate_kind, stream_id, stream_version, event_type,
-      occurred_at, actor_kind, payload_json, metadata_json
+      occurred_at, command_id, actor_kind, payload_json, metadata_json
     )
     VALUES
       (
         'event-keep-1', 'thread', 'thread-keep', 1, 'thread.turn-start-requested',
-        '2026-06-13T08:05:00.000Z', 'client',
+        '2026-06-13T08:05:00.000Z', 'cmd-keep-turn', 'client',
         '{"threadId":"thread-keep","modelSelection":{"provider":"claudeAgent","model":"claude-sonnet-4-6","options":{"effort":"max"}}}',
         '{}'
       ),
       (
         'event-purge-1', 'thread', 'thread-purge', 1, 'thread.turn-start-requested',
-        '2026-06-13T09:05:00.000Z', 'client',
+        '2026-06-13T09:05:00.000Z', 'cmd-purge-turn', 'client',
         '{"threadId":"thread-purge","modelSelection":{"provider":"codex","model":"gpt-5-codex","options":{"reasoningEffort":"high"}}}',
         '{}'
       ),
       (
         'event-purge-2', 'thread', 'thread-purge', 2, 'thread.turn-start-requested',
-        '2026-06-14T10:05:00.000Z', 'client',
+        '2026-06-14T10:05:00.000Z', NULL, 'client',
         '{"threadId":"thread-purge"}',
+        '{}'
+      ),
+      (
+        'event-purge-delete', 'thread', 'thread-purge', 3, 'thread.deleted',
+        '2026-06-14T10:10:00.000Z', 'cmd-purge-delete', 'user',
+        '{"threadId":"thread-purge","deletedAt":"2026-06-14T10:10:00.000Z"}',
         '{}'
       )
   `;
@@ -162,6 +168,10 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
       (
         'cmd-purge-turn', 'thread', 'thread-purge',
         '2026-06-13T09:05:00.000Z', 2, 'accepted', NULL
+      ),
+      (
+        'cmd-purge-delete', 'thread', 'thread-purge',
+        '2026-06-14T10:10:00.000Z', 3, 'accepted', NULL
       )
   `;
 
@@ -267,13 +277,16 @@ describe("ProfileStatsArchive", () => {
           SELECT COUNT(*) AS count FROM orchestration_events WHERE stream_id = 'thread-purge'
         `;
         expect(remainingEvents[0]?.count).toBe(0);
-        const remainingReceipts = yield* sql<{ readonly aggregateId: string }>`
-          SELECT aggregate_id AS aggregateId
+        const remainingReceipts = yield* sql<{ readonly commandId: string }>`
+          SELECT command_id AS commandId
           FROM orchestration_command_receipts
-          WHERE aggregate_id IN ('thread-keep', 'thread-purge')
-          ORDER BY aggregate_id ASC
+          WHERE command_id IN ('cmd-keep-turn', 'cmd-purge-turn', 'cmd-purge-delete')
+          ORDER BY command_id ASC
         `;
-        expect(remainingReceipts.map((row) => row.aggregateId)).toEqual(["thread-keep"]);
+        expect(remainingReceipts.map((row) => row.commandId)).toEqual([
+          "cmd-keep-turn",
+          "cmd-purge-delete",
+        ]);
         const remainingActivities = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count
           FROM projection_thread_activities
