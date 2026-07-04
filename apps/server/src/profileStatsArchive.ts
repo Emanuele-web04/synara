@@ -60,6 +60,11 @@ interface CheckpointMessageRow {
   readonly messageId: string | null;
 }
 
+interface ThreadCheckpointCleanup {
+  readonly cwd: string | null;
+  readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+}
+
 export interface ThreadTurnSnapshotRow {
   readonly provider: string | null;
   readonly model: string | null;
@@ -268,6 +273,68 @@ const makeProfileStatsArchive = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const checkpointStore = yield* CheckpointStore;
 
+  const loadThreadCheckpointCleanup = (threadId: string) =>
+    Effect.gen(function* () {
+      const threadRows = yield* sql<PurgeThreadRow>`
+        SELECT
+          t.project_id AS projectId,
+          t.model_selection_json AS modelSelectionJson,
+          t.deleted_at AS deletedAt,
+          t.env_mode AS envMode,
+          t.worktree_path AS worktreePath,
+          p.kind AS projectKind,
+          p.workspace_root AS workspaceRoot
+        FROM projection_threads t
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE t.thread_id = ${threadId}
+      `;
+      const thread = threadRows[0];
+      if (!thread) {
+        return null;
+      }
+
+      const checkpointTurnRows = yield* sql<CheckpointTurnRow>`
+        SELECT
+          turn_id AS turnId,
+          checkpoint_ref AS checkpointRef
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND (
+            turn_id IS NOT NULL
+            OR checkpoint_ref IS NOT NULL
+          )
+        ORDER BY row_id ASC
+      `;
+      const checkpointMessageRows = yield* sql<CheckpointMessageRow>`
+        SELECT message_id AS messageId
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+          AND message_id IS NOT NULL
+        ORDER BY message_id ASC
+      `;
+
+      const cwd = threadWorkspaceCwdForCheckpointCleanup(thread);
+      const hasPersistedCheckpointRef = checkpointTurnRows.some((row) =>
+        readString(row.checkpointRef)?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`),
+      );
+      const checkpointRefs =
+        cwd !== null || hasPersistedCheckpointRef
+          ? checkpointRefsForThreadPurge(threadId, checkpointTurnRows, checkpointMessageRows)
+          : [];
+      if (checkpointRefs.length > 0 && cwd === null) {
+        return yield* Effect.fail(
+          new Error(
+            `Cannot purge checkpoint refs for thread ${threadId} because its workspace is unavailable.`,
+          ),
+        );
+      }
+
+      return {
+        cwd,
+        checkpointRefs,
+      } satisfies ThreadCheckpointCleanup;
+    });
+
   const snapshotAndPurgeThread = (threadId: string) =>
     Effect.gen(function* () {
       const threadRows = yield* sql<PurgeThreadRow>`
@@ -323,28 +390,6 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           AND source = 'native'
         ORDER BY created_at ASC, message_id ASC
       `;
-      const checkpointTurnRows = yield* sql<CheckpointTurnRow>`
-        SELECT
-          turn_id AS turnId,
-          checkpoint_ref AS checkpointRef
-        FROM projection_turns
-        WHERE thread_id = ${threadId}
-          AND (
-            turn_id IS NOT NULL
-            OR checkpoint_ref IS NOT NULL
-          )
-        ORDER BY row_id ASC
-      `;
-      let checkpointMessageRows: ReadonlyArray<CheckpointMessageRow> = [];
-      if (checkpointTurnRows.length > 0) {
-        checkpointMessageRows = yield* sql<CheckpointMessageRow>`
-          SELECT message_id AS messageId
-          FROM projection_thread_messages
-          WHERE thread_id = ${threadId}
-            AND message_id IS NOT NULL
-          ORDER BY message_id ASC
-        `;
-      }
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
       const tokenProvider = parseModelSelectionJson(thread.modelSelectionJson)?.provider ?? null;
@@ -404,42 +449,9 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         );
       }
 
-      const checkpointRefs = checkpointRefsForThreadPurge(
-        threadId,
-        checkpointTurnRows,
-        checkpointMessageRows,
-      );
-      if (checkpointRefs.length > 0) {
-        const cwd = threadWorkspaceCwdForCheckpointCleanup(thread);
-        if (cwd === null) {
-          return yield* Effect.fail(
-            new Error(
-              `Cannot purge checkpoint refs for thread ${threadId} because its workspace is unavailable.`,
-            ),
-          );
-        }
-        yield* checkpointStore.deleteCheckpointRefs({ cwd, checkpointRefs });
-      }
-
       // Hard delete: every table that stores rows for this thread. The delete
-      // command receipts must survive because they are the retry idempotency
-      // record after the thread row and its delete event are gone.
-      yield* sql`
-        DELETE FROM orchestration_command_receipts
-        WHERE aggregate_kind = 'thread'
-          AND aggregate_id = ${threadId}
-          AND command_id NOT IN (
-            SELECT command_id
-            FROM orchestration_events
-            WHERE aggregate_kind = 'thread'
-              AND event_type = 'thread.deleted'
-              AND command_id IS NOT NULL
-              AND (
-                stream_id = ${threadId}
-                OR json_extract(payload_json, '$.threadId') = ${threadId}
-              )
-          )
-      `;
+      // receipts stay as tiny idempotency tombstones for command retries after
+      // the bulky event/projection rows are gone.
       // The event delete mirrors the snapshot scope above (stream id OR
       // payload threadId, thread aggregate only) so no snapshotted event can
       // survive the purge.
@@ -466,7 +478,28 @@ const makeProfileStatsArchive = Effect.gen(function* () {
 
   const purgeThreadWithStatsSnapshot: ProfileStatsArchiveShape["purgeThreadWithStatsSnapshot"] = (
     input,
-  ) => sql.withTransaction(snapshotAndPurgeThread(input.threadId));
+  ) =>
+    Effect.gen(function* () {
+      const checkpointCleanup = yield* loadThreadCheckpointCleanup(input.threadId);
+      if (checkpointCleanup === null) {
+        return false;
+      }
+      if (checkpointCleanup.checkpointRefs.length > 0) {
+        const cwd = checkpointCleanup.cwd;
+        if (cwd === null) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot purge checkpoint refs for thread ${input.threadId} because its workspace is unavailable.`,
+            ),
+          );
+        }
+        yield* checkpointStore.deleteCheckpointRefs({
+          cwd,
+          checkpointRefs: checkpointCleanup.checkpointRefs,
+        });
+      }
+      return yield* sql.withTransaction(snapshotAndPurgeThread(input.threadId));
+    });
 
   const purgeSoftDeletedManualThreads: ProfileStatsArchiveShape["purgeSoftDeletedManualThreads"] = (
     input,

@@ -120,6 +120,7 @@ export function makeServerRuntimeServicesLayer() {
     automationServiceLayer,
     automationSchedulerLayer,
     automationRunReactorLayer,
+    AutomationRepositoryLive,
     orchestrationReactorLayer,
     threadDeletionReactorLayer,
     devServerManagerLayer,

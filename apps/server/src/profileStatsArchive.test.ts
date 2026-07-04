@@ -142,19 +142,25 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         '{}'
       ),
       (
-        'event-purge-1', 'thread', 'thread-purge', 1, 'thread.turn-start-requested',
+        'event-purge-create', 'thread', 'thread-purge', 1, 'thread.created',
+        '2026-06-13T09:00:00.000Z', 'cmd-purge-create', 'client',
+        '{"threadId":"thread-purge","projectId":"project-archive","title":"Purged Thread"}',
+        '{}'
+      ),
+      (
+        'event-purge-1', 'thread', 'thread-purge', 2, 'thread.turn-start-requested',
         '2026-06-13T09:05:00.000Z', 'cmd-purge-turn', 'client',
         '{"threadId":"thread-purge","modelSelection":{"provider":"codex","model":"gpt-5-codex","options":{"reasoningEffort":"high"}}}',
         '{}'
       ),
       (
-        'event-purge-2', 'thread', 'thread-purge', 2, 'thread.turn-start-requested',
+        'event-purge-2', 'thread', 'thread-purge', 3, 'thread.turn-start-requested',
         '2026-06-14T10:05:00.000Z', NULL, 'client',
         '{"threadId":"thread-purge"}',
         '{}'
       ),
       (
-        'event-purge-delete', 'thread', 'thread-purge', 3, 'thread.deleted',
+        'event-purge-delete', 'thread', 'thread-purge', 4, 'thread.deleted',
         '2026-06-14T10:10:00.000Z', 'cmd-purge-delete', 'user',
         '{"threadId":"thread-purge","deletedAt":"2026-06-14T10:10:00.000Z"}',
         '{}'
@@ -169,6 +175,10 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
       (
         'cmd-keep-turn', 'thread', 'thread-keep',
         '2026-06-13T08:05:00.000Z', 1, 'accepted', NULL
+      ),
+      (
+        'cmd-purge-create', 'thread', 'thread-purge',
+        '2026-06-13T09:00:00.000Z', 2, 'accepted', NULL
       ),
       (
         'cmd-purge-turn', 'thread', 'thread-purge',
@@ -311,12 +321,19 @@ describe("ProfileStatsArchive", () => {
         const remainingReceipts = yield* sql<{ readonly commandId: string }>`
           SELECT command_id AS commandId
           FROM orchestration_command_receipts
-          WHERE command_id IN ('cmd-keep-turn', 'cmd-purge-turn', 'cmd-purge-delete')
+          WHERE command_id IN (
+            'cmd-keep-turn',
+            'cmd-purge-create',
+            'cmd-purge-turn',
+            'cmd-purge-delete'
+          )
           ORDER BY command_id ASC
         `;
         expect(remainingReceipts.map((row) => row.commandId)).toEqual([
           "cmd-keep-turn",
+          "cmd-purge-create",
           "cmd-purge-delete",
+          "cmd-purge-turn",
         ]);
         const remainingActivities = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count
@@ -427,6 +444,108 @@ describe("ProfileStatsArchive", () => {
         const statsAfter = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfter.activity.totalThreads).toBe(0);
         expect(deletedCheckpointRefCalls).toEqual([]);
+      }),
+    );
+  });
+
+  it("deletes message-start checkpoint refs when no turn checkpoint row exists yet", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-message-checkpoint',
+            'Message Checkpoint',
+            '/work/message-checkpoint',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-message-checkpoint',
+            'project-message-checkpoint',
+            'Message Checkpoint',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source,
+            created_at, updated_at
+          )
+          VALUES (
+            'message-pending-checkpoint',
+            'thread-message-checkpoint',
+            NULL,
+            'user',
+            'pending turn',
+            0,
+            'native',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:01:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, assistant_message_id, state,
+            requested_at, started_at, completed_at, checkpoint_turn_count,
+            checkpoint_ref, checkpoint_status, checkpoint_files_json
+          )
+          VALUES (
+            'thread-message-checkpoint', NULL, 'message-pending-checkpoint', NULL, 'pending',
+            '2026-06-13T09:01:00.000Z', NULL, NULL, NULL,
+            NULL, NULL, '[]'
+          )
+        `;
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-message-checkpoint",
+        });
+
+        expect(purged).toBe(true);
+        expect(deletedCheckpointRefCalls).toEqual([
+          {
+            cwd: "/work/message-checkpoint",
+            checkpointRefs: [
+              String(
+                checkpointRefForThreadMessageStart(
+                  ThreadId.makeUnsafe("thread-message-checkpoint"),
+                  MessageId.makeUnsafe("message-pending-checkpoint"),
+                ),
+              ),
+            ],
+          },
+        ]);
+        const remainingRows = yield* sql<{ readonly messages: number; readonly turns: number }>`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM projection_thread_messages
+              WHERE thread_id = 'thread-message-checkpoint'
+            ) AS messages,
+            (
+              SELECT COUNT(*)
+              FROM projection_turns
+              WHERE thread_id = 'thread-message-checkpoint'
+            ) AS turns
+        `;
+        expect(remainingRows[0]).toEqual({ messages: 0, turns: 0 });
       }),
     );
   });

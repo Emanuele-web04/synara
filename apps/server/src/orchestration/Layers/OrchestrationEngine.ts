@@ -635,7 +635,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // the command engine to own a hydrated read model.
   const getReadModel = () => Effect.sync(() => commandReadModel);
   const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
-    refreshCommandReadModelFromProjectionState;
+    maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
