@@ -34,6 +34,7 @@ import {
   makeCheckCursorProviderStatus,
   makeCheckDevinProviderStatus,
   makeCheckGrokProviderStatus,
+  makeClaudeProbeEnv,
   makeCheckOpenCodeProviderStatus,
   makeProviderHealthLive,
   parseAuthStatusFromOutput,
@@ -1895,6 +1896,17 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           assert.strictEqual(status.authStatus, "authenticated");
         }),
     );
+
+    it("builds Claude SDK probe environments in the configured server home", () => {
+      const env = makeClaudeProbeEnv(
+        "~/.claude-work",
+        { SYNARA_TEST_INSTANCE: "claude-work" },
+        "/tmp/synara-test-home",
+      );
+
+      assert.strictEqual(env.HOME, "/tmp/synara-test-home/.claude-work");
+      assert.strictEqual(env.SYNARA_TEST_INSTANCE, "claude-work");
+    });
 
     it.effect("trusts usable Claude OAuth credentials after the SDK probe validates them", () =>
       Effect.gen(function* () {

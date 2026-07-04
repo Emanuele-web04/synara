@@ -1,6 +1,7 @@
 import { Effect, Layer } from "effect";
 
 import { AgentGatewayCredentialsWithSecretsLive } from "../agentGateway/Layers/AgentGatewayCredentials";
+import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
 import { ServerConfig } from "../config";
 import {
   makeProviderServerPasswordResolver,
@@ -106,6 +107,7 @@ export function makeServerProviderLayer(
       Layer.provide(ProviderRuntimeEventRepositoryLive),
       // Provider sessions resolve persisted provider-instance settings before launch.
       Layer.provide(Layer.succeed(ServerSettingsService, serverSettings)),
+      Layer.provide(ServerSecretStoreLive),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),

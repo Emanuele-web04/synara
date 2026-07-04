@@ -748,12 +748,13 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               json_extract(a.payload_json, '$.provider'),
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
-                THEN COALESCE(
-                  json_extract(th.model_selection_json, '$.provider'),
-                  json_extract(th.model_selection_json, '$.instanceId')
-                )
+                THEN json_extract(th.model_selection_json, '$.provider')
               END,
               s.provider_name,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.instanceId')
+              END,
               'unknown'
             ) AS provider,
             COALESCE(

@@ -9,6 +9,7 @@
  * @module ProviderHealthLive
  */
 import * as OS from "node:os";
+import nodePath from "node:path";
 import type {
   ProviderInstanceId,
   ServerSettings,
@@ -480,6 +481,7 @@ interface ClaudeSubscriptionProbeInput {
   readonly binaryPath?: string | undefined;
   readonly homePath?: string | undefined;
   readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly homeDir?: string | undefined;
 }
 
 function waitForAbortSignal(signal: AbortSignal): Promise<void> {
@@ -514,6 +516,7 @@ function environmentFingerprint(
 function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string {
   return JSON.stringify({
     binaryPath: input.binaryPath?.trim() || null,
+    homeDir: input.homeDir?.trim() || null,
     homePath: input.homePath?.trim() || null,
     environment: environmentFingerprint(input.environment),
   });
@@ -522,7 +525,7 @@ function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string
 const probeClaudeSubscription = (input: ClaudeSubscriptionProbeInput) => {
   const abort = new AbortController();
   const executable = nonEmptyTrimmed(input.binaryPath) ?? "claude";
-  const env = makeClaudeProbeEnv(input.homePath, input.environment);
+  const env = makeClaudeProbeEnv(input.homePath, input.environment, input.homeDir);
   return Effect.tryPromise(async () => {
     const { query: claudeQuery } = await loadClaudeAgentSdk();
     const q = claudeQuery({
@@ -896,12 +899,20 @@ async function makeCodexProbeEnv(
   });
 }
 
-function makeClaudeProbeEnv(
+export function makeClaudeProbeEnv(
   homePath?: string,
   environment?: Readonly<Record<string, string>>,
+  homeDir?: string,
 ): NodeJS.ProcessEnv {
   const normalizedHomePath = nonEmptyTrimmed(homePath);
-  return buildClaudeInstanceProcessEnv(normalizedHomePath, environment);
+  const baseHomeDir = nonEmptyTrimmed(homeDir) ?? OS.homedir();
+  const resolvedHomePath =
+    normalizedHomePath === "~"
+      ? baseHomeDir
+      : normalizedHomePath?.startsWith("~/")
+        ? nodePath.join(baseHomeDir, normalizedHomePath.slice(2))
+        : normalizedHomePath;
+  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
 }
 
 export const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -2862,6 +2873,7 @@ export function makeProviderHealthLive(options?: { readonly providerUpdateTimeou
                   binaryPath,
                   homePath,
                   environment: instance.environment,
+                  homeDir: serverConfig.homeDir,
                 }),
                 binaryPath,
                 homePath,

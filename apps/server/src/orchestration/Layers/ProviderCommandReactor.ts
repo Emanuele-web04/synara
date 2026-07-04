@@ -2,6 +2,8 @@
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
 
+import { isDeepStrictEqual } from "node:util";
+
 import {
   type ChatAttachment,
   type CheckpointRef,
@@ -34,7 +36,6 @@ import {
   Duration,
   Deferred,
   Effect,
-  Equal,
   Exit,
   Layer,
   Option,
@@ -305,7 +306,7 @@ function shouldRestartForProviderOptionsChange(input: {
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
 }): boolean {
-  return !Equal.equals(
+  return !isDeepStrictEqual(
     normalizeProviderOptionsForComparison(input.requestedProvider, input.previousProviderOptions),
     normalizeProviderOptionsForComparison(input.requestedProvider, input.requestedProviderOptions),
   );
@@ -1969,7 +1970,7 @@ const make = Effect.gen(function* () {
           : (currentProvider === "droid" ||
               currentProvider === "grok" ||
               currentProvider === "devin") &&
-            !Equal.equals(previousModelSelection, requestedModelSelection));
+            !isDeepStrictEqual(previousModelSelection, requestedModelSelection));
       const previousProviderOptions = threadProviderOptions.get(threadId);
       const providerOptionsChanged = shouldRestartForProviderOptionsChange({
         requestedProvider: desiredRoutedModelSelection.provider,

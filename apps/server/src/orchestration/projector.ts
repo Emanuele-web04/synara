@@ -116,6 +116,21 @@ function updateThread(
   return nextThreads;
 }
 
+function canProjectTurnModelSelection(
+  thread: OrchestrationThread,
+  modelSelection: OrchestrationThread["modelSelection"] | undefined,
+): boolean {
+  if (modelSelection === undefined) {
+    return false;
+  }
+  const session = thread.session;
+  if (!session || session.status === "stopped" || session.status === "error") {
+    return true;
+  }
+  const boundInstanceId = session.providerInstanceId ?? session.providerName;
+  return !boundInstanceId || modelSelection.instanceId === boundInstanceId;
+}
+
 // Message ids are unique within a thread and streamed deltas land on the newest
 // message, so searching backwards finds the target in one step instead of
 // scanning the whole (capped at MAX_THREAD_MESSAGES) transcript.
@@ -892,7 +907,9 @@ export function projectEvent(
           }
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: thread.modelSelection,
-            requestedModelSelection: payload.modelSelection,
+            requestedModelSelection: canProjectTurnModelSelection(thread, payload.modelSelection)
+              ? payload.modelSelection
+              : undefined,
             canAdoptRequestedProvider: canAdoptFirstTurnProvider({
               hasLatestTurn: thread.latestTurn !== null,
               hasSession: thread.session !== null,
