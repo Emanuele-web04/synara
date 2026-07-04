@@ -123,6 +123,26 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     ]);
   });
 
+  it("keeps account overlay roots for the full instance context", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+
+    const roots = resolveCodexGeneratedImagesRoots({
+      homePath: "/codex-test/.codex-work",
+      shadowHomePath: "/codex-test/.codex-work-auth",
+      accountId: "codex_work",
+    });
+
+    assert.ok(
+      roots.some(
+        (root) =>
+          root.startsWith(
+            path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_work-"),
+          ) && root.endsWith(path.join("generated_images")),
+      ),
+      `expected account overlay generated_images root, got ${JSON.stringify(roots)}`,
+    );
+  });
+
   it("collapses to a single root when overlay equals source", () => {
     delete process.env.SYNARA_HOME;
     // The overlay falls under `<dirname(source)>/.synara/runtime/codex-home-overlay`,
@@ -137,6 +157,12 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
 });
 
 describe("codexConfiguredHomePathsFromSettings", () => {
+  const previousSynaraHome = process.env.SYNARA_HOME;
+
+  afterEach(() => {
+    if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
+    else process.env.SYNARA_HOME = previousSynaraHome;
+  });
   it("includes the env-scoped write home for instances relocating the overlay root", () => {
     const settings = {
       ...DEFAULT_SERVER_SETTINGS,
@@ -149,7 +175,9 @@ describe("codexConfiguredHomePathsFromSettings", () => {
       },
     };
 
-    const homes = codexConfiguredHomePathsFromSettings(settings);
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
 
     const expectedPrefix = path.join(
       "/instance-env/runtime",
@@ -158,8 +186,40 @@ describe("codexConfiguredHomePathsFromSettings", () => {
       "codex_env-",
     );
     assert.ok(
-      homes.some((home) => home.startsWith(expectedPrefix)),
-      `expected env-scoped account overlay home, got ${JSON.stringify(homes)}`,
+      roots.some((root) => root.startsWith(expectedPrefix)),
+      `expected env-scoped account overlay root, got ${JSON.stringify(roots)}`,
+    );
+  });
+
+  it("preserves configured account context for generated-image roots", () => {
+    process.env.SYNARA_HOME = "/synara-test/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_work: {
+          driver: "codex" as const,
+          enabled: true,
+          config: {
+            homePath: "/codex-test/.codex-work",
+            shadowHomePath: "/codex-test/.codex-work-auth",
+            accountId: "codex_work",
+          },
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.some(
+        (root) =>
+          root.startsWith(
+            path.join("/synara-test/runtime", "codex-home-overlay", "accounts", "codex_work-"),
+          ) && root.endsWith(path.join("generated_images")),
+      ),
+      `expected configured account overlay generated_images root, got ${JSON.stringify(roots)}`,
     );
   });
 });

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
 
+import { resolveCodexHomeOverlayAccountSegment } from "./codexHomePaths.ts";
 import { resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 
 const tempDirs: string[] = [];
@@ -133,6 +134,59 @@ describe("resolveAllowedLocalPreviewFile", () => {
       });
 
       assert.equal(result, null);
+    } finally {
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
+      } else {
+        process.env.SYNARA_HOME = previousSynaraHome;
+      }
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows generated images from the configured Codex account overlay after direct-home toggles", async () => {
+    const fakeRoot = path.join(
+      process.cwd(),
+      `.test-codex-configured-account-overlay-${process.pid}-${Date.now()}`,
+    );
+    const sourceHome = path.join(fakeRoot, "source", ".codex-work");
+    const shadowHome = path.join(fakeRoot, "shadow", ".codex-work-auth");
+    const synaraHome = path.join(fakeRoot, "synara", "runtime");
+    const accountSegment = resolveCodexHomeOverlayAccountSegment({
+      homePath: sourceHome,
+      shadowHomePath: shadowHome,
+      accountId: "work",
+    });
+    assert.ok(accountSegment, "expected an account overlay segment");
+    const imageDir = path.join(
+      synaraHome,
+      "codex-home-overlay",
+      "accounts",
+      accountSegment,
+      "generated_images",
+      "thread-work",
+    );
+    const imagePath = path.join(imageDir, "call.png");
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = synaraHome;
+    try {
+      const result = await resolveAllowedLocalPreviewFile({
+        requestedPath: imagePath,
+        cwd: null,
+        codexHomePaths: [
+          {
+            homePath: sourceHome,
+            shadowHomePath: shadowHome,
+            accountId: "work",
+            environment: { DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0" },
+          },
+        ],
+      });
+
+      assert.equal(result?.path, realpathSync(imagePath));
     } finally {
       if (previousSynaraHome === undefined) {
         delete process.env.SYNARA_HOME;

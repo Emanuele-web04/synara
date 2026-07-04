@@ -31,7 +31,10 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/effectHttp";
 import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { deriveAuthClientMetadata } from "./auth/utils";
-import { codexConfiguredHomePathsFromSettings } from "./codexGeneratedImages.ts";
+import {
+  codexConfiguredHomePathsFromSettings,
+  type CodexGeneratedImageHomeCandidate,
+} from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
@@ -816,7 +819,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     const configuredCodexHomePaths = Option.isSome(settingsService)
       ? yield* settingsService.value.getSettings.pipe(
           Effect.map(codexConfiguredHomePathsFromSettings),
-          Effect.catch(() => Effect.succeed<readonly string[]>([])),
+          Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
         )
       : [];
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);
@@ -830,7 +833,10 @@ export const localImageEffectRouteLayer = HttpRouter.add(
           Effect.catch(() => Effect.succeed<readonly string[]>([])),
         )
       : [];
-    const codexHomePaths = [...new Set([...configuredCodexHomePaths, ...liveCodexHomePaths])];
+    const codexHomePaths: readonly CodexGeneratedImageHomeCandidate[] = [
+      ...configuredCodexHomePaths,
+      ...liveCodexHomePaths,
+    ];
 
     const previewFile = yield* Effect.promise(() =>
       resolveAllowedLocalPreviewFile({

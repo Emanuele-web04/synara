@@ -41,6 +41,21 @@ it("expands instance Claude homes for historical-session imports", () => {
   assert.equal(environment?.SYNARA_CLAUDE_IMPORT_TEST, "1");
 });
 
+it("expands instance Claude homes against the configured Synara home", () => {
+  const environment = claudeHistoricalSessionEnvironment(
+    {
+      claudeAgent: {
+        homePath: "~/claude-work",
+        environment: { SYNARA_CLAUDE_IMPORT_TEST: "1" },
+      },
+    } satisfies ProviderStartOptions,
+    { homeDir: "/synara/home" },
+  );
+
+  assert.equal(environment?.HOME, path.join("/synara/home", "claude-work"));
+  assert.equal(environment?.SYNARA_CLAUDE_IMPORT_TEST, "1");
+});
+
 it("does not remerge ambient credentials into Claude import child environments", () => {
   const original = process.env.ANTHROPIC_API_KEY;
   process.env.ANTHROPIC_API_KEY = "ambient-key";
@@ -131,6 +146,7 @@ it.effect("imports Codex history through a provider-owned fork", () =>
       fileSystem,
       path,
       platform: process.platform,
+      serverConfig: { homeDir: "/tmp/synara-home" },
       orchestrationEngine: {
         dispatch: (command: OrchestrationCommand) =>
           Effect.sync(() => {
@@ -190,6 +206,7 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
       fileSystem,
       path,
       platform: process.platform,
+      serverConfig: { homeDir: "/tmp/synara-home" },
       orchestrationEngine: {
         dispatch: () => Effect.die("disabled import must not dispatch"),
       } as unknown as OrchestrationEngineShape,

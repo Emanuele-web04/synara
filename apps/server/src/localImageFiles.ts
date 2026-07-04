@@ -16,7 +16,10 @@ import {
 } from "@synara/shared/localPreviewFiles";
 import { SCRATCH_WORKSPACES_DIRNAME } from "@synara/shared/threadWorkspace";
 
-import { resolveCodexGeneratedImagesRoots } from "./codexGeneratedImages.ts";
+import {
+  type CodexGeneratedImageHomeCandidate,
+  resolveCodexGeneratedImagesRoots,
+} from "./codexGeneratedImages.ts";
 
 export { LOCAL_IMAGE_ROUTE_PATH };
 
@@ -127,9 +130,9 @@ async function resolveWorkspaceRoot(cwd: string | null): Promise<string | null> 
 export async function resolveAllowedLocalPreviewFile(input: {
   readonly requestedPath: string | null;
   readonly cwd: string | null;
-  readonly codexHomePath?: string;
+  readonly codexHomePath?: CodexGeneratedImageHomeCandidate;
   /** Additional configured Codex homes (per-instance dedicated homes). */
-  readonly codexHomePaths?: readonly string[];
+  readonly codexHomePaths?: readonly CodexGeneratedImageHomeCandidate[];
   readonly scratchWorkspacesRoot?: string;
   readonly allowAbsoluteLocalPreviewFile?: boolean;
   readonly previewGrant?: string | null;

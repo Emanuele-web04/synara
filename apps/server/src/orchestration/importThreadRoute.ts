@@ -33,6 +33,7 @@ import type { FileSystem, Path } from "effect";
 import { Data, Effect, Option } from "effect";
 
 import { resolveThreadWorkspaceCwd } from "../checkpointing/Utils";
+import type { ServerConfigShape } from "../config";
 import { loadClaudeAgentSdk } from "../provider/claudeAgentSdk.ts";
 import { buildClaudeInstanceProcessEnv } from "../provider/claudeEnvironment.ts";
 import { ensureProviderEnabled } from "../provider/enabledProviderAdapter";
@@ -158,6 +159,7 @@ async function queryClaudeHistoricalSession<T>(input: {
 
 export function claudeHistoricalSessionEnvironment(
   providerOptions: ProviderStartOptions | undefined,
+  input?: { readonly homeDir?: string | undefined },
 ): NodeJS.ProcessEnv | undefined {
   const claudeOptions = providerOptions?.claudeAgent;
   if (!claudeOptions) {
@@ -168,7 +170,14 @@ export function claudeHistoricalSessionEnvironment(
   if (!homePath && Object.keys(environment).length === 0) {
     return undefined;
   }
-  return buildClaudeInstanceProcessEnv(homePath, environment);
+  const baseHomeDir = input?.homeDir?.trim();
+  const resolvedHomePath =
+    baseHomeDir && homePath === "~"
+      ? baseHomeDir
+      : baseHomeDir && homePath?.startsWith("~/")
+        ? nodePath.join(baseHomeDir, homePath.slice(2))
+        : homePath;
+  return buildClaudeInstanceProcessEnv(resolvedHomePath, environment);
 }
 
 function mapProviderSessionStatusToOrchestrationStatus(
@@ -197,6 +206,7 @@ export interface ImportThreadHandlerOptions {
   readonly projectionSnapshotQuery: ProjectionSnapshotQueryShape;
   readonly providerAdapterRegistry: ProviderAdapterRegistryShape;
   readonly providerService: ProviderServiceShape;
+  readonly serverConfig: Pick<ServerConfigShape, "homeDir">;
   readonly serverSettings: ServerSettingsShape;
 }
 
@@ -221,7 +231,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly externalId: string;
     readonly providerOptions?: ProviderStartOptions;
   }) {
-    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
+      homeDir: options.serverConfig.homeDir,
+    });
     const claudeSessionInfo = yield* Effect.tryPromise({
       try: () =>
         queryClaudeHistoricalSession<SDKSessionInfo | null | undefined>({
@@ -380,7 +392,9 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     readonly providerOptions?: ProviderStartOptions;
     readonly threadId: ThreadId;
   }) {
-    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions);
+    const historicalEnv = claudeHistoricalSessionEnvironment(input.providerOptions, {
+      homeDir: options.serverConfig.homeDir,
+    });
     const sessionMessages = yield* Effect.tryPromise({
       try: () =>
         queryClaudeHistoricalSession<SessionMessage[]>({
