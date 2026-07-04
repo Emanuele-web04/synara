@@ -123,6 +123,21 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
   `;
 
   yield* sql`
+    INSERT INTO orchestration_command_receipts (
+      command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status, error
+    )
+    VALUES
+      (
+        'cmd-keep-turn', 'thread', 'thread-keep',
+        '2026-06-13T08:05:00.000Z', 1, 'accepted', NULL
+      ),
+      (
+        'cmd-purge-turn', 'thread', 'thread-purge',
+        '2026-06-13T09:05:00.000Z', 2, 'accepted', NULL
+      )
+  `;
+
+  yield* sql`
     INSERT INTO projection_thread_activities (
       activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
     )
@@ -179,6 +194,13 @@ describe("ProfileStatsArchive", () => {
           SELECT COUNT(*) AS count FROM orchestration_events WHERE stream_id = 'thread-purge'
         `;
         expect(remainingEvents[0]?.count).toBe(0);
+        const remainingReceipts = yield* sql<{ readonly aggregateId: string }>`
+          SELECT aggregate_id AS aggregateId
+          FROM orchestration_command_receipts
+          WHERE aggregate_id IN ('thread-keep', 'thread-purge')
+          ORDER BY aggregate_id ASC
+        `;
+        expect(remainingReceipts.map((row) => row.aggregateId)).toEqual(["thread-keep"]);
         const remainingActivities = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count
           FROM projection_thread_activities
