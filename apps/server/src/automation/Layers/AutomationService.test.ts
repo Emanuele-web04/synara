@@ -2747,6 +2747,64 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("replaces stale heartbeat turn provider options with selected instance settings", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-refresh-options-target");
+      const codexWorkInstanceId = "codex_work_heartbeat_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [codexWorkInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Work",
+            config: {
+              homePath: "/tmp/codex-heartbeat-home",
+              accountId: "work",
+            },
+          },
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: codexWorkInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+          claudeAgent: {
+            homePath: "/tmp/stale-claude-home",
+          },
+        },
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      const command = dispatchedCommands[0];
+      assert.strictEqual(command?.type, "thread.turn.start");
+      if (command?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.deepStrictEqual(command.providerOptions, {
+        codex: {
+          homePath: "/tmp/codex-heartbeat-home",
+          accountId: "work",
+        },
+      });
+    }),
+  );
+
   it.effect("drops stale heartbeat turn provider options when the selected instance is gone", () =>
     Effect.gen(function* () {
       resetHarness();
