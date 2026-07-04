@@ -267,6 +267,12 @@ import {
   XIcon,
 } from "~/lib/icons";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
+import {
+  ComposerScheduleSendMenu,
+  DEFAULT_SCHEDULED_COMPOSER_DELAY_OPTIONS,
+  formatScheduledComposerCountdown,
+  type ScheduledComposerDispatchMode,
+} from "./chat/ComposerScheduleSendMenu";
 import { ComposerLiveChangesHeader } from "./chat/ComposerLiveChangesHeader";
 import { Button } from "./ui/button";
 import { Skeleton } from "./ui/skeleton";
@@ -790,6 +796,13 @@ function formatPastedTextTitleSeed(pastedTexts: ReadonlyArray<PastedTextDraft>):
 
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const VOICE_RECORDER_ACTION_ARM_DELAY_MS = 250;
+const DEFAULT_SCHEDULED_COMPOSER_DISPATCH_MODE: ScheduledComposerDispatchMode = "queue";
+
+type ScheduledComposerPrompt = {
+  dispatchMode: ScheduledComposerDispatchMode;
+  queuedTurn: QueuedComposerChatTurn;
+  targetAtMs: number;
+};
 
 function warnVoiceGuard(event: string, details?: Record<string, unknown>) {
   if (!import.meta.env.DEV) {
@@ -1236,6 +1249,16 @@ export default function ChatView({
   const restoredQueuedSourceProposedPlanRef = useRef<RestoredComposerSourceProposedPlan | null>(
     restoredSourceProposedPlan ?? null,
   );
+  const [scheduledComposerDelaySeconds, setScheduledComposerDelaySeconds] = useState(
+    DEFAULT_SCHEDULED_COMPOSER_DELAY_OPTIONS[0]?.seconds ?? 5 * 60,
+  );
+  const [scheduledComposerDispatchMode, setScheduledComposerDispatchMode] =
+    useState<ScheduledComposerDispatchMode>(DEFAULT_SCHEDULED_COMPOSER_DISPATCH_MODE);
+  const [scheduledComposerPrompt, setScheduledComposerPrompt] =
+    useState<ScheduledComposerPrompt | null>(null);
+  const scheduledComposerPromptRef = useRef<ScheduledComposerPrompt | null>(null);
+  const [scheduledComposerNowMs, setScheduledComposerNowMs] = useState(() => Date.now());
+  const scheduledComposerDispatchingRef = useRef(false);
   const autoDispatchingQueuedTurnRef = useRef(false);
   // Holds queued-composer auto-dispatch through a non-Codex steer's
   // interrupt→re-dispatch gap; see resolveQueuedSteerGateTransition.
@@ -6040,6 +6063,113 @@ export default function ChatView({
     ],
   );
 
+  useEffect(() => {
+    scheduledComposerPromptRef.current = scheduledComposerPrompt;
+  }, [scheduledComposerPrompt]);
+
+  useEffect(() => {
+    if (scheduledComposerPrompt === null) {
+      return;
+    }
+    setScheduledComposerNowMs(Date.now());
+    const timer = window.setInterval(() => setScheduledComposerNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [scheduledComposerPrompt]);
+
+  const cancelScheduledComposerPrompt = useCallback(() => {
+    setScheduledComposerPrompt(null);
+    scheduledComposerPromptRef.current = null;
+  }, []);
+
+  const startScheduledComposerPrompt = useCallback(() => {
+    if (!activeThread) {
+      return;
+    }
+    const liveComposerSnapshot = composerEditorRef.current?.readSnapshot() ?? null;
+    const promptForSchedule = liveComposerSnapshot?.value ?? promptRef.current;
+    const { trimmedPrompt, sendableTerminalContexts, sendablePastedTexts, hasSendableContent } =
+      deriveComposerSendState({
+        prompt: promptForSchedule,
+        imageCount: composerImages.length,
+        fileCount: composerFiles.length,
+        assistantSelectionCount: composerAssistantSelections.length,
+        fileCommentCount: composerFileComments.length,
+        terminalContexts: composerTerminalContexts,
+        pastedTexts: composerPastedTexts,
+      });
+    if (!hasSendableContent) {
+      toastManager.add({
+        type: "error",
+        title: "Add a prompt before starting the timer.",
+      });
+      return;
+    }
+
+    const createdAtMs = Date.now();
+    const queuedTurn: QueuedComposerChatTurn = {
+      id: randomUUID(),
+      kind: "chat",
+      createdAt: new Date(createdAtMs).toISOString(),
+      previewText: buildQueuedComposerPreviewText({
+        trimmedPrompt,
+        images: composerImages,
+        files: composerFiles,
+        assistantSelections: composerAssistantSelections,
+        terminalContexts: sendableTerminalContexts,
+        fileComments: composerFileComments,
+        pastedTexts: sendablePastedTexts,
+      }),
+      prompt: promptForSchedule,
+      images: composerImages,
+      files: composerFiles,
+      assistantSelections: composerAssistantSelections,
+      fileComments: composerFileComments,
+      terminalContexts: sendableTerminalContexts,
+      pastedTexts: sendablePastedTexts,
+      skills: selectedComposerSkillsRef.current,
+      mentions: selectedComposerMentionsRef.current,
+      selectedProvider,
+      selectedModel,
+      selectedPromptEffort,
+      modelSelection: selectedModelSelection,
+      ...(providerOptionsForDispatch ? { providerOptionsForDispatch } : {}),
+      runtimeMode,
+      interactionMode,
+      envMode,
+    };
+
+    const nextScheduledPrompt: ScheduledComposerPrompt = {
+      dispatchMode: scheduledComposerDispatchMode,
+      queuedTurn,
+      targetAtMs: createdAtMs + scheduledComposerDelaySeconds * 1000,
+    };
+    setScheduledComposerPrompt(nextScheduledPrompt);
+    scheduledComposerPromptRef.current = nextScheduledPrompt;
+    setScheduledComposerNowMs(createdAtMs);
+    clearComposerInput(activeThread.id);
+    scheduleComposerFocus();
+  }, [
+    activeThread,
+    clearComposerInput,
+    composerAssistantSelections,
+    composerFileComments,
+    composerFiles,
+    composerImages,
+    composerPastedTexts,
+    composerTerminalContexts,
+    envMode,
+    interactionMode,
+    providerOptionsForDispatch,
+    runtimeMode,
+    scheduleComposerFocus,
+    scheduledComposerDelaySeconds,
+    scheduledComposerDispatchMode,
+    selectedModel,
+    selectedModelSelection,
+    selectedPromptEffort,
+    selectedProvider,
+  ]);
+
   const cancelAutomationConversation = useCallback(() => {
     // Abandon setup and put everything back into the composer: the accumulated request
     // plus any reply the user had started typing but not yet sent, so cancelling never
@@ -7497,6 +7627,136 @@ export default function ChatView({
     }
     return turnStartSucceeded;
   };
+  const scheduledComposerOnSendRef = useRef(onSend);
+  scheduledComposerOnSendRef.current = onSend;
+
+  const dispatchScheduledPromptInNewChat = useCallback(
+    async (scheduledPrompt: ScheduledComposerPrompt): Promise<boolean> => {
+      const api = readNativeApi();
+      if (!api || !activeProject) {
+        return false;
+      }
+      const createdAt = new Date().toISOString();
+      const nextThreadId = newThreadId();
+      const trimmedPrompt = scheduledPrompt.queuedTurn.prompt.trim();
+      const title = buildPromptThreadTitleFallback(trimmedPrompt || GENERIC_CHAT_THREAD_TITLE);
+      const outgoingText = formatOutgoingComposerPrompt({
+        provider: scheduledPrompt.queuedTurn.selectedProvider,
+        model: scheduledPrompt.queuedTurn.selectedModel,
+        effort: scheduledPrompt.queuedTurn.selectedPromptEffort,
+        text: scheduledPrompt.queuedTurn.prompt,
+      });
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.create",
+        commandId: newCommandId(),
+        threadId: nextThreadId,
+        projectId: activeProject.id,
+        title,
+        modelSelection: scheduledPrompt.queuedTurn.modelSelection,
+        runtimeMode: scheduledPrompt.queuedTurn.runtimeMode,
+        interactionMode: scheduledPrompt.queuedTurn.interactionMode,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        lastKnownPr: null,
+        createdAt,
+      });
+      rememberCustomBinaryPathForDispatch({
+        threadId: nextThreadId,
+        provider: scheduledPrompt.queuedTurn.modelSelection.provider,
+        providerOptions: scheduledPrompt.queuedTurn.providerOptionsForDispatch,
+      });
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.start",
+        commandId: newCommandId(),
+        threadId: nextThreadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text: outgoingText,
+          attachments: [],
+        },
+        modelSelection: scheduledPrompt.queuedTurn.modelSelection,
+        ...(scheduledPrompt.queuedTurn.providerOptionsForDispatch
+          ? { providerOptions: scheduledPrompt.queuedTurn.providerOptionsForDispatch }
+          : {}),
+        assistantDeliveryMode,
+        dispatchMode: "queue",
+        runtimeMode: scheduledPrompt.queuedTurn.runtimeMode,
+        interactionMode: scheduledPrompt.queuedTurn.interactionMode,
+        createdAt,
+      });
+      const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
+      if (snapshot) {
+        syncServerShellSnapshot(snapshot);
+      }
+      await navigate({ to: "/$threadId", params: { threadId: nextThreadId } });
+      return true;
+    },
+    [
+      activeProject,
+      assistantDeliveryMode,
+      navigate,
+      rememberCustomBinaryPathForDispatch,
+      syncServerShellSnapshot,
+    ],
+  );
+
+  useEffect(() => {
+    if (scheduledComposerPrompt === null || scheduledComposerDispatchingRef.current) {
+      return;
+    }
+    const remainingMs = scheduledComposerPrompt.targetAtMs - scheduledComposerNowMs;
+    if (remainingMs > 0) {
+      return;
+    }
+
+    scheduledComposerDispatchingRef.current = true;
+    void (async () => {
+      let succeeded = false;
+      try {
+        if (scheduledComposerPrompt.dispatchMode === "new") {
+          succeeded = await dispatchScheduledPromptInNewChat(scheduledComposerPrompt);
+        } else if (scheduledComposerPrompt.dispatchMode === "queue" && hasLiveTurn) {
+          if (activeThread) {
+            enqueueQueuedComposerTurn(activeThread.id, scheduledComposerPrompt.queuedTurn);
+            succeeded = true;
+          }
+        } else {
+          succeeded = await scheduledComposerOnSendRef.current(
+            undefined,
+            scheduledComposerPrompt.dispatchMode,
+            scheduledComposerPrompt.queuedTurn,
+          );
+        }
+        if (succeeded) {
+          setScheduledComposerPrompt(null);
+          scheduledComposerPromptRef.current = null;
+        } else {
+          toastManager.add({
+            type: "error",
+            title: "Scheduled prompt could not be sent.",
+          });
+        }
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: "Scheduled prompt could not be sent.",
+          description: error instanceof Error ? error.message : undefined,
+        });
+      } finally {
+        scheduledComposerDispatchingRef.current = false;
+      }
+    })();
+  }, [
+    activeThread,
+    dispatchScheduledPromptInNewChat,
+    enqueueQueuedComposerTurn,
+    hasLiveTurn,
+    scheduledComposerNowMs,
+    scheduledComposerPrompt,
+  ]);
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -9497,6 +9757,12 @@ export default function ChatView({
     activeContextWindowLabel: contextWindowSelectionStatus.activeLabel,
     pendingContextWindowLabel: contextWindowSelectionStatus.pendingSelectedLabel,
   };
+  const scheduledComposerCountdownLabel =
+    scheduledComposerPrompt === null
+      ? null
+      : formatScheduledComposerCountdown(
+          scheduledComposerPrompt.targetAtMs - scheduledComposerNowMs,
+        );
   // The composer's leading controls (extras "+" menu, access-rules/runtime
   // indicator). At the narrowest footer tier they relocate from the footer to
   // the branch-toolbar row below the input instead of getting clipped; the
@@ -10025,6 +10291,27 @@ export default function ChatView({
                         />
                       ) : null}
                       {!isVoiceRecording && !isVoiceTranscribing ? composerPickerControls : null}
+                      {!isVoiceRecording && !isVoiceTranscribing && !activePendingProgress ? (
+                        <ComposerScheduleSendMenu
+                          canSchedule={
+                            !isComposerApprovalState &&
+                            !isConnecting &&
+                            !isSendBusy &&
+                            composerSendState.hasSendableContent
+                          }
+                          selectedDelaySeconds={scheduledComposerDelaySeconds}
+                          selectedMode={scheduledComposerDispatchMode}
+                          pendingCountdownLabel={scheduledComposerCountdownLabel}
+                          pendingMode={scheduledComposerPrompt?.dispatchMode ?? null}
+                          pendingPreviewText={
+                            scheduledComposerPrompt?.queuedTurn.previewText ?? null
+                          }
+                          onDelayChange={setScheduledComposerDelaySeconds}
+                          onModeChange={setScheduledComposerDispatchMode}
+                          onSchedule={startScheduledComposerPrompt}
+                          onCancel={cancelScheduledComposerPrompt}
+                        />
+                      ) : null}
                       {showVoiceNotesControl && (isVoiceRecording || isVoiceTranscribing) ? (
                         <ComposerVoiceRecorderBar
                           disabled={isComposerApprovalState || isConnecting || isSendBusy}

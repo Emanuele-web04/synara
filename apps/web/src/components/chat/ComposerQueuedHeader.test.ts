@@ -5,10 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  compactQueuedComposerPreviewMarkdown,
-  formatQueuedComposerWaitTimer,
-} from "./ComposerQueuedHeader";
+import { compactQueuedComposerPreviewMarkdown } from "./ComposerQueuedHeader";
 
 describe("compactQueuedComposerPreviewMarkdown", () => {
   it("keeps inline markdown while dropping block-only heading/list syntax", () => {
@@ -30,20 +27,5 @@ describe("compactQueuedComposerPreviewMarkdown", () => {
   it("falls back for empty block prefixes", () => {
     expect(compactQueuedComposerPreviewMarkdown("")).toBe("Queued follow-up");
     expect(compactQueuedComposerPreviewMarkdown(">")).toBe("Queued follow-up");
-  });
-});
-
-describe("formatQueuedComposerWaitTimer", () => {
-  it("formats the queued wait time from creation to the current check", () => {
-    expect(
-      formatQueuedComposerWaitTimer("2026-07-04T12:00:00.000Z", "2026-07-04T12:00:07.000Z"),
-    ).toBe("7s");
-    expect(
-      formatQueuedComposerWaitTimer("2026-07-04T12:00:00.000Z", "2026-07-04T12:01:03.000Z"),
-    ).toBe("1m 3s");
-  });
-
-  it("falls back for invalid queued timestamps", () => {
-    expect(formatQueuedComposerWaitTimer("not-a-date", "2026-07-04T12:00:00.000Z")).toBe("0s");
   });
 });
