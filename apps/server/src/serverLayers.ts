@@ -64,13 +64,16 @@ export function makeServerRuntimeServicesLayer() {
   const checkpointReactorLayer = CheckpointReactorLive.pipe(
     Layer.provideMerge(runtimeServicesLayer),
   );
+  const profileStatsArchiveLayer = ProfileStatsArchiveLive.pipe(
+    Layer.provideMerge(checkpointStoreLayer),
+  );
   const orchestrationReactorLayer = OrchestrationReactorLive.pipe(
     Layer.provideMerge(runtimeIngestionLayer),
     Layer.provideMerge(providerCommandReactorLayer),
     Layer.provideMerge(checkpointReactorLayer),
   );
   const threadDeletionReactorLayer = ThreadDeletionReactorLive.pipe(
-    Layer.provideMerge(ProfileStatsArchiveLive),
+    Layer.provideMerge(profileStatsArchiveLayer),
     Layer.provideMerge(OrchestrationLayerLive),
     Layer.provideMerge(TerminalLayerLive),
   );

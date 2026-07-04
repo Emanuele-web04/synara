@@ -5,9 +5,13 @@
 // delete actually free disk space without shrinking the Profile page numbers.
 // Layer: server maintenance service (SqlClient).
 
+import { CheckpointRef, type ThreadEnvironmentMode } from "@t3tools/contracts";
+import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
+import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
+import { CHECKPOINT_REFS_PREFIX } from "./checkpointing/Utils";
 import { aggregateProfileSkillUsageRows } from "./profileStats";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
 
@@ -15,6 +19,10 @@ interface PurgeThreadRow {
   readonly projectId: string | null;
   readonly modelSelectionJson: string | null;
   readonly deletedAt: string | null;
+  readonly envMode: string | null;
+  readonly worktreePath: string | null;
+  readonly projectKind: string | null;
+  readonly workspaceRoot: string | null;
 }
 
 interface TurnEventRow {
@@ -31,6 +39,10 @@ interface SkillMessageRow {
   readonly text: string | null;
   readonly skillsJson: string | null;
   readonly mentionsJson: string | null;
+}
+
+interface CheckpointTurnRow {
+  readonly checkpointRef: string | null;
 }
 
 export interface ThreadTurnSnapshotRow {
@@ -82,6 +94,48 @@ function parseModelSelectionJson(json: string | null): ModelSelectionLike | null
   } catch {
     return null;
   }
+}
+
+function normalizeThreadEnvironmentMode(value: string | null): ThreadEnvironmentMode | undefined {
+  return value === "local" || value === "worktree" ? value : undefined;
+}
+
+function threadWorkspaceCwdForCheckpointCleanup(thread: PurgeThreadRow): string | null {
+  const projectCwd =
+    thread.projectKind === "chat" && thread.worktreePath === null ? null : thread.workspaceRoot;
+  return resolveThreadWorkspaceCwd({
+    projectCwd,
+    envMode: normalizeThreadEnvironmentMode(thread.envMode),
+    worktreePath: thread.worktreePath,
+  });
+}
+
+function checkpointRefsFromTurnRows(
+  rows: ReadonlyArray<CheckpointTurnRow>,
+): ReadonlyArray<CheckpointRef> {
+  const refs = new Set<string>();
+  for (const row of rows) {
+    const checkpointRef = readString(row.checkpointRef);
+    if (!checkpointRef?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`)) {
+      continue;
+    }
+    refs.add(checkpointRef);
+  }
+  return [...refs].map((checkpointRef) => CheckpointRef.makeUnsafe(checkpointRef));
+}
+
+function hasProfileStatsContribution(input: {
+  readonly promptRows: ReadonlyArray<SkillMessageRow>;
+  readonly turnRows: ReadonlyArray<ThreadTurnSnapshotRow>;
+  readonly tokenRows: ReadonlyArray<ThreadTokenSnapshotRow>;
+  readonly skillRows: ReturnType<typeof aggregateProfileSkillUsageRows>;
+}): boolean {
+  return (
+    input.promptRows.length > 0 ||
+    input.turnRows.some((row) => row.turnCount > 0) ||
+    input.tokenRows.length > 0 ||
+    input.skillRows.some((row) => row.runCount > 0)
+  );
 }
 
 // Mirrors the per-turn extraction in profileStats.queryTurnInsights: the turn
@@ -165,7 +219,9 @@ export interface ProfileStatsArchiveShape {
   // Purges every soft-deleted thread that was NOT hidden by the retention
   // sweep. Catches per-thread failures so one bad thread cannot stall the
   // sweep; returns how many threads were purged.
-  readonly purgeSoftDeletedManualThreads: () => Effect.Effect<number, unknown>;
+  readonly purgeSoftDeletedManualThreads: (input?: {
+    readonly beforePurge?: (threadId: string) => Effect.Effect<boolean, unknown>;
+  }) => Effect.Effect<number, unknown>;
 }
 
 export class ProfileStatsArchive extends ServiceMap.Service<
@@ -175,16 +231,22 @@ export class ProfileStatsArchive extends ServiceMap.Service<
 
 const makeProfileStatsArchive = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
+  const checkpointStore = yield* CheckpointStore;
 
   const snapshotAndPurgeThread = (threadId: string) =>
     Effect.gen(function* () {
       const threadRows = yield* sql<PurgeThreadRow>`
         SELECT
-          project_id AS projectId,
-          model_selection_json AS modelSelectionJson,
-          deleted_at AS deletedAt
-        FROM projection_threads
-        WHERE thread_id = ${threadId}
+          t.project_id AS projectId,
+          t.model_selection_json AS modelSelectionJson,
+          t.deleted_at AS deletedAt,
+          t.env_mode AS envMode,
+          t.worktree_path AS worktreePath,
+          p.kind AS projectKind,
+          p.workspace_root AS workspaceRoot
+        FROM projection_threads t
+        LEFT JOIN projection_projects p ON p.project_id = t.project_id
+        WHERE t.thread_id = ${threadId}
       `;
       const thread = threadRows[0];
       if (!thread) {
@@ -226,55 +288,83 @@ const makeProfileStatsArchive = Effect.gen(function* () {
           AND source = 'native'
         ORDER BY created_at ASC, message_id ASC
       `;
+      const checkpointTurnRows = yield* sql<CheckpointTurnRow>`
+        SELECT checkpoint_ref AS checkpointRef
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND checkpoint_ref IS NOT NULL
+      `;
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
       const tokenProvider = parseModelSelectionJson(thread.modelSelectionJson)?.provider ?? null;
       const tokenRows = aggregateThreadTokenRows(tokenActivityRows);
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
+      const hasStatsContribution = hasProfileStatsContribution({
+        promptRows: skillMessageRows,
+        turnRows,
+        tokenRows,
+        skillRows,
+      });
 
       // Snapshot writes are idempotent per thread so an interrupted purge can
       // safely re-run: wipe any partial snapshot before inserting the new one.
+      yield* sql`DELETE FROM profile_stats_deleted_threads WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_prompts WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_turns WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_skills WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM profile_stats_deleted_tokens WHERE thread_id = ${threadId}`;
 
-      yield* sql`
-        INSERT OR REPLACE INTO profile_stats_deleted_threads (thread_id, project_id, deleted_at)
-        VALUES (${threadId}, ${projectId}, ${deletedAt})
-      `;
-      yield* sql`
-        INSERT INTO profile_stats_deleted_prompts (thread_id, project_id, created_at)
-        SELECT thread_id, ${projectId}, created_at
-        FROM projection_thread_messages
-        WHERE thread_id = ${threadId}
-          AND role = 'user'
-          AND source = 'native'
-      `;
-      yield* Effect.forEach(
-        turnRows,
-        (row) => sql`
-          INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
-          VALUES (${threadId}, ${row.provider}, ${row.model}, ${row.reasoning}, ${row.turnCount})
-        `,
-        { concurrency: 1, discard: true },
-      );
-      yield* Effect.forEach(
-        skillRows,
-        (row) => sql`
-          INSERT INTO profile_stats_deleted_skills (thread_id, name, kind, run_count)
-          VALUES (${threadId}, ${row.name}, ${row.kind}, ${row.runCount})
-        `,
-        { concurrency: 1, discard: true },
-      );
-      yield* Effect.forEach(
-        tokenRows,
-        (row) => sql`
-          INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, tokens)
-          VALUES (${threadId}, ${row.createdAt}, ${tokenProvider}, ${row.tokens})
-        `,
-        { concurrency: 1, discard: true },
-      );
+      if (hasStatsContribution) {
+        yield* sql`
+          INSERT INTO profile_stats_deleted_threads (thread_id, project_id, deleted_at)
+          VALUES (${threadId}, ${projectId}, ${deletedAt})
+        `;
+        yield* sql`
+          INSERT INTO profile_stats_deleted_prompts (thread_id, project_id, created_at)
+          SELECT thread_id, ${projectId}, created_at
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+            AND role = 'user'
+            AND source = 'native'
+        `;
+        yield* Effect.forEach(
+          turnRows,
+          (row) => sql`
+            INSERT INTO profile_stats_deleted_turns (thread_id, provider, model, reasoning, turn_count)
+            VALUES (${threadId}, ${row.provider}, ${row.model}, ${row.reasoning}, ${row.turnCount})
+          `,
+          { concurrency: 1, discard: true },
+        );
+        yield* Effect.forEach(
+          skillRows,
+          (row) => sql`
+            INSERT INTO profile_stats_deleted_skills (thread_id, name, kind, run_count)
+            VALUES (${threadId}, ${row.name}, ${row.kind}, ${row.runCount})
+          `,
+          { concurrency: 1, discard: true },
+        );
+        yield* Effect.forEach(
+          tokenRows,
+          (row) => sql`
+            INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, tokens)
+            VALUES (${threadId}, ${row.createdAt}, ${tokenProvider}, ${row.tokens})
+          `,
+          { concurrency: 1, discard: true },
+        );
+      }
+
+      const checkpointRefs = checkpointRefsFromTurnRows(checkpointTurnRows);
+      if (checkpointRefs.length > 0) {
+        const cwd = threadWorkspaceCwdForCheckpointCleanup(thread);
+        if (cwd === null) {
+          return yield* Effect.fail(
+            new Error(
+              `Cannot purge checkpoint refs for thread ${threadId} because its workspace is unavailable.`,
+            ),
+          );
+        }
+        yield* checkpointStore.deleteCheckpointRefs({ cwd, checkpointRefs });
+      }
 
       // Hard delete: every table that stores rows for this thread. The event
       // delete mirrors the snapshot scope above (stream id OR payload threadId,
@@ -310,7 +400,7 @@ const makeProfileStatsArchive = Effect.gen(function* () {
   ) => sql.withTransaction(snapshotAndPurgeThread(input.threadId));
 
   const purgeSoftDeletedManualThreads: ProfileStatsArchiveShape["purgeSoftDeletedManualThreads"] =
-    () =>
+    (input) =>
       Effect.gen(function* () {
         // Classify by the LATEST thread.deleted event: only threads whose most
         // recent delete came from retention stay hidden-but-kept. Soft-deleted
@@ -337,14 +427,20 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           candidates,
           (candidate) =>
-            purgeThreadWithStatsSnapshot({ threadId: candidate.threadId }).pipe(
-              Effect.flatMap((purged) =>
-                Effect.sync(() => {
-                  if (purged) {
-                    purgedCount += 1;
-                  }
-                }),
-              ),
+            Effect.gen(function* () {
+              const shouldPurge = input?.beforePurge
+                ? yield* input.beforePurge(candidate.threadId)
+                : true;
+              if (!shouldPurge) {
+                return;
+              }
+              const purged = yield* purgeThreadWithStatsSnapshot({
+                threadId: candidate.threadId,
+              });
+              if (purged) {
+                purgedCount += 1;
+              }
+            }).pipe(
               Effect.catch((error) =>
                 Effect.logWarning("profile stats archive failed to purge soft-deleted thread", {
                   threadId: candidate.threadId,

@@ -7,14 +7,42 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
+import {
+  CheckpointStore,
+  type CheckpointStoreShape,
+} from "./checkpointing/Services/CheckpointStore";
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
 import { ProfileStatsArchive, ProfileStatsArchiveLive } from "./profileStatsArchive";
 
+interface DeletedCheckpointRefCall {
+  readonly cwd: string;
+  readonly checkpointRefs: ReadonlyArray<string>;
+}
+
+const deletedCheckpointRefCalls: DeletedCheckpointRefCall[] = [];
+
+const checkpointStoreTestLayer = Layer.succeed(CheckpointStore, {
+  isGitRepository: () => Effect.die("unused checkpoint store test method"),
+  captureCheckpoint: () => Effect.die("unused checkpoint store test method"),
+  copyCheckpointRef: () => Effect.die("unused checkpoint store test method"),
+  hasCheckpointRef: () => Effect.die("unused checkpoint store test method"),
+  restoreCheckpoint: () => Effect.die("unused checkpoint store test method"),
+  diffCheckpoints: () => Effect.die("unused checkpoint store test method"),
+  deleteCheckpointRefs: (input) =>
+    Effect.sync(() => {
+      deletedCheckpointRefCalls.push({
+        cwd: input.cwd,
+        checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
+      });
+    }),
+} satisfies CheckpointStoreShape);
+
 const testLayer = Layer.mergeAll(ProfileStatsQueryLive, ProfileStatsArchiveLive).pipe(
+  Layer.provideMerge(checkpointStoreTestLayer),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provide(
     ServerConfig.layerTest(process.cwd(), {
@@ -158,9 +186,40 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
         '{"totalProcessedTokens":5000}', 2, '2026-06-13T18:45:00.000Z'
       )
   `;
+
+  yield* sql`
+    INSERT INTO projection_turns (
+      thread_id, turn_id, pending_message_id, assistant_message_id, state,
+      requested_at, started_at, completed_at, checkpoint_turn_count,
+      checkpoint_ref, checkpoint_status, checkpoint_files_json
+    )
+    VALUES
+      (
+        'thread-keep', 'turn-keep-1', NULL, NULL, 'completed',
+        '2026-06-13T08:05:00.000Z', '2026-06-13T08:05:10.000Z',
+        '2026-06-13T08:06:00.000Z', 1,
+        'refs/t3/checkpoints/thread-keep/turn/1', 'captured', '[]'
+      ),
+      (
+        'thread-purge', 'turn-purge-1', NULL, NULL, 'completed',
+        '2026-06-13T09:05:00.000Z', '2026-06-13T09:05:10.000Z',
+        '2026-06-13T09:06:00.000Z', 1,
+        'refs/t3/checkpoints/thread-purge/turn/1', 'captured', '[]'
+      ),
+      (
+        'thread-purge', 'turn-purge-2', NULL, NULL, 'completed',
+        '2026-06-14T10:05:00.000Z', '2026-06-14T10:05:10.000Z',
+        '2026-06-14T10:06:00.000Z', 2,
+        'provider-diff:event-purge-2', 'captured', '[]'
+      )
+  `;
 });
 
 describe("ProfileStatsArchive", () => {
+  beforeEach(() => {
+    deletedCheckpointRefCalls.length = 0;
+  });
+
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {
     await runArchiveTest(
       Effect.gen(function* () {
@@ -183,13 +242,27 @@ describe("ProfileStatsArchive", () => {
         expect(purged).toBe(true);
 
         // Every row the purged thread owned is gone.
-        const remaining = yield* sql<{ readonly threads: number; readonly messages: number }>`
+        const remaining = yield* sql<{
+          readonly threads: number;
+          readonly messages: number;
+          readonly turns: number;
+        }>`
           SELECT
             (SELECT COUNT(*) FROM projection_threads WHERE thread_id = 'thread-purge') AS threads,
-            (SELECT COUNT(*) FROM projection_thread_messages WHERE thread_id = 'thread-purge')
-              AS messages
+            (
+              SELECT COUNT(*)
+              FROM projection_thread_messages
+              WHERE thread_id = 'thread-purge'
+            ) AS messages,
+            (SELECT COUNT(*) FROM projection_turns WHERE thread_id = 'thread-purge') AS turns
         `;
-        expect(remaining[0]).toMatchObject({ threads: 0, messages: 0 });
+        expect(remaining[0]).toMatchObject({ threads: 0, messages: 0, turns: 0 });
+        expect(deletedCheckpointRefCalls).toEqual([
+          {
+            cwd: "/work/archive",
+            checkpointRefs: ["refs/t3/checkpoints/thread-purge/turn/1"],
+          },
+        ]);
         const remainingEvents = yield* sql<{ readonly count: number }>`
           SELECT COUNT(*) AS count FROM orchestration_events WHERE stream_id = 'thread-purge'
         `;
@@ -234,6 +307,82 @@ describe("ProfileStatsArchive", () => {
         expect(purgedAgain).toBe(false);
         const statsAfterRepurge = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsAfterRepurge.activity).toEqual(statsBefore.activity);
+      }),
+    );
+  });
+
+  it("hard-deletes empty cleanup threads without archiving a lifetime tombstone", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-empty-cleanup',
+            'Empty Cleanup',
+            '/work/empty-cleanup',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-empty-cleanup',
+            'project-empty-cleanup',
+            'Empty Cleanup',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO profile_stats_deleted_threads (thread_id, project_id, deleted_at)
+          VALUES (
+            'thread-empty-cleanup',
+            'project-empty-cleanup',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+
+        const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        expect(statsBefore.activity.totalThreads).toBe(2);
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-empty-cleanup",
+        });
+        expect(purged).toBe(true);
+
+        const rows = yield* sql<{ readonly threads: number; readonly tombstones: number }>`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM projection_threads
+              WHERE thread_id = 'thread-empty-cleanup'
+            ) AS threads,
+            (
+              SELECT COUNT(*)
+              FROM profile_stats_deleted_threads
+              WHERE thread_id = 'thread-empty-cleanup'
+            ) AS tombstones
+        `;
+        expect(rows[0]).toEqual({ threads: 0, tombstones: 0 });
+
+        const statsAfter = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
+        expect(statsAfter.activity.totalThreads).toBe(0);
+        expect(deletedCheckpointRefCalls).toEqual([]);
       }),
     );
   });
@@ -308,6 +457,26 @@ describe("ProfileStatsArchive", () => {
         const statsBefore = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
         expect(statsBefore.activity.totalPromptsSent).toBe(2);
         expect(statsBefore.activity.totalThreads).toBe(3);
+
+        const deferredThreadIds: string[] = [];
+        const deferredCount = yield* archive.purgeSoftDeletedManualThreads({
+          beforePurge: (threadId) =>
+            Effect.sync(() => {
+              deferredThreadIds.push(threadId);
+              return false;
+            }),
+        });
+        expect(deferredCount).toBe(0);
+        expect(deferredThreadIds).toEqual(["thread-manual"]);
+
+        const threadsAfterDeferred = yield* sql<{ readonly threadId: string }>`
+          SELECT thread_id AS threadId FROM projection_threads ORDER BY thread_id ASC
+        `;
+        expect(threadsAfterDeferred.map((row) => row.threadId)).toEqual([
+          "thread-live",
+          "thread-manual",
+          "thread-retention",
+        ]);
 
         const purgedCount = yield* archive.purgeSoftDeletedManualThreads();
         expect(purgedCount).toBe(1);
