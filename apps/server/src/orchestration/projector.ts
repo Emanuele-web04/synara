@@ -715,12 +715,17 @@ export function projectEvent(
               entry.id === message.id
                 ? {
                     ...entry,
-                    text: message.streaming
-                      ? `${entry.text}${message.text}`
-                      : message.text.length > 0
-                        ? message.text
-                        : entry.text,
-                    streaming: message.streaming,
+                    // Late streaming deltas can be real append-only metadata (generated images)
+                    // or a replay of finalized assistant text. Only append unseen text.
+                    text:
+                      message.streaming && entry.streaming
+                        ? `${entry.text}${message.text}`
+                        : message.streaming && !entry.text.includes(message.text)
+                          ? `${entry.text}${message.text}`
+                        : !message.streaming && message.text.length > 0
+                          ? message.text
+                          : entry.text,
+                    streaming: entry.streaming ? message.streaming : false,
                     source: message.source,
                     updatedAt: message.updatedAt,
                     turnId: resolveStableMessageTurnId({

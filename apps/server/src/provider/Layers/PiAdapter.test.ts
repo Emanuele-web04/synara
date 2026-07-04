@@ -9,6 +9,7 @@ import {
   ensurePiSubagentChildLauncherEnv,
   getPiSupportedThinkingOptions,
   makePiSubagentPromptItemId,
+  makePiSubagentSourceKey,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
 } from "./PiAdapter";
@@ -107,12 +108,91 @@ describe("Pi subagent child launcher env", () => {
 });
 
 describe("Pi subagent transcript helpers", () => {
-  it("uses distinct prompt item ids for repeated prompts to the same child thread", () => {
-    const first = makePiSubagentPromptItemId("child-provider-1");
-    const second = makePiSubagentPromptItemId("child-provider-1");
+  it("keys prompt item ids by child thread and transcript source", () => {
+    const sourceKey = makePiSubagentSourceKey({
+      kind: "subagent_result",
+      parentThreadId: "thread-1",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child.jsonl",
+    });
+    const laterSourceKey = makePiSubagentSourceKey({
+      kind: "subagent_result",
+      parentThreadId: "thread-1",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child-later.jsonl",
+    });
+    const first = makePiSubagentPromptItemId({
+      providerThreadId: "child-provider-1",
+      sourceKey,
+    });
+    const replay = makePiSubagentPromptItemId({
+      providerThreadId: "child-provider-1",
+      sourceKey,
+    });
+    const laterPrompt = makePiSubagentPromptItemId({
+      providerThreadId: "child-provider-1",
+      sourceKey: laterSourceKey,
+    });
 
-    expect(first).not.toBe(second);
-    expect(first).toMatch(/^pi-subagent-prompt-child-provider-1-/);
-    expect(second).toMatch(/^pi-subagent-prompt-child-provider-1-/);
+    expect(replay).toBe(first);
+    expect(laterPrompt).not.toBe(first);
+    expect(first).toMatch(/^pi-subagent-prompt-[a-f0-9]{24}$/);
+  });
+
+  it("uses the same session transcript source across Pi import surfaces", () => {
+    const messageSurface = makePiSubagentSourceKey({
+      kind: "subagent_result",
+      parentThreadId: "thread-1",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child.jsonl",
+    });
+    const toolSurface = makePiSubagentSourceKey({
+      kind: "subagent",
+      parentThreadId: "thread-1",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child.jsonl",
+      toolCallId: "call-1",
+    });
+
+    expect(toolSurface).toBe(messageSurface);
+    expect(
+      makePiSubagentPromptItemId({
+        providerThreadId: "child-provider-1",
+        sourceKey: toolSurface,
+      }),
+    ).toBe(
+      makePiSubagentPromptItemId({
+        providerThreadId: "child-provider-1",
+        sourceKey: messageSurface,
+      }),
+    );
+  });
+
+  it("scopes session transcript ids to the parent Synara thread", () => {
+    const firstParent = makePiSubagentSourceKey({
+      kind: "subagent_result",
+      parentThreadId: "thread-1",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child.jsonl",
+    });
+    const secondParent = makePiSubagentSourceKey({
+      kind: "subagent_result",
+      parentThreadId: "thread-2",
+      providerThreadId: "child-provider-1",
+      sessionFile: "/tmp/pi-child.jsonl",
+    });
+
+    expect(secondParent).not.toBe(firstParent);
+    expect(
+      makePiSubagentPromptItemId({
+        providerThreadId: "child-provider-1",
+        sourceKey: secondParent,
+      }),
+    ).not.toBe(
+      makePiSubagentPromptItemId({
+        providerThreadId: "child-provider-1",
+        sourceKey: firstParent,
+      }),
+    );
   });
 });

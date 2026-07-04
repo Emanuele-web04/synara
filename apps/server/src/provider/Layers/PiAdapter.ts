@@ -455,8 +455,62 @@ function parseJsonLineRecord(line: string): Record<string, unknown> | undefined 
   }
 }
 
-export function makePiSubagentPromptItemId(providerThreadId: string): RuntimeItemId {
-  return RuntimeItemId.makeUnsafe(`pi-subagent-prompt-${providerThreadId}-${crypto.randomUUID()}`);
+// Synthetic child-thread transcript events must replay with the same ids so
+// imported messages and activity rows upsert instead of duplicating.
+function stablePiSubagentHash(parts: ReadonlyArray<unknown>): string {
+  return crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex").slice(0, 24);
+}
+
+export function makePiSubagentSourceKey(input: {
+  readonly kind: string;
+  readonly parentThreadId: string;
+  readonly providerThreadId: string;
+  readonly sessionFile?: string | undefined;
+  readonly toolCallId?: string | undefined;
+  readonly messageIdentity?: string | undefined;
+  readonly promptText?: string | undefined;
+  readonly messageText?: string | undefined;
+}): string {
+  if (input.sessionFile) {
+    return `session:${input.parentThreadId}:${input.providerThreadId}:${input.sessionFile}`;
+  }
+  if (input.toolCallId) {
+    return `tool:${input.parentThreadId}:${input.providerThreadId}:${input.kind}:${input.toolCallId}`;
+  }
+  if (input.messageIdentity) {
+    return `message:${input.parentThreadId}:${input.providerThreadId}:${input.kind}:${input.messageIdentity}`;
+  }
+  return `${input.kind}:content:${stablePiSubagentHash([
+    input.parentThreadId,
+    input.providerThreadId,
+    input.promptText,
+    input.messageText,
+  ])}`;
+}
+
+function makePiSubagentEventId(sourceKey: string, eventKind: string): EventId {
+  return EventId.makeUnsafe(`pi-subagent-event-${stablePiSubagentHash([sourceKey, eventKind])}`);
+}
+
+function makePiSubagentTurnId(sourceKey: string): TurnId {
+  return TurnId.makeUnsafe(`pi-subagent-turn-${stablePiSubagentHash([sourceKey, "turn"])}`);
+}
+
+function makePiSubagentRuntimeItemId(
+  sourceKey: string,
+  itemKind: string,
+  itemParts: ReadonlyArray<unknown> = [],
+): RuntimeItemId {
+  return RuntimeItemId.makeUnsafe(
+    `pi-subagent-${itemKind}-${stablePiSubagentHash([sourceKey, itemKind, ...itemParts])}`,
+  );
+}
+
+export function makePiSubagentPromptItemId(input: {
+  readonly providerThreadId: string;
+  readonly sourceKey: string;
+}): RuntimeItemId {
+  return makePiSubagentRuntimeItemId(input.sourceKey, "prompt", [input.providerThreadId]);
 }
 
 function readBoundedPiSubagentSessionFile(sessionFile: string): string | undefined {
@@ -1233,16 +1287,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const emitPiSubagentChildTranscript = (input: {
       readonly context: PiSessionContext;
       readonly providerThreadId: string;
+      readonly sourceKey: string;
       readonly name?: string | undefined;
       readonly promptText?: string | undefined;
       readonly messageText: string;
       readonly failed: boolean;
       readonly raw: ProviderRuntimeEvent["raw"];
     }): void => {
-      const childTurnId = TurnId.makeUnsafe(`pi-subagent-turn-${crypto.randomUUID()}`);
-      const assistantItemId = RuntimeItemId.makeUnsafe(
-        `pi-subagent-assistant-${crypto.randomUUID()}`,
-      );
+      const childTurnId = makePiSubagentTurnId(input.sourceKey);
+      const assistantItemId = makePiSubagentRuntimeItemId(input.sourceKey, "assistant", [
+        input.providerThreadId,
+      ]);
       const providerRefs = {
         providerThreadId: input.providerThreadId,
         providerParentThreadId: input.context.session.threadId,
@@ -1251,7 +1306,11 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       if (input.promptText) {
         offerRuntimeEvent({
           ...makeEventBase(input.context, { includeTurnId: false }),
-          itemId: makePiSubagentPromptItemId(input.providerThreadId),
+          eventId: makePiSubagentEventId(input.sourceKey, "prompt-completed"),
+          itemId: makePiSubagentPromptItemId({
+            providerThreadId: input.providerThreadId,
+            sourceKey: input.sourceKey,
+          }),
           providerRefs,
           type: "item.completed",
           payload: {
@@ -1266,6 +1325,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
       offerRuntimeEvent({
         ...makeEventBase(input.context, { includeTurnId: false }),
+        eventId: makePiSubagentEventId(input.sourceKey, "turn-started"),
         turnId: childTurnId,
         providerRefs,
         type: "turn.started",
@@ -1274,6 +1334,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
       offerRuntimeEvent({
         ...makeEventBase(input.context, { includeTurnId: false }),
+        eventId: makePiSubagentEventId(input.sourceKey, "assistant-delta"),
         turnId: childTurnId,
         itemId: assistantItemId,
         providerRefs,
@@ -1283,6 +1344,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
       offerRuntimeEvent({
         ...makeEventBase(input.context, { includeTurnId: false }),
+        eventId: makePiSubagentEventId(input.sourceKey, "assistant-completed"),
         turnId: childTurnId,
         itemId: assistantItemId,
         providerRefs,
@@ -1297,6 +1359,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       } satisfies ProviderRuntimeEvent);
       offerRuntimeEvent({
         ...makeEventBase(input.context, { includeTurnId: false }),
+        eventId: makePiSubagentEventId(input.sourceKey, "turn-completed"),
         turnId: childTurnId,
         providerRefs,
         type: "turn.completed",
@@ -1312,6 +1375,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
     const emitPiSubagentSessionTranscript = (input: {
       readonly context: PiSessionContext;
       readonly providerThreadId: string;
+      readonly sourceKey: string;
       readonly sessionFile: string;
       readonly promptText?: string | undefined;
       readonly raw: ProviderRuntimeEvent["raw"];
@@ -1326,7 +1390,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         return true;
       }
 
-      const childTurnId = TurnId.makeUnsafe(`pi-subagent-turn-${crypto.randomUUID()}`);
+      const childTurnId = makePiSubagentTurnId(input.sourceKey);
       const providerRefs = {
         providerThreadId: input.providerThreadId,
         providerParentThreadId: input.context.session.threadId,
@@ -1365,8 +1429,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       if (input.promptText) {
         offerRuntimeEvent({
           ...makeEventBase(input.context, { includeTurnId: false }),
+          eventId: makePiSubagentEventId(input.sourceKey, "prompt-completed"),
           ...(sessionStartedAt ? { createdAt: sessionStartedAt } : {}),
-          itemId: makePiSubagentPromptItemId(input.providerThreadId),
+          itemId: makePiSubagentPromptItemId({
+            providerThreadId: input.providerThreadId,
+            sourceKey: input.sourceKey,
+          }),
           providerRefs,
           type: "item.completed",
           payload: {
@@ -1381,17 +1449,19 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
       offerRuntimeEvent({
         ...childBase(sessionStartedAt),
+        eventId: makePiSubagentEventId(input.sourceKey, "turn-started"),
         type: "turn.started",
         payload: {},
         raw: transcriptRaw,
       } satisfies ProviderRuntimeEvent);
 
-      for (const entry of sessionEntries) {
+      for (const [entryIndex, entry] of sessionEntries.entries()) {
         if (entry?.type !== "message") continue;
         const message = toolRecord(entry.message);
         const role = message?.role;
         const content = Array.isArray(message?.content) ? message.content : [];
         const createdAt = timestampFromUnknown(entry.timestamp) ?? timestampFromUnknown(message?.timestamp);
+        const entryIdentity = firstStringValue(entry, ["id"]) ?? stablePiSubagentHash([entryIndex, entry]);
 
         if (role === "assistant") {
           for (const [index, part] of content.entries()) {
@@ -1400,12 +1470,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             if (partRecord.type === "text" && typeof partRecord.text === "string") {
               const text = partRecord.text;
               if (text.length === 0) continue;
-              const itemId = RuntimeItemId.makeUnsafe(
-                `pi-subagent-session-assistant-${entry.id ?? crypto.randomUUID()}-${index}`,
-              );
+              const itemId = makePiSubagentRuntimeItemId(input.sourceKey, "session-assistant", [
+                entryIdentity,
+                index,
+              ]);
               emittedRenderableEvent = true;
               offerRuntimeEvent({
                 ...childBase(createdAt),
+                eventId: makePiSubagentEventId(
+                  input.sourceKey,
+                  `session-assistant-delta:${entryIdentity}:${index}`,
+                ),
                 itemId,
                 type: "content.delta",
                 payload: { streamKind: "assistant_text", delta: text },
@@ -1413,6 +1488,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               } satisfies ProviderRuntimeEvent);
               offerRuntimeEvent({
                 ...childBase(createdAt),
+                eventId: makePiSubagentEventId(
+                  input.sourceKey,
+                  `session-assistant-completed:${entryIdentity}:${index}`,
+                ),
                 itemId,
                 type: "item.completed",
                 payload: {
@@ -1428,12 +1507,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             if (partRecord.type === "thinking" && typeof partRecord.thinking === "string") {
               const thinking = partRecord.thinking;
               if (thinking.length === 0) continue;
-              const itemId = RuntimeItemId.makeUnsafe(
-                `pi-subagent-session-thinking-${entry.id ?? crypto.randomUUID()}-${index}`,
-              );
+              const itemId = makePiSubagentRuntimeItemId(input.sourceKey, "session-thinking", [
+                entryIdentity,
+                index,
+              ]);
               emittedRenderableEvent = true;
               offerRuntimeEvent({
                 ...childBase(createdAt),
+                eventId: makePiSubagentEventId(
+                  input.sourceKey,
+                  `session-thinking-delta:${entryIdentity}:${index}`,
+                ),
                 itemId,
                 type: "content.delta",
                 payload: { streamKind: "reasoning_text", delta: thinking },
@@ -1441,6 +1525,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               } satisfies ProviderRuntimeEvent);
               offerRuntimeEvent({
                 ...childBase(createdAt),
+                eventId: makePiSubagentEventId(
+                  input.sourceKey,
+                  `session-thinking-completed:${entryIdentity}:${index}`,
+                ),
                 itemId,
                 type: "item.completed",
                 payload: {
@@ -1458,11 +1546,17 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               const toolName = firstStringValue(partRecord, ["name"]) ?? "tool";
               if (!toolCallId) continue;
               const args = partRecord.arguments;
-              const itemId = RuntimeItemId.makeUnsafe(`pi-subagent-session-tool-${toolCallId}`);
+              const itemId = makePiSubagentRuntimeItemId(input.sourceKey, "session-tool", [
+                toolCallId,
+              ]);
               pendingTools.set(toolCallId, { toolName, args, itemId });
               emittedRenderableEvent = true;
               offerRuntimeEvent({
                 ...childBase(createdAt),
+                eventId: makePiSubagentEventId(
+                  input.sourceKey,
+                  `session-tool-started:${toolCallId}`,
+                ),
                 itemId,
                 providerRefs: {
                   ...providerRefs,
@@ -1492,11 +1586,13 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           const result = { content };
           const detail = textFromToolResult(result);
           const itemId =
-            pending?.itemId ?? RuntimeItemId.makeUnsafe(`pi-subagent-session-tool-${toolCallId}`);
+            pending?.itemId ??
+            makePiSubagentRuntimeItemId(input.sourceKey, "session-tool", [toolCallId]);
           pendingTools.delete(toolCallId);
           emittedRenderableEvent = true;
           offerRuntimeEvent({
             ...childBase(createdAt),
+            eventId: makePiSubagentEventId(input.sourceKey, `session-tool-completed:${toolCallId}`),
             itemId,
             providerRefs: {
               ...providerRefs,
@@ -1523,6 +1619,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
       offerRuntimeEvent({
         ...childBase(),
+        eventId: makePiSubagentEventId(input.sourceKey, "turn-completed"),
         type: "turn.completed",
         payload: { state: "completed", stopReason: null },
         raw: transcriptRaw,
@@ -1548,6 +1645,18 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       const promptText = task;
       const failed = status === "failed" || status === "cancelled";
       const messageText = customMessageText(record?.content);
+      const messageIdentity =
+        firstStringValue(record, ["id", "messageId", "eventId"]) ??
+        firstStringValue(details, ["messageId", "eventId"]);
+      const sourceKey = makePiSubagentSourceKey({
+        kind: customType,
+        parentThreadId: context.session.threadId,
+        providerThreadId,
+        ...(sessionFile ? { sessionFile } : {}),
+        ...(messageIdentity ? { messageIdentity } : {}),
+        ...(promptText ? { promptText } : {}),
+        ...(messageText ? { messageText } : {}),
+      });
       const receiverAgent = {
         threadId: providerThreadId,
         ...(agent ? { agentId: agent, agentRole: agent } : {}),
@@ -1562,7 +1671,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
       offerRuntimeEvent({
         ...makeEventBase(context, { includeTurnId: false }),
-        itemId: RuntimeItemId.makeUnsafe(`pi-subagent-message-${crypto.randomUUID()}`),
+        eventId: makePiSubagentEventId(sourceKey, "result-activity-completed"),
+        itemId: makePiSubagentRuntimeItemId(sourceKey, "message", [providerThreadId]),
         type: "item.completed",
         payload: {
           itemType: "collab_agent_tool_call",
@@ -1581,12 +1691,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       if (!messageText) return true;
 
       const emittedSessionTranscript = sessionFile
-        ? emitPiSubagentSessionTranscript({ context, providerThreadId, sessionFile, promptText, raw })
+        ? emitPiSubagentSessionTranscript({
+            context,
+            providerThreadId,
+            sourceKey,
+            sessionFile,
+            promptText,
+            raw,
+          })
         : false;
       if (!emittedSessionTranscript) {
         emitPiSubagentChildTranscript({
           context,
           providerThreadId,
+          sourceKey,
           ...(name ? { name } : {}),
           ...(promptText ? { promptText } : {}),
           messageText,
@@ -2148,10 +2266,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             for (const receiverAgent of transcriptTargets) {
               const providerThreadId = firstStringValue(receiverAgent, ["threadId"]);
               if (!providerThreadId) continue;
+              const sourceKey = makePiSubagentSourceKey({
+                kind: event.toolName,
+                parentThreadId: context.session.threadId,
+                providerThreadId,
+                toolCallId: event.toolCallId,
+                ...(sessionFile ? { sessionFile } : {}),
+                ...(promptText ? { promptText } : {}),
+                ...(detail ? { messageText: detail } : {}),
+              });
               const emittedSessionTranscript = sessionFile
                 ? emitPiSubagentSessionTranscript({
                     context,
                     providerThreadId,
+                    sourceKey,
                     sessionFile,
                     promptText,
                     raw,
@@ -2166,6 +2294,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                 emitPiSubagentChildTranscript({
                   context,
                   providerThreadId,
+                  sourceKey,
                   ...(childName ? { name: childName } : {}),
                   ...(promptText ? { promptText } : {}),
                   messageText: detail,
