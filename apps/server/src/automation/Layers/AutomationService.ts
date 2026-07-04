@@ -125,6 +125,7 @@ export function resolveAutomationDefinitionProviderOptionsForSettings(
   definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
   settings: ServerSettings,
 ): ProviderStartOptions | undefined {
+  // Automations may outlive provider-instance edits, so turns use the selected live instance.
   if (!definition.modelSelection) {
     return definition.providerOptions;
   }
