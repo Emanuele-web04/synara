@@ -104,6 +104,45 @@ describe("resolveAllowedLocalPreviewFile", () => {
     }
   });
 
+  it("rejects generated images from sibling Codex account overlays", async () => {
+    const fakeRoot = path.join(
+      process.cwd(),
+      `.test-codex-account-overlay-${process.pid}-${Date.now()}`,
+    );
+    const sourceHome = path.join(fakeRoot, "source", ".codex");
+    const synaraHome = path.join(fakeRoot, "synara", "runtime");
+    const siblingImageDir = path.join(
+      synaraHome,
+      "codex-home-overlay",
+      "accounts",
+      "work-account",
+      "generated_images",
+      "thread-work",
+    );
+    const imagePath = path.join(siblingImageDir, "call.png");
+    mkdirSync(siblingImageDir, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const previousSynaraHome = process.env.SYNARA_HOME;
+    process.env.SYNARA_HOME = synaraHome;
+    try {
+      const result = await resolveAllowedLocalPreviewFile({
+        requestedPath: imagePath,
+        cwd: null,
+        codexHomePath: sourceHome,
+      });
+
+      assert.equal(result, null);
+    } finally {
+      if (previousSynaraHome === undefined) {
+        delete process.env.SYNARA_HOME;
+      } else {
+        process.env.SYNARA_HOME = previousSynaraHome;
+      }
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("allows PDFs inside the current workspace", async () => {
     const workspace = makeTempDir("dpcode-pdf-workspace-");
     writeFileSync(path.join(workspace, ".git"), "gitdir: .git");
