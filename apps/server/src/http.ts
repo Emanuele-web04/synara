@@ -10,6 +10,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
+import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
 import { DateTime, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
@@ -31,11 +32,7 @@ import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localI
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
-import {
-  threadArchiveChunks,
-  threadArchiveFileName,
-  threadExportBlockedReason,
-} from "./orchestration/exportThreadArchive";
+import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";

@@ -6,8 +6,9 @@
 //          Stream.fromAsyncIterable). ZIP is produced with node:zlib and a
 //          hand-written central directory, streamed one entry at a time so the
 //          server never holds the whole archive in memory.
-// Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName,
-//          threadExportBlockedReason.
+// Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName.
+// The export-eligibility guard lives in @t3tools/shared/threadExport so the
+// web composer and the HTTP route share one predicate.
 
 import zlib from "node:zlib";
 import { promisify } from "node:util";
@@ -186,19 +187,6 @@ export async function buildThreadArchiveBytes(thread: OrchestrationThread): Prom
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
-}
-
-// Exports must not capture in-flight output: a partial assistant response would
-// be serialized as if it were a completed message. The composer hides /export
-// while a turn runs; this server-side check backstops racing or direct requests.
-export function threadExportBlockedReason(thread: OrchestrationThread): string | null {
-  if (thread.latestTurn?.state === "running") {
-    return "Thread is still running. Wait for the current turn to finish before exporting.";
-  }
-  if (thread.messages.some((message) => message.streaming)) {
-    return "Thread has a streaming message. Wait for the current response to finish before exporting.";
-  }
-  return null;
 }
 
 const FILENAME_SAFE_REPLACE = /[^a-z0-9-]+/g;

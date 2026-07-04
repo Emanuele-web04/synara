@@ -40,6 +40,7 @@ import {
 } from "@t3tools/contracts";
 import { getModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
 import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
+import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import {
   buildPromptThreadTitleFallback,
@@ -3092,9 +3093,12 @@ export default function ChatView({
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
   // Export is hidden while the thread is running so archives cannot capture a
-  // partial assistant response; the server route enforces the same rule (409).
+  // partial assistant response. Same shared predicate as the server's 409
+  // guard, so the composer and the export route cannot drift.
   const canOfferExportCommand =
-    isServerThread && activeThread !== undefined && !isWorking && !hasStreamingAssistantText;
+    isServerThread &&
+    activeThread !== undefined &&
+    threadExportBlockedReason(activeThread) === null;
   const selectedDynamicAgents =
     selectedProvider === "claudeAgent"
       ? (claudeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)

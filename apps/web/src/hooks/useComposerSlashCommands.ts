@@ -571,6 +571,17 @@ export function useComposerSlashCommands(input: {
   }, [editorActions, providerCommandDiscoveryCwd, threadId]);
 
   const runExportSlashCommand = useCallback(() => {
+    // Re-validate at call time (mirrors /compact): menu selections and stale
+    // highlights can outlive the availability computed at render time.
+    if (!canOfferExportCommand) {
+      toastManager.add({
+        type: "warning",
+        title: "Export is unavailable",
+        description:
+          "Open a server-backed thread and wait for the current turn to finish before exporting.",
+      });
+      return;
+    }
     const params = new URLSearchParams({ threadId: threadId });
     void downloadUrlAsBlob({
       url: resolveWsHttpUrl(`/api/thread-export?${params.toString()}`),
@@ -583,7 +594,7 @@ export function useComposerSlashCommands(input: {
           error instanceof Error ? error.message : "An error occurred while exporting the thread.",
       });
     });
-  }, [threadId]);
+  }, [canOfferExportCommand, threadId]);
 
   const handleStandaloneSlashCommand = useCallback(
     async (trimmed: string): Promise<boolean> => {

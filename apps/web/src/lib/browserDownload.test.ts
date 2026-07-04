@@ -117,6 +117,29 @@ describe("browserDownload", () => {
     expect(click).toHaveBeenCalledTimes(1);
   });
 
+  it("surfaces the response body reason when the server blocks the download", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve(
+        new Response("Thread is still running. Wait for the current turn to finish.", {
+          status: 409,
+          statusText: "Conflict",
+        }),
+      ),
+    );
+
+    await expect(
+      downloadUrlAsBlob({
+        url: "http://127.0.0.1:5733/api/thread-export?threadId=thread-1",
+        filename: "synara-thread-thread-1.zip",
+      }),
+    ).rejects.toThrow(
+      "Download failed with HTTP 409 Conflict. Thread is still running. Wait for the current turn to finish.",
+    );
+
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(click).not.toHaveBeenCalled();
+  });
+
   it("throws before creating a download when the server rejects the file", async () => {
     globalThis.fetch = vi.fn(() =>
       Promise.resolve(new Response("Not Found", { status: 404, statusText: "Not Found" })),
