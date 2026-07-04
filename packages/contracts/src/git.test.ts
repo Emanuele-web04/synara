@@ -83,6 +83,21 @@ describe("GitRunStackedActionInput", () => {
 
     expect(parsed.codexHomePath).toBe("/tmp/custom-codex-home");
   });
+
+  it("accepts an optional textGenerationModelSelection for provider routing", () => {
+    const parsed = decodeRunStackedActionInput({
+      actionId: "action-3",
+      cwd: "/repo",
+      action: "commit",
+      textGenerationModelSelection: {
+        provider: "opencode",
+        model: "openrouter/gpt-oss-120b",
+      },
+    });
+
+    expect(parsed.textGenerationModelSelection?.provider).toBe("opencode");
+    expect(parsed.textGenerationModelSelection?.model).toBe("openrouter/gpt-oss-120b");
+  });
 });
 
 describe("GitSummarizeDiffInput", () => {
