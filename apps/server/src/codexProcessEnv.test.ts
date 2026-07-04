@@ -6,6 +6,8 @@ import {
   readlinkSync,
   rmSync,
   symlinkSync,
+  chmodSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import os from "node:os";
@@ -303,6 +305,39 @@ describe("buildCodexProcessEnv account overlays", () => {
       expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
       expect(path.resolve(readlinkSync(overlayAuthPath))).toBe(path.resolve(shadowAuthPath));
     } finally {
+      rmSync(fixture.root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when shadow-home auth cannot be linked into the account overlay", async () => {
+    const fixture = makeAccountFixture();
+    writeFileSync(path.join(fixture.shadowHomePath, "auth.json"), '{"account":"work"}', "utf8");
+    const firstEnv = await buildCodexProcessEnv({
+      env: fixture.env,
+      homePath: fixture.homePath,
+      shadowHomePath: fixture.shadowHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+    const overlayHomePath = firstEnv.CODEX_HOME;
+    expect(overlayHomePath).toBeTruthy();
+    if (!overlayHomePath) {
+      throw new Error("Expected Codex overlay home path.");
+    }
+    unlinkSync(path.join(overlayHomePath, "auth.json"));
+    chmodSync(overlayHomePath, 0o500);
+    try {
+      await expect(
+        buildCodexProcessEnv({
+          env: fixture.env,
+          homePath: fixture.homePath,
+          shadowHomePath: fixture.shadowHomePath,
+          accountId: "work",
+          platform: "win32",
+        }),
+      ).rejects.toThrow(/EACCES|EPERM/);
+    } finally {
+      chmodSync(overlayHomePath, 0o700);
       rmSync(fixture.root, { recursive: true, force: true });
     }
   });
