@@ -1901,6 +1901,75 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("does not append replayed streaming text to finalized projected messages", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = new Date().toISOString();
+
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          is_streaming,
+          source,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'assistant-replay',
+          'thread-replay',
+          NULL,
+          'assistant',
+          'Child answer.',
+          0,
+          'native',
+          ${now},
+          ${now}
+        )
+      `;
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.makeUnsafe("evt-replay-streaming-duplicate"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.makeUnsafe("thread-replay"),
+        occurredAt: now,
+        commandId: CommandId.makeUnsafe("cmd-replay-streaming-duplicate"),
+        causationEventId: null,
+        correlationId: CorrelationId.makeUnsafe("cmd-replay-streaming-duplicate"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-replay"),
+          messageId: MessageId.makeUnsafe("assistant-replay"),
+          role: "assistant",
+          text: "Child answer.",
+          turnId: null,
+          streaming: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const messageRows = yield* sql<{ readonly text: string; readonly isStreaming: unknown }>`
+        SELECT
+          text,
+          is_streaming AS "isStreaming"
+        FROM projection_thread_messages
+        WHERE message_id = 'assistant-replay'
+      `;
+      assert.equal(messageRows.length, 1);
+      assert.equal(messageRows[0]?.text, "Child answer.");
+      assert.isFalse(Boolean(messageRows[0]?.isStreaming));
+    }),
+  );
+
   it.effect(
     "resolves turn-count conflicts when checkpoint completion rewrites provisional turns",
     () =>

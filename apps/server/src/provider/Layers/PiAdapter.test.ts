@@ -1,17 +1,19 @@
 // FILE: PiAdapter.test.ts
-// Purpose: Verifies Pi adapter model discovery exposes only SDK-supported thinking levels.
+// Purpose: Verifies Pi adapter discovery, subagent prompt, and transcript helper behavior.
 // Layer: Provider adapter tests
 // Depends on: PiAdapter discovery helpers and Pi model metadata shapes.
 
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
+  buildPiSubagentPrompt,
   ensurePiSubagentChildLauncherEnv,
   getPiSupportedThinkingOptions,
   makePiSubagentPromptItemId,
   makePiSubagentSourceKey,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  recordPiSubagentSessionTranscriptEmission,
 } from "./PiAdapter";
 
 function makePiModel(input: {
@@ -101,13 +103,74 @@ describe("Pi subagent child launcher env", () => {
   it("preserves an explicit subagent launcher override", () => {
     const env = { PI_SUBAGENT_PI_COMMAND: "custom-pi-wrapper pi" };
 
-    ensurePiSubagentChildLauncherEnv(env);
+    ensurePiSubagentChildLauncherEnv(env, "/opt/pi/bin/pi");
 
     expect(env.PI_SUBAGENT_PI_COMMAND).toBe("custom-pi-wrapper pi");
+  });
+
+  it("uses the configured Pi binary when no launcher override exists", () => {
+    const env: { PI_SUBAGENT_PI_COMMAND?: string } = {};
+
+    ensurePiSubagentChildLauncherEnv(env, "/opt/pi/bin/pi");
+
+    expect(env.PI_SUBAGENT_PI_COMMAND).toBe("/opt/pi/bin/pi");
+  });
+
+  it("replaces the adapter default when a configured Pi binary appears later", () => {
+    const env = { PI_SUBAGENT_PI_COMMAND: "pi" };
+
+    ensurePiSubagentChildLauncherEnv(env, "/opt/pi/bin/pi");
+
+    expect(env.PI_SUBAGENT_PI_COMMAND).toBe("/opt/pi/bin/pi");
+  });
+});
+
+describe("Pi subagent prompt expansion", () => {
+  it("includes project scope for project-local inline agent mentions", () => {
+    const prompt = buildPiSubagentPrompt("Please @scout(inspect the repo).", [
+      {
+        name: "scout",
+        displayName: "Scout",
+        scope: "project",
+      },
+    ]);
+
+    expect(prompt).toContain('Launch the "scout" subagent from the project agent scope');
+    expect(prompt).toContain('scope/source "project"');
+    expect(prompt).toContain("inspect the repo");
   });
 });
 
 describe("Pi subagent transcript helpers", () => {
+  it("suppresses exact session transcript replays while allowing appended content", () => {
+    const emittedTranscripts = new Map<string, string>();
+
+    expect(
+      recordPiSubagentSessionTranscriptEmission({
+        emittedTranscripts,
+        providerThreadId: "child-provider-1",
+        sessionFile: "/tmp/pi-child.jsonl",
+        sessionContent: '{"type":"message","id":"one"}\n',
+      }),
+    ).toBe(true);
+    expect(
+      recordPiSubagentSessionTranscriptEmission({
+        emittedTranscripts,
+        providerThreadId: "child-provider-1",
+        sessionFile: "/tmp/pi-child.jsonl",
+        sessionContent: '{"type":"message","id":"one"}\n',
+      }),
+    ).toBe(false);
+    expect(
+      recordPiSubagentSessionTranscriptEmission({
+        emittedTranscripts,
+        providerThreadId: "child-provider-1",
+        sessionFile: "/tmp/pi-child.jsonl",
+        sessionContent: '{"type":"message","id":"one"}\n{"type":"message","id":"two"}\n',
+      }),
+    ).toBe(true);
+  });
+
   it("keys prompt item ids by child thread and transcript source", () => {
     const sourceKey = makePiSubagentSourceKey({
       kind: "subagent_result",

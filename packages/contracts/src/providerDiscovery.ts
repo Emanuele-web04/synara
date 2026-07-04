@@ -299,6 +299,7 @@ export const ProviderAgentDescriptor = Schema.Struct({
   displayName: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
 });
 export type ProviderAgentDescriptor = typeof ProviderAgentDescriptor.Type;
 

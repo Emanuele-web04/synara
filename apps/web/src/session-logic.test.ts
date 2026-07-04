@@ -928,6 +928,30 @@ describe("deriveWorkLogEntries", () => {
         kind: "tool.started",
       }),
       makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [
+                {
+                  threadId: "child-provider-1",
+                  agentNickname: "smoke-test",
+                  prompt: "Run a harmless subagent smoke test.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
         id: "pi-subagent-result",
         createdAt: "2026-02-23T00:00:03.000Z",
         summary: "Subagent result",
@@ -962,6 +986,61 @@ describe("deriveWorkLogEntries", () => {
       detail: "Subagent launched successfully and changed no files.",
       subagents: [{ threadId: "child-provider-1", nickname: "smoke-test" }],
     });
+  });
+
+  it("does not leak old thread-scoped collab completions into the visible work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-tool",
+        turnId: "turn-2",
+        summary: "Visible tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "current" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "old-thread-scoped-subagent-result",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent result",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent result",
+          detail: "Old subagent output should stay hidden while turn 2 is visible.",
+          data: {
+            parentTurnId: "turn-1",
+            item: {
+              parentTurnId: "turn-1",
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "old" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual(["visible-tool"]);
   });
 
   it("does not leak old turn-stamped collab completions into the visible work log", () => {

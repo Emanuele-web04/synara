@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -43,6 +43,7 @@ describe("listPiSubagentDefinitions", () => {
         name: "scout",
         displayName: "Scout",
         description: "Project scout",
+        scope: "project",
       },
     ]);
   });
@@ -64,6 +65,26 @@ describe("listPiSubagentDefinitions", () => {
         name: "scout",
         displayName: "Scout",
         description: "Ancestor project scout",
+        scope: "project",
+      },
+    ]);
+  });
+
+  it("skips unreadable Pi agent definition files", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "synara-pi-agents-"));
+    const agentDir = path.join(root, "agent");
+    const agentsDir = path.join(agentDir, "agents");
+    const cwd = path.join(root, "repo");
+    mkdirSync(agentsDir, { recursive: true });
+    symlinkSync(path.join(root, "missing.md"), path.join(agentsDir, "broken.md"));
+    writeAgent(agentsDir, "scout.md", ["name: scout", "description: Valid scout"].join("\n"));
+
+    expect(listPiSubagentDefinitions({ agentDir, cwd })).toEqual([
+      {
+        name: "scout",
+        displayName: "Scout",
+        description: "Valid scout",
+        scope: "global",
       },
     ]);
   });

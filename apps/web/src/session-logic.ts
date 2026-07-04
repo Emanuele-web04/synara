@@ -827,8 +827,16 @@ export function deriveWorkLogEntries(
 ): WorkLogEntry[] {
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
+  const visibleSubagentThreadIds = collectVisibleTurnSubagentThreadIds(ordered, visibleTurnIds);
   const entries = ordered
-    .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
+    .filter((activity) =>
+      shouldKeepActivityForWorkLog(
+        activity,
+        latestTurnId,
+        visibleTurnIds,
+        visibleSubagentThreadIds,
+      ),
+    )
     .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
@@ -859,10 +867,54 @@ export function deriveWorkLogEntries(
   );
 }
 
+function collectVisibleTurnSubagentThreadIds(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+): ReadonlySet<string> | undefined {
+  if (!visibleTurnIds || visibleTurnIds.size === 0) {
+    return undefined;
+  }
+  const threadIds = new Set<string>();
+  for (const activity of activities) {
+    if (activity.turnId === null || !visibleTurnIds.has(activity.turnId)) {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    for (const subagent of extractCollabSubagents(payload)) {
+      threadIds.add(subagent.threadId);
+      if (subagent.providerThreadId) {
+        threadIds.add(subagent.providerThreadId);
+      }
+    }
+  }
+  return threadIds;
+}
+
+function threadScopedSubagentResultMatchesVisibleTurn(
+  payload: Record<string, unknown> | null,
+  visibleTurnIds: ReadonlySet<TurnId | string>,
+  visibleSubagentThreadIds: ReadonlySet<string> | undefined,
+): boolean {
+  const parentTurnId = extractCollabParentTurnId(payload);
+  if (parentTurnId) {
+    return visibleTurnIds.has(parentTurnId);
+  }
+  if (!visibleSubagentThreadIds || visibleSubagentThreadIds.size === 0) {
+    return false;
+  }
+  return extractCollabSubagents(payload).some(
+    (subagent) =>
+      visibleSubagentThreadIds.has(subagent.threadId) ||
+      (subagent.providerThreadId !== undefined &&
+        visibleSubagentThreadIds.has(subagent.providerThreadId)),
+  );
+}
+
 function shouldKeepActivityForWorkLog(
   activity: OrchestrationThreadActivity,
   latestTurnId: TurnId | undefined,
   visibleTurnIds: ReadonlySet<TurnId | string> | undefined,
+  visibleSubagentThreadIds: ReadonlySet<string> | undefined,
 ): boolean {
   // Thread-level compaction progress has no provider turn id but should stay visible.
   if (activity.kind === "context-compaction" && activity.turnId === null) {
@@ -885,6 +937,13 @@ function shouldKeepActivityForWorkLog(
       asTrimmedString(payload?.itemType) === "collab_agent_tool_call" &&
       asTrimmedString(payload?.detail)
     ) {
+      if (visibleTurnIds && visibleTurnIds.size > 0) {
+        return threadScopedSubagentResultMatchesVisibleTurn(
+          payload,
+          visibleTurnIds,
+          visibleSubagentThreadIds,
+        );
+      }
       return true;
     }
   }
@@ -1110,6 +1169,15 @@ function extractCollabTaskOutputDetail(payload: Record<string, unknown> | null):
     }
   }
   return null;
+}
+
+function extractCollabParentTurnId(payload: Record<string, unknown> | null): string | null {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return null;
+  }
+  const data = asRecord(payload?.data);
+  const item = collabPayloadItem(payload);
+  return asTrimmedString(data?.parentTurnId ?? item?.parentTurnId);
 }
 
 function extractCollabActionTitle(payload: Record<string, unknown> | null): string | null {

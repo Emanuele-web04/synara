@@ -21,6 +21,10 @@ import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
+  mergeProjectedMessageStreaming,
+  mergeProjectedMessageText,
+} from "./messageProjectionMerge.ts";
+import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
@@ -715,17 +719,16 @@ export function projectEvent(
               entry.id === message.id
                 ? {
                     ...entry,
-                    // Late streaming deltas can be real append-only metadata (generated images)
-                    // or a replay of finalized assistant text. Only append unseen text.
-                    text:
-                      message.streaming && entry.streaming
-                        ? `${entry.text}${message.text}`
-                        : message.streaming && !entry.text.includes(message.text)
-                          ? `${entry.text}${message.text}`
-                        : !message.streaming && message.text.length > 0
-                          ? message.text
-                          : entry.text,
-                    streaming: entry.streaming ? message.streaming : false,
+                    text: mergeProjectedMessageText({
+                      existingText: entry.text,
+                      existingStreaming: entry.streaming,
+                      incomingText: message.text,
+                      incomingStreaming: message.streaming,
+                    }),
+                    streaming: mergeProjectedMessageStreaming({
+                      existingStreaming: entry.streaming,
+                      incomingStreaming: message.streaming,
+                    }),
                     source: message.source,
                     updatedAt: message.updatedAt,
                     turnId: resolveStableMessageTurnId({

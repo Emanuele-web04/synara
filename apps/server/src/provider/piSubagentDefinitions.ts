@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -26,7 +26,12 @@ function parseDefinitionFile(
   filePath: string,
   source: PiSubagentDefinition["source"],
 ): PiSubagentDefinition | null {
-  const content = readFileSync(filePath, "utf8");
+  let content: string;
+  try {
+    content = readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
   const match = content.match(/^---\n([\s\S]*?)\n---/);
   if (!match) return null;
 
@@ -55,7 +60,14 @@ function readAgentDirectory(
   const resolvedDir = expandHome(dir);
   if (!existsSync(resolvedDir)) return [];
 
-  return readdirSync(resolvedDir, { withFileTypes: true })
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(resolvedDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  return entries
     .filter((entry) => entry.name.endsWith(".md") && (entry.isFile() || entry.isSymbolicLink()))
     .sort((a, b) => a.name.localeCompare(b.name))
     .flatMap((entry) => {
@@ -119,6 +131,7 @@ export function listPiSubagentDefinitions(input: {
       return {
         name: definition.name,
         displayName: displayNameFromAgentName(definition.name),
+        scope: definition.source,
         ...(definition.description ? { description: definition.description } : {}),
         ...(model ? { model } : {}),
       };
