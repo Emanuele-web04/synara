@@ -86,6 +86,19 @@ function providerOptionsForSelectedInstance(
   return instanceOptions && hasProviderStartOptions(instanceOptions) ? instanceOptions : undefined;
 }
 
+export function resolveAutomationDefinitionProviderOptionsForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): ProviderStartOptions | undefined {
+  if (!definition.modelSelection) {
+    return definition.providerOptions;
+  }
+  const selectionInstance = resolveProviderInstance(settings, {
+    instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+  });
+  return selectionInstance ? providerOptionsForSelectedInstance(selectionInstance) : undefined;
+}
+
 export function resolveAutomationCompletionTextGenerationInputForSettings(
   definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
   settings: ServerSettings,
@@ -97,11 +110,10 @@ export function resolveAutomationCompletionTextGenerationInputForSettings(
         instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
       })
     : null;
-  const directProviderOptions = selectionInstance
-    ? providerOptionsForSelectedInstance(selectionInstance)
-    : definition.modelSelection
-      ? undefined
-      : definition.providerOptions;
+  const directProviderOptions = resolveAutomationDefinitionProviderOptionsForSettings(
+    definition,
+    settings,
+  );
   const directInput = selectionInstance
     ? resolveTextGenerationInputForSelection(
         definition.modelSelection,
@@ -948,6 +960,12 @@ export const AutomationServiceLive = Layer.effect(
           acknowledgedRisks: definition.acknowledgedRisks,
           now,
         });
+        const automationTurnProviderOptions = yield* serverSettings.getSettings.pipe(
+          Effect.map((settings) =>
+            resolveAutomationDefinitionProviderOptionsForSettings(definition, settings),
+          ),
+          Effect.mapError(toServiceError("Failed to load automation provider settings.")),
+        );
 
         const stopIfRunCannotDispatch = (latest: AutomationRun, detail: string) =>
           latest.status === "running"
@@ -1029,8 +1047,8 @@ export const AutomationServiceLive = Layer.effect(
                 attachments: [],
               },
               modelSelection: definition.modelSelection,
-              ...(definition.providerOptions
-                ? { providerOptions: definition.providerOptions }
+              ...(automationTurnProviderOptions
+                ? { providerOptions: automationTurnProviderOptions }
                 : {}),
               dispatchMode: "queue",
               dispatchOrigin: "automation",
@@ -1118,7 +1136,9 @@ export const AutomationServiceLive = Layer.effect(
               attachments: [],
             },
             modelSelection: definition.modelSelection,
-            ...(definition.providerOptions ? { providerOptions: definition.providerOptions } : {}),
+            ...(automationTurnProviderOptions
+              ? { providerOptions: automationTurnProviderOptions }
+              : {}),
             dispatchMode: "queue",
             dispatchOrigin: "automation",
             runtimeMode: definition.runtimeMode,

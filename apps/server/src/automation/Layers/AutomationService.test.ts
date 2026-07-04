@@ -598,6 +598,59 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("replaces stale standalone turn provider options with selected instance settings", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const codexWorkInstanceId = "codex_work_dispatch" as ProviderInstanceId;
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [codexWorkInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Work",
+            config: {
+              homePath: "/tmp/codex-dispatch-home",
+              accountId: "work",
+            },
+          },
+        },
+      });
+      const created = yield* service.create({
+        ...createInput("local"),
+        modelSelection: {
+          instanceId: codexWorkInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+          claudeAgent: {
+            homePath: "/tmp/stale-claude-home",
+          },
+        },
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
+      assert.strictEqual(turnStart?.type, "thread.turn.start");
+      if (turnStart?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.deepStrictEqual(turnStart.providerOptions, {
+        codex: {
+          homePath: "/tmp/codex-dispatch-home",
+          accountId: "work",
+        },
+      });
+    }),
+  );
+
   it.effect("creates a named worktree for worktree-mode automations", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -1599,6 +1652,43 @@ layer("AutomationService", (it) => {
       assert.isUndefined(dispatchedCommands.find((entry) => entry.type === "thread.create"));
       assert.strictEqual(run.threadId, targetThreadId);
       assert.strictEqual(run.status, "running");
+    }),
+  );
+
+  it.effect("drops stale heartbeat turn provider options when the selected instance is gone", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-stale-options-target");
+      const removedInstanceId = "codex_removed_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: removedInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+      });
+
+      yield* service.runNow({ automationId: created.id });
+
+      const command = dispatchedCommands[0];
+      assert.strictEqual(command?.type, "thread.turn.start");
+      if (command?.type !== "thread.turn.start") {
+        assert.fail("Expected a thread.turn.start command.");
+      }
+      assert.isUndefined(command.providerOptions);
     }),
   );
 
