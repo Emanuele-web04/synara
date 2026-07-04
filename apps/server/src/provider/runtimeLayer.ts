@@ -4,6 +4,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config";
 import type { SecretStoreError } from "../auth/Services/ServerSecretStore";
+import { ServerSecretStoreLive } from "../auth/Layers/ServerSecretStore";
 import { ServerSettingsLive } from "../serverSettings";
 import { AnalyticsService } from "../telemetry/Services/AnalyticsService";
 import { ProviderUnsupportedError } from "./Errors";
@@ -93,6 +94,7 @@ export function makeServerProviderLayer(): Layer.Layer<
       Layer.provide(providerSessionDirectoryLayer),
       // Provider sessions resolve persisted provider-instance settings before launch.
       Layer.provide(ServerSettingsLive),
+      Layer.provide(ServerSecretStoreLive),
     );
     const providerDiscoveryLayer = ProviderDiscoveryServiceLive.pipe(
       Layer.provide(adapterRegistryLayer),

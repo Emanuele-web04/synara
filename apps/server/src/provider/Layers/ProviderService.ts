@@ -9,7 +9,7 @@
  *
  * @module ProviderServiceLive
  */
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import {
@@ -43,6 +43,7 @@ import {
 import { Cause, Effect, Exit, Layer, Option, PubSub, Schema, SchemaIssue, Stream } from "effect";
 
 import { ProviderUnsupportedError, ProviderValidationError } from "../Errors.ts";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { ProviderAdapterRegistry } from "../Services/ProviderAdapterRegistry.ts";
 import { ProviderService, type ProviderServiceShape } from "../Services/ProviderService.ts";
 import {
@@ -67,6 +68,7 @@ const configuredProviderRuntimeIdleStopMs =
 const PROVIDER_RUNTIME_IDLE_STOP_MS = Number.isFinite(Number(configuredProviderRuntimeIdleStopMs))
   ? Math.max(0, Number(configuredProviderRuntimeIdleStopMs))
   : DEFAULT_PROVIDER_RUNTIME_IDLE_STOP_MS;
+const PROVIDER_OPTIONS_FINGERPRINT_HMAC_SECRET = "provider-options-fingerprint-hmac-key";
 
 const ProviderRollbackConversationInput = Schema.Struct({
   threadId: ThreadId,
@@ -122,6 +124,7 @@ function toRuntimeStatus(session: ProviderSession): "starting" | "running" | "st
 
 function toRuntimePayloadFromSession(
   session: ProviderSession,
+  credentialsFingerprintKey: Uint8Array,
   extra?: {
     readonly modelSelection?: unknown;
     readonly providerOptions?: unknown;
@@ -144,7 +147,11 @@ function toRuntimePayloadFromSession(
   const credentialsFingerprint =
     Schema.is(ProviderKind)(session.provider) &&
     Schema.is(ProviderStartOptions)(extra?.providerOptions)
-      ? credentialsFingerprintForProvider(session.provider, extra.providerOptions)
+      ? credentialsFingerprintForProvider(
+          session.provider,
+          extra.providerOptions,
+          credentialsFingerprintKey,
+        )
       : undefined;
   const providerInstanceId = session.providerInstanceId ?? extra?.providerInstanceId;
   return {
@@ -240,6 +247,7 @@ function redactedProviderOptionsForComparison(
 function credentialsFingerprintForProvider(
   provider: ProviderKind,
   options: ProviderStartOptions | undefined,
+  key: Uint8Array,
 ): string | undefined {
   const providerOptions = options?.[provider];
   if (!providerOptions || typeof providerOptions !== "object") {
@@ -258,7 +266,7 @@ function credentialsFingerprintForProvider(
   if (environmentEntries.length === 0 && password === null) {
     return undefined;
   }
-  return createHash("sha256")
+  return createHmac("sha256", key)
     .update(JSON.stringify({ environment: environmentEntries, serverPassword: password }))
     .digest("hex");
 }
@@ -278,6 +286,7 @@ function readPersistedCredentialsFingerprint(
 
 function providerStartOptionsEqualForProvider(
   provider: ProviderKind,
+  credentialsFingerprintKey: Uint8Array,
   persisted: {
     readonly options: ProviderStartOptions | undefined;
     readonly credentialsFingerprint: string | undefined;
@@ -288,7 +297,9 @@ function providerStartOptionsEqualForProvider(
     isDeepStrictEqual(
       redactedProviderOptionsForComparison(persisted.options)?.[provider],
       redactedProviderOptionsForComparison(current)?.[provider],
-    ) && persisted.credentialsFingerprint === credentialsFingerprintForProvider(provider, current)
+    ) &&
+    persisted.credentialsFingerprint ===
+      credentialsFingerprintForProvider(provider, current, credentialsFingerprintKey)
   );
 }
 
@@ -499,6 +510,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const registry = yield* ProviderAdapterRegistry;
     const directory = yield* ProviderSessionDirectory;
     const serverSettings = yield* ServerSettingsService;
+    const secretStore = yield* ServerSecretStore;
+    const credentialsFingerprintKey = yield* secretStore.getOrCreateRandom(
+      PROVIDER_OPTIONS_FINGERPRINT_HMAC_SECRET,
+      32,
+    );
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
     const runtimeIdleTimers = new Map<ThreadId, ReturnType<typeof setTimeout>>();
     // Fired idle callbacks outlive their timer map entry, so use generations to
@@ -525,6 +541,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       if (instanceId && registry.getByInstance) {
         return registry
           .getByInstance(instanceId as ProviderInstanceId)
+          .pipe(
+            Effect.flatMap((adapter) =>
+              provider && adapter.provider !== provider
+                ? registry.getByProvider(provider)
+                : Effect.succeed(adapter),
+            ),
+          )
           .pipe(
             Effect.catch(() =>
               provider
@@ -811,7 +834,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session, extra),
+        runtimePayload: toRuntimePayloadFromSession(session, credentialsFingerprintKey, extra),
       });
 
     const upsertStoppedSessionBinding = (
@@ -826,7 +849,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         status: "stopped",
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
         runtimePayload: {
-          ...toRuntimePayloadFromSession(session, {
+          ...toRuntimePayloadFromSession(session, credentialsFingerprintKey, {
             lastRuntimeEvent: "provider.stopAll",
             lastRuntimeEventAt: stoppedAt,
           }),
@@ -1030,6 +1053,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           hasPersistedResumeCursor &&
           providerStartOptionsEqualForProvider(
             resolved.instance.driver,
+            credentialsFingerprintKey,
             {
               options: persistedProviderOptions,
               credentialsFingerprint: readPersistedCredentialsFingerprint(
@@ -1385,6 +1409,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           persistedBinding.providerInstanceId === resolved.instance.instanceId &&
           providerStartOptionsEqualForProvider(
             resolved.instance.driver,
+            credentialsFingerprintKey,
             {
               options: persistedProviderOptions,
               credentialsFingerprint: readPersistedCredentialsFingerprint(
@@ -1520,6 +1545,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const effectiveProviderOptions = resolvedSource.providerOptions;
         const canReuseSourceResumeCursor = providerStartOptionsEqualForProvider(
           resolvedSource.instance.driver,
+          credentialsFingerprintKey,
           {
             options: sourcePersistedProviderOptions,
             credentialsFingerprint: readPersistedCredentialsFingerprint(
@@ -1610,7 +1636,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
                 const fingerprint =
                   effectiveProviderOptions !== undefined &&
                   Schema.is(ProviderKind)(adapter.provider)
-                    ? credentialsFingerprintForProvider(adapter.provider, effectiveProviderOptions)
+                    ? credentialsFingerprintForProvider(
+                        adapter.provider,
+                        effectiveProviderOptions,
+                        credentialsFingerprintKey,
+                      )
                     : undefined;
                 return fingerprint !== undefined
                   ? { providerOptionsCredentialsFingerprint: fingerprint }

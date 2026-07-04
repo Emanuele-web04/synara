@@ -633,6 +633,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
               WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
               THEN COALESCE(
                 json_extract(th.model_selection_json, '$.provider'),
+                s.provider_name,
                 json_extract(th.model_selection_json, '$.instanceId')
               )
               WHEN s.provider_name IS NOT NULL THEN s.provider_name

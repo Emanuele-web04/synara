@@ -30,6 +30,26 @@ describe("provider instance resolution", () => {
     expect(resolved).toBeNull();
   });
 
+  it("rejects explicit instance ids whose driver does not match the provider constraint", () => {
+    const resolved = resolveProviderInstance(
+      {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      },
+      {
+        provider: "codex",
+        instanceId: providerInstanceId("work"),
+      },
+    );
+
+    expect(resolved).toBeNull();
+  });
+
   it("still resolves provider defaults when no explicit instance id is requested", () => {
     const resolved = resolveProviderInstance(DEFAULT_SERVER_SETTINGS, {
       provider: "claudeAgent",

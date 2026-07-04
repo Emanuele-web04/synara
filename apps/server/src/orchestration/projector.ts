@@ -82,6 +82,21 @@ function updateThread(
   return threads.map((thread) => (thread.id === threadId ? { ...thread, ...patch } : thread));
 }
 
+function canProjectTurnModelSelection(
+  thread: OrchestrationThread,
+  modelSelection: OrchestrationThread["modelSelection"] | undefined,
+): boolean {
+  if (modelSelection === undefined) {
+    return false;
+  }
+  const session = thread.session;
+  if (!session || session.status === "stopped" || session.status === "error") {
+    return true;
+  }
+  const boundInstanceId = session.providerInstanceId ?? session.providerName;
+  return !boundInstanceId || modelSelection.instanceId === boundInstanceId;
+}
+
 function decodeForEvent<A>(
   schema: Schema.Schema<A>,
   value: unknown,
@@ -658,7 +673,10 @@ export function projectEvent(
             return nextBase;
           }
           const modelSelectionPatch =
-            payload.modelSelection !== undefined ? { modelSelection: payload.modelSelection } : {};
+            payload.modelSelection !== undefined &&
+            canProjectTurnModelSelection(thread, payload.modelSelection)
+            ? { modelSelection: payload.modelSelection }
+            : {};
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {

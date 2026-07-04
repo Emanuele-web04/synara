@@ -20,7 +20,7 @@ import {
   type RuntimeMode,
   TurnId,
 } from "@t3tools/contracts";
-import { Cache, Cause, Duration, Effect, Equal, Layer, Option, Schema, Stream } from "effect";
+import { Cache, Cause, Duration, Effect, Layer, Option, Schema, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import {
   buildPromptThreadTitleFallback,
@@ -125,7 +125,7 @@ function shouldRestartForProviderOptionsChange(input: {
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
 }): boolean {
-  return !Equal.equals(
+  return !isDeepStrictEqual(
     normalizeProviderOptionsForComparison(input.requestedProvider, input.previousProviderOptions),
     normalizeProviderOptionsForComparison(input.requestedProvider, input.requestedProviderOptions),
   );
@@ -968,7 +968,7 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelSelectionChange =
         (currentProvider === "claudeAgent" || currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
-        !Equal.equals(previousModelSelection, requestedModelSelection);
+        !isDeepStrictEqual(previousModelSelection, requestedModelSelection);
       const previousProviderOptions = threadProviderOptions.get(threadId);
       const providerOptionsChanged = shouldRestartForProviderOptionsChange({
         requestedProvider: desiredProvider,
@@ -2406,3 +2406,4 @@ const make = Effect.gen(function* () {
 });
 
 export const ProviderCommandReactorLive = Layer.effect(ProviderCommandReactor, make);
+import { isDeepStrictEqual } from "node:util";

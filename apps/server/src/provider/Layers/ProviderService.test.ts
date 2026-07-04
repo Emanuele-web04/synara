@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
 import type {
   ProviderApprovalDecision,
@@ -39,6 +40,7 @@ import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.t
 import { makeProviderServiceLive } from "./ProviderService.ts";
 import { ProviderSessionDirectoryLive } from "./ProviderSessionDirectory.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { ServerSecretStore } from "../../auth/Services/ServerSecretStore.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../../persistence/Layers/ProviderSessionRuntime.ts";
 import { ProviderSessionRuntimeRepository } from "../../persistence/Services/ProviderSessionRuntime.ts";
 import {
@@ -53,6 +55,27 @@ const asEventId = (value: string): EventId => EventId.makeUnsafe(value);
 const asProviderInstanceId = (value: string): ProviderInstanceId => value as ProviderInstanceId;
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 const asTurnId = (value: string): TurnId => TurnId.makeUnsafe(value);
+
+const providerServiceSecretBytes = new Map<string, Uint8Array>();
+const ProviderServiceTestSecretStoreLayer = Layer.succeed(ServerSecretStore, {
+  get: (name) => Effect.succeed(providerServiceSecretBytes.get(name) ?? null),
+  set: (name, value) =>
+    Effect.sync(() => {
+      providerServiceSecretBytes.set(name, Uint8Array.from(value));
+    }),
+  getOrCreateRandom: (name, bytes) =>
+    Effect.sync(() => {
+      const existing = providerServiceSecretBytes.get(name);
+      if (existing) return existing;
+      const generated = Uint8Array.from({ length: bytes }, (_, index) => (index * 17 + 23) % 256);
+      providerServiceSecretBytes.set(name, generated);
+      return generated;
+    }),
+  remove: (name) =>
+    Effect.sync(() => {
+      providerServiceSecretBytes.delete(name);
+    }),
+});
 
 type LegacyProviderRuntimeEvent = {
   readonly type: string;
@@ -334,6 +357,7 @@ function makeProviderServiceLayer(
         Layer.provide(directoryLayer),
         Layer.provideMerge(AnalyticsService.layerTest),
         Layer.provide(serverSettingsLayer),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       ),
       serverSettingsLayer,
       directoryLayer,
@@ -432,6 +456,7 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
       Layer.provide(directoryLayer),
       Layer.provide(AnalyticsService.layerTest),
       Layer.provide(ServerSettingsService.layerTest()),
+      Layer.provide(ProviderServiceTestSecretStoreLayer),
     );
 
     yield* Effect.gen(function* () {
@@ -517,6 +542,7 @@ it.effect(
             },
           }),
         ),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       yield* Effect.gen(function* () {
@@ -586,6 +612,7 @@ it.effect(
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
       const updatedResumeCursor = {
         threadId: asThreadId("thread-1"),
@@ -638,6 +665,7 @@ it.effect(
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       secondCodex.startSession.mockClear();
@@ -741,6 +769,79 @@ deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
   );
 });
 
+it.effect(
+  "ProviderServiceLive stops runtime sessions through the bound provider when instance ids are reused",
+  () =>
+    Effect.gen(function* () {
+      const codex = makeFakeCodexAdapter("codex");
+      const claude = makeFakeCodexAdapter("claudeAgent");
+      const threadId = asThreadId("thread-bound-provider-cleanup");
+      const providerInstanceId = asProviderInstanceId("work");
+      const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+        Layer.provide(SqlitePersistenceMemory),
+      );
+      const directoryLayer = ProviderSessionDirectoryLive.pipe(
+        Layer.provide(runtimeRepositoryLayer),
+      );
+      const registry: typeof ProviderAdapterRegistry.Service = {
+        getByInstance: (instanceId) =>
+          instanceId === providerInstanceId
+            ? Effect.succeed(claude.adapter)
+            : Effect.fail(new ProviderUnsupportedError({ provider: String(instanceId) })),
+        getByProvider: (provider) =>
+          provider === "codex"
+            ? Effect.succeed(codex.adapter)
+            : provider === "claudeAgent"
+              ? Effect.succeed(claude.adapter)
+              : Effect.fail(new ProviderUnsupportedError({ provider })),
+        listProviders: () => Effect.succeed(["codex", "claudeAgent"]),
+      };
+
+      const providerLayer = makeProviderServiceLive().pipe(
+        Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+        Layer.provide(directoryLayer),
+        Layer.provide(AnalyticsService.layerTest),
+        Layer.provide(
+          ServerSettingsService.layerTest({
+            providerInstances: {
+              work: {
+                driver: "claudeAgent",
+                enabled: true,
+              },
+            },
+          }),
+        ),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
+      );
+
+      yield* Effect.gen(function* () {
+        const provider = yield* ProviderService;
+        const directory = yield* ProviderSessionDirectory;
+        yield* codex.adapter.startSession({
+          provider: "codex",
+          providerInstanceId,
+          threadId,
+          cwd: "/tmp/project-bound-provider-cleanup",
+          runtimeMode: "full-access",
+        });
+        yield* directory.upsert({
+          threadId,
+          provider: "codex",
+          providerInstanceId,
+          runtimeMode: "full-access",
+          status: "running",
+        });
+        assert.equal(typeof provider.stopRuntimeSession, "function");
+        if (provider.stopRuntimeSession) {
+          yield* provider.stopRuntimeSession({ threadId });
+        }
+      }).pipe(Effect.provide(Layer.mergeAll(providerLayer, directoryLayer)));
+
+      assert.equal(codex.stopSession.mock.calls.length, 1);
+      assert.equal(claude.stopSession.mock.calls.length, 0);
+    }),
+);
+
 routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("routes provider operations and rollback conversation", () =>
     Effect.gen(function* () {
@@ -837,8 +938,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         result,
         new ProviderValidationError({
           operation: "ProviderService.startSession",
-          issue:
-            "Requested provider 'codex' does not match provider instance 'claudeAgent' driver 'claudeAgent'.",
+          issue: "Unknown provider instance 'claudeAgent'.",
         }),
       );
       assert.equal(routing.codex.startSession.mock.calls.length, 0);
@@ -1586,6 +1686,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -1619,6 +1720,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       secondClaude.startSession.mockClear();
@@ -1684,6 +1786,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -1718,6 +1821,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       yield* Effect.gen(function* () {
@@ -1796,6 +1900,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest(firstSettings)),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -1825,6 +1930,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest(secondSettings)),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       yield* Effect.gen(function* () {
@@ -1897,6 +2003,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest(settings)),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -1917,6 +2024,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.equal(Option.isSome(persisted), true);
       if (Option.isSome(persisted)) {
         const runtimePayload = persisted.value.runtimePayload as {
+          providerOptionsCredentialsFingerprint?: unknown;
           providerOptions?: {
             opencode?: {
               serverPassword?: string;
@@ -1924,8 +2032,21 @@ routing.layer("ProviderServiceLive routing", (it) => {
             };
           };
         };
+        const rawSecretFingerprint = createHash("sha256")
+          .update(
+            JSON.stringify({
+              environment: [["OPENCODE_API_KEY", "opencode-env-secret"]],
+              serverPassword: "opencode-password",
+            }),
+          )
+          .digest("hex");
         assert.equal(runtimePayload.providerOptions?.opencode?.serverPassword, undefined);
         assert.equal(runtimePayload.providerOptions?.opencode?.environment, undefined);
+        assert.equal(typeof runtimePayload.providerOptionsCredentialsFingerprint, "string");
+        assert.notEqual(
+          runtimePayload.providerOptionsCredentialsFingerprint,
+          rawSecretFingerprint,
+        );
       }
 
       const secondOpenCode = makeFakeCodexAdapter("opencode");
@@ -1944,6 +2065,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest(settings)),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       yield* Effect.gen(function* () {
@@ -2014,6 +2136,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(firstDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       const initial = yield* Effect.gen(function* () {
@@ -2050,6 +2173,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         Layer.provide(secondDirectoryLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(ServerSettingsService.layerTest()),
+        Layer.provide(ProviderServiceTestSecretStoreLayer),
       );
 
       yield* Effect.gen(function* () {

@@ -37,6 +37,7 @@ import {
   makeCheckGrokProviderStatus,
   makeCheckKiloProviderStatus,
   makeCheckOpenCodeProviderStatus,
+  makeClaudeProbeEnv,
   parseAuthStatusFromOutput,
   parseClaudeAuthStatusFromOutput,
   providerStatusesEqual,
@@ -1311,6 +1312,17 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         ),
       ),
     );
+
+    it("builds Claude SDK probe environments in the configured server home", () => {
+      const env = makeClaudeProbeEnv(
+        "~/.claude-work",
+        { SYNARA_TEST_INSTANCE: "claude-work" },
+        "/tmp/synara-test-home",
+      );
+
+      assert.strictEqual(env.HOME, "/tmp/synara-test-home/.claude-work");
+      assert.strictEqual(env.SYNARA_TEST_INSTANCE, "claude-work");
+    });
 
     it.effect(
       "strips stale direct Claude credentials from health probes when local OAuth is usable",

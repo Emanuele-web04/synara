@@ -538,6 +538,90 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
+  it("attributes provider-less token updates to the active session before model heuristics", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'project-profile',
+            'OpenCode Claude Model Thread',
+            '{"instanceId":"work","model":"anthropic/claude-sonnet-4-6"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T10:00:00.000Z',
+            '2026-06-13T10:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_sessions (
+            thread_id,
+            status,
+            provider_name,
+            provider_instance_id,
+            updated_at
+          )
+          VALUES (
+            'thread-opencode-claude-model',
+            'ready',
+            'opencode',
+            'work',
+            '2026-06-13T10:00:00.000Z'
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES (
+            'activity-opencode-claude-model',
+            'thread-opencode-claude-model',
+            'turn-opencode-claude-model',
+            'info',
+            'context-window.updated',
+            'tokens updated',
+            '{"totalProcessedTokens":3200}',
+            1,
+            '2026-06-13T10:06:00.000Z'
+          )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.topProvider).toBe("opencode");
+        expect(tokenStats.providers).toEqual(["opencode"]);
+        expect(tokenStats.unavailableProviders).not.toContain("claudeAgent");
+      }),
+    );
+  });
+
   it("keeps historical provider-less turns attributed before latest session fallback", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {

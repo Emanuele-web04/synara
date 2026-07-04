@@ -423,7 +423,13 @@ export function resolveProviderInstance(
 ): ResolvedProviderInstance | null {
   const instances = deriveProviderInstances(settings);
   if (input.instanceId !== undefined) {
-    return instances.find((instance) => instance.instanceId === input.instanceId) ?? null;
+    return (
+      instances.find(
+        (instance) =>
+          instance.instanceId === input.instanceId &&
+          (input.provider === undefined || instance.driver === input.provider),
+      ) ?? null
+    );
   }
   const requestedInstanceId = input.provider
     ? defaultInstanceIdForProvider(input.provider)

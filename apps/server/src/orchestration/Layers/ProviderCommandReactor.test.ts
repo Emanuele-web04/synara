@@ -2805,6 +2805,66 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls.length).toBe(3);
   });
 
+  it("does not restart when provider options are structurally unchanged", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const providerOptions = {
+      codex: {
+        accountId: "personal",
+        homePath: "/tmp/shared-codex-home",
+        shadowHomePath: "/tmp/personal-codex-home",
+      },
+    };
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-1"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-codex-account-same-1"),
+          role: "user",
+          text: "first account",
+          attachments: [],
+        },
+        providerOptions,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-codex-account-same-2"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-codex-account-same-2"),
+          role: "user",
+          text: "same account",
+          attachments: [],
+        },
+        providerOptions: {
+          codex: {
+            accountId: "personal",
+            homePath: "/tmp/shared-codex-home",
+            shadowHomePath: "/tmp/personal-codex-home",
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.length).toBe(1);
+  });
+
   it("restarts Claude sessions when Claude provider options change", async () => {
     const harness = await createHarness({
       threadModelSelection: { instanceId: "claudeAgent", model: "claude-opus-4-6" },
@@ -3369,6 +3429,10 @@ describe("ProviderCommandReactor", () => {
 
     const readModel = await Effect.runPromise(harness.engine.getReadModel());
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(thread?.modelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5-codex",
+    });
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
     ).toMatchObject({
@@ -3443,6 +3507,10 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.providerName).toBe("codex");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+    expect(thread?.modelSelection).toEqual({
+      instanceId: "codex",
+      model: "gpt-5-codex",
+    });
     expect(
       thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
     ).toMatchObject({

@@ -421,6 +421,7 @@ interface ClaudeSubscriptionProbeInput {
   readonly binaryPath?: string | undefined;
   readonly homePath?: string | undefined;
   readonly environment?: Readonly<Record<string, string>> | undefined;
+  readonly homeDir?: string | undefined;
 }
 
 function waitForAbortSignal(signal: AbortSignal): Promise<void> {
@@ -455,6 +456,7 @@ function environmentFingerprint(
 function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string {
   return JSON.stringify({
     binaryPath: input.binaryPath?.trim() || null,
+    homeDir: input.homeDir?.trim() || null,
     homePath: input.homePath?.trim() || null,
     environment: environmentFingerprint(input.environment),
   });
@@ -463,7 +465,7 @@ function claudeSubscriptionProbeKey(input: ClaudeSubscriptionProbeInput): string
 const probeClaudeSubscription = (input: ClaudeSubscriptionProbeInput) => {
   const abort = new AbortController();
   const executable = nonEmptyTrimmed(input.binaryPath) ?? "claude";
-  const env = makeClaudeProbeEnv(input.homePath, input.environment);
+  const env = makeClaudeProbeEnv(input.homePath, input.environment, input.homeDir);
   return Effect.tryPromise(async () => {
     const q = claudeQuery({
       // oxlint-disable-next-line require-yield
@@ -879,11 +881,12 @@ function makeCodexProbeEnv(
   });
 }
 
-function makeClaudeProbeEnv(
+export function makeClaudeProbeEnv(
   homePath?: string,
   environment?: Readonly<Record<string, string>>,
+  homeDir?: string,
 ): NodeJS.ProcessEnv {
-  return buildClaudeProcessEnv({ homePath, environment });
+  return buildClaudeProcessEnv({ homePath, environment, homeDir });
 }
 
 const readCodexConfigModelProviderForEnv = (env: NodeJS.ProcessEnv) =>
@@ -2700,6 +2703,7 @@ export const ProviderHealthLive = Layer.effect(
                 binaryPath,
                 homePath: claudeHomePath,
                 environment: instance.environment,
+                homeDir: serverConfig.homeDir,
               }),
               binaryPath,
               claudeHomePath,
