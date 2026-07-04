@@ -5,13 +5,23 @@
 // delete actually free disk space without shrinking the Profile page numbers.
 // Layer: server maintenance service (SqlClient).
 
-import { CheckpointRef, type ThreadEnvironmentMode } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  MessageId,
+  ThreadId,
+  TurnId,
+  type ThreadEnvironmentMode,
+} from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 import { Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
-import { CHECKPOINT_REFS_PREFIX } from "./checkpointing/Utils";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurnStart,
+  CHECKPOINT_REFS_PREFIX,
+} from "./checkpointing/Utils";
 import { aggregateProfileSkillUsageRows } from "./profileStats";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
 
@@ -42,7 +52,12 @@ interface SkillMessageRow {
 }
 
 interface CheckpointTurnRow {
+  readonly turnId: string | null;
   readonly checkpointRef: string | null;
+}
+
+interface CheckpointMessageRow {
+  readonly messageId: string | null;
 }
 
 export interface ThreadTurnSnapshotRow {
@@ -110,17 +125,37 @@ function threadWorkspaceCwdForCheckpointCleanup(thread: PurgeThreadRow): string 
   });
 }
 
-function checkpointRefsFromTurnRows(
-  rows: ReadonlyArray<CheckpointTurnRow>,
+function checkpointRefsForThreadPurge(
+  threadId: string,
+  turnRows: ReadonlyArray<CheckpointTurnRow>,
+  messageRows: ReadonlyArray<CheckpointMessageRow>,
 ): ReadonlyArray<CheckpointRef> {
   const refs = new Set<string>();
-  for (const row of rows) {
-    const checkpointRef = readString(row.checkpointRef);
-    if (!checkpointRef?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`)) {
-      continue;
+
+  const addRef = (checkpointRef: CheckpointRef | string | null | undefined) => {
+    const raw = readString(checkpointRef);
+    if (raw?.startsWith(`${CHECKPOINT_REFS_PREFIX}/`)) {
+      refs.add(raw);
     }
-    refs.add(checkpointRef);
+  };
+
+  const typedThreadId = ThreadId.makeUnsafe(threadId);
+  for (const row of turnRows) {
+    const checkpointRef = readString(row.checkpointRef);
+    addRef(checkpointRef);
+
+    const turnId = readString(row.turnId);
+    if (turnId) {
+      addRef(checkpointRefForThreadTurnStart(typedThreadId, TurnId.makeUnsafe(turnId)));
+    }
   }
+  for (const row of messageRows) {
+    const messageId = readString(row.messageId);
+    if (messageId) {
+      addRef(checkpointRefForThreadMessageStart(typedThreadId, MessageId.makeUnsafe(messageId)));
+    }
+  }
+
   return [...refs].map((checkpointRef) => CheckpointRef.makeUnsafe(checkpointRef));
 }
 
@@ -289,11 +324,27 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         ORDER BY created_at ASC, message_id ASC
       `;
       const checkpointTurnRows = yield* sql<CheckpointTurnRow>`
-        SELECT checkpoint_ref AS checkpointRef
+        SELECT
+          turn_id AS turnId,
+          checkpoint_ref AS checkpointRef
         FROM projection_turns
         WHERE thread_id = ${threadId}
-          AND checkpoint_ref IS NOT NULL
+          AND (
+            turn_id IS NOT NULL
+            OR checkpoint_ref IS NOT NULL
+          )
+        ORDER BY row_id ASC
       `;
+      let checkpointMessageRows: ReadonlyArray<CheckpointMessageRow> = [];
+      if (checkpointTurnRows.length > 0) {
+        checkpointMessageRows = yield* sql<CheckpointMessageRow>`
+          SELECT message_id AS messageId
+          FROM projection_thread_messages
+          WHERE thread_id = ${threadId}
+            AND message_id IS NOT NULL
+          ORDER BY message_id ASC
+        `;
+      }
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
       const tokenProvider = parseModelSelectionJson(thread.modelSelectionJson)?.provider ?? null;
@@ -353,7 +404,11 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         );
       }
 
-      const checkpointRefs = checkpointRefsFromTurnRows(checkpointTurnRows);
+      const checkpointRefs = checkpointRefsForThreadPurge(
+        threadId,
+        checkpointTurnRows,
+        checkpointMessageRows,
+      );
       if (checkpointRefs.length > 0) {
         const cwd = threadWorkspaceCwdForCheckpointCleanup(thread);
         if (cwd === null) {

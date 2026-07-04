@@ -5,6 +5,7 @@
 // Exports: Vitest coverage for ProfileStatsArchive.
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { Effect, Layer } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -13,6 +14,10 @@ import {
   CheckpointStore,
   type CheckpointStoreShape,
 } from "./checkpointing/Services/CheckpointStore";
+import {
+  checkpointRefForThreadMessageStart,
+  checkpointRefForThreadTurnStart,
+} from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
@@ -270,7 +275,33 @@ describe("ProfileStatsArchive", () => {
         expect(deletedCheckpointRefCalls).toEqual([
           {
             cwd: "/work/archive",
-            checkpointRefs: ["refs/t3/checkpoints/thread-purge/turn/1"],
+            checkpointRefs: [
+              "refs/t3/checkpoints/thread-purge/turn/1",
+              String(
+                checkpointRefForThreadTurnStart(
+                  ThreadId.makeUnsafe("thread-purge"),
+                  TurnId.makeUnsafe("turn-purge-1"),
+                ),
+              ),
+              String(
+                checkpointRefForThreadTurnStart(
+                  ThreadId.makeUnsafe("thread-purge"),
+                  TurnId.makeUnsafe("turn-purge-2"),
+                ),
+              ),
+              String(
+                checkpointRefForThreadMessageStart(
+                  ThreadId.makeUnsafe("thread-purge"),
+                  MessageId.makeUnsafe("message-purge-1"),
+                ),
+              ),
+              String(
+                checkpointRefForThreadMessageStart(
+                  ThreadId.makeUnsafe("thread-purge"),
+                  MessageId.makeUnsafe("message-purge-2"),
+                ),
+              ),
+            ],
           },
         ]);
         const remainingEvents = yield* sql<{ readonly count: number }>`

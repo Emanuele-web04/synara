@@ -350,6 +350,13 @@ const orchestrationEngine = {
       threads: [],
       updatedAt: now,
     }),
+  refreshCommandReadModel: () =>
+    Effect.succeed({
+      snapshotSequence: 0,
+      projects: [],
+      threads: [],
+      updatedAt: now,
+    }),
   dispatch: (command: OrchestrationCommand) =>
     failDispatchType !== null && command.type === failDispatchType
       ? Effect.fail(

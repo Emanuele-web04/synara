@@ -1,10 +1,9 @@
-import type { OrchestrationEvent } from "@t3tools/contracts";
+import { ThreadId, type OrchestrationEvent } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, Layer, Stream } from "effect";
 
 import { ProfileStatsArchive } from "../../profileStatsArchive";
 import { ProviderService } from "../../provider/Services/ProviderService";
-import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory";
 import { TerminalManager } from "../../terminal/Services/Manager";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "../../threadRetention";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine";
@@ -19,7 +18,7 @@ type ThreadDeletedEvent = Extract<OrchestrationEvent, { type: "thread.deleted" }
 // (or before purge existed) are archived and purged shortly after startup.
 const PURGE_STARTUP_SWEEP_DELAY_MS = 60 * 1000;
 
-type ProviderCleanupBindingState = "present" | "absent" | "unknown";
+const MISSING_PROVIDER_BINDING_DETAIL = "no persisted provider binding exists";
 
 export const logCleanupCauseUnlessInterrupted = <R, E>({
   effect,
@@ -68,42 +67,49 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const profileStatsArchive = yield* ProfileStatsArchive;
   const providerService = yield* ProviderService;
-  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const terminalManager = yield* TerminalManager;
 
-  const hasProviderBindingForCleanup = (
-    threadId: ThreadDeletedEvent["payload"]["threadId"],
-  ): Effect.Effect<ProviderCleanupBindingState, unknown> =>
-    providerSessionDirectory.getBinding(threadId).pipe(
-      Effect.map((binding) =>
-        Option.isSome(binding) ? ("present" as const) : ("absent" as const),
-      ),
+  const refreshCommandReadModelAfterPurge = (threadId: string) =>
+    orchestrationEngine.refreshCommandReadModel().pipe(
+      Effect.asVoid,
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
         }
-        return Effect.logWarning("thread deletion cleanup skipped provider binding lookup", {
+        return Effect.logWarning("thread deletion cleanup could not refresh command read model", {
           threadId,
           cause: Cause.pretty(cause),
-        }).pipe(Effect.as("unknown" as const));
+        });
       }),
     );
+
+  const stopProviderSessionWithoutBinding = (
+    threadId: ThreadDeletedEvent["payload"]["threadId"],
+    cause: Cause.Cause<unknown>,
+  ) =>
+    Effect.logDebug("thread deletion cleanup found no provider session to stop", {
+      threadId,
+      cause: Cause.pretty(cause),
+    }).pipe(Effect.as(true));
 
   const stopProviderSession = Effect.fn(function* (
     threadId: ThreadDeletedEvent["payload"]["threadId"],
   ) {
-    const bindingState = yield* hasProviderBindingForCleanup(threadId);
-    if (bindingState === "unknown") {
-      return false;
-    }
-    if (bindingState === "absent") {
-      return true;
-    }
-    return yield* cleanupSucceededUnlessInterrupted({
-      effect: providerService.stopSession({ threadId }),
-      message: "thread deletion cleanup skipped provider session stop",
-      threadId,
-    });
+    return yield* providerService.stopSession({ threadId }).pipe(
+      Effect.as(true),
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        if (Cause.pretty(cause).includes(MISSING_PROVIDER_BINDING_DETAIL)) {
+          return stopProviderSessionWithoutBinding(threadId, cause);
+        }
+        return Effect.logDebug("thread deletion cleanup skipped provider session stop", {
+          threadId,
+          cause: Cause.pretty(cause),
+        }).pipe(Effect.as(false));
+      }),
+    );
   });
 
   const closeThreadTerminals = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
@@ -123,7 +129,9 @@ const make = Effect.gen(function* () {
     return profileStatsArchive
       .purgeThreadWithStatsSnapshot({ threadId: event.payload.threadId })
       .pipe(
-        Effect.asVoid,
+        Effect.flatMap((purged) =>
+          purged ? refreshCommandReadModelAfterPurge(event.payload.threadId) : Effect.void,
+        ),
         Effect.catch((error) =>
           // A failed purge leaves the thread soft-deleted; the startup sweep
           // retries it on the next boot.
@@ -184,8 +192,11 @@ const make = Effect.gen(function* () {
       Effect.sleep(PURGE_STARTUP_SWEEP_DELAY_MS).pipe(
         Effect.flatMap(() =>
           profileStatsArchive.purgeSoftDeletedManualThreads({
-            beforePurge: cleanupThreadBeforePurge,
+            beforePurge: (threadId) => cleanupThreadBeforePurge(ThreadId.makeUnsafe(threadId)),
           }),
+        ),
+        Effect.tap((purgedCount) =>
+          purgedCount > 0 ? refreshCommandReadModelAfterPurge("startup-sweep") : Effect.void,
         ),
         Effect.flatMap((purgedCount) =>
           purgedCount > 0
