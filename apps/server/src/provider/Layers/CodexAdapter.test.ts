@@ -10,6 +10,7 @@ import {
   type ProviderListSkillsResult,
   type ProviderReadPluginResult,
   type ProviderSession,
+  type ProviderStartOptions,
   type ProviderTurnStartResult,
   type ProviderUserInputAnswers,
   ThreadId,
@@ -26,6 +27,7 @@ import {
   type CodexAppServerSendTurnInput,
 } from "../../codexAppServerManager.ts";
 import { ServerConfig } from "../../config.ts";
+import { resolveCodexHomePath } from "../../codexGeneratedImages.ts";
 import { ProviderAdapterValidationError } from "../Errors.ts";
 import { CodexAdapter } from "../Services/CodexAdapter.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
@@ -38,6 +40,10 @@ const asItemId = (value: string): ProviderItemId => ProviderItemId.makeUnsafe(va
 
 class FakeCodexManager extends CodexAppServerManager {
   public sessionSnapshots: ProviderSession[] = [];
+  public codexOptionsByThreadId = new Map<
+    ThreadId,
+    NonNullable<ProviderStartOptions["codex"]> | undefined
+  >();
 
   public startSessionImpl = vi.fn(
     async (input: CodexAppServerStartSessionInput): Promise<ProviderSession> => {
@@ -209,6 +215,12 @@ class FakeCodexManager extends CodexAppServerManager {
     return this.sessionSnapshots;
   }
 
+  override getSessionCodexOptions(
+    threadId: ThreadId,
+  ): NonNullable<ProviderStartOptions["codex"]> | undefined {
+    return this.codexOptionsByThreadId.get(threadId);
+  }
+
   override hasSession(_threadId: ThreadId): boolean {
     return false;
   }
@@ -277,6 +289,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);
     }),
   );
+
   it.effect("maps codex model options before starting a session", () =>
     Effect.gen(function* () {
       validationManager.startSessionImpl.mockClear();
@@ -363,6 +376,52 @@ validationLayer("CodexAdapterLive validation", (it) => {
           ?.codexOptions,
         { environment },
       );
+    }),
+  );
+
+  it.effect("lists generated-image homes from live session Codex options", () =>
+    Effect.gen(function* () {
+      const now = new Date().toISOString();
+      validationManager.sessionSnapshots = [
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-work"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-default"),
+          createdAt: now,
+          updatedAt: now,
+        },
+      ];
+      validationManager.codexOptionsByThreadId.clear();
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-work"), {
+        homePath: "/tmp/codex-live-work",
+        accountId: "work",
+      });
+      const adapter = yield* CodexAdapter;
+      const listGeneratedImageHomePaths = adapter.listGeneratedImageHomePaths;
+      if (!listGeneratedImageHomePaths) {
+        throw new Error("Expected Codex adapter to expose generated-image home paths.");
+      }
+
+      const homes = yield* listGeneratedImageHomePaths();
+
+      assert.deepStrictEqual(
+        new Set(homes),
+        new Set([
+          resolveCodexHomePath({ homePath: "/tmp/codex-live-work", accountId: "work" }),
+          resolveCodexHomePath(undefined),
+        ]),
+      );
+      validationManager.sessionSnapshots = [];
+      validationManager.codexOptionsByThreadId.clear();
     }),
   );
 });

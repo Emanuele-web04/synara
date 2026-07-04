@@ -19,13 +19,14 @@ import {
   type AutomationUpdateInput,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderStartOptions,
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
 import { Cause, Effect, Layer, Option, PubSub, Queue, Stream } from "effect";
 import {
   inferLegacyProviderKindFromModelSelection,
-  mergeProviderStartOptions,
   providerStartOptionsFromInstance,
+  type ResolvedProviderInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
 } from "@t3tools/shared/providerInstances";
@@ -67,6 +68,64 @@ interface AutomationCompletionEvaluationJob {
   readonly definition: AutomationDefinition;
   readonly run: AutomationRun;
   readonly policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>;
+}
+
+function hasProviderStartOptions(options: ProviderStartOptions): boolean {
+  return Object.values(options).some((value) => value !== undefined);
+}
+
+function providerOptionsForSelectedInstance(
+  baseOptions: ProviderStartOptions | undefined,
+  instance: ResolvedProviderInstance,
+): ProviderStartOptions | undefined {
+  const instanceOptions = providerStartOptionsFromInstance(instance);
+
+  switch (instance.driver) {
+    case "codex": {
+      const { codex: _staleCodex, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.codex ? { ...rest, codex: instanceOptions.codex } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "claudeAgent": {
+      const { claudeAgent: _staleClaudeAgent, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.claudeAgent
+        ? { ...rest, claudeAgent: instanceOptions.claudeAgent }
+        : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "cursor": {
+      const { cursor: _staleCursor, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.cursor ? { ...rest, cursor: instanceOptions.cursor } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "gemini": {
+      const { gemini: _staleGemini, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.gemini ? { ...rest, gemini: instanceOptions.gemini } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "grok": {
+      const { grok: _staleGrok, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.grok ? { ...rest, grok: instanceOptions.grok } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "kilo": {
+      const { kilo: _staleKilo, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.kilo ? { ...rest, kilo: instanceOptions.kilo } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "opencode": {
+      const { opencode: _staleOpenCode, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.opencode
+        ? { ...rest, opencode: instanceOptions.opencode }
+        : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+    case "pi": {
+      const { pi: _stalePi, ...rest } = baseOptions ?? {};
+      const next = instanceOptions?.pi ? { ...rest, pi: instanceOptions.pi } : rest;
+      return hasProviderStartOptions(next) ? next : undefined;
+    }
+  }
 }
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
@@ -1268,20 +1327,19 @@ export const AutomationServiceLive = Layer.effect(
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
-        // Stored definitions never carry redacted per-instance environment or
-        // secrets, so the completion evaluator must merge in the server-side
-        // instance options the same way turn dispatch does.
+        // Stored definitions can outlive provider-instance edits, so the
+        // selected driver's launch options must come from the live settings
+        // snapshot rather than stale definition-level providerOptions.
         const selectionInstance = definition.modelSelection
           ? resolveProviderInstance(settings, {
               instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
             })
           : null;
         const directProviderOptions = selectionInstance
-          ? mergeProviderStartOptions(
-              definition.providerOptions,
-              providerStartOptionsFromInstance(selectionInstance),
-            )
-          : definition.providerOptions;
+          ? providerOptionsForSelectedInstance(definition.providerOptions, selectionInstance)
+          : definition.modelSelection
+            ? undefined
+            : definition.providerOptions;
         const directInput = resolveTextGenerationInputForSelection(
           definition.modelSelection,
           directProviderOptions,

@@ -145,6 +145,11 @@ export interface ProviderAdapterShape<TError> {
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
   /**
+   * List provider home roots that can contain generated image artifacts for live sessions.
+   */
+  readonly listGeneratedImageHomePaths?: () => Effect.Effect<ReadonlyArray<string>, TError>;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;

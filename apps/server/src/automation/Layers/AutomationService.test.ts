@@ -16,6 +16,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationProjectShell,
   type OrchestrationThreadShell,
+  type ProviderInstanceId,
 } from "@t3tools/contracts";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
@@ -2222,6 +2223,119 @@ layer("AutomationService", (it) => {
         model: "composer-2",
       });
     }),
+  );
+
+  it.effect(
+    "replaces stale heartbeat completion provider options with selected instance options",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const serverSettings = yield* ServerSettingsService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-stale-provider-options");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-stale-provider-options");
+        const codexWorkInstanceId = "codex_work" as ProviderInstanceId;
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [codexWorkInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Work",
+              config: {
+                homePath: "/tmp/codex-work-home",
+                accountId: "work",
+              },
+            },
+          },
+        });
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: codexWorkInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "stale provider options stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.providerOptions?.codex, {
+          homePath: "/tmp/codex-work-home",
+          accountId: "work",
+        });
+      }),
+  );
+
+  it.effect(
+    "drops stale heartbeat completion provider options when the selected instance is gone",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-missing-provider-instance");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-missing-provider-instance");
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: "codex_removed" as ProviderInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "missing instance stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
+      }),
   );
 
   it.effect("keeps a heartbeat automation active when the AI stop condition is unmatched", () =>

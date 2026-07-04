@@ -28,6 +28,7 @@ import { codexConfiguredHomePathsFromSettings } from "./codexGeneratedImages.ts"
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
+import { ProviderAdapterRegistry } from "./provider/Services/ProviderAdapterRegistry.ts";
 import { ServerSettingsService } from "./serverSettings.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
@@ -509,12 +510,24 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     // resolve them from settings when the service is available so those images
     // stay servable. The route keeps working without settings (e.g. tests).
     const settingsService = yield* Effect.serviceOption(ServerSettingsService);
-    const codexHomePaths = Option.isSome(settingsService)
+    const configuredCodexHomePaths = Option.isSome(settingsService)
       ? yield* settingsService.value.getSettings.pipe(
           Effect.map(codexConfiguredHomePathsFromSettings),
           Effect.catch(() => Effect.succeed<readonly string[]>([])),
         )
       : [];
+    const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);
+    const liveCodexHomePaths = Option.isSome(adapterRegistry)
+      ? yield* adapterRegistry.value.getByProvider("codex").pipe(
+          Effect.flatMap((adapter) =>
+            adapter.listGeneratedImageHomePaths
+              ? adapter.listGeneratedImageHomePaths()
+              : Effect.succeed<readonly string[]>([]),
+          ),
+          Effect.catch(() => Effect.succeed<readonly string[]>([])),
+        )
+      : [];
+    const codexHomePaths = [...new Set([...configuredCodexHomePaths, ...liveCodexHomePaths])];
 
     const previewFile = yield* Effect.promise(() =>
       resolveAllowedLocalPreviewFile({
