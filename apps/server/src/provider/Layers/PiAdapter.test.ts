@@ -9,10 +9,14 @@ import {
   buildPiSubagentPrompt,
   ensurePiSubagentChildLauncherEnv,
   getPiSupportedThinkingOptions,
+  makePiSubagentTurnCompletedPayload,
   makePiSubagentPromptItemId,
   makePiSubagentSourceKey,
   makePiUserInputOptions,
   PLAIN_PI_EXTENSION_THEME,
+  piSubagentPromptTextForReceiver,
+  piSubagentReceiverAgents,
+  recordPiSubagentParentTurnIds,
   recordPiSubagentSessionTranscriptEmission,
 } from "./PiAdapter";
 
@@ -151,6 +155,77 @@ describe("Pi subagent prompt expansion", () => {
 });
 
 describe("Pi subagent transcript helpers", () => {
+  it("records parent turn ids for async subagent launch acknowledgements", () => {
+    const parentTurnIds = new Map<string, string>();
+
+    recordPiSubagentParentTurnIds({
+      parentTurnId: "turn-parent-1",
+      subagentParentTurnIds: parentTurnIds,
+      transcriptTargets: [{ threadId: "child-provider-1" }, { threadId: "" }, {}],
+    });
+
+    expect(parentTurnIds.get("child-provider-1")).toBe("turn-parent-1");
+    expect(parentTurnIds.size).toBe(1);
+  });
+
+  it("uses each multi-subagent child's own prompt and session file", () => {
+    const args = {
+      children: [
+        { agent: "scout", task: "Inspect the repo" },
+        { agent: "writer", task: "Draft the summary" },
+      ],
+    };
+    const details = {
+      children: [
+        { threadId: "child-provider-1", sessionFile: "/tmp/pi-scout.jsonl" },
+        { threadId: "child-provider-2", sessionFile: "/tmp/pi-writer.jsonl" },
+      ],
+    };
+
+    const receiverAgents = piSubagentReceiverAgents({ args, details });
+
+    expect(receiverAgents).toMatchObject([
+      {
+        threadId: "child-provider-1",
+        agentId: "scout",
+        prompt: "Inspect the repo",
+        sessionFile: "/tmp/pi-scout.jsonl",
+      },
+      {
+        threadId: "child-provider-2",
+        agentId: "writer",
+        prompt: "Draft the summary",
+        sessionFile: "/tmp/pi-writer.jsonl",
+      },
+    ]);
+    expect(
+      piSubagentPromptTextForReceiver({
+        args,
+        details,
+        receiverAgent: receiverAgents[0],
+      }),
+    ).toBe("Inspect the repo");
+    expect(
+      piSubagentPromptTextForReceiver({
+        args,
+        details,
+        receiverAgent: receiverAgents[1],
+      }),
+    ).toBe("Draft the summary");
+  });
+
+  it("carries failed state into session transcript turn completions", () => {
+    expect(makePiSubagentTurnCompletedPayload(false)).toEqual({
+      state: "completed",
+      stopReason: null,
+    });
+    expect(makePiSubagentTurnCompletedPayload(true)).toEqual({
+      state: "failed",
+      stopReason: null,
+      errorMessage: "Subagent failed",
+    });
+  });
+
   it("suppresses exact session transcript replays while allowing appended content", () => {
     const emittedTranscripts = new Map<string, string>();
 

@@ -96,11 +96,13 @@ function findNearestProjectAgentsDir(cwd: string): string | undefined {
 }
 
 function displayNameFromAgentName(name: string): string {
-  return name
-    .split(/[-_]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ") || name;
+  return (
+    name
+      .split(/[-_]+/)
+      .filter(Boolean)
+      .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(" ") || name
+  );
 }
 
 function modelWithThinking(definition: PiSubagentDefinition): string | undefined {

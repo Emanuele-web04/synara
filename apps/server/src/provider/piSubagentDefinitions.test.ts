@@ -20,12 +20,9 @@ describe("listPiSubagentDefinitions", () => {
     writeAgent(
       path.join(agentDir, "agents"),
       "scout.md",
-      [
-        "name: scout",
-        "description: Global scout",
-        "model: openai/gpt-5.5",
-        "thinking: low",
-      ].join("\n"),
+      ["name: scout", "description: Global scout", "model: openai/gpt-5.5", "thinking: low"].join(
+        "\n",
+      ),
     );
     writeAgent(
       path.join(cwd, ".pi", "agents"),

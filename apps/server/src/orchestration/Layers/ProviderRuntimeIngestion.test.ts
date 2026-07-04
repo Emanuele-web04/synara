@@ -4220,9 +4220,9 @@ describe("ProviderRuntimeIngestion", () => {
       asThreadId("subagent:thread-1:child-provider-1"),
     );
 
-    expect(childThread.messages.map((message) => ({ role: message.role, text: message.text }))).toEqual([
-      { role: "user", text: "Run a deterministic child-thread prompt smoke test." },
-    ]);
+    expect(
+      childThread.messages.map((message) => ({ role: message.role, text: message.text })),
+    ).toEqual([{ role: "user", text: "Run a deterministic child-thread prompt smoke test." }]);
   });
 
   it("does not append duplicate child assistant text when synthetic transcript events replay", async () => {

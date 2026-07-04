@@ -975,10 +975,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             <div>
               <div className="space-y-0.5">
                 {visibleEntries.map((workEntry) => (
-                    <SimpleWorkEntryRow
-                      key={`work-row:${workEntry.id}`}
-                      parentThreadId={activeThreadId}
-                      workEntry={workEntry}
+                  <SimpleWorkEntryRow
+                    key={`work-row:${workEntry.id}`}
+                    parentThreadId={activeThreadId}
+                    workEntry={workEntry}
                     chatMetaFontSizePx={appTypographyScale.chatMetaPx}
                     textFontSizePx={normalizedChatFontSizePx}
                     density={prefersCompactWorkEntryRow(workEntry) ? "compact" : "default"}

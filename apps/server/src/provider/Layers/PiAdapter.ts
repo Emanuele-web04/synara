@@ -771,7 +771,7 @@ function isPiSubagentTool(toolName: string): boolean {
   return toolName === "subagent" || toolName === "subagent_resume";
 }
 
-function piSubagentReceiverAgents(input: {
+export function piSubagentReceiverAgents(input: {
   readonly args: unknown;
   readonly details: Record<string, unknown> | undefined;
 }): ReadonlyArray<Record<string, unknown>> {
@@ -832,9 +832,50 @@ function piSubagentReceiverAgents(input: {
   ];
 }
 
-function piSubagentPromptText(args: unknown, details?: Record<string, unknown>): string | undefined {
+export function piSubagentPromptText(
+  args: unknown,
+  details?: Record<string, unknown>,
+): string | undefined {
   const argsRecord = toolRecord(args);
-  return firstStringValue(argsRecord, ["task", "prompt", "message"]) ?? firstStringValue(details, ["task"]);
+  return (
+    firstStringValue(argsRecord, ["task", "prompt", "message"]) ??
+    firstStringValue(details, ["task"])
+  );
+}
+
+export function piSubagentPromptTextForReceiver(input: {
+  readonly args: unknown;
+  readonly details?: Record<string, unknown> | undefined;
+  readonly receiverAgent?: Record<string, unknown> | undefined;
+}): string | undefined {
+  return (
+    firstStringValue(input.receiverAgent, ["prompt", "task", "message"]) ??
+    piSubagentPromptText(input.args, input.details)
+  );
+}
+
+// Async launch acknowledgements can return before any transcript import happens,
+// so keep their eventual custom result rows tied to the originating parent turn.
+export function recordPiSubagentParentTurnIds<ParentTurnId>(input: {
+  readonly parentTurnId?: ParentTurnId | undefined;
+  readonly subagentParentTurnIds: Map<string, ParentTurnId>;
+  readonly transcriptTargets: ReadonlyArray<Record<string, unknown>>;
+}): void {
+  if (input.parentTurnId === undefined) return;
+  for (const target of input.transcriptTargets) {
+    const providerThreadId = firstStringValue(target, ["threadId"]);
+    if (providerThreadId) {
+      input.subagentParentTurnIds.set(providerThreadId, input.parentTurnId);
+    }
+  }
+}
+
+export function makePiSubagentTurnCompletedPayload(failed: boolean) {
+  return {
+    state: failed ? "failed" : "completed",
+    stopReason: null,
+    ...(failed ? { errorMessage: "Subagent failed" } : {}),
+  } as const;
 }
 
 function isPiSubagentLaunchAcknowledgement(details: Record<string, unknown> | undefined): boolean {
@@ -859,7 +900,8 @@ function hasRenderablePiSubagentSessionEntry(entry: Record<string, unknown>): bo
     return content.some((part) => {
       const partRecord = toolRecord(part);
       if (!partRecord) return false;
-      if (partRecord.type === "text") return typeof partRecord.text === "string" && partRecord.text.length > 0;
+      if (partRecord.type === "text")
+        return typeof partRecord.text === "string" && partRecord.text.length > 0;
       if (partRecord.type === "thinking") {
         return typeof partRecord.thinking === "string" && partRecord.thinking.length > 0;
       }
@@ -904,7 +946,9 @@ function piSubagentLifecycleItem(input: {
     type: "collabAgentToolCall",
     tool: input.toolName,
     toolName: input.toolName,
-    ...(input.args !== undefined ? { input: input.args, args: input.args, rawInput: input.args } : {}),
+    ...(input.args !== undefined
+      ? { input: input.args, args: input.args, rawInput: input.args }
+      : {}),
     ...(agent ? { agent, agentId: agent, agentRole: agent } : {}),
     ...(name ? { name, agentNickname: name } : {}),
     ...(title ? { title } : {}),
@@ -1431,11 +1475,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         turnId: childTurnId,
         providerRefs,
         type: "turn.completed",
-        payload: {
-          state: input.failed ? "failed" : "completed",
-          stopReason: null,
-          ...(input.failed ? { errorMessage: "Subagent failed" } : {}),
-        },
+        payload: makePiSubagentTurnCompletedPayload(input.failed),
         raw: input.raw,
       } satisfies ProviderRuntimeEvent);
     };
@@ -1446,6 +1486,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       readonly sourceKey: string;
       readonly sessionFile: string;
       readonly promptText?: string | undefined;
+      readonly failed: boolean;
       readonly raw: ProviderRuntimeEvent["raw"];
     }): boolean => {
       const sessionContent = readBoundedPiSubagentSessionFile(input.sessionFile);
@@ -1483,7 +1524,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           sessionContent,
         })
       ) {
-        return true;
+        return false;
       }
 
       const sessionStartedAt = sessionLines
@@ -1541,8 +1582,10 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const message = toolRecord(entry.message);
         const role = message?.role;
         const content = Array.isArray(message?.content) ? message.content : [];
-        const createdAt = timestampFromUnknown(entry.timestamp) ?? timestampFromUnknown(message?.timestamp);
-        const entryIdentity = firstStringValue(entry, ["id"]) ?? stablePiSubagentHash([entryIndex, entry]);
+        const createdAt =
+          timestampFromUnknown(entry.timestamp) ?? timestampFromUnknown(message?.timestamp);
+        const entryIdentity =
+          firstStringValue(entry, ["id"]) ?? stablePiSubagentHash([entryIndex, entry]);
 
         if (role === "user") {
           const text = textFromContent(content as (TextContent | ImageContent)[]).trim();
@@ -1725,7 +1768,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ...childBase(),
         eventId: makePiSubagentEventId(input.sourceKey, "turn-completed"),
         type: "turn.completed",
-        payload: { state: "completed", stopReason: null },
+        payload: makePiSubagentTurnCompletedPayload(input.failed),
         raw: transcriptRaw,
       } satisfies ProviderRuntimeEvent);
 
@@ -1739,8 +1782,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
 
       const details = toolRecord(record?.details);
       const providerThreadId =
-        firstStringValue(details, ["id", "name"]) ??
-        `subagent-message-${crypto.randomUUID()}`;
+        firstStringValue(details, ["id", "name"]) ?? `subagent-message-${crypto.randomUUID()}`;
       const agent = firstStringValue(details, ["agent"]);
       const name = firstStringValue(details, ["name"]);
       const task = firstStringValue(details, ["task"]);
@@ -1807,6 +1849,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             sourceKey,
             sessionFile,
             promptText,
+            failed,
             raw,
           })
         : false;
@@ -2353,11 +2396,8 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             },
             raw,
           } satisfies ProviderRuntimeEvent);
-          if (isPiSubagentTool(event.toolName) && detail) {
+          if (isPiSubagentTool(event.toolName)) {
             const outputDetails = toolRecord(toolRawOutput(event.result)?.details);
-            if (isPiSubagentLaunchAcknowledgement(outputDetails)) {
-              return;
-            }
             const receiverAgents = piSubagentReceiverAgents({
               args: tracked.args,
               details: outputDetails,
@@ -2368,29 +2408,38 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
               "sessionPath",
               "session_file",
             ]);
-            const promptText = piSubagentPromptText(tracked.args, outputDetails);
             const transcriptTargets =
               receiverAgents.length > 0
                 ? receiverAgents
                 : fallbackThreadId
                   ? [{ threadId: fallbackThreadId }]
                   : [];
+            recordPiSubagentParentTurnIds({
+              parentTurnId: tracked.parentTurnId,
+              subagentParentTurnIds: context.subagentParentTurnIds,
+              transcriptTargets,
+            });
+            if (isPiSubagentLaunchAcknowledgement(outputDetails)) {
+              return;
+            }
             for (const receiverAgent of transcriptTargets) {
               const providerThreadId = firstStringValue(receiverAgent, ["threadId"]);
               if (!providerThreadId) continue;
-              if (tracked.parentTurnId) {
-                context.subagentParentTurnIds.set(providerThreadId, tracked.parentTurnId);
-              }
               const childSessionFile =
                 firstStringValue(receiverAgent, ["sessionFile", "sessionPath", "session_file"]) ??
                 sessionFile;
+              const childPromptText = piSubagentPromptTextForReceiver({
+                args: tracked.args,
+                details: outputDetails,
+                receiverAgent,
+              });
               const sourceKey = makePiSubagentSourceKey({
                 kind: event.toolName,
                 parentThreadId: context.session.threadId,
                 providerThreadId,
                 toolCallId: event.toolCallId,
                 ...(childSessionFile ? { sessionFile: childSessionFile } : {}),
-                ...(promptText ? { promptText } : {}),
+                ...(childPromptText ? { promptText: childPromptText } : {}),
                 ...(detail ? { messageText: detail } : {}),
               });
               const emittedSessionTranscript = childSessionFile
@@ -2399,11 +2448,12 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                     providerThreadId,
                     sourceKey,
                     sessionFile: childSessionFile,
-                    promptText,
+                    promptText: childPromptText,
+                    failed: event.isError,
                     raw,
                   })
                 : false;
-              if (!emittedSessionTranscript) {
+              if (!emittedSessionTranscript && detail) {
                 const childName = firstStringValue(receiverAgent, [
                   "agentNickname",
                   "name",
@@ -2414,7 +2464,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
                   providerThreadId,
                   sourceKey,
                   ...(childName ? { name: childName } : {}),
-                  ...(promptText ? { promptText } : {}),
+                  ...(childPromptText ? { promptText: childPromptText } : {}),
                   messageText: detail,
                   failed: event.isError,
                   raw,

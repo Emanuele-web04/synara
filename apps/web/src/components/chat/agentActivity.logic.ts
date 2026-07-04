@@ -199,11 +199,12 @@ function buildGroupedAgentActivityEntry(
     ...(prompt || primaryEntry.subagentAction || latest.subagentAction
       ? {
           subagentAction: {
-            ...(primaryEntry.subagentAction ?? latest.subagentAction ?? {
-              tool: "spawnAgent",
-              status: latest.subagentAction?.status ?? "completed",
-              summaryText: "Agent activity",
-            }),
+            ...(primaryEntry.subagentAction ??
+              latest.subagentAction ?? {
+                tool: "spawnAgent",
+                status: latest.subagentAction?.status ?? "completed",
+                summaryText: "Agent activity",
+              }),
             ...(prompt ? { prompt } : {}),
           },
         }
@@ -316,14 +317,12 @@ function isRedundantSingleSubagentLaunch(
 function subagentThreadIdentityKeys(
   subagent: NonNullable<WorkLogEntry["subagents"]>[number],
 ): string[] {
-  return [
-    subagent.resolvedThreadId,
-    subagent.providerThreadId,
-    subagent.threadId,
-  ].flatMap((value) => {
-    const normalized = normalizeGroupKey(value);
-    return normalized ? [normalized] : [];
-  });
+  return [subagent.resolvedThreadId, subagent.providerThreadId, subagent.threadId].flatMap(
+    (value) => {
+      const normalized = normalizeGroupKey(value);
+      return normalized ? [normalized] : [];
+    },
+  );
 }
 
 function normalizeGroupKey(value: string | null | undefined): string | null {

@@ -828,9 +828,7 @@ export function deriveWorkLogEntries(
   const visibleTurnIds = options.visibleTurnIds;
   const ordered = orderedActivities(activities);
   const entries = ordered
-    .filter((activity) =>
-      shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds),
-    )
+    .filter((activity) => shouldKeepActivityForWorkLog(activity, latestTurnId, visibleTurnIds))
     .filter((activity) => !shouldOmitRoutedCollabAgentToolActivity(activity))
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => !isQuietTurnLifecycleActivity(activity))
