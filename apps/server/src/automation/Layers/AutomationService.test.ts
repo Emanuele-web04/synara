@@ -1752,6 +1752,56 @@ layer("AutomationService", (it) => {
     }),
   );
 
+  it.effect("fails a heartbeat run when the selected provider instance is disabled", () =>
+    Effect.gen(function* () {
+      resetHarness();
+      const service = yield* AutomationService;
+      const serverSettings = yield* ServerSettingsService;
+      const targetThreadId = ThreadId.makeUnsafe("heartbeat-disabled-options-target");
+      const disabledInstanceId = "codex_disabled_dispatch" as ProviderInstanceId;
+      threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          [disabledInstanceId]: {
+            driver: "codex",
+            displayName: "Codex Disabled",
+            enabled: false,
+            config: {
+              homePath: "/tmp/codex-disabled-home",
+              accountId: "disabled",
+            },
+          },
+        },
+      });
+
+      const created = yield* service.create({
+        ...createInput("local"),
+        mode: "heartbeat",
+        targetThreadId,
+        modelSelection: {
+          instanceId: disabledInstanceId,
+          model: "gpt-5-codex",
+        },
+        providerOptions: {
+          codex: {
+            homePath: "/tmp/stale-codex-home",
+            environment: {
+              STALE_CODEX_ENV: "must-not-leak",
+            },
+          },
+        },
+      });
+
+      const error = yield* service.runNow({ automationId: created.id }).pipe(Effect.flip);
+
+      assert.match(error.message, /provider instance 'codex_disabled_dispatch' is disabled/);
+      assert.strictEqual(dispatchedCommands.length, 0);
+      const listed = yield* service.list({ projectId });
+      const failedRun = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(failedRun?.status, "failed");
+    }),
+  );
+
   it.effect("does not complete a queued heartbeat run from an unrelated latest turn", () =>
     Effect.gen(function* () {
       resetHarness();
@@ -2548,6 +2598,93 @@ layer("AutomationService", (it) => {
         yield* waitForAutomationList({
           service,
           description: "missing instance stop evaluation",
+          predicate: (listed) =>
+            listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
+            undefined,
+        });
+
+        assert.deepStrictEqual(completionEvaluationInputs.at(-1)?.modelSelection, {
+          instanceId: "cursor",
+          model: "composer-2",
+        });
+        assert.isUndefined(completionEvaluationInputs.at(-1)?.providerOptions);
+      }),
+  );
+
+  it.effect(
+    "drops stale heartbeat completion provider options when the selected instance is disabled",
+    () =>
+      Effect.gen(function* () {
+        resetHarness();
+        const service = yield* AutomationService;
+        const serverSettings = yield* ServerSettingsService;
+        const targetThreadId = ThreadId.makeUnsafe("heartbeat-stop-disabled-provider-instance");
+        const automationTurnId = TurnId.makeUnsafe("turn-stop-disabled-provider-instance");
+        const disabledInstanceId = "codex_disabled_completion" as ProviderInstanceId;
+        threadShell = Option.some(makeThreadShell({ id: targetThreadId }));
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [disabledInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Disabled Completion",
+              config: {
+                homePath: "/tmp/codex-disabled-completion-home",
+                accountId: "disabled-completion",
+              },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+
+        const created = yield* service.create({
+          ...createInput("local"),
+          mode: "heartbeat",
+          targetThreadId,
+          modelSelection: {
+            instanceId: disabledInstanceId,
+            model: "gpt-5-codex",
+          },
+          providerOptions: {
+            codex: {
+              homePath: "/tmp/stale-codex-home",
+              environment: {
+                STALE_CODEX_ENV: "must-not-leak",
+              },
+            },
+          },
+          completionPolicy: heartbeatCompletionPolicy("the PR is ready"),
+        });
+        const { run } = yield* service.runNow({ automationId: created.id });
+        yield* serverSettings.updateSettings({
+          providerInstances: {
+            [disabledInstanceId]: {
+              driver: "codex",
+              displayName: "Codex Disabled Completion",
+              enabled: false,
+              config: {
+                homePath: "/tmp/codex-disabled-completion-home",
+                accountId: "disabled-completion",
+              },
+            },
+          },
+          textGenerationModelSelection: {
+            instanceId: "cursor",
+            model: "composer-2",
+          },
+        });
+        yield* completeHeartbeatRun({
+          run,
+          threadId: targetThreadId,
+          turnId: automationTurnId,
+        });
+
+        yield* service.reconcileThread({ threadId: targetThreadId });
+        yield* waitForAutomationList({
+          service,
+          description: "disabled instance stop evaluation",
           predicate: (listed) =>
             listed.runs.find((entry) => entry.id === run.id)?.result?.completionEvaluation !==
             undefined,
