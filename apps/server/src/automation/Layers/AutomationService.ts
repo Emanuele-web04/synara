@@ -102,69 +102,61 @@ interface AutomationCompletionEvaluationJob {
   readonly policy: Extract<AutomationCompletionPolicy, { type: "ai-evaluated" }>;
 }
 
+type AutomationCompletionTextGenerationInput =
+  | NonNullable<ReturnType<typeof resolveTextGenerationInputForSelection>>
+  | Record<string, never>;
+
 function hasProviderStartOptions(options: ProviderStartOptions): boolean {
   return Object.values(options).some((value) => value !== undefined);
 }
 
 function providerOptionsForSelectedInstance(
-  baseOptions: ProviderStartOptions | undefined,
   instance: ResolvedProviderInstance,
 ): ProviderStartOptions | undefined {
   const instanceOptions = providerStartOptionsFromInstance(instance);
+  return instanceOptions && hasProviderStartOptions(instanceOptions) ? instanceOptions : undefined;
+}
 
-  switch (instance.driver) {
-    case "codex": {
-      const { codex: _staleCodex, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.codex ? { ...rest, codex: instanceOptions.codex } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "claudeAgent": {
-      const { claudeAgent: _staleClaudeAgent, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.claudeAgent
-        ? { ...rest, claudeAgent: instanceOptions.claudeAgent }
-        : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "cursor": {
-      const { cursor: _staleCursor, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.cursor ? { ...rest, cursor: instanceOptions.cursor } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "antigravity": {
-      const { antigravity: _staleAntigravity, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.antigravity
-        ? { ...rest, antigravity: instanceOptions.antigravity }
-        : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "grok": {
-      const { grok: _staleGrok, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.grok ? { ...rest, grok: instanceOptions.grok } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "droid": {
-      const { droid: _staleDroid, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.droid ? { ...rest, droid: instanceOptions.droid } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "devin": {
-      const { devin: _staleDevin, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.devin ? { ...rest, devin: instanceOptions.devin } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "opencode": {
-      const { opencode: _staleOpenCode, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.opencode
-        ? { ...rest, opencode: instanceOptions.opencode }
-        : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
-    case "pi": {
-      const { pi: _stalePi, ...rest } = baseOptions ?? {};
-      const next = instanceOptions?.pi ? { ...rest, pi: instanceOptions.pi } : rest;
-      return hasProviderStartOptions(next) ? next : undefined;
-    }
+export function resolveAutomationCompletionTextGenerationInputForSettings(
+  definition: Pick<AutomationDefinition, "modelSelection" | "providerOptions">,
+  settings: ServerSettings,
+): AutomationCompletionTextGenerationInput {
+  // Stored definitions can outlive provider-instance edits, so completion
+  // evaluation launch options come from the live settings snapshot.
+  const selectionInstance = definition.modelSelection
+    ? resolveProviderInstance(settings, {
+        instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
+      })
+    : null;
+  const directProviderOptions = selectionInstance
+    ? providerOptionsForSelectedInstance(selectionInstance)
+    : definition.modelSelection
+      ? undefined
+      : definition.providerOptions;
+  const directInput = selectionInstance
+    ? resolveTextGenerationInputForSelection(
+        definition.modelSelection,
+        directProviderOptions,
+        selectionInstance.driver,
+      )
+    : null;
+  if (directInput) {
+    return directInput;
   }
+
+  const fallbackInstance = resolveProviderInstance(settings, {
+    instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
+  });
+  const fallbackProviderOptions = fallbackInstance
+    ? providerStartOptionsFromInstance(fallbackInstance)
+    : undefined;
+  return (
+    resolveTextGenerationInputForSelection(
+      settings.textGenerationModelSelection,
+      fallbackProviderOptions,
+      fallbackInstance?.driver,
+    ) ?? {}
+  );
 }
 
 /** Statuses a run can no longer leave; reconciliation never overwrites these. */
@@ -1648,39 +1640,7 @@ export const AutomationServiceLive = Layer.effect(
         const settings = yield* serverSettings.getSettings.pipe(
           Effect.mapError(toServiceError("Failed to load text-generation settings.")),
         );
-        // Stored definitions can outlive provider-instance edits, so the
-        // selected driver's launch options must come from the live settings
-        // snapshot rather than stale definition-level providerOptions.
-        const selectionInstance = definition.modelSelection
-          ? resolveProviderInstance(settings, {
-              instanceId: resolveModelSelectionInstanceId(definition.modelSelection),
-            })
-          : null;
-        const directProviderOptions = selectionInstance
-          ? providerOptionsForSelectedInstance(definition.providerOptions, selectionInstance)
-          : definition.modelSelection
-            ? undefined
-            : definition.providerOptions;
-        const directInput = resolveTextGenerationInputForSelection(
-          definition.modelSelection,
-          directProviderOptions,
-        );
-        if (directInput) {
-          return directInput;
-        }
-        const fallbackInstance = resolveProviderInstance(settings, {
-          provider: settings.textGenerationModelSelection.provider,
-          instanceId: resolveModelSelectionInstanceId(settings.textGenerationModelSelection),
-        });
-        const fallbackProviderOptions = fallbackInstance
-          ? providerStartOptionsFromInstance(fallbackInstance)
-          : definition.providerOptions;
-        return (
-          resolveTextGenerationInputForSelection(
-            settings.textGenerationModelSelection,
-            fallbackProviderOptions,
-          ) ?? {}
-        );
+        return resolveAutomationCompletionTextGenerationInputForSettings(definition, settings);
       });
 
     const shouldUseStopPolicyForDefinition = (
