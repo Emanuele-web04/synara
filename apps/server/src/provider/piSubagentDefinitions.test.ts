@@ -88,4 +88,25 @@ describe("listPiSubagentDefinitions", () => {
       },
     ]);
   });
+
+  it("accepts CRLF-delimited frontmatter", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "synara-pi-agents-"));
+    const agentDir = path.join(root, "agent");
+    const agentsDir = path.join(agentDir, "agents");
+    const cwd = path.join(root, "repo");
+    mkdirSync(agentsDir, { recursive: true });
+    writeFileSync(
+      path.join(agentsDir, "windows.md"),
+      ["---", "name: windows", "description: CRLF agent", "---", "", "Body"].join("\r\n"),
+    );
+
+    expect(listPiSubagentDefinitions({ agentDir, cwd })).toEqual([
+      {
+        name: "windows",
+        displayName: "Windows",
+        description: "CRLF agent",
+        scope: "global",
+      },
+    ]);
+  });
 });

@@ -32,7 +32,7 @@ function parseDefinitionFile(
   } catch {
     return null;
   }
-  const match = content.match(/^---\n([\s\S]*?)\n---/);
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return null;
 
   const frontmatter = match[1] ?? "";

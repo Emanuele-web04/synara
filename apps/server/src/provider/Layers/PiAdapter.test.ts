@@ -123,6 +123,15 @@ describe("Pi subagent child launcher env", () => {
 
     expect(env.PI_SUBAGENT_PI_COMMAND).toBe("/opt/pi/bin/pi");
   });
+
+  it("resets an adapter-owned configured Pi binary for later default sessions", () => {
+    const env: { PI_SUBAGENT_PI_COMMAND?: string } = {};
+
+    ensurePiSubagentChildLauncherEnv(env, "/opt/pi/bin/pi");
+    ensurePiSubagentChildLauncherEnv(env);
+
+    expect(env.PI_SUBAGENT_PI_COMMAND).toBe("pi");
+  });
 });
 
 describe("Pi subagent prompt expansion", () => {
@@ -136,7 +145,7 @@ describe("Pi subagent prompt expansion", () => {
     ]);
 
     expect(prompt).toContain('Launch the "scout" subagent from the project agent scope');
-    expect(prompt).toContain('scope/source "project"');
+    expect(prompt).toContain('using scope/source "project"');
     expect(prompt).toContain("inspect the repo");
   });
 });

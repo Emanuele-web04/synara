@@ -962,7 +962,9 @@ describe("deriveWorkLogEntries", () => {
           title: "Subagent result",
           detail: "Subagent launched successfully and changed no files.",
           data: {
+            parentTurnId: "turn-1",
             item: {
+              parentTurnId: "turn-1",
               receiverThreadIds: ["child-provider-1"],
               receiverAgents: [
                 {
@@ -986,6 +988,53 @@ describe("deriveWorkLogEntries", () => {
       detail: "Subagent launched successfully and changed no files.",
       subagents: [{ threadId: "child-provider-1", nickname: "smoke-test" }],
     });
+  });
+
+  it("hides thread-scoped Pi subagent result messages that have no launch turn", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "current" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "thread-scoped-subagent-result-without-parent",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent result",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent result",
+          detail: "Unscoped subagent output should stay hidden while turn 2 is visible.",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "unknown" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual([]);
   });
 
   it("does not leak old thread-scoped collab completions into the visible work log", () => {

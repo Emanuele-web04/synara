@@ -76,6 +76,7 @@ const PI_DEFAULT_SUPPORTED_THINKING_LEVELS = new Set<ThinkingLevel>([
 ]);
 const DEFAULT_PI_SUBAGENT_PI_COMMAND = "pi";
 const MAX_PI_SUBAGENT_SESSION_TRANSCRIPT_BYTES = 1_000_000;
+const adapterOwnedPiLauncherEnvValues = new WeakMap<object, string>();
 
 type PiModelRegistry = Pick<ModelRegistry, "find" | "getAll" | "getAvailable">;
 type PiCodingAgentModule = typeof import("@earendil-works/pi-coding-agent");
@@ -95,6 +96,7 @@ interface PiSessionContext {
   activeToolItems: Map<string, PiTrackedToolCall>;
   pendingUserInputs: Map<ApprovalRequestId, PiPendingUserInput>;
   emittedSubagentSessionTranscripts: Map<string, string>;
+  subagentParentTurnIds: Map<string, TurnId>;
   stopped: boolean;
   lastKnownTokenUsage: ThreadTokenUsageSnapshot | undefined;
   unsubscribe: (() => void) | undefined;
@@ -111,6 +113,7 @@ interface PiTrackedToolCall {
   readonly toolName: string;
   readonly args: unknown;
   readonly itemId: RuntimeItemId;
+  readonly parentTurnId?: TurnId | undefined;
   readonly itemType:
     | "command_execution"
     | "file_change"
@@ -151,10 +154,22 @@ export function ensurePiSubagentChildLauncherEnv(
 ): void {
   const configuredCommand = trimToUndefined(binaryPath);
   const existingCommand = trimToUndefined(env.PI_SUBAGENT_PI_COMMAND);
-  if (existingCommand && (!configuredCommand || existingCommand !== DEFAULT_PI_SUBAGENT_PI_COMMAND)) {
+  const envObject = env as object;
+  const adapterOwnedCommand = adapterOwnedPiLauncherEnvValues.get(envObject);
+  const existingIsAdapterOwned =
+    existingCommand !== undefined && existingCommand === adapterOwnedCommand;
+
+  if (
+    existingCommand &&
+    existingCommand !== DEFAULT_PI_SUBAGENT_PI_COMMAND &&
+    !existingIsAdapterOwned
+  ) {
     return;
   }
-  env.PI_SUBAGENT_PI_COMMAND = configuredCommand ?? DEFAULT_PI_SUBAGENT_PI_COMMAND;
+
+  const nextCommand = configuredCommand ?? DEFAULT_PI_SUBAGENT_PI_COMMAND;
+  env.PI_SUBAGENT_PI_COMMAND = nextCommand;
+  adapterOwnedPiLauncherEnvValues.set(envObject, nextCommand);
 }
 
 function isPiThinkingLevel(value: string | null | undefined): value is ThinkingLevel {
@@ -580,10 +595,10 @@ function readBalancedInlineTask(
 
 function piSubagentPromptScopeClause(agent: ProviderAgentDescriptor): string {
   if (agent.scope === "project") {
-    return ' from the project agent scope (pass scope/source "project" if the subagent tool accepts it)';
+    return ' from the project agent scope using scope/source "project"';
   }
   if (agent.scope === "global") {
-    return ' from the global agent scope (pass scope/source "global" if the subagent tool accepts it)';
+    return ' from the global agent scope using scope/source "global"';
   }
   return "";
 }
@@ -775,6 +790,11 @@ function piSubagentReceiverAgents(input: {
       const title = firstStringValue(childRecord, ["title"]);
       const model = firstStringValue(childRecord, ["model"]);
       const task = firstStringValue(childRecord, ["task"]);
+      const sessionFile = firstStringValue(childDetails, [
+        "sessionFile",
+        "sessionPath",
+        "session_file",
+      ]);
       return [
         {
           threadId: providerThreadId,
@@ -782,6 +802,7 @@ function piSubagentReceiverAgents(input: {
           ...(name ? { agentNickname: name } : title ? { agentNickname: title } : {}),
           ...(model ? { model } : {}),
           ...(task ? { prompt: task } : {}),
+          ...(sessionFile ? { sessionFile } : {}),
         },
       ];
     });
@@ -794,6 +815,11 @@ function piSubagentReceiverAgents(input: {
   const title = firstStringValue(input.details, ["title"]);
   const task = firstStringValue(input.details, ["task"]);
   const model = firstStringValue(input.details, ["model"]);
+  const sessionFile = firstStringValue(input.details, [
+    "sessionFile",
+    "sessionPath",
+    "session_file",
+  ]);
   return [
     {
       threadId: providerThreadId,
@@ -801,6 +827,7 @@ function piSubagentReceiverAgents(input: {
       ...(name ? { agentNickname: name } : title ? { agentNickname: title } : {}),
       ...(model ? { model } : {}),
       ...(task ? { prompt: task } : {}),
+      ...(sessionFile ? { sessionFile } : {}),
     },
   ];
 }
@@ -825,6 +852,9 @@ function hasRenderablePiSubagentSessionEntry(entry: Record<string, unknown>): bo
   const message = toolRecord(entry.message);
   const role = message?.role;
   const content = Array.isArray(message?.content) ? message.content : [];
+  if (role === "user") {
+    return textFromContent(content as (TextContent | ImageContent)[]).trim().length > 0;
+  }
   if (role === "assistant") {
     return content.some((part) => {
       const partRecord = toolRecord(part);
@@ -1436,6 +1466,15 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       if (!sessionEntries.some(hasRenderablePiSubagentSessionEntry)) {
         return false;
       }
+      const hasTranscriptUserMessage = sessionEntries.some((entry) => {
+        if (entry?.type !== "message") return false;
+        const message = toolRecord(entry.message);
+        const content = Array.isArray(message?.content) ? message.content : [];
+        return (
+          message?.role === "user" &&
+          textFromContent(content as (TextContent | ImageContent)[]).trim().length > 0
+        );
+      });
       if (
         !recordPiSubagentSessionTranscriptEmission({
           emittedTranscripts: input.context.emittedSubagentSessionTranscripts,
@@ -1468,7 +1507,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         providerRefs,
       });
 
-      if (input.promptText) {
+      if (input.promptText && !hasTranscriptUserMessage) {
         offerRuntimeEvent({
           ...makeEventBase(input.context, { includeTurnId: false }),
           eventId: makePiSubagentEventId(input.sourceKey, "prompt-completed"),
@@ -1504,6 +1543,29 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         const content = Array.isArray(message?.content) ? message.content : [];
         const createdAt = timestampFromUnknown(entry.timestamp) ?? timestampFromUnknown(message?.timestamp);
         const entryIdentity = firstStringValue(entry, ["id"]) ?? stablePiSubagentHash([entryIndex, entry]);
+
+        if (role === "user") {
+          const text = textFromContent(content as (TextContent | ImageContent)[]).trim();
+          if (text.length === 0) continue;
+          const itemId = makePiSubagentRuntimeItemId(input.sourceKey, "session-user", [
+            entryIdentity,
+          ]);
+          emittedRenderableEvent = true;
+          offerRuntimeEvent({
+            ...childBase(createdAt),
+            eventId: makePiSubagentEventId(input.sourceKey, `session-user:${entryIdentity}`),
+            itemId,
+            type: "item.completed",
+            payload: {
+              itemType: "user_message",
+              status: "completed",
+              title: "User message",
+              detail: text,
+            },
+            raw: transcriptRaw,
+          } satisfies ProviderRuntimeEvent);
+          continue;
+        }
 
         if (role === "assistant") {
           for (const [index, part] of content.entries()) {
@@ -1705,7 +1767,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
         ...(name ? { agentNickname: name } : {}),
         ...(task ? { prompt: task } : {}),
       };
-      const parentTurnId = context.activeTurnId;
+      const parentTurnId = context.subagentParentTurnIds.get(providerThreadId);
       const raw = {
         source: "pi.sdk.event",
         messageType: "message_end",
@@ -2190,6 +2252,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             toolName: event.toolName,
             args: event.args,
             itemId,
+            ...(context.activeTurnId ? { parentTurnId: context.activeTurnId } : {}),
             itemType: toolItemType(event.toolName),
           };
           context.activeToolItems.set(event.toolCallId, tracked);
@@ -2256,6 +2319,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             toolName: event.toolName,
             args: undefined,
             itemId: RuntimeItemId.makeUnsafe(`pi-tool-${event.toolCallId}`),
+            // Missing start events cannot be tied to the current active turn; it may be newer.
             itemType: toolItemType(event.toolName),
           };
           context.activeToolItems.delete(event.toolCallId);
@@ -2314,21 +2378,27 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
             for (const receiverAgent of transcriptTargets) {
               const providerThreadId = firstStringValue(receiverAgent, ["threadId"]);
               if (!providerThreadId) continue;
+              if (tracked.parentTurnId) {
+                context.subagentParentTurnIds.set(providerThreadId, tracked.parentTurnId);
+              }
+              const childSessionFile =
+                firstStringValue(receiverAgent, ["sessionFile", "sessionPath", "session_file"]) ??
+                sessionFile;
               const sourceKey = makePiSubagentSourceKey({
                 kind: event.toolName,
                 parentThreadId: context.session.threadId,
                 providerThreadId,
                 toolCallId: event.toolCallId,
-                ...(sessionFile ? { sessionFile } : {}),
+                ...(childSessionFile ? { sessionFile: childSessionFile } : {}),
                 ...(promptText ? { promptText } : {}),
                 ...(detail ? { messageText: detail } : {}),
               });
-              const emittedSessionTranscript = sessionFile
+              const emittedSessionTranscript = childSessionFile
                 ? emitPiSubagentSessionTranscript({
                     context,
                     providerThreadId,
                     sourceKey,
-                    sessionFile,
+                    sessionFile: childSessionFile,
                     promptText,
                     raw,
                   })
@@ -2588,6 +2658,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           activeToolItems: new Map(),
           pendingUserInputs: new Map(),
           emittedSubagentSessionTranscripts: new Map(),
+          subagentParentTurnIds: new Map(),
           stopped: false,
           lastKnownTokenUsage: undefined,
           unsubscribe: undefined,
@@ -2672,17 +2743,20 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
       },
     ) =>
       Effect.gen(function* () {
-        const text =
-          appendFileAttachmentsPromptBlock({
-            text: input.input,
-            attachments: input.attachments,
-            attachmentsDir: serverConfig.attachmentsDir,
-            include: "all-files",
-          }) ?? "";
         const piSubagentAgents = listPiSubagentDefinitions({
           agentDir: context.agentDir,
           cwd: context.session.cwd ?? serverConfig.cwd,
         });
+        // Inline @agent(...) directives are command syntax, so parse only the user's
+        // typed prompt before appending passive file attachment text.
+        const userPromptText = buildPiSubagentPrompt(input.input ?? "", piSubagentAgents);
+        const text =
+          appendFileAttachmentsPromptBlock({
+            text: userPromptText,
+            attachments: input.attachments,
+            attachmentsDir: serverConfig.attachmentsDir,
+            include: "all-files",
+          }) ?? "";
         const images = yield* Effect.forEach(
           input.attachments ?? [],
           (attachment) =>
@@ -2719,7 +2793,7 @@ const makePiAdapter = (options?: PiAdapterLiveOptions) =>
           { concurrency: 1 },
         );
         return {
-          text: buildPiSubagentPrompt(text, piSubagentAgents),
+          text,
           images: images.filter((image): image is ImageContent => image !== undefined),
         };
       });
