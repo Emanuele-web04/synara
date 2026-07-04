@@ -30,7 +30,9 @@ interface DeletedCheckpointRefCall {
 
 const deletedCheckpointRefCalls: DeletedCheckpointRefCall[] = [];
 
-function recordDeletedCheckpointRefs(input: Parameters<CheckpointStoreShape["deleteCheckpointRefs"]>[0]) {
+function recordDeletedCheckpointRefs(
+  input: Parameters<CheckpointStoreShape["deleteCheckpointRefs"]>[0],
+) {
   deletedCheckpointRefCalls.push({
     cwd: input.cwd,
     checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
