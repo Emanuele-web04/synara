@@ -287,6 +287,44 @@ describe("codexConfiguredHomePathsFromSettings", () => {
       `expected configured account overlay generated_images root, got ${JSON.stringify(roots)}`,
     );
   });
+
+  it("excludes disabled Codex instance homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providerInstances: {
+        codex_disabled: {
+          driver: "codex" as const,
+          enabled: false,
+          config: {
+            homePath: "/codex-test/.codex-disabled",
+            accountId: "codex_disabled",
+          },
+        },
+        codex_enabled: {
+          driver: "codex" as const,
+          enabled: true,
+          config: {
+            homePath: "/codex-test/.codex-enabled",
+            accountId: "codex_enabled",
+          },
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.some((root) => root.includes(path.join("accounts", "codex_enabled-"))),
+      `expected enabled account overlay root, got ${JSON.stringify(roots)}`,
+    );
+    assert.ok(
+      roots.every((root) => !root.includes(path.join("accounts", "codex_disabled-"))),
+      `expected disabled account overlay root to be absent, got ${JSON.stringify(roots)}`,
+    );
+  });
 });
 
 describe("isGeneratedImageOnlyMarkdown", () => {

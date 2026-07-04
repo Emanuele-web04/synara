@@ -172,7 +172,7 @@ export function codexConfiguredHomePathsFromSettings(
     addCandidate(defaultHomePath);
   }
   for (const instance of deriveProviderInstances(settings)) {
-    if (instance.driver !== "codex") {
+    if (instance.driver !== "codex" || !instance.enabled) {
       continue;
     }
     // Keep the full account/shadow/environment context. Collapsing this to a
