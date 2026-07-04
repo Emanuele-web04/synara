@@ -3091,7 +3091,10 @@ export default function ChatView({
       interactionMode,
       isSidechat: Boolean(activeThread.sidechatSourceThreadId),
     });
-  const canOfferExportCommand = isServerThread && activeThread !== undefined;
+  // Export is hidden while the thread is running so archives cannot capture a
+  // partial assistant response; the server route enforces the same rule (409).
+  const canOfferExportCommand =
+    isServerThread && activeThread !== undefined && !isWorking && !hasStreamingAssistantText;
   const selectedDynamicAgents =
     selectedProvider === "claudeAgent"
       ? (claudeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)

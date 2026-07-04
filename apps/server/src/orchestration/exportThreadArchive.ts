@@ -3,9 +3,11 @@
 //          can download the conversation as a portable, compressed package —
 //          mirroring the `/export` affordance of agent CLIs.
 // Layer: Orchestration utility (plain async module; HTTP composes it through
-//          Effect.promise). ZIP is produced with node:zlib and a hand-written
-//          central directory.
-// Exports: buildThreadArchiveBytes, threadArchiveFileName.
+//          Stream.fromAsyncIterable). ZIP is produced with node:zlib and a
+//          hand-written central directory, streamed one entry at a time so the
+//          server never holds the whole archive in memory.
+// Exports: threadArchiveChunks, buildThreadArchiveBytes, threadArchiveFileName,
+//          threadExportBlockedReason.
 
 import zlib from "node:zlib";
 import { promisify } from "node:util";
@@ -34,28 +36,46 @@ const u32 = (value: number): Buffer => {
 const UTF8_FLAG = 0x0800;
 const deflateRaw = promisify(zlib.deflateRaw);
 
+interface ZipEntryRecord {
+  readonly localChunk: Buffer;
+  readonly centralRecord: (offset: number) => Buffer;
+}
+
 // Zeroed DOS time/date (1980-01-01 00:00) keeps exports deterministic without
 // adding date conversion code to the archive writer.
-async function buildZip(entries: ReadonlyArray<ThreadArchiveEntry>): Promise<Buffer> {
-  const localHeaders: Buffer[] = [];
-  const centralDirectory: Buffer[] = [];
-  let offset = 0;
+async function buildZipEntry(entry: ThreadArchiveEntry): Promise<ZipEntryRecord> {
+  const nameBuffer = Buffer.from(entry.name, "utf8");
+  const data = Buffer.from(entry.data, "utf8");
+  const crc = crc32(data);
 
-  for (const entry of entries) {
-    const nameBuffer = Buffer.from(entry.name, "utf8");
-    const data = Buffer.from(entry.data, "utf8");
-    const crc = crc32(data);
+  const compressed = await deflateRaw(data);
+  const useDeflate = compressed.length < data.length;
+  const stored = useDeflate ? compressed : data;
+  const method = useDeflate ? 8 : 0;
 
-    const compressed = await deflateRaw(data);
-    const useDeflate = compressed.length < data.length;
-    const stored = useDeflate ? compressed : data;
-    const method = useDeflate ? 8 : 0;
+  const localChunk = Buffer.concat([
+    u32(0x04034b50), // local file header signature
+    u16(20), // version needed to extract
+    u16(UTF8_FLAG), // general purpose: UTF-8 names
+    u16(method), // compression method (8 deflate, 0 store)
+    u16(0), // last mod time
+    u16(0), // last mod date
+    u32(crc), // CRC-32
+    u32(stored.length), // compressed size
+    u32(data.length), // uncompressed size
+    u16(nameBuffer.length), // file name length
+    u16(0), // extra field length
+    nameBuffer,
+    stored,
+  ]);
 
-    const localHeader = Buffer.concat([
-      u32(0x04034b50), // local file header signature
+  const centralRecord = (offset: number): Buffer =>
+    Buffer.concat([
+      u32(0x02014b50), // central directory header signature
+      u16(20), // version made by
       u16(20), // version needed to extract
       u16(UTF8_FLAG), // general purpose: UTF-8 names
-      u16(method), // compression method (8 deflate, 0 store)
+      u16(method), // compression method
       u16(0), // last mod time
       u16(0), // last mod date
       u32(crc), // CRC-32
@@ -63,53 +83,15 @@ async function buildZip(entries: ReadonlyArray<ThreadArchiveEntry>): Promise<Buf
       u32(data.length), // uncompressed size
       u16(nameBuffer.length), // file name length
       u16(0), // extra field length
+      u16(0), // file comment length
+      u16(0), // disk number start
+      u16(0), // internal file attributes
+      u32(0), // external file attributes
+      u32(offset), // offset of local header
       nameBuffer,
-      stored,
     ]);
 
-    localHeaders.push(localHeader);
-
-    centralDirectory.push(
-      Buffer.concat([
-        u32(0x02014b50), // central directory header signature
-        u16(20), // version made by
-        u16(20), // version needed to extract
-        u16(UTF8_FLAG), // general purpose: UTF-8 names
-        u16(method), // compression method
-        u16(0), // last mod time
-        u16(0), // last mod date
-        u32(crc), // CRC-32
-        u32(stored.length), // compressed size
-        u32(data.length), // uncompressed size
-        u16(nameBuffer.length), // file name length
-        u16(0), // extra field length
-        u16(0), // file comment length
-        u16(0), // disk number start
-        u16(0), // internal file attributes
-        u32(0), // external file attributes
-        u32(offset), // offset of local header
-        nameBuffer,
-      ]),
-    );
-
-    offset += localHeader.length;
-  }
-
-  const centralDirectoryStart = offset;
-  const centralDirectoryBody = Buffer.concat(centralDirectory);
-
-  const endOfCentralDirectory = Buffer.concat([
-    u32(0x06054b50), // end of central directory signature
-    u16(0), // number of this disk
-    u16(0), // disk where central directory starts
-    u16(entries.length), // entries on this disk
-    u16(entries.length), // total entries
-    u32(centralDirectoryBody.length), // size of central directory
-    u32(centralDirectoryStart), // offset of central directory
-    u16(0), // comment length
-  ]);
-
-  return Buffer.concat([...localHeaders, centralDirectoryBody, endOfCentralDirectory]);
+  return { localChunk, centralRecord };
 }
 
 const MESSAGE_ROLE_HEADING: Record<string, string> = {
@@ -159,15 +141,64 @@ function buildThreadJson(thread: OrchestrationThread): string {
   );
 }
 
-export function buildThreadArchiveEntries(thread: OrchestrationThread): ThreadArchiveEntry[] {
-  return [
-    { name: "thread.json", data: buildThreadJson(thread) },
-    { name: "transcript.md", data: buildTranscriptMarkdown(thread) },
-  ];
+// Lazy per-entry generation: each entry's string is materialized only while
+// that entry is being compressed and emitted, then becomes collectible.
+function* threadArchiveEntries(thread: OrchestrationThread): Generator<ThreadArchiveEntry> {
+  yield { name: "thread.json", data: buildThreadJson(thread) };
+  yield { name: "transcript.md", data: buildTranscriptMarkdown(thread) };
 }
 
-export function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
-  return buildZip(buildThreadArchiveEntries(thread));
+// Streams the ZIP as it is produced: one local header+payload chunk per entry,
+// then the central directory and end record. Peak memory is bounded by a single
+// entry (its text, compressed copy, and header), never the whole archive.
+export async function* threadArchiveChunks(thread: OrchestrationThread): AsyncGenerator<Buffer> {
+  const centralRecords: Buffer[] = [];
+  let offset = 0;
+  let entryCount = 0;
+
+  for (const entry of threadArchiveEntries(thread)) {
+    const { localChunk, centralRecord } = await buildZipEntry(entry);
+    centralRecords.push(centralRecord(offset));
+    offset += localChunk.length;
+    entryCount += 1;
+    yield localChunk;
+  }
+
+  const centralDirectoryBody = Buffer.concat(centralRecords);
+  yield centralDirectoryBody;
+
+  yield Buffer.concat([
+    u32(0x06054b50), // end of central directory signature
+    u16(0), // number of this disk
+    u16(0), // disk where central directory starts
+    u16(entryCount), // entries on this disk
+    u16(entryCount), // total entries
+    u32(centralDirectoryBody.length), // size of central directory
+    u32(offset), // offset of central directory
+    u16(0), // comment length
+  ]);
+}
+
+// Convenience for tests and small callers that want the whole archive at once.
+export async function buildThreadArchiveBytes(thread: OrchestrationThread): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of threadArchiveChunks(thread)) {
+    chunks.push(chunk);
+  }
+  return Buffer.concat(chunks);
+}
+
+// Exports must not capture in-flight output: a partial assistant response would
+// be serialized as if it were a completed message. The composer hides /export
+// while a turn runs; this server-side check backstops racing or direct requests.
+export function threadExportBlockedReason(thread: OrchestrationThread): string | null {
+  if (thread.latestTurn?.state === "running") {
+    return "Thread is still running. Wait for the current turn to finish before exporting.";
+  }
+  if (thread.messages.some((message) => message.streaming)) {
+    return "Thread has a streaming message. Wait for the current response to finish before exporting.";
+  }
+  return null;
 }
 
 const FILENAME_SAFE_REPLACE = /[^a-z0-9-]+/g;

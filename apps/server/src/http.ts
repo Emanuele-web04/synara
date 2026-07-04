@@ -32,8 +32,9 @@ import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFavi
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import {
-  buildThreadArchiveBytes,
+  threadArchiveChunks,
   threadArchiveFileName,
+  threadExportBlockedReason,
 } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
@@ -482,18 +483,25 @@ const threadExportEffectRouteLayer = HttpRouter.add(
     if (Option.isNone(threadOption)) return HttpServerResponse.text("Not Found", { status: 404 });
     const thread = threadOption.value;
 
-    const archive = yield* Effect.promise(() => buildThreadArchiveBytes(thread));
+    const blockedReason = threadExportBlockedReason(thread);
+    if (blockedReason !== null) {
+      return HttpServerResponse.text(blockedReason, { status: 409 });
+    }
+
     const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
-    return HttpServerResponse.uint8Array(archive, {
-      status: 200,
-      contentType: "application/zip",
-      headers: {
-        "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
-        "Cache-Control": "no-store",
-        ...localPreviewCorsHeaders({ config, request, url }),
-        "Access-Control-Expose-Headers": "Content-Disposition",
+    return HttpServerResponse.stream(
+      Stream.fromAsyncIterable(threadArchiveChunks(thread), (cause) => cause),
+      {
+        status: 200,
+        contentType: "application/zip",
+        headers: {
+          "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+          "Cache-Control": "no-store",
+          ...localPreviewCorsHeaders({ config, request, url }),
+          "Access-Control-Expose-Headers": "Content-Disposition",
+        },
       },
-    });
+    );
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

@@ -8,7 +8,12 @@ import zlib from "node:zlib";
 import type { OrchestrationThread } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 
-import { buildThreadArchiveBytes, threadArchiveFileName } from "./exportThreadArchive.ts";
+import {
+  buildThreadArchiveBytes,
+  threadArchiveChunks,
+  threadArchiveFileName,
+  threadExportBlockedReason,
+} from "./exportThreadArchive.ts";
 
 // Minimal ZIP reader: walks the central directory, inflates each raw-deflate
 // entry. Enough to prove the writer emits a valid archive without depending on
@@ -169,6 +174,51 @@ describe("exportThreadArchive", () => {
     ]);
     expect(threadJson.messages[0].skills).toEqual([{ name: "review" }]);
     expect(threadJson.messages[0].mentions).toEqual([{ path: "src/index.ts" }]);
+  });
+
+  it("streams the archive as multiple chunks that reassemble into a valid zip", async () => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of threadArchiveChunks(sampleThread())) {
+      chunks.push(chunk);
+    }
+
+    // One chunk per entry, then central directory, then end record.
+    expect(chunks.length).toBe(4);
+
+    const entries = readZip(Buffer.concat(chunks));
+    expect(entries.map((entry) => entry.name).sort()).toEqual(["thread.json", "transcript.md"]);
+  });
+
+  it("allows export for a settled thread", () => {
+    expect(threadExportBlockedReason(sampleThread())).toBeNull();
+  });
+
+  it("blocks export while the latest turn is running", () => {
+    const thread = {
+      ...sampleThread(),
+      latestTurn: { state: "running" },
+    } as unknown as OrchestrationThread;
+
+    expect(threadExportBlockedReason(thread)).toMatch(/still running/);
+  });
+
+  it("blocks export while a message is still streaming", () => {
+    const base = sampleThread();
+    const thread = {
+      ...base,
+      messages: [...base.messages, { ...base.messages[1], id: "m3", streaming: true }],
+    } as unknown as OrchestrationThread;
+
+    expect(threadExportBlockedReason(thread)).toMatch(/streaming/);
+  });
+
+  it("allows export when the latest turn has settled", () => {
+    const thread = {
+      ...sampleThread(),
+      latestTurn: { state: "completed" },
+    } as unknown as OrchestrationThread;
+
+    expect(threadExportBlockedReason(thread)).toBeNull();
   });
 
   it("slugifies the title and stamps the date bucket into the filename", () => {
