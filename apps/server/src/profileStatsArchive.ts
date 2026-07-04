@@ -13,7 +13,7 @@ import {
   type ThreadEnvironmentMode,
 } from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
-import { Effect, Layer, ServiceMap } from "effect";
+import { Cause, Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
@@ -321,19 +321,61 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         cwd !== null || hasPersistedCheckpointRef
           ? checkpointRefsForThreadPurge(threadId, checkpointTurnRows, checkpointMessageRows)
           : [];
-      if (checkpointRefs.length > 0 && cwd === null) {
-        return yield* Effect.fail(
-          new Error(
-            `Cannot purge checkpoint refs for thread ${threadId} because its workspace is unavailable.`,
-          ),
-        );
-      }
 
       return {
         cwd,
         checkpointRefs,
       } satisfies ThreadCheckpointCleanup;
     });
+
+  // Stale/missing workspaces cannot contain reachable refs for us to delete; keep
+  // the DB purge moving, but fail normally once a usable Git repo is confirmed.
+  const deleteCheckpointRefsForPurge = (input: {
+    readonly threadId: string;
+    readonly cwd: string | null;
+    readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+  }) => {
+    if (input.checkpointRefs.length === 0) {
+      return Effect.void;
+    }
+    const cwd = input.cwd;
+    if (cwd === null) {
+      return Effect.logWarning(
+        "profile stats archive skipped checkpoint ref cleanup because workspace is unavailable",
+        { threadId: input.threadId, checkpointRefCount: input.checkpointRefs.length },
+      );
+    }
+
+    return Effect.gen(function* () {
+      const isGitRepository = yield* checkpointStore.isGitRepository(cwd).pipe(
+        Effect.catchCause((cause) => {
+          if (Cause.hasInterruptsOnly(cause)) {
+            return Effect.failCause(cause);
+          }
+          return Effect.logWarning(
+            "profile stats archive could not verify checkpoint cleanup workspace",
+            {
+              threadId: input.threadId,
+              cwd,
+              cause: Cause.pretty(cause),
+            },
+          ).pipe(Effect.as(false));
+        }),
+      );
+      if (!isGitRepository) {
+        yield* Effect.logWarning(
+          "profile stats archive skipped checkpoint ref cleanup because workspace is not a git repository",
+          { threadId: input.threadId, cwd },
+        );
+        return;
+      }
+
+      yield* checkpointStore.deleteCheckpointRefs({
+        cwd,
+        checkpointRefs: input.checkpointRefs,
+      });
+    });
+  };
 
   const snapshotAndPurgeThread = (threadId: string) =>
     Effect.gen(function* () {
@@ -484,20 +526,11 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       if (checkpointCleanup === null) {
         return false;
       }
-      if (checkpointCleanup.checkpointRefs.length > 0) {
-        const cwd = checkpointCleanup.cwd;
-        if (cwd === null) {
-          return yield* Effect.fail(
-            new Error(
-              `Cannot purge checkpoint refs for thread ${input.threadId} because its workspace is unavailable.`,
-            ),
-          );
-        }
-        yield* checkpointStore.deleteCheckpointRefs({
-          cwd,
-          checkpointRefs: checkpointCleanup.checkpointRefs,
-        });
-      }
+      yield* deleteCheckpointRefsForPurge({
+        threadId: input.threadId,
+        cwd: checkpointCleanup.cwd,
+        checkpointRefs: checkpointCleanup.checkpointRefs,
+      });
       return yield* sql.withTransaction(snapshotAndPurgeThread(input.threadId));
     });
 

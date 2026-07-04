@@ -30,20 +30,25 @@ interface DeletedCheckpointRefCall {
 
 const deletedCheckpointRefCalls: DeletedCheckpointRefCall[] = [];
 
+function recordDeletedCheckpointRefs(input: Parameters<CheckpointStoreShape["deleteCheckpointRefs"]>[0]) {
+  deletedCheckpointRefCalls.push({
+    cwd: input.cwd,
+    checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
+  });
+}
+
+let isGitRepositoryImpl: CheckpointStoreShape["isGitRepository"] = () => Effect.succeed(true);
+let deleteCheckpointRefsImpl: CheckpointStoreShape["deleteCheckpointRefs"] = (input) =>
+  Effect.sync(() => recordDeletedCheckpointRefs(input));
+
 const checkpointStoreTestLayer = Layer.succeed(CheckpointStore, {
-  isGitRepository: () => Effect.die("unused checkpoint store test method"),
+  isGitRepository: (cwd) => isGitRepositoryImpl(cwd),
   captureCheckpoint: () => Effect.die("unused checkpoint store test method"),
   copyCheckpointRef: () => Effect.die("unused checkpoint store test method"),
   hasCheckpointRef: () => Effect.die("unused checkpoint store test method"),
   restoreCheckpoint: () => Effect.die("unused checkpoint store test method"),
   diffCheckpoints: () => Effect.die("unused checkpoint store test method"),
-  deleteCheckpointRefs: (input) =>
-    Effect.sync(() => {
-      deletedCheckpointRefCalls.push({
-        cwd: input.cwd,
-        checkpointRefs: input.checkpointRefs.map((checkpointRef) => String(checkpointRef)),
-      });
-    }),
+  deleteCheckpointRefs: (input) => deleteCheckpointRefsImpl(input),
 } satisfies CheckpointStoreShape);
 
 const testLayer = Layer.mergeAll(ProfileStatsQueryLive, ProfileStatsArchiveLive).pipe(
@@ -243,6 +248,8 @@ const seedTwoThreadsWithActivity = Effect.gen(function* () {
 describe("ProfileStatsArchive", () => {
   beforeEach(() => {
     deletedCheckpointRefCalls.length = 0;
+    isGitRepositoryImpl = () => Effect.succeed(true);
+    deleteCheckpointRefsImpl = (input) => Effect.sync(() => recordDeletedCheckpointRefs(input));
   });
 
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {
@@ -546,6 +553,133 @@ describe("ProfileStatsArchive", () => {
             ) AS turns
         `;
         expect(remainingRows[0]).toEqual({ messages: 0, turns: 0 });
+      }),
+    );
+  });
+
+  it("purges thread rows when checkpoint cleanup workspace is stale", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+        isGitRepositoryImpl = () => Effect.succeed(false);
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-stale-checkpoint',
+            'Stale Checkpoint',
+            '/work/missing-checkpoint',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-stale-checkpoint',
+            'project-stale-checkpoint',
+            'Stale Checkpoint',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_thread_messages (
+            message_id, thread_id, turn_id, role, text, is_streaming, source,
+            created_at, updated_at
+          )
+          VALUES (
+            'message-stale-checkpoint',
+            'thread-stale-checkpoint',
+            'turn-stale-checkpoint',
+            'user',
+            'stale checkpoint purge',
+            0,
+            'native',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:01:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, assistant_message_id, state,
+            requested_at, started_at, completed_at, checkpoint_turn_count,
+            checkpoint_ref, checkpoint_status, checkpoint_files_json
+          )
+          VALUES (
+            'thread-stale-checkpoint',
+            'turn-stale-checkpoint',
+            NULL,
+            NULL,
+            'completed',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:01:10.000Z',
+            '2026-06-13T09:02:00.000Z',
+            1,
+            'refs/t3/checkpoints/thread-stale-checkpoint/turn/1',
+            'captured',
+            '[]'
+          )
+        `;
+        yield* sql`
+          INSERT INTO checkpoint_diff_blobs (
+            thread_id, from_turn_count, to_turn_count, diff, created_at
+          )
+          VALUES (
+            'thread-stale-checkpoint',
+            0,
+            1,
+            'diff --git a/file b/file',
+            '2026-06-13T09:02:00.000Z'
+          )
+        `;
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-stale-checkpoint",
+        });
+
+        expect(purged).toBe(true);
+        expect(deletedCheckpointRefCalls).toEqual([]);
+        const rows = yield* sql<{
+          readonly threads: number;
+          readonly messages: number;
+          readonly turns: number;
+          readonly diffBlobs: number;
+        }>`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM projection_threads
+              WHERE thread_id = 'thread-stale-checkpoint'
+            ) AS threads,
+            (
+              SELECT COUNT(*)
+              FROM projection_thread_messages
+              WHERE thread_id = 'thread-stale-checkpoint'
+            ) AS messages,
+            (
+              SELECT COUNT(*)
+              FROM projection_turns
+              WHERE thread_id = 'thread-stale-checkpoint'
+            ) AS turns,
+            (
+              SELECT COUNT(*)
+              FROM checkpoint_diff_blobs
+              WHERE thread_id = 'thread-stale-checkpoint'
+            ) AS diffBlobs
+        `;
+        expect(rows[0]).toEqual({ threads: 0, messages: 0, turns: 0, diffBlobs: 0 });
       }),
     );
   });
