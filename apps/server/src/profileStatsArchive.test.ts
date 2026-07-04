@@ -686,6 +686,250 @@ describe("ProfileStatsArchive", () => {
     );
   });
 
+  it("keeps checkpoint refs when the database purge transaction fails", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-failed-purge',
+            'Failed Purge',
+            '/work/failed-purge',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-failed-purge',
+            'project-failed-purge',
+            'Failed Purge',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id, turn_id, pending_message_id, assistant_message_id, state,
+            requested_at, started_at, completed_at, checkpoint_turn_count,
+            checkpoint_ref, checkpoint_status, checkpoint_files_json
+          )
+          VALUES (
+            'thread-failed-purge',
+            'turn-failed-purge',
+            NULL,
+            NULL,
+            'completed',
+            '2026-06-13T09:01:00.000Z',
+            '2026-06-13T09:01:10.000Z',
+            '2026-06-13T09:02:00.000Z',
+            1,
+            'refs/t3/checkpoints/thread-failed-purge/turn/1',
+            'captured',
+            '[]'
+          )
+        `;
+
+        yield* sql`DROP TABLE profile_stats_deleted_threads`;
+        const exit = yield* Effect.exit(
+          archive.purgeThreadWithStatsSnapshot({ threadId: "thread-failed-purge" }),
+        );
+
+        expect(exit._tag).toBe("Failure");
+        expect(deletedCheckpointRefCalls).toEqual([]);
+        const rows = yield* sql<{ readonly threads: number; readonly turns: number }>`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM projection_threads
+              WHERE thread_id = 'thread-failed-purge'
+            ) AS threads,
+            (
+              SELECT COUNT(*)
+              FROM projection_turns
+              WHERE thread_id = 'thread-failed-purge'
+            ) AS turns
+        `;
+        expect(rows[0]).toEqual({ threads: 1, turns: 1 });
+      }),
+    );
+  });
+
+  it("interrupts active automation runs before deleting the thread shell", async () => {
+    await runArchiveTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const archive = yield* ProfileStatsArchive;
+
+        yield* sql`
+          INSERT INTO projection_projects (
+            project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'project-automation-purge',
+            'Automation Purge',
+            '/work/automation-purge',
+            '{}',
+            '2026-06-12T09:00:00.000Z',
+            '2026-06-12T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id, project_id, title, model_selection_json, runtime_mode,
+            interaction_mode, env_mode, created_at, updated_at, deleted_at
+          )
+          VALUES (
+            'thread-automation-purge',
+            'project-automation-purge',
+            'Automation Purge',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access', 'default', 'local',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:05:00.000Z'
+          )
+        `;
+        yield* sql`
+          INSERT INTO automation_definitions (
+            automation_id, project_id, source_thread_id, name, prompt, schedule_json,
+            enabled, next_run_at, model_selection_json, provider_options_json, runtime_mode,
+            interaction_mode, worktree_mode, mode, target_thread_id, max_iterations,
+            stop_on_error, completion_policy_json, completion_policy_version,
+            completion_policy_updated_at, minimum_interval_seconds, max_runtime_seconds,
+            retry_policy_json, misfire_policy, acknowledged_risks_json, iteration_count,
+            created_at, updated_at, archived_at
+          )
+          VALUES (
+            'automation-purge',
+            'project-automation-purge',
+            NULL,
+            'Automation Purge',
+            'run it',
+            '{"type":"manual"}',
+            1,
+            NULL,
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            NULL,
+            'full-access',
+            'default',
+            'reuse',
+            'heartbeat',
+            'thread-automation-purge',
+            NULL,
+            1,
+            '{"type":"none"}',
+            0,
+            NULL,
+            60,
+            NULL,
+            '{"type":"none"}',
+            'skip',
+            '[]',
+            1,
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:00.000Z',
+            NULL
+          )
+        `;
+        yield* sql`
+          INSERT INTO automation_runs (
+            run_id, automation_id, project_id, thread_id, turn_id, trigger_type, status,
+            scheduled_for, claimed_by, claimed_at, lease_expires_at, started_at, finished_at,
+            thread_create_command_id, turn_start_command_id, message_id, error, result_json,
+            permission_snapshot_json, created_at, updated_at
+          )
+          VALUES (
+            'run-automation-purge',
+            'automation-purge',
+            'project-automation-purge',
+            'thread-automation-purge',
+            NULL,
+            'scheduled',
+            'running',
+            '2026-06-13T09:00:00.000Z',
+            'worker-1',
+            '2026-06-13T09:00:05.000Z',
+            '2026-06-13T09:10:00.000Z',
+            '2026-06-13T09:00:10.000Z',
+            NULL,
+            NULL,
+            'cmd-turn',
+            'message-run',
+            NULL,
+            NULL,
+            '{}',
+            '2026-06-13T09:00:00.000Z',
+            '2026-06-13T09:00:10.000Z'
+          )
+        `;
+
+        const purged = yield* archive.purgeThreadWithStatsSnapshot({
+          threadId: "thread-automation-purge",
+        });
+
+        expect(purged).toBe(true);
+        const rows = yield* sql<{
+          readonly threads: number;
+          readonly runStatus: string;
+          readonly error: string | null;
+          readonly resultJson: string | null;
+          readonly finishedAt: string | null;
+          readonly claimedBy: string | null;
+          readonly leaseExpiresAt: string | null;
+        }>`
+          SELECT
+            (
+              SELECT COUNT(*)
+              FROM projection_threads
+              WHERE thread_id = 'thread-automation-purge'
+            ) AS threads,
+            status AS runStatus,
+            error,
+            result_json AS resultJson,
+            finished_at AS finishedAt,
+            claimed_by AS claimedBy,
+            lease_expires_at AS leaseExpiresAt
+          FROM automation_runs
+          WHERE run_id = 'run-automation-purge'
+        `;
+        const result = JSON.parse(rows[0]?.resultJson ?? "null") as {
+          readonly outcome?: string;
+          readonly severity?: string;
+          readonly summary?: string;
+        } | null;
+        expect(rows[0]).toMatchObject({
+          threads: 0,
+          runStatus: "interrupted",
+          error: "Automation run was interrupted because its thread was deleted.",
+          finishedAt: "2026-06-13T09:05:00.000Z",
+          claimedBy: null,
+          leaseExpiresAt: null,
+        });
+        expect(result).toMatchObject({
+          outcome: "needs-attention",
+          severity: "warning",
+          summary: "Automation run was interrupted because its thread was deleted.",
+        });
+      }),
+    );
+  });
+
   it("sweeps manually soft-deleted threads but leaves retention-hidden ones in place", async () => {
     await runArchiveTest(
       Effect.gen(function* () {

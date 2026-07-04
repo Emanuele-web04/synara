@@ -113,7 +113,7 @@ const make = Effect.gen(function* () {
   });
 
   const closeThreadTerminals = (threadId: ThreadDeletedEvent["payload"]["threadId"]) =>
-    logCleanupCauseUnlessInterrupted({
+    cleanupSucceededUnlessInterrupted({
       effect: terminalManager.close({ threadId, deleteHistory: true }),
       message: "thread deletion cleanup skipped terminal close",
       threadId,
@@ -147,8 +147,8 @@ const make = Effect.gen(function* () {
     threadId: ThreadDeletedEvent["payload"]["threadId"],
   ) {
     const providerCleanupSucceeded = yield* stopProviderSession(threadId);
-    yield* closeThreadTerminals(threadId);
-    return providerCleanupSucceeded;
+    const terminalCleanupSucceeded = yield* closeThreadTerminals(threadId);
+    return providerCleanupSucceeded && terminalCleanupSucceeded;
   });
 
   const processThreadDeleted = Effect.fn(function* (event: ThreadDeletedEvent) {

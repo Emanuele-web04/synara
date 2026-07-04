@@ -272,6 +272,13 @@ export class ProfileStatsArchive extends ServiceMap.Service<
 const makeProfileStatsArchive = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const checkpointStore = yield* CheckpointStore;
+  const threadDeletedAutomationRunResultJson = JSON.stringify({
+    outcome: "needs-attention",
+    summary: "Automation run was interrupted because its thread was deleted.",
+    severity: "warning",
+    unread: true,
+    archivedAt: null,
+  });
 
   const loadThreadCheckpointCleanup = (threadId: string) =>
     Effect.gen(function* () {
@@ -376,6 +383,27 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       });
     });
   };
+
+  const deleteCheckpointRefsAfterCommittedPurge = (input: {
+    readonly threadId: string;
+    readonly cwd: string | null;
+    readonly checkpointRefs: ReadonlyArray<CheckpointRef>;
+  }) =>
+    deleteCheckpointRefsForPurge(input).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) {
+          return Effect.failCause(cause);
+        }
+        return Effect.logWarning(
+          "profile stats archive could not delete checkpoint refs after purge",
+          {
+            threadId: input.threadId,
+            checkpointRefCount: input.checkpointRefs.length,
+            cause: Cause.pretty(cause),
+          },
+        );
+      }),
+    );
 
   const snapshotAndPurgeThread = (threadId: string) =>
     Effect.gen(function* () {
@@ -513,6 +541,18 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       yield* sql`DELETE FROM projection_thread_proposed_plans WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_thread_sessions WHERE thread_id = ${threadId}`;
       yield* sql`DELETE FROM projection_turns WHERE thread_id = ${threadId}`;
+      yield* sql`
+        UPDATE automation_runs
+        SET status = 'interrupted',
+            error = 'Automation run was interrupted because its thread was deleted.',
+            result_json = ${threadDeletedAutomationRunResultJson},
+            finished_at = COALESCE(finished_at, ${deletedAt}),
+            updated_at = ${deletedAt},
+            lease_expires_at = NULL,
+            claimed_by = NULL
+        WHERE thread_id = ${threadId}
+          AND status NOT IN ('succeeded', 'failed', 'cancelled', 'interrupted', 'skipped')
+      `;
       yield* sql`DELETE FROM projection_threads WHERE thread_id = ${threadId}`;
 
       return true;
@@ -526,12 +566,15 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       if (checkpointCleanup === null) {
         return false;
       }
-      yield* deleteCheckpointRefsForPurge({
-        threadId: input.threadId,
-        cwd: checkpointCleanup.cwd,
-        checkpointRefs: checkpointCleanup.checkpointRefs,
-      });
-      return yield* sql.withTransaction(snapshotAndPurgeThread(input.threadId));
+      const purged = yield* sql.withTransaction(snapshotAndPurgeThread(input.threadId));
+      if (purged) {
+        yield* deleteCheckpointRefsAfterCommittedPurge({
+          threadId: input.threadId,
+          cwd: checkpointCleanup.cwd,
+          checkpointRefs: checkpointCleanup.checkpointRefs,
+        });
+      }
+      return purged;
     });
 
   const purgeSoftDeletedManualThreads: ProfileStatsArchiveShape["purgeSoftDeletedManualThreads"] = (
