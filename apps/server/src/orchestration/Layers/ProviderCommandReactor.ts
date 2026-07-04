@@ -9,6 +9,8 @@ import { providerWorkspaceChanged } from "../projectRelocationPaths.ts";
 // Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
 // Layer: Orchestration provider reactor
 
+import { isDeepStrictEqual } from "node:util";
+
 import {
   type ChatAttachment,
   type ClaudeCacheObservation,
@@ -43,7 +45,6 @@ import {
   Duration,
   Deferred,
   Effect,
-  Equal,
   Exit,
   Fiber,
   Layer,
@@ -327,7 +328,7 @@ function shouldRestartForProviderOptionsChange(input: {
   readonly previousProviderOptions: ProviderStartOptions | undefined;
   readonly requestedProviderOptions: ProviderStartOptions | undefined;
 }): boolean {
-  return !Equal.equals(
+  return !isDeepStrictEqual(
     normalizeProviderOptionsForComparison(input.requestedProvider, input.previousProviderOptions),
     normalizeProviderOptionsForComparison(input.requestedProvider, input.requestedProviderOptions),
   );
@@ -2154,7 +2155,7 @@ const make = Effect.gen(function* () {
               currentProvider === "grok" ||
               currentProvider === "devin") &&
             requestedModelSelection !== undefined &&
-            !Equal.equals(previousModelSelection, requestedModelSelection);
+            !isDeepStrictEqual(previousModelSelection, requestedModelSelection);
       const requestedComputerControl = options?.enableComputerControl;
       // A missing cache entry means the session was started by a dispatch that
       // carried no computer-control flag, which provisions the default (off), so
