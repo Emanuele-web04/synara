@@ -31,7 +31,7 @@ export interface ProcessTreeKiller {
     rootPid: number;
     signal: TerminalKillSignal;
     tree: CapturedProcessTree;
-    includeRootTree?: boolean;
+    includeRootTree?: boolean | undefined;
     onError: (error: Error, context: { pid: number; source: "tree-kill" | "captured" }) => void;
   }): void;
 }
@@ -116,9 +116,7 @@ function captureProcessChildrenMapSync(): ProcessChildrenMap | null {
 }
 
 function readCurrentCommands(pids: readonly number[]): ProcessCommandMap | null {
-  const uniquePids = [
-    ...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0)),
-  ];
+  const uniquePids = [...new Set(pids.filter((pid) => Number.isInteger(pid) && pid > 0))];
   if (uniquePids.length === 0) return new Map();
   try {
     const result = spawnSync("ps", ["-p", uniquePids.join(","), "-o", "pid=,command="], {
