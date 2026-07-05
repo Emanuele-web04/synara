@@ -23,6 +23,7 @@ import {
   claudeHistoricalSessionChildEnvironment,
   claudeHistoricalSessionEnvironment,
   makeImportThreadHandler,
+  resolveImportedThreadProviderOptionsForSettings,
 } from "./importThreadRoute";
 
 const threadId = ThreadId.makeUnsafe("thread-import");
@@ -244,3 +245,26 @@ it.effect("rejects imports before inspecting a disabled provider adapter", () =>
     assert.equal(startSession.mock.calls.length, 0);
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it("rejects disabled provider instances before import preflight can materialize options", () => {
+  assert.throws(
+    () =>
+      resolveImportedThreadProviderOptionsForSettings(
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            opencode_disabled: {
+              driver: "opencode",
+              enabled: false,
+              config: {
+                serverUrl: "http://127.0.0.1:4096",
+                serverPassword: "must-not-be-used",
+              },
+            },
+          },
+        },
+        { provider: "opencode", instanceId: "opencode_disabled", model: "opencode/model" },
+      ),
+    /disabled for thread import/,
+  );
+});

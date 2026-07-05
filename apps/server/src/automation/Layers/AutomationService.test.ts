@@ -1245,7 +1245,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("replaces stale standalone turn provider options with selected instance settings", () =>
+  it.effect("keeps selected instance secrets out of standalone turn events", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -1260,6 +1260,7 @@ layer("AutomationService", (it) => {
               homePath: "/tmp/codex-dispatch-home",
               accountId: "work",
             },
+            environment: [{ name: "CODEX_SECRET", value: "super-secret", sensitive: true }],
           },
         },
       });
@@ -1289,12 +1290,12 @@ layer("AutomationService", (it) => {
       if (turnStart?.type !== "thread.turn.start") {
         assert.fail("Expected a thread.turn.start command.");
       }
-      assert.deepStrictEqual(turnStart.providerOptions, {
-        codex: {
-          homePath: "/tmp/codex-dispatch-home",
-          accountId: "work",
-        },
+      assert.deepStrictEqual(turnStart.modelSelection, {
+        instanceId: codexWorkInstanceId,
+        model: "gpt-5-codex",
       });
+      assert.strictEqual(turnStart.providerOptions, undefined);
+      assert.ok(!JSON.stringify(turnStart).includes("super-secret"));
     }),
   );
 
@@ -2638,7 +2639,7 @@ layer("AutomationService", (it) => {
     }),
   );
 
-  it.effect("replaces stale heartbeat turn provider options with selected instance settings", () =>
+  it.effect("keeps selected instance secrets out of heartbeat turn events", () =>
     Effect.gen(function* () {
       resetHarness();
       const service = yield* AutomationService;
@@ -2687,12 +2688,11 @@ layer("AutomationService", (it) => {
       if (command?.type !== "thread.turn.start") {
         assert.fail("Expected a thread.turn.start command.");
       }
-      assert.deepStrictEqual(command.providerOptions, {
-        codex: {
-          homePath: "/tmp/codex-heartbeat-home",
-          accountId: "work",
-        },
+      assert.deepStrictEqual(command.modelSelection, {
+        instanceId: codexWorkInstanceId,
+        model: "gpt-5-codex",
       });
+      assert.strictEqual(command.providerOptions, undefined);
     }),
   );
 
