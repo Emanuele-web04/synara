@@ -436,13 +436,16 @@ function makePermissionSnapshot(
   definition: AutomationDefinition,
   now: string,
   settingsRevision?: number,
-  providerOptions?: ProviderStartOptions,
+  _providerOptions?: ProviderStartOptions,
 ) {
   return {
     provider: definition.modelSelection.provider,
     ...(settingsRevision !== undefined ? { settingsRevision } : {}),
     modelSelection: definition.modelSelection,
-    ...(providerOptions ? { providerOptions } : {}),
+    // Instance-backed runs resolve provider options live; snapshots keep only legacy direct options.
+    ...(!definition.modelSelection && definition.providerOptions
+      ? { providerOptions: definition.providerOptions }
+      : {}),
     completionPolicyVersion: completionPolicyVersionForDefinition(definition),
     iterationNumber: definition.iterationCount + 1,
     runtimeMode: definition.runtimeMode,

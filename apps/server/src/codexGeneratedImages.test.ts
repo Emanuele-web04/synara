@@ -284,4 +284,35 @@ describe("codexConfiguredHomePathsFromSettings", () => {
       `expected disabled default home to be absent, got ${JSON.stringify(roots)}`,
     );
   });
+
+  it("excludes generic-disabled default Codex homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled-generic/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          enabled: true,
+          homePath: "/codex-test/.codex-disabled-generic",
+        },
+      },
+      providerInstances: {
+        codex: {
+          driver: "codex" as const,
+          enabled: false,
+          config: {},
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.every((root) => !root.includes(".codex-disabled-generic")),
+      `expected generic-disabled default home to be absent, got ${JSON.stringify(roots)}`,
+    );
+  });
 });

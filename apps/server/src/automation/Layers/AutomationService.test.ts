@@ -1306,6 +1306,10 @@ layer("AutomationService", (it) => {
       });
       assert.strictEqual(turnStart.providerOptions, undefined);
       assert.ok(!JSON.stringify(turnStart).includes("super-secret"));
+      const listed = yield* service.list({ projectId });
+      const run = listed.runs.find((entry) => entry.automationId === created.id);
+      assert.strictEqual(run?.permissionSnapshot.providerOptions, undefined);
+      assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("super-secret"));
     }),
   );
 

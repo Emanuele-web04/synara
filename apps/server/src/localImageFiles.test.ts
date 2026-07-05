@@ -62,6 +62,36 @@ describe("resolveAllowedLocalPreviewFile", () => {
     }
   });
 
+  it("does not fall back to ambient Codex homes when the allowlist is intentionally empty", async () => {
+    const fakeRoot = path.join(
+      process.cwd(),
+      `.test-codex-empty-allowlist-${process.pid}-${Date.now()}`,
+    );
+    const codexHome = path.join(fakeRoot, ".codex-disabled");
+    const imageDir = path.join(codexHome, "generated_images", "provider-thread");
+    const imagePath = path.join(imageDir, "call.png");
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const previousCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = codexHome;
+    try {
+      const result = await resolveAllowedLocalPreviewFile({
+        requestedPath: imagePath,
+        cwd: null,
+        codexHomePaths: [],
+      });
+
+      assert.equal(result, null);
+    } finally {
+      if (previousCodexHome === undefined) {
+        delete process.env.CODEX_HOME;
+      } else {
+        process.env.CODEX_HOME = previousCodexHome;
+      }
+      rmSync(fakeRoot, { recursive: true, force: true });
+    }
+  });
+
   it("allows images written to the SYNARA_HOME codex-home-overlay generated_images root", async () => {
     // Codex app-server is launched with CODEX_HOME pointing at a Synara overlay
     // directory (see resolveSynaraCodexHomeOverlayPath). Generated images therefore

@@ -201,7 +201,14 @@ export async function resolveAllowedLocalPreviewFile(input: {
   if (!isSupportedLocalImagePath(realFilePath)) {
     return null;
   }
-  const codexHomeCandidates = [input.codexHomePath, ...(input.codexHomePaths ?? [])];
+  // A provided empty array means settings/live sessions intentionally allow no Codex homes.
+  // Only fall back to the ambient CODEX_HOME when callers do not provide an allowlist at all.
+  const codexHomeCandidates =
+    input.codexHomePaths === undefined
+      ? [input.codexHomePath]
+      : input.codexHomePath === undefined
+        ? input.codexHomePaths
+        : [input.codexHomePath, ...input.codexHomePaths];
   const generatedImagesRoots = await Promise.all(
     [...new Set(codexHomeCandidates.flatMap((home) => resolveCodexGeneratedImagesRoots(home)))].map(
       realpathOrNull,
