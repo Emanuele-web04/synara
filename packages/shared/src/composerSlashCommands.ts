@@ -16,6 +16,7 @@ export const BUILT_IN_COMPOSER_SLASH_COMMANDS = [
   "status",
   "subagents",
   "fast",
+  "export",
   "automation",
 ] as const;
 

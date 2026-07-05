@@ -117,6 +117,26 @@ describe("getGitTextGenerationModelOptions", () => {
     expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
   });
 
+  it("prefers runtime-discovered OpenCode and Kilo models for git writing settings", () => {
+    const options = getGitTextGenerationModelOptions(
+      {
+        customCodexModels: [],
+        customKiloModels: [],
+        customOpenCodeModels: [],
+        textGenerationModel: "openrouter/custom-model",
+        textGenerationProvider: "opencode",
+      },
+      {
+        opencode: [{ slug: "openrouter/gpt-oss-120b", name: "GPT OSS 120B" }],
+        kilo: [{ slug: "kilo/kilo-auto/free", name: "Kilo Auto Free" }],
+      },
+    );
+
+    expect(options.some((option) => option.slug === "openrouter/gpt-oss-120b")).toBe(true);
+    expect(options.some((option) => option.slug === "kilo/kilo-auto/free")).toBe(true);
+    expect(options.some((option) => option.slug === "openrouter/custom-model")).toBe(true);
+  });
+
   it("preserves a currently selected transient git writing model", () => {
     const options = getGitTextGenerationModelOptions({
       customCodexModels: [],

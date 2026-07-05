@@ -200,7 +200,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     return nextCommandReadModel;
   }).pipe(
     Effect.catchCause((cause) =>
-      Effect.logError("failed to refresh orchestration read model after project repair").pipe(
+      Effect.logError("failed to refresh orchestration command read model").pipe(
         Effect.annotateLogs({
           cause: Cause.pretty(cause),
         }),
@@ -210,7 +210,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               commandId: "repair-local-state",
               commandType: ORCHESTRATION_WS_METHODS.repairState,
               detail:
-                "Project repair completed, but the refreshed local snapshot could not be loaded.",
+                "Projection state changed, but the refreshed command snapshot could not be loaded.",
             }),
           ),
         ),
@@ -634,6 +634,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   // code should use ProjectionSnapshotQuery directly instead of depending on
   // the command engine to own a hydrated read model.
   const getReadModel = () => Effect.sync(() => commandReadModel);
+  const refreshCommandReadModel: OrchestrationEngineShape["refreshCommandReadModel"] = () =>
+    maintenanceLock.withPermits(1)(refreshCommandReadModelFromProjectionState);
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
@@ -779,6 +781,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     getReadModel,
+    refreshCommandReadModel,
     readEvents,
     dispatch,
     repairState,

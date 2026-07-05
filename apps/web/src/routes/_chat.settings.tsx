@@ -60,6 +60,7 @@ import {
 } from "../appSettings";
 import { APP_VERSION } from "../branding";
 import { useDesktopTopBarTrafficLightGutterClassName } from "../hooks/useDesktopTopBarGutter";
+import { useProviderModelCatalog } from "../hooks/useProviderModelCatalog";
 import { ProviderOptionLabel } from "../components/ProviderIcon";
 import {
   Autocomplete,
@@ -134,6 +135,7 @@ import {
 } from "../lib/serverReactQuery";
 import { cn, isMacPlatform } from "../lib/utils";
 import { unarchiveThreadFromClient } from "../lib/threadArchive";
+import { resolveProviderDiscoveryCwd } from "../lib/providerDiscovery";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 import {
   buildNotificationSettingsSupportText,
@@ -859,26 +861,50 @@ function SettingsRouteView() {
     textGenerationModel,
     textGenerationProvider,
   } = settings;
+  const currentGitTextGenerationProvider = textGenerationProvider ?? "codex";
+  const currentGitTextGenerationModel = textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
+  const gitWritingModelHintByProvider = useMemo<Partial<Record<ProviderKind, string | null>>>(
+    () => ({ [currentGitTextGenerationProvider]: currentGitTextGenerationModel }),
+    [currentGitTextGenerationModel, currentGitTextGenerationProvider],
+  );
+  const providerModelDiscoveryCwd = resolveProviderDiscoveryCwd({
+    activeThreadWorktreePath: null,
+    activeProjectCwd: null,
+    serverCwd: serverConfigQuery.data?.cwd ?? null,
+  });
+  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
+    selectedProvider: currentGitTextGenerationProvider,
+    discoveryEnabled: activeSection === "models",
+    cwd: providerModelDiscoveryCwd,
+    modelHintByProvider: gitWritingModelHintByProvider,
+  });
   const gitTextGenerationModelOptions = useMemo(
     () =>
-      getGitTextGenerationModelOptions({
-        customCodexModels,
-        customKiloModels,
-        customOpenCodeModels,
-        textGenerationModel,
-        textGenerationProvider,
-      }),
+      getGitTextGenerationModelOptions(
+        {
+          customCodexModels,
+          customKiloModels,
+          customOpenCodeModels,
+          textGenerationModel,
+          textGenerationProvider,
+        },
+        {
+          codex: gitWritingCatalogOptionsByProvider.codex,
+          kilo: gitWritingCatalogOptionsByProvider.kilo,
+          opencode: gitWritingCatalogOptionsByProvider.opencode,
+        },
+      ),
     [
       customCodexModels,
       customKiloModels,
       customOpenCodeModels,
+      gitWritingCatalogOptionsByProvider.codex,
+      gitWritingCatalogOptionsByProvider.kilo,
+      gitWritingCatalogOptionsByProvider.opencode,
       textGenerationModel,
       textGenerationProvider,
     ],
   );
-  const currentGitTextGenerationProvider = settings.textGenerationProvider ?? "codex";
-  const currentGitTextGenerationModel =
-    settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL;
   const currentGitTextGenerationValue = `${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";
   const defaultGitTextGenerationModel =

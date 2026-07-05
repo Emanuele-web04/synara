@@ -350,6 +350,13 @@ const orchestrationEngine = {
       threads: [],
       updatedAt: now,
     }),
+  refreshCommandReadModel: () =>
+    Effect.succeed({
+      snapshotSequence: 0,
+      projects: [],
+      threads: [],
+      updatedAt: now,
+    }),
   dispatch: (command: OrchestrationCommand) =>
     failDispatchType !== null && command.type === failDispatchType
       ? Effect.fail(
@@ -408,6 +415,7 @@ const projectionSnapshotQuery = {
   getThreadShellById: () => Effect.succeed(threadShell),
   findSyntheticSubagentParentThread: () => Effect.succeed(Option.none()),
   getThreadDetailById: () => Effect.succeed(threadDetail as never),
+  getThreadDetailForExportById: () => Effect.succeed(threadDetail as never),
   getThreadDetailSnapshotById: () => Effect.succeed(Option.none()),
 } as unknown as ProjectionSnapshotQueryShape;
 
