@@ -44,6 +44,7 @@ import {
   GitListBranchesInput,
   GitPullInput,
   GitPullRequestRefInput,
+  GitPullRequestSnapshotInput,
   GitReadWorkingTreeDiffInput,
   GitRemoveWorktreeInput,
   GitRemoveIndexLockInput,
@@ -159,6 +160,7 @@ export const WS_METHODS = {
   gitUnstageFiles: "git.unstageFiles",
   gitHandoffThread: "git.handoffThread",
   gitResolvePullRequest: "git.resolvePullRequest",
+  gitPullRequestSnapshot: "git.pullRequestSnapshot",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
 
   // Terminal methods
@@ -313,6 +315,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitUnstageFiles, GitUnstageFilesInput),
   tagRequestBody(WS_METHODS.gitHandoffThread, GitHandoffThreadInput),
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
+  tagRequestBody(WS_METHODS.gitPullRequestSnapshot, GitPullRequestSnapshotInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
 
   // Terminal methods

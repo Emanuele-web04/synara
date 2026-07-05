@@ -4,8 +4,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
+  createWorktreeSetupSnapshot,
+  failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
   type LocalDispatchSnapshot,
+  resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
   describeVoiceRecordingStartError,
@@ -30,6 +33,7 @@ import {
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
+  worktreeSetupHasError,
 } from "./ChatView.logic";
 
 describe("composer menu selection", () => {
@@ -902,10 +906,97 @@ describe("shouldStartActiveTurnLayoutGrace", () => {
   });
 });
 
+describe("worktree setup snapshots", () => {
+  it("marks earlier steps done, the active step active, and later steps pending", () => {
+    expect(createWorktreeSetupSnapshot("prepare-thread").steps).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("starts with every step pending except the first when setup begins", () => {
+    expect(createWorktreeSetupSnapshot("create-worktree").steps.map((step) => step.status)).toEqual(
+      ["active", "pending", "pending"],
+    );
+  });
+
+  it("ends with every step done except the last when the session starts", () => {
+    expect(createWorktreeSetupSnapshot("start-session").steps.map((step) => step.status)).toEqual([
+      "done",
+      "done",
+      "active",
+    ]);
+  });
+
+  it("fails only the active step and leaves the rest untouched", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failed.steps.map((step) => step.status)).toEqual(["done", "error", "pending"]);
+    expect(worktreeSetupHasError(failed)).toBe(true);
+  });
+
+  it("returns the same snapshot when no step is active", () => {
+    const failed = failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("prepare-thread"));
+    expect(failWorktreeSetupSnapshot(failed)).toBe(failed);
+  });
+
+  it("reports no error for null or healthy snapshots", () => {
+    expect(worktreeSetupHasError(null)).toBe(false);
+    expect(worktreeSetupHasError(createWorktreeSetupSnapshot("create-worktree"))).toBe(false);
+  });
+
+  it("replaces a held failed setup when a fresh local dispatch starts", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup).toBeNull();
+  });
+
+  it("replaces a held failed setup when retrying worktree setup", () => {
+    const current: LocalDispatchSnapshot = {
+      startedAt: "2026-04-13T00:00:00.000Z",
+      worktreeSetup: failWorktreeSetupSnapshot(createWorktreeSetupSnapshot("create-worktree")),
+      latestTurnTurnId: null,
+      latestTurnRequestedAt: null,
+      latestTurnStartedAt: null,
+      latestTurnCompletedAt: null,
+      sessionOrchestrationStatus: null,
+      sessionUpdatedAt: null,
+    };
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "create-worktree" },
+    });
+
+    expect(next).not.toBe(current);
+    expect(next.worktreeSetup?.steps.map((step) => step.status)).toEqual([
+      "active",
+      "pending",
+      "pending",
+    ]);
+  });
+});
+
 describe("hasServerAcknowledgedLocalDispatch", () => {
   const localDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,
@@ -915,7 +1006,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
   };
   const firstTurnLocalDispatch: LocalDispatchSnapshot = {
     startedAt: "2026-04-13T00:00:00.000Z",
-    preparingWorktree: false,
+    worktreeSetup: null,
     latestTurnTurnId: null,
     latestTurnRequestedAt: null,
     latestTurnStartedAt: null,

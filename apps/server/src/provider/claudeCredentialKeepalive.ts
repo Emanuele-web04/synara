@@ -18,7 +18,7 @@
 // process mishandling refresh-token rotation). This keeps the Keychain token perpetually
 // fresh, so the SDK session always reads a valid token.
 //
-// Opt out:  T3CODE_CLAUDE_KEEPALIVE=0
+// Opt in:   T3CODE_CLAUDE_KEEPALIVE=1
 // Tune:     T3CODE_CLAUDE_KEEPALIVE_MINUTES=<n>   (default 30)
 
 import { execFile } from "node:child_process";
@@ -34,11 +34,20 @@ const COMMAND_TIMEOUT_MS = 20_000;
 export const CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS = 2_147_483_647;
 export const CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS = ["auth", "status"] as const;
 
-function envFlagDisabled(value: string | undefined): boolean {
+function envFlagEnabled(value: string | undefined): boolean {
   const normalized = value?.trim().toLowerCase();
-  return (
-    normalized === "0" || normalized === "false" || normalized === "off" || normalized === "no"
-  );
+  return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
+}
+
+export function isClaudeCredentialKeepaliveEnabled(
+  input: {
+    readonly platform?: NodeJS.Platform;
+    readonly env?: NodeJS.ProcessEnv;
+  } = {},
+): boolean {
+  const platform = input.platform ?? process.platform;
+  const env = input.env ?? process.env;
+  return platform === "darwin" && envFlagEnabled(env.T3CODE_CLAUDE_KEEPALIVE);
 }
 
 // Mirrors the Claude Agent adapter default while honoring persisted custom CLI paths.
@@ -94,9 +103,9 @@ export function startClaudeCredentialKeepalive(input?: {
   const homeDir = input?.homeDir;
   const log = input?.log ?? (() => {});
 
-  // Only macOS exhibits the Keychain/short-TTL behavior that causes the bug; other platforms
-  // use the credentials file the SDK already manages, so the keepalive is a no-op there.
-  if (platform !== "darwin" || envFlagDisabled(env.T3CODE_CLAUDE_KEEPALIVE)) {
+  // Only run when explicitly enabled. The check touches Claude Code auth data, so
+  // Synara should not do it as background work merely because the app opened.
+  if (!isClaudeCredentialKeepaliveEnabled({ platform, env })) {
     return { stop: () => {} };
   }
 
@@ -128,9 +137,9 @@ export function startClaudeCredentialKeepalive(input?: {
   if (typeof timer.unref === "function") {
     timer.unref();
   }
-  // Refresh once shortly after startup so an already-stale token recovers promptly.
+  // Run once after opt-in so an already-stale token recovers promptly instead
+  // of waiting for the first interval tick.
   void tick();
-
   log(`[claude-keepalive] started (every ${intervalMs / 60_000}m, macOS)`);
   return {
     stop: () => clearInterval(timer),

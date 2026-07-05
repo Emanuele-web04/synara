@@ -7,6 +7,7 @@ import { describe, it, assert } from "@effect/vitest";
 import {
   CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS,
   CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS,
+  isClaudeCredentialKeepaliveEnabled,
   resolveClaudeCredentialKeepaliveBinaryPath,
   resolveClaudeCredentialKeepaliveIntervalMs,
 } from "./claudeCredentialKeepalive.ts";
@@ -14,6 +15,24 @@ import {
 describe("claudeCredentialKeepalive", () => {
   it("uses the documented Claude auth status command", () => {
     assert.deepEqual([...CLAUDE_CREDENTIAL_KEEPALIVE_AUTH_STATUS_ARGS], ["auth", "status"]);
+  });
+
+  it("requires explicit opt-in on macOS", () => {
+    assert.equal(isClaudeCredentialKeepaliveEnabled({ platform: "darwin", env: {} }), false);
+    assert.equal(
+      isClaudeCredentialKeepaliveEnabled({
+        platform: "darwin",
+        env: { T3CODE_CLAUDE_KEEPALIVE: "1" },
+      }),
+      true,
+    );
+    assert.equal(
+      isClaudeCredentialKeepaliveEnabled({
+        platform: "linux",
+        env: { T3CODE_CLAUDE_KEEPALIVE: "1" },
+      }),
+      false,
+    );
   });
 
   it("resolves configured Claude binary paths with a safe default", () => {

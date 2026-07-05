@@ -43,6 +43,7 @@ import {
 } from "./EnvironmentAutomationsSection";
 import { EnvironmentUsageSection } from "./EnvironmentUsageSection";
 import { EnvironmentLocalServersSection } from "./EnvironmentLocalServersSection";
+import { EnvironmentPullRequestSection } from "./EnvironmentPullRequestSection";
 import { EnvironmentMarkersSection } from "./EnvironmentMarkersSection";
 import { EnvironmentNotesSection } from "./EnvironmentNotesSection";
 import { EnvironmentPinnedSection } from "./EnvironmentPinnedSection";
@@ -323,6 +324,16 @@ export function EnvironmentPanel({
             }}
           />
         </EnvironmentLabeledSection>
+      ) : null}
+
+      {settings.showEnvironmentPullRequest && isGitRepo && onOpenGithubRepository ? (
+        <EnvironmentPullRequestSection
+          gitCwd={gitCwd}
+          enabled={open}
+          activeThreadId={activeThreadId}
+          onOpenUrl={onOpenGithubRepository}
+          onClose={onClose}
+        />
       ) : null}
 
       {settings.showEnvironmentEditor ? (
