@@ -134,6 +134,17 @@ export function useProviderUsageSummary(input: {
     openUsageSnapshotQuery.data,
   ]);
 
+  // A throttle/staleness note the server rides on an otherwise-ok snapshot (e.g. Claude serving the
+  // last values while Anthropic rate-limits). Only surfaced when the snapshot is actually shown —
+  // non-ok snapshots hide the section entirely, so their `detail` would never be seen anyway.
+  const usageNotice = useMemo(() => {
+    if (blocksProviderUsageFallback) {
+      return undefined;
+    }
+    const detail = authoritativeLiveSnapshot?.detail?.trim();
+    return detail ? detail : undefined;
+  }, [authoritativeLiveSnapshot, blocksProviderUsageFallback]);
+
   const learnMoreHref = useMemo(
     () =>
       deriveRateLimitLearnMoreHref(rateLimits) ?? deriveProviderUsageLearnMoreHref(input.provider),
@@ -152,5 +163,6 @@ export function useProviderUsageSummary(input: {
     learnMoreHref,
     rateLimits,
     usageLines,
+    usageNotice,
   } as const;
 }
