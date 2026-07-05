@@ -7,7 +7,7 @@ vi.mock("../../processRunner", () => ({
 }));
 
 import { runProcess } from "../../processRunner";
-import { GitHubCli } from "../Services/GitHubCli.ts";
+import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import { GitHubCliLive } from "./GitHubCli.ts";
 
 const mockedRunProcess = vi.mocked(runProcess);
@@ -64,13 +64,7 @@ layer("GitHubCliLive", (it) => {
       });
       expect(mockedRunProcess).toHaveBeenCalledWith(
         "gh",
-        [
-          "pr",
-          "view",
-          "#42",
-          "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-        ],
+        ["pr", "view", "#42", "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
         expect.objectContaining({ cwd: "/repo" }),
       );
     }),
@@ -175,13 +169,7 @@ layer("GitHubCliLive", (it) => {
       assert.strictEqual(result.summary.state, "open");
       expect(mockedRunProcess).toHaveBeenCalledWith(
         "gh",
-        [
-          "pr",
-          "view",
-          "42",
-          "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
-        ],
+        ["pr", "view", "42", "--json", `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`],
         expect.objectContaining({ cwd: "/repo" }),
       );
     }),

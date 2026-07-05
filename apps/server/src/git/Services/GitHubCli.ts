@@ -12,6 +12,13 @@ import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contra
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
 
+/**
+ * Field list for `gh pr view/list --json` calls that decode into
+ * {@link GitHubPullRequestSummary} — one source so call sites and tests cannot drift.
+ */
+export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
+  "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner";
+
 export interface GitHubPullRequestSummary {
   readonly number: number;
   readonly title: string;

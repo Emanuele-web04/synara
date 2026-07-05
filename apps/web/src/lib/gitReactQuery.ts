@@ -175,8 +175,14 @@ export function gitPullRequestSnapshotQueryOptions(input: {
     },
     enabled: (input.enabled ?? true) && input.cwd !== null && input.reference !== null,
     staleTime: GIT_PR_SNAPSHOT_STALE_TIME_MS,
-    refetchInterval: GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS,
-    refetchOnWindowFocus: true,
+    // Once the snapshot itself reports the PR merged/closed, stop polling it — the cached
+    // git status can lag behind and would otherwise keep the interval alive.
+    refetchInterval: (query) =>
+      query.state.data && query.state.data.pullRequest.state !== "open"
+        ? false
+        : GIT_PR_SNAPSHOT_REFETCH_INTERVAL_MS,
+    refetchOnWindowFocus: (query) =>
+      !query.state.data || query.state.data.pullRequest.state === "open",
     refetchOnReconnect: true,
   });
 }

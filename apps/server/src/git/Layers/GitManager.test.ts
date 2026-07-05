@@ -20,6 +20,7 @@ import {
   type GitHubCliShape,
   type GitHubPullRequestSummary,
   GitHubCli,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
@@ -530,7 +531,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            PULL_REQUEST_SUMMARY_JSON_FIELDS,
           ],
         }).pipe(
           Effect.map((result) => {
@@ -614,13 +615,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       getPullRequest: (input) =>
         execute({
           cwd: input.cwd,
-          args: [
-            "pr",
-            "view",
-            input.reference,
-            "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-          ],
+          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
       getRepositoryCloneUrls: (input) =>
         execute({
@@ -640,7 +635,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "view",
             input.reference,
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
           ],
         }).pipe(
           Effect.map((result) => ({
@@ -2250,7 +2245,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commentsTruncated).toBe(true);
       expect(result.commentsError).toBeNull();
       expect(ghCalls).toContain(
-        "pr view 42 --json number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
       );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
       expect(ghCalls).toContain(

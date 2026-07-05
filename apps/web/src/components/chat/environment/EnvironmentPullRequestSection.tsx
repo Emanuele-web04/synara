@@ -212,15 +212,18 @@ export function EnvironmentPullRequestSection({
     }),
   );
 
-  // The snapshot's own PR summary is fresher than the cached git status: when it reports
-  // the PR merged/closed between git-status polls, drop the section instead of rendering
-  // stale "open" rows, and prefer its title/number/url for display.
+  // The snapshot's own PR summary is fresher than the cached git status: prefer its
+  // title/number/url for display, and when it reports the PR merged/closed between
+  // git-status polls, swap the checks/comments rows for a state note instead of
+  // rendering stale "open" data.
   const livePr = snapshotQuery.data?.pullRequest ?? null;
   const displayPr = livePr ?? pr;
 
-  if (!pr || pr.state !== "open" || !displayPr || displayPr.state !== "open") {
+  if (!pr || pr.state !== "open" || !displayPr) {
     return null;
   }
+
+  const settledState = displayPr.state !== "open" ? displayPr.state : null;
 
   const checks = snapshotQuery.data?.checks ?? [];
   const comments = snapshotQuery.data?.comments ?? [];
@@ -259,7 +262,29 @@ export function EnvironmentPullRequestSection({
         }}
       />
 
-      {failed ? (
+      {settledState ? (
+        <EnvironmentRow
+          icon={
+            settledState === "merged" ? (
+              <CircleCheckIcon
+                className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "text-success")}
+                aria-hidden
+              />
+            ) : (
+              <CircleAlertIcon
+                className={cn(ENVIRONMENT_ROW_ICON_CLASS_NAME, "opacity-60")}
+                aria-hidden
+              />
+            )
+          }
+          label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
+          trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
+          onClick={() => {
+            onOpenUrl(displayPr.url);
+            onClose();
+          }}
+        />
+      ) : failed ? (
         <EnvironmentRow
           icon={
             <CircleAlertIcon

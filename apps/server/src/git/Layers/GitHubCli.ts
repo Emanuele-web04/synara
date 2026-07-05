@@ -11,6 +11,7 @@ import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
   type GitHubPullRequestSummary,
@@ -428,7 +429,7 @@ const makeGitHubCli = Effect.sync(() => {
           "--limit",
           String(input.limit ?? 1),
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          PULL_REQUEST_SUMMARY_JSON_FIELDS,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
@@ -447,13 +448,7 @@ const makeGitHubCli = Effect.sync(() => {
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,
-        args: [
-          "pr",
-          "view",
-          input.reference,
-          "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-        ],
+        args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
@@ -474,7 +469,7 @@ const makeGitHubCli = Effect.sync(() => {
           "view",
           input.reference,
           "--json",
-          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+          `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
