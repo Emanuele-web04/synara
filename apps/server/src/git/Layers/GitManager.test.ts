@@ -632,12 +632,22 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           cwd: input.cwd,
           args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
         }).pipe(Effect.asVoid),
-      getPullRequestChecks: (input) => {
-        ghCalls.push(`pr view ${input.reference} --json statusCheckRollup`);
-        return scenario.failWith
-          ? Effect.fail(scenario.failWith)
-          : Effect.succeed(scenario.pullRequestChecks ?? []);
-      },
+      getPullRequestWithChecks: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "view",
+            input.reference,
+            "--json",
+            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+          ],
+        }).pipe(
+          Effect.map((result) => ({
+            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
+            checks: scenario.pullRequestChecks ?? [],
+          })),
+        ),
       getPullRequestReviewComments: (input) => {
         ghCalls.push(
           `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
@@ -2239,7 +2249,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.comments).toEqual(comments);
       expect(result.commentsTruncated).toBe(true);
       expect(result.commentsError).toBeNull();
-      expect(ghCalls).toContain("pr view 42 --json statusCheckRollup");
+      expect(ghCalls).toContain(
+        "pr view 42 --json number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+      );
       // Owner/repo come from the PR URL, not the local checkout's remotes.
       expect(ghCalls).toContain(
         "api graphql reviewThreads github.enterprise.test/pingdotgg/codething-mvp#42",

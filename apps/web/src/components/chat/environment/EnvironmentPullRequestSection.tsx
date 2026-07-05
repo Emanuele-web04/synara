@@ -6,6 +6,7 @@
 
 import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
+import type { ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
@@ -93,6 +94,39 @@ function checksToneIcon(tone: PullRequestChecksTone) {
   }
 }
 
+// Popup row that is clickable only when it has a URL: plain div without one, MenuItem with one.
+function MenuRow({
+  url,
+  onOpenUrl,
+  className,
+  children,
+}: {
+  url: string | null;
+  onOpenUrl: (url: string) => void;
+  className: string;
+  children: ReactNode;
+}) {
+  if (!url) {
+    return (
+      <div className={cn("w-full cursor-default rounded-[0.5rem] text-left", className)}>
+        {children}
+      </div>
+    );
+  }
+
+  return (
+    <MenuItem
+      onClick={() => onOpenUrl(url)}
+      className={cn(
+        "w-full cursor-pointer rounded-[0.5rem] text-left data-highlighted:bg-[var(--color-background-elevated-secondary)]",
+        className,
+      )}
+    >
+      {children}
+    </MenuItem>
+  );
+}
+
 function ChecksMenuRow({
   check,
   onOpenUrl,
@@ -100,32 +134,18 @@ function ChecksMenuRow({
   check: GitPullRequestCheck;
   onOpenUrl: (url: string) => void;
 }) {
-  const content = (
-    <>
+  return (
+    <MenuRow
+      url={check.url}
+      onOpenUrl={onOpenUrl}
+      className="grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 px-2 py-1 text-[length:var(--app-font-size-ui,12px)]"
+    >
       <CheckStatusIcon status={check.status} />
       <span className="min-w-0 truncate text-[var(--color-text-foreground)]">{check.name}</span>
       <span className="shrink-0 text-[length:var(--app-font-size-ui-xs,10px)] text-muted-foreground">
         {PULL_REQUEST_CHECK_STATUS_LABELS[check.status]}
       </span>
-    </>
-  );
-
-  if (!check.url) {
-    return (
-      <div className="grid w-full cursor-default grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-[0.5rem] px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)]">
-        {content}
-      </div>
-    );
-  }
-
-  const checkUrl = check.url;
-  return (
-    <MenuItem
-      onClick={() => onOpenUrl(checkUrl)}
-      className="grid w-full cursor-pointer grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-[0.5rem] px-2 py-1 text-left text-[length:var(--app-font-size-ui,12px)] data-highlighted:bg-[var(--color-background-elevated-secondary)]"
-    >
-      {content}
-    </MenuItem>
+    </MenuRow>
   );
 }
 
@@ -137,8 +157,8 @@ function CommentsMenuRow({
   onOpenUrl: (url: string) => void;
 }) {
   const display = describePullRequestComment(comment);
-  const content = (
-    <>
+  return (
+    <MenuRow url={comment.url} onOpenUrl={onOpenUrl} className="flex flex-col gap-0.5 px-2 py-1.5">
       <span className="line-clamp-2 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)]">
         {display.title}
       </span>
@@ -153,25 +173,7 @@ function CommentsMenuRow({
           <span className="shrink-0 tabular-nums">{formatRelativeTime(comment.createdAt)}</span>
         ) : null}
       </span>
-    </>
-  );
-
-  if (!comment.url) {
-    return (
-      <div className="flex w-full cursor-default flex-col gap-0.5 rounded-[0.5rem] px-2 py-1.5 text-left">
-        {content}
-      </div>
-    );
-  }
-
-  const commentUrl = comment.url;
-  return (
-    <MenuItem
-      onClick={() => onOpenUrl(commentUrl)}
-      className="flex w-full cursor-pointer flex-col gap-0.5 rounded-[0.5rem] px-2 py-1.5 text-left data-highlighted:bg-[var(--color-background-elevated-secondary)]"
-    >
-      {content}
-    </MenuItem>
+    </MenuRow>
   );
 }
 
@@ -210,7 +212,13 @@ export function EnvironmentPullRequestSection({
     }),
   );
 
-  if (!pr || pr.state !== "open") {
+  // The snapshot's own PR summary is fresher than the cached git status: when it reports
+  // the PR merged/closed between git-status polls, drop the section instead of rendering
+  // stale "open" rows, and prefer its title/number/url for display.
+  const livePr = snapshotQuery.data?.pullRequest ?? null;
+  const displayPr = livePr ?? pr;
+
+  if (!pr || pr.state !== "open" || !displayPr || displayPr.state !== "open") {
     return null;
   }
 
@@ -230,8 +238,8 @@ export function EnvironmentPullRequestSection({
     appendComposerPromptText(
       activeThreadId,
       buildFixReviewCommentsPrompt({
-        prNumber: pr.number,
-        prUrl: pr.url,
+        prNumber: displayPr.number,
+        prUrl: displayPr.url,
         comments,
         commentsTruncated,
       }),
@@ -243,10 +251,10 @@ export function EnvironmentPullRequestSection({
     <EnvironmentLabeledSection label="Pull request">
       <EnvironmentRow
         icon={<GitPullRequestIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-        label={<span className="truncate">{`#${pr.number} ${pr.title}`}</span>}
+        label={<span className="truncate">{`#${displayPr.number} ${displayPr.title}`}</span>}
         trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
         onClick={() => {
-          onOpenUrl(pr.url);
+          onOpenUrl(displayPr.url);
           onClose();
         }}
       />

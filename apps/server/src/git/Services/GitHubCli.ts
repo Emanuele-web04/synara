@@ -66,12 +66,19 @@ export interface GitHubCliShape {
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
 
   /**
-   * List CI checks (check runs + commit statuses) for a pull request head commit.
+   * Resolve a pull request together with its CI checks (check runs + commit statuses)
+   * in a single `gh pr view` call, so snapshot polling pays one process/API round trip.
    */
-  readonly getPullRequestChecks: (input: {
+  readonly getPullRequestWithChecks: (input: {
     readonly cwd: string;
     readonly reference: string;
-  }) => Effect.Effect<ReadonlyArray<GitPullRequestCheck>, GitHubCliError>;
+  }) => Effect.Effect<
+    {
+      readonly summary: GitHubPullRequestSummary;
+      readonly checks: ReadonlyArray<GitPullRequestCheck>;
+    },
+    GitHubCliError
+  >;
 
   /**
    * List the root comments of unresolved review threads for a pull request.

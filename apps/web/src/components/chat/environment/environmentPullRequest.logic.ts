@@ -5,6 +5,7 @@
 // Layer: Web domain helpers (no React)
 
 import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
+import { pluralize } from "@t3tools/shared/text";
 
 export type PullRequestChecksTone = "pending" | "success" | "failure" | "none";
 
@@ -13,25 +14,21 @@ export interface PullRequestChecksSummary {
   tone: PullRequestChecksTone;
 }
 
-function pluralize(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 // Failure outranks pending so a red state never hides behind "N pending checks".
 export function summarizePullRequestChecks(
   checks: ReadonlyArray<GitPullRequestCheck>,
 ): PullRequestChecksSummary {
   const failing = checks.filter((check) => check.status === "failure").length;
   if (failing > 0) {
-    return { label: `${pluralize(failing, "failing check")}`, tone: "failure" };
+    return { label: `${failing} ${pluralize(failing, "failing check")}`, tone: "failure" };
   }
   const cancelled = checks.filter((check) => check.status === "cancelled").length;
   if (cancelled > 0) {
-    return { label: `${pluralize(cancelled, "cancelled check")}`, tone: "failure" };
+    return { label: `${cancelled} ${pluralize(cancelled, "cancelled check")}`, tone: "failure" };
   }
   const pending = checks.filter((check) => check.status === "pending").length;
   if (pending > 0) {
-    return { label: `${pluralize(pending, "pending check")}`, tone: "pending" };
+    return { label: `${pending} ${pluralize(pending, "pending check")}`, tone: "pending" };
   }
   if (checks.length === 0) {
     return { label: "No checks", tone: "none" };
@@ -68,8 +65,8 @@ export function withStableCheckKeys(
 
 export function summarizePullRequestComments(count: number, truncated = false): string {
   if (count === 0) return truncated ? "Comments may exist" : "No comments";
-  const noun = count === 1 ? "comment" : "comments";
-  return truncated ? `${count}+ ${noun}` : pluralize(count, "comment");
+  const noun = pluralize(count, "comment");
+  return truncated ? `${count}+ ${noun}` : `${count} ${noun}`;
 }
 
 export interface PullRequestCommentDisplay {
@@ -144,16 +141,13 @@ export function buildFixReviewCommentsPrompt(input: {
     const body = truncate(comment.body.trim(), FIX_PROMPT_COMMENT_BODY_MAX_LENGTH);
     return `${index + 1}. ${formatFixPromptCommentHeading(comment)}:\n> ${body.replace(/\n/g, "\n> ")}`;
   });
-  const overflow = input.comments.length - included.length;
-  const footer =
-    overflow > 0
-      ? [
-          `There are ${overflow} more unresolved review comments not listed here — fetch the rest from ${input.prUrl} once these are addressed.`,
-        ]
-      : input.commentsTruncated === true
-        ? [
-            `More unresolved review comments may exist beyond this bounded preview — fetch the rest from ${input.prUrl} before claiming all review comments are addressed.`,
-          ]
-        : [];
+  // One footer covers both truncation sources: the server's bounded fetch and this
+  // client-side cap (unreachable in practice — the RPC already limits to 20 comments).
+  const hasMore = input.commentsTruncated === true || input.comments.length > included.length;
+  const footer = hasMore
+    ? [
+        `More unresolved review comments may exist beyond this bounded preview — fetch the rest from ${input.prUrl} before claiming all review comments are addressed.`,
+      ]
+    : [];
   return [header, ...items, ...footer].join("\n\n");
 }

@@ -131,6 +131,11 @@ const RawPullRequestChecksSchema = Schema.Struct({
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawStatusCheckRollupItemSchema))),
 });
 
+const RawGitHubPullRequestWithChecksSchema = Schema.Struct({
+  ...RawGitHubPullRequestSchema.fields,
+  ...RawPullRequestChecksSchema.fields,
+});
+
 const PULL_REQUEST_REVIEW_THREAD_PAGE_SIZE = 50;
 const PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT = 5;
 const PULL_REQUEST_REVIEW_COMMENT_LIMIT = 20;
@@ -381,7 +386,7 @@ function decodeGitHubJson<S extends Schema.Top>(
     | "listOpenPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
-    | "getPullRequestChecks"
+    | "getPullRequestWithChecks"
     | "getPullRequestReviewComments",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
@@ -461,21 +466,30 @@ const makeGitHubCli = Effect.sync(() => {
         ),
         Effect.map(normalizePullRequestSummary),
       ),
-    getPullRequestChecks: (input) =>
+    getPullRequestWithChecks: (input) =>
       execute({
         cwd: input.cwd,
-        args: ["pr", "view", input.reference, "--json", "statusCheckRollup"],
+        args: [
+          "pr",
+          "view",
+          input.reference,
+          "--json",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+        ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
           decodeGitHubJson(
             raw,
-            RawPullRequestChecksSchema,
-            "getPullRequestChecks",
-            "GitHub CLI returned invalid check rollup JSON.",
+            RawGitHubPullRequestWithChecksSchema,
+            "getPullRequestWithChecks",
+            "GitHub CLI returned invalid pull request JSON.",
           ),
         ),
-        Effect.map(normalizePullRequestChecks),
+        Effect.map((decoded) => ({
+          summary: normalizePullRequestSummary(decoded),
+          checks: normalizePullRequestChecks(decoded),
+        })),
       ),
     getPullRequestReviewComments: (input) =>
       Effect.gen(function* () {
@@ -536,7 +550,9 @@ const makeGitHubCli = Effect.sync(() => {
             pageInfo.endCursor !== null &&
             comments.length < PULL_REQUEST_REVIEW_COMMENT_LIMIT &&
             fetchedPages < PULL_REQUEST_REVIEW_THREAD_PAGE_LIMIT;
-          if (!canFetchNextPage && pageInfo.hasNextPage && pageInfo.endCursor !== null) {
+          // hasNextPage alone marks truncation: a null endCursor still means threads remain,
+          // we just cannot page to them.
+          if (!canFetchNextPage && pageInfo.hasNextPage) {
             truncated = true;
           }
           after = canFetchNextPage ? pageInfo.endCursor : null;

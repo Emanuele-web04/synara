@@ -154,7 +154,9 @@ describe("buildFixReviewCommentsPrompt", () => {
     });
     expect(prompt).toContain(`${FIX_PROMPT_MAX_COMMENTS}. Comment`);
     expect(prompt).not.toContain(`${FIX_PROMPT_MAX_COMMENTS + 1}. Comment`);
-    expect(prompt).toContain("There are 5 more unresolved review comments not listed here");
+    expect(prompt).toContain(
+      "More unresolved review comments may exist beyond this bounded preview",
+    );
   });
 
   it("points at GitHub when the server truncated the bounded comment preview", () => {

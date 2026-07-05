@@ -117,11 +117,15 @@ function parsePullRequestRepositoryFromUrl(
   return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
 }
 
+// github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
+// which is only well-defined for PRs hosted on github.com.
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   const trimmed = url.trim();
-  const match = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
-  const repositoryName = match?.[1]?.trim() ?? "";
-  return repositoryName.length > 0 ? repositoryName : null;
+  if (!/^https:\/\//i.test(trimmed)) {
+    return null;
+  }
+  const repository = parsePullRequestRepositoryFromUrl(trimmed);
+  return repository && repository.host.toLowerCase() === "github.com" ? repository.repo : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(
@@ -1547,7 +1551,12 @@ export const makeGitManager = Effect.gen(function* () {
   const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
     function* (input) {
       const reference = normalizePullRequestReference(input.reference);
-      const summary = yield* gitHubCli.getPullRequest({ cwd: input.cwd, reference });
+      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
+      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+        cwd: input.cwd,
+        reference,
+      });
       const pullRequest = toResolvedPullRequest(summary);
 
       const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
@@ -1558,34 +1567,28 @@ export const makeGitManager = Effect.gen(function* () {
         );
       }
 
-      const [checks, commentsResult] = yield* Effect.all(
-        [
-          gitHubCli.getPullRequestChecks({ cwd: input.cwd, reference }),
-          gitHubCli
-            .getPullRequestReviewComments({
-              cwd: input.cwd,
-              host: repository.host,
-              owner: repository.owner,
-              repo: repository.repo,
-              number: pullRequest.number,
-            })
-            .pipe(
-              Effect.map((result) => ({
-                comments: result.comments,
-                commentsTruncated: result.truncated,
-                commentsError: null,
-              })),
-              Effect.catch((error) =>
-                Effect.succeed({
-                  comments: [],
-                  commentsTruncated: false,
-                  commentsError: error.message,
-                }),
-              ),
-            ),
-        ],
-        { concurrency: 2 },
-      );
+      const commentsResult = yield* gitHubCli
+        .getPullRequestReviewComments({
+          cwd: input.cwd,
+          host: repository.host,
+          owner: repository.owner,
+          repo: repository.repo,
+          number: pullRequest.number,
+        })
+        .pipe(
+          Effect.map((result) => ({
+            comments: result.comments,
+            commentsTruncated: result.truncated,
+            commentsError: null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              comments: [],
+              commentsTruncated: false,
+              commentsError: error.message,
+            }),
+          ),
+        );
 
       return {
         pullRequest,

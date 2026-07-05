@@ -110,6 +110,12 @@ layer("GitHubCliLive", (it) => {
     Effect.gen(function* () {
       mockedRunProcess.mockResolvedValueOnce({
         stdout: JSON.stringify({
+          number: 42,
+          title: "Snapshot PR",
+          url: "https://github.com/o/r/pull/42",
+          baseRefName: "main",
+          headRefName: "feature/snapshot",
+          state: "OPEN",
           statusCheckRollup: [
             {
               __typename: "CheckRun",
@@ -148,10 +154,10 @@ layer("GitHubCliLive", (it) => {
 
       const result = yield* Effect.gen(function* () {
         const gh = yield* GitHubCli;
-        return yield* gh.getPullRequestChecks({ cwd: "/repo", reference: "42" });
+        return yield* gh.getPullRequestWithChecks({ cwd: "/repo", reference: "42" });
       });
 
-      assert.deepStrictEqual(result, [
+      assert.deepStrictEqual(result.checks, [
         {
           name: "Format, Lint, Typecheck",
           status: "pending",
@@ -165,9 +171,17 @@ layer("GitHubCliLive", (it) => {
         },
         { name: "ci/legacy", status: "failure", url: "https://ci.example/build/3" },
       ]);
+      assert.strictEqual(result.summary.number, 42);
+      assert.strictEqual(result.summary.state, "open");
       expect(mockedRunProcess).toHaveBeenCalledWith(
         "gh",
-        ["pr", "view", "42", "--json", "statusCheckRollup"],
+        [
+          "pr",
+          "view",
+          "42",
+          "--json",
+          "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner,statusCheckRollup",
+        ],
         expect.objectContaining({ cwd: "/repo" }),
       );
     }),
@@ -431,6 +445,63 @@ layer("GitHubCliLive", (it) => {
       });
 
       assert.equal(result.comments.length, 20);
+      assert.equal(result.truncated, true);
+      expect(mockedRunProcess).toHaveBeenCalledTimes(1);
+    }),
+  );
+
+  it.effect("marks truncation when more pages exist but no cursor is returned", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      isResolved: false,
+                      comments: {
+                        nodes: [
+                          {
+                            id: "PRRC_1",
+                            body: "Finding",
+                            path: "cursorless.ts",
+                            url: "https://github.com/o/r/pull/42#discussion_r1",
+                            createdAt: "2026-07-01T10:00:00Z",
+                            author: { login: "bot" },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                  pageInfo: {
+                    hasNextPage: true,
+                    endCursor: null,
+                  },
+                },
+              },
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.getPullRequestReviewComments({
+          cwd: "/repo",
+          host: "github.com",
+          owner: "o",
+          repo: "r",
+          number: 42,
+        });
+      });
+
+      assert.equal(result.comments.length, 1);
       assert.equal(result.truncated, true);
       expect(mockedRunProcess).toHaveBeenCalledTimes(1);
     }),
