@@ -1,0 +1,23 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "close": "Close",
+    "delete": "Delete",
+    "confirm": "Confirm",
+    "back": "Back",
+    "next": "Next",
+    "done": "Done",
+    "yes": "Yes",
+    "no": "No",
+    "ok": "OK",
+    "loading": "Loading...",
+    "error": "Error",
+    "retry": "Retry"
+  },
+  "_meta": {
+    "description": "English translation file - auto-generated keys, review and fill manually",
+    "lastUpdated": "2026-07-05",
+    "totalKeys": 14
+  }
+}
