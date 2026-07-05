@@ -263,7 +263,10 @@
     "archiveUndo": {
       "undo": "撤销",
       "viewArchived": "在设置中查看已归档的聊天"
-    }
+    },
+    "renameChat": "重命名聊天",
+    "renameChatDescription": "为此聊天起一个新名称，方便以后识别。",
+    "toggleThreadSidebar": "切换线程侧边栏"
   },
   "chat": {
     "sessionStatus": {
@@ -384,6 +387,280 @@
       "closePreview": "关闭图片预览",
       "previousImage": "上一张",
       "nextImage": "下一张"
+    },
+    "activeTaskList": {
+      "tasksCompleted": "已完成 {{completed}}/{{total}} 个任务",
+      "openTasksSidebar": "打开任务侧边栏",
+      "expandTaskBanner": "展开任务横幅",
+      "collapseTaskBanner": "收起任务横幅",
+      "backgroundTasks_one": "{{count}} 个后台代理",
+      "backgroundTasks_other": "{{count}} 个后台代理"
+    },
+    "agentActivity": {
+      "back": "返回",
+      "updates_one": "{{count}} 个更新",
+      "updates_other": "{{count}} 个更新",
+      "promptSection": "提示",
+      "resultSection": "结果",
+      "agentsSection": "代理",
+      "activitySection": "活动",
+      "open": "打开"
+    },
+    "composerAutomation": {
+      "settingUp": "正在设置自动化",
+      "cancelSetup": "取消自动化设置"
+    },
+    "composerControls": {
+      "moreControls": "更多编辑器控制",
+      "mode": "模式",
+      "build": "构建",
+      "plan": "计划",
+      "hidePlanSidebar": "隐藏计划侧边栏",
+      "showPlanSidebar": "显示计划侧边栏"
+    },
+    "composerExtras": {
+      "extras": "编辑器附加功能",
+      "addImage": "添加图片",
+      "planMode": "计划模式",
+      "fast": "快速",
+      "default": "默认"
+    },
+    "composerPendingUserInputPanel": {
+      "previousQuestion": "上一个问题",
+      "nextQuestion": "下一个问题",
+      "selectOneOrMore": "选择一个或多个。"
+    },
+    "fileLineComment": {
+      "localComment": "本地评论",
+      "commentOn": "评论 {{lineLabel}}",
+      "requestChange": "请求更改",
+      "comment": "评论"
+    },
+    "generatedImage": {
+      "generatedImage": "生成的图片",
+      "couldNotDownload": "无法下载生成的图片",
+      "downloadImage": "下载生成的图片",
+      "expandImage": "展开生成的图片",
+      "expand": "展开",
+      "download": "下载"
+    },
+    "gitPanel": {
+      "unavailableForThread": "该会话的源代码管理不可用。",
+      "title": "源代码管理",
+      "closeLabel": "关闭源代码管理",
+      "refreshLabel": "刷新更改",
+      "loading": "正在加载更改...",
+      "noChanges": "工作树中没有更改。",
+      "staged": "已暂存",
+      "noStaged": "没有已暂存的更改。",
+      "unstageFile": "取消暂存文件",
+      "unstageAll": "取消暂存全部",
+      "changes": "更改",
+      "noUnstaged": "没有未暂存的更改。",
+      "stageFile": "暂存文件",
+      "stageAll": "暂存全部",
+      "selectFileDiff": "选择文件以查看其差异。"
+    },
+    "localDirectory": {
+      "folderNotFound": "未找到文件夹。",
+      "permissionDenied": "权限被拒绝。",
+      "notAFolder": "不是文件夹。",
+      "unableToLoadFolders": "无法加载文件夹。",
+      "stillConnecting": "应用仍在连接中。请稍后再试。",
+      "goUpDirectory": "返回上一级",
+      "useThisFolder": "使用此文件夹",
+      "matchesDeeper": "更深层匹配",
+      "waitingHomeDir": "正在等待服务器返回主目录...",
+      "loadingLocalFiles": "正在加载本地文件...",
+      "searchingNestedFiles": "正在搜索嵌套文件...",
+      "noMatches": "无匹配。",
+      "noFilesOrFolders": "此处没有文件或文件夹。",
+      "showingTopMatches": "显示最佳匹配。继续输入以缩小范围。"
+    },
+    "messageCopy": {
+      "copiedToast": "已复制！",
+      "failedToCopyToast": "复制失败",
+      "copyMessage": "复制消息",
+      "copyToClipboard": "复制到剪贴板"
+    },
+    "messageTrail": {
+      "messageNavigation": "消息导航",
+      "messageLabel": "消息 {{ordinal}}：{{preview}}"
+    },
+    "modelEffort": {
+      "ultrathink": "超级思考",
+      "thinkingOn": "开",
+      "thinkingOff": "关",
+      "changeModelAndReasoning": "更改模型和推理",
+      "changeModel": "更改模型",
+      "speed": "速度",
+      "fast": "快速",
+      "default": "默认"
+    },
+    "openInPicker": {
+      "openInEditor": "在编辑器中打开",
+      "open": "打开",
+      "editorOptions": "编辑器选项",
+      "noEditorsFound": "未找到已安装的编辑器",
+      "addAction": "添加操作"
+    },
+    "projectPicker": {
+      "workInProject": "在项目中工作",
+      "connecting": "应用仍在连接中。请稍后再试。",
+      "unableToLoadFolders": "无法加载文件夹。",
+      "unableToSelectProject": "无法选择项目。",
+      "unableToOpenFolderPicker": "无法打开文件夹选择器。",
+      "unableToUpdateProject": "无法更新项目。",
+      "newProject": "新项目",
+      "addNewProject": "添加新项目",
+      "addingProject": "正在添加项目...",
+      "openingFolderPicker": "正在打开文件夹选择器...",
+      "searchProjects": "搜索项目",
+      "dontWorkInProject": "不要在项目中工作",
+      "loadingFolders": "正在加载文件夹…",
+      "noFolders": "未找到文件夹",
+      "noMatches": "无匹配",
+      "activeFolders": "活动文件夹",
+      "foldersOnThisMac": "此 Mac 上的文件夹"
+    },
+    "proposedPlan": {
+      "copiedToast": "计划已复制为 Markdown",
+      "copyFailedToast": "无法复制计划",
+      "workspaceUnavailable": "工作区路径不可用",
+      "workspaceUnavailableDesc": "此会话没有可用于下载的工作区路径。",
+      "downloadedToast": "计划已下载",
+      "downloadFailedToast": "无法下载计划",
+      "unknownError": "发生错误。",
+      "exportUnavailable": "导出不可用",
+      "exportUnavailableDesc": "导出计划需要桌面应用。",
+      "exportedToast": "计划已导出",
+      "exportFailedToast": "无法导出计划",
+      "downloadToFolder": "下载到 .plan 文件夹",
+      "exportFile": "导出 Markdown 文件",
+      "copied": "已复制",
+      "copyAsMarkdown": "复制为 Markdown"
+    },
+    "providerHealthBanner": {
+      "unavailable": "{{providerLabel}} 不可用",
+      "limitedAvailability": "{{providerLabel}} 可用性受限",
+      "statusTitle": "{{providerLabel}} 状态",
+      "dismissLabel": "关闭提供商状态"
+    },
+    "providerModelPicker": {
+      "checking": "检查中",
+      "signIn": "登录",
+      "unavailable": "不可用",
+      "loadingModels": "正在加载模型",
+      "noPiModels": "未找到 Pi 模型",
+      "noMatches": "无匹配",
+      "searchModels": "搜索模型或提供商",
+      "comingSoon": "即将推出",
+      "changeModel": "更改模型"
+    },
+    "queuedActions": {
+      "steer": "引导",
+      "deleteQueued": "删除已排队的后续操作",
+      "queuedActions": "已排队的后续操作",
+      "editQueuedPrompt": "编辑已排队的提示",
+      "deleteQueuedPrompt": "删除已排队的提示"
+    },
+    "rateLimit": {
+      "resetsInSeconds": " {{seconds}} 秒后重置。",
+      "resetsInMinutes": " {{minutes}} 分钟后重置。",
+      "rateLimitReached": "已达到速率限制。",
+      "approachingRateLimit": "接近速率限制",
+      "dismissStatus": "关闭速率限制状态"
+    },
+    "threadError": {
+      "dismissError": "关闭错误"
+    },
+    "traitsPicker": {
+      "defaultSuffix": "（默认）",
+      "thinking": "思考",
+      "onDefault": "开（默认）",
+      "off": "关",
+      "context": "上下文",
+      "variant": "变体",
+      "effort": "努力",
+      "removeUltrathink": "从提示中移除超级思考以更改努力程度。",
+      "speed": "速度",
+      "default": "默认",
+      "fast": "快速",
+      "mode": "模式",
+      "agent": "代理",
+      "changeEffortContextSpeed": "更改努力程度、上下文和速度",
+      "options": "选项"
+    },
+    "transcriptSelection": {
+      "selectionActions": "选择操作",
+      "highlight": "高亮",
+      "underline": "下划线",
+      "addToChat": "添加到聊天"
+    },
+    "workspaceExplorer": {
+      "loadingDirectory": "正在加载目录...",
+      "couldNotLoadDirectory": "无法加载目录。",
+      "noWorkspace": "没有工作区。",
+      "searchFiles": "搜索文件...",
+      "searchFilesAriaLabel": "搜索文件",
+      "couldNotSearchFiles": "无法搜索文件。",
+      "noMatchingFiles": "没有匹配的文件。",
+      "showingTopMatches": "显示最佳匹配。优化搜索以缩小范围。",
+      "searchFilesByPath": "按名称或路径搜索文件。"
+    },
+    "workspaceFilePreviewHeader": {
+      "source": "源代码",
+      "sourceTitle": "源代码视图 — 选择文本以在聊天中引用确切行",
+      "preview": "预览",
+      "previewTitle": "渲染预览 — 浏览和切换任务列表",
+      "filePath": "文件路径",
+      "shownPartially": "部分显示",
+      "markdownView": "Markdown 视图",
+      "moreActions": "更多操作",
+      "referenceInChat": "在聊天中引用",
+      "askWhyChanged": "询问为什么更改"
+    },
+    "timeline": {
+      "editMessage": "编辑消息",
+      "editAndResend": "编辑并重新发送",
+      "revertToThisMessage": "恢复到此消息",
+      "pinToPanel": "固定到面板",
+      "unpinFromPanel": "取消固定",
+      "showLess": "显示更少",
+      "showMore": "显示更多",
+      "showNMore": "显示 {{count}} 更多",
+      "showNMoreToolCalls": "+{{count}} 更多工具调用",
+      "workedFor": "耗时 {{elapsed}}",
+      "details": "详情",
+      "edited": "已编辑",
+      "openThread": "打开线程",
+      "latest": "最新",
+      "summaryLabel": "摘要",
+      "rawCall": "原始调用",
+      "nMore": "+{{count}} 更多",
+      "sendMessageToStart": "发送消息以开始对话。",
+      "imagePreview": "预览 {{name}}",
+      "failed": " — 失败",
+      "emptyResponse": "（空响应）",
+      "workingFor": "正在运行 {{seconds}} 秒"
+    },
+    "header": {
+      "chatHistory": "聊天历史",
+      "noChatsInProject": "该项目中还没有聊天",
+      "newEditorRailItem": "新建编辑器轨道项",
+      "new": "新建",
+      "newChat": "新建聊天",
+      "newTerminal": "新建终端",
+      "chatIndex": "聊天 {{index}}",
+      "closeTitle": "关闭 {{title}}",
+      "closeTerminal": "关闭终端",
+      "closeSelectedSide": "关闭选定的侧边",
+      "terminal": "终端",
+      "toggleDiffPanel": "切换差异面板",
+      "toggleDiffPanelWithShortcut": "切换差异面板 ({{shortcut}})",
+      "diffPanelUnavailable": "差异面板不可用，因为该项目不是 Git 仓库。",
+      "handOff": "交接",
+      "handoffTo": "交接给 {{provider}}"
     }
   },
   "environment": {
@@ -418,7 +695,43 @@
       "clickToRenameTitle": "点击或按 Enter 重命名",
       "unpinMessage": "取消固定消息",
       "unpin": "取消固定"
-    }
+    },
+    "localServers": {
+      "label": "本地服务器",
+      "noServers": "未找到服务器",
+      "countRunning": "{{count}} 个运行中",
+      "refreshLocalServers": "刷新本地服务器",
+      "refresh": "刷新",
+      "stopServer": "停止服务器 {{name}}",
+      "scanningPorts": "扫描端口中...",
+      "scanningLocalPorts": "扫描本地端口",
+      "couldNotScan": "无法扫描端口",
+      "scanFailed": "扫描失败",
+      "willAppear": "运行中的服务器将显示在此处"
+    },
+    "markers": {
+      "label": "标记",
+      "unavailableLabel": "{{label}}（不可用）",
+      "markNotDone": "标记未完成",
+      "markDone": "标记完成",
+      "jumpToF2Rename": "跳转到标记。按 F2 重命名。",
+      "unavailableEnterToRename": "标记不可用。按 Enter 重命名。",
+      "clickJumpDoubleClickRename": "点击跳转，双击重命名",
+      "sourceTextUnavailable": "源文本不可用",
+      "removeMarker": "移除标记",
+      "remove": "移除"
+    },
+    "title": "环境",
+    "togglePanel": "切换环境面板",
+    "usage": "使用情况",
+    "editor": "编辑器",
+    "editorView": "编辑器视图",
+    "openInEditor": "在 {{editor}} 中打开",
+    "openInEditorDefault": "在编辑器中打开",
+    "projectInstructions": "项目说明",
+    "projectInstructionsPlaceholder": "在此处添加项目说明...",
+    "copyToNotepad": "复制到记事本",
+    "appendToNotepad": "追加到记事本"
   },
   "kanban": {
     "column": {
@@ -456,7 +769,20 @@
       "couldNotSendDraft": "无法发送草稿",
       "doneDerived": "已完成是自动派生的",
       "doneDerivedDescription": "卡片在其运行完成时会移到这里。"
-    }
+    },
+    "onlyImages": "只允许图片文件",
+    "fileNotAdded": "文件无法添加",
+    "filesNotAdded": "{{count}} 个文件无法添加",
+    "newTask": "新任务",
+    "dialogDescription": "在看板中创建一个新任务。",
+    "localFoldersUnavailable": "本地文件夹不可用",
+    "placeholder": "描述任务...",
+    "attachImages": "附加图片",
+    "sendAsDraft": "作为草稿发送",
+    "creating": "创建中...",
+    "createTask": "创建任务",
+    "chooseProject": "选择项目",
+    "noProject": "无项目"
   },
   "workspace": {
     "title": "工作区",
@@ -840,11 +1166,368 @@
       "repairSucceededDescription": "本地状态已修复。",
       "repairFailed": "修复失败",
       "repairFailedGeneric": "修复本地状态时发生错误。"
+    },
+    "backToApp": "返回应用",
+    "searchPlaceholder": "搜索设置...",
+    "noMatching": "无匹配的设置",
+    "gitToastPreviewDescription": "Git 提交 Toast 预览",
+    "gitToastPreviewOn": "预览开启",
+    "gitToastPreview": "预览"
+  },
+  "filePreview": {
+    "loadingFile": "正在加载文件...",
+    "noWorkspace": "没有关联到当前聊天的工作区。",
+    "selectFileFromExplorer": "从文件浏览器中选择文件。",
+    "couldNotCreatePreview": "无法创建本地文件预览授权。",
+    "couldNotReadFile": "无法读取文件。",
+    "comment": "评论",
+    "commentOnLine": "评论第 {{lineNumber}} 行",
+    "lineCount": "{{count}} 行"
+  },
+  "editor": {
+    "workspaceLabel": "工作区",
+    "noWorkspace": "无工作区",
+    "switchProject": "切换项目",
+    "hideChatPanel": "隐藏聊天面板",
+    "showChatPanel": "显示聊天面板",
+    "switchToChatView": "切换到聊天视图",
+    "chatLabel": "聊天",
+    "loadingChangedFiles": "正在加载变更文件...",
+    "changedFiles": "变更文件",
+    "noFilesInDiff": "差异中没有文件。",
+    "resizeChatPanel": "调整聊天面板大小",
+    "dragToResizeChatPanel": "拖动以调整聊天面板大小",
+    "editorActivityBar": "编辑器活动栏",
+    "files": "文件",
+    "diff": "差异",
+    "hideFilesSidebar": "隐藏文件侧边栏",
+    "hideDiffSidebar": "隐藏差异侧边栏",
+    "hideSearchSidebar": "隐藏搜索侧边栏",
+    "searchFiles": "搜索文件"
+  },
+  "browser": {
+    "panel": {
+      "couldNotCompleteAction": "无法完成该浏览器操作。",
+      "restoringBrowser": "正在恢复浏览器",
+      "local": "本地",
+      "refreshLocalServers": "刷新本地服务器",
+      "scanningLocalServers": "正在扫描本地服务器",
+      "checkingLocalhostPorts": "正在检查本地端口",
+      "noLocalServers": "没有本地服务器",
+      "tryAnotherBrowserUrl": "尝试另一个浏览器 URL",
+      "maxAttachmentsExceeded": "每条消息最多可附加 {{count}} 个引用。",
+      "screenshotTooLarge": "'{{name}}' 超过了 {{limit}} 附件大小限制。",
+      "browserScreenshotCopied": "浏览器截图已复制",
+      "goBack": "后退",
+      "goForward": "前进",
+      "reload": "刷新",
+      "searchOrEnterUrl": "搜索或输入 URL",
+      "copyScreenshot": "复制截图",
+      "copyLink": "复制链接",
+      "browserActions": "浏览器操作",
+      "newTab": "新建标签页",
+      "captureScreenshot": "截取截图",
+      "openExternally": "在外部打开",
+      "closeBrowserPanel": "关闭浏览器面板",
+      "browserUnavailable": "浏览器不可用。",
+      "untitled": "未命名",
+      "closeTab": "关闭标签页",
+      "browserIsSleeping": "浏览器正在休眠",
+      "restoringCachedBrowser": "正在恢复缓存的浏览器",
+      "startingBrowser": "正在启动浏览器..."
     }
+  },
+  "toolCallDetails": {
+    "title": "工具调用",
+    "editPayload": "该工具调用的编辑负载。",
+    "commandPayload": "该工具调用的命令负载。",
+    "noPayload": "没有可用的详细负载。",
+    "filesSection": "文件",
+    "diffSection": "差异",
+    "editsSection": "编辑",
+    "writtenContent": "写入内容",
+    "before": "之前",
+    "after": "之后",
+    "outputSection": "输出",
+    "stdout": "标准输出",
+    "stderr": "标准错误",
+    "exitCode": "退出码 {{code}}",
+    "truncated": "已截断"
+  },
+  "rightDock": {
+    "addPanel": "添加面板",
+    "collapsePanel": "折叠面板",
+    "closePanel": "关闭 {{label}}"
+  },
+  "messages": {
+    "timeline": {
+      "sentViaAutomation": "通过自动化发送",
+      "steeringConversation": "引导对话",
+      "preparingWorktree": "准备工作树...",
+      "failed": "— 失败",
+      "showLess": "显示更少",
+      "showMore": "显示更多",
+      "showMoreCount": "显示更多 {{count}} 条",
+      "editMessage": "编辑消息",
+      "editAndResend": "编辑并重新发送",
+      "revertToThisMessage": "恢复到此消息",
+      "emptyResponse": "（空回复）",
+      "moreToolCalls": "还有 {{count}} 个工具调用",
+      "workedFor": "工作了 {{elapsed}}",
+      "details": "详情",
+      "unpinFromPanel": "从面板取消固定",
+      "pinToPanel": "固定到面板",
+      "editedFiles": "已编辑 {{count}} 个{{count, plural, other {文件}}}",
+      "undo": "撤销",
+      "collapseChangedFilesList": "折叠更改的文件列表",
+      "expandChangedFilesList": "展开更改的文件列表",
+      "showMoreFiles": "显示更多 {{count}} 个{{count, plural, other {文件}}}",
+      "workingFor": "工作了",
+      "thinking": "思考中",
+      "sendMessageToStart": "发送消息以开始对话。"
+    }
+  },
+  "terminal": {
+    "viewportPane": {
+      "defaultTerminal": "终端",
+      "terminal": "终端",
+      "closeTerminal": "关闭 {{name}}",
+      "newTerminalTab": "新建终端标签",
+      "moveToOwnTab": "移至独立标签",
+      "splitRight": "向右分屏",
+      "splitDown": "向下分屏",
+      "collapseIntoDrawer": "折叠到抽屉",
+      "expandIntoWorkspace": "展开到工作区",
+      "collapseSidePanel": "折叠侧面板",
+      "openSidePanel": "打开侧面板",
+      "closeActiveTab": "关闭当前标签"
+    },
+    "searchLabel": "搜索终端",
+    "findPrevious": "查找上一个",
+    "findNext": "查找下一个",
+    "toggleRegex": "使用正则表达式",
+    "toggleCaseSensitive": "区分大小写",
+    "toggleWholeWord": "全词匹配",
+    "scrollToBottom": "滚动到底部"
+  },
+  "theme": {
+    "darkTheme": "深色",
+    "lightTheme": "浅色",
+    "systemUsingSlot": "系统（使用 {{variant}}）",
+    "activeThemeNow": "当前激活主题",
+    "usedWhenSwitch": "切换到 {{variant}} 时使用",
+    "inactiveWhileLocked": "锁定到 {{mode}} 时不活跃",
+    "copied": "已复制",
+    "copiedDescription": "{{variant}} 主题已复制到剪贴板",
+    "copyFailed": "复制失败",
+    "copyFailedDescription": "无法复制主题到剪贴板",
+    "reset": "重置",
+    "copy": "复制",
+    "accent": "强调色",
+    "background": "背景色",
+    "foreground": "前景色",
+    "uiFont": "界面字体",
+    "codeFont": "代码字体",
+    "translucentSidebar": "半透明侧边栏",
+    "contrast": "对比度",
+    "systemDefault": "系统默认",
+    "resetToDefault": "重置为默认值",
+    "resetColor": "将 {{name}} 重置为默认值",
+    "import": "导入",
+    "importDialogTitle": "导入主题（{{variant}}）",
+    "importDescription": "粘贴主题分享字符串以导入 {{variant}} 主题配置。",
+    "themeShareString": "主题分享字符串",
+    "cancel": "取消",
+    "imported": "主题已导入",
+    "importUpdated": "{{variant}} 主题已从分享字符串更新",
+    "importError": "无效的主题分享字符串"
+  },
+  "profile": {
+    "share": {
+      "title": "分享个人卡片",
+      "copy": "复制",
+      "copyStatCard": "复制统计卡片",
+      "save": "保存",
+      "saveStatCard": "保存统计卡片",
+      "shareTo": "分享到 {{label}}",
+      "copied": "已复制！",
+      "renderFailed": "渲染失败",
+      "copyUnavailable": "复制不可用",
+      "savedPng": "已保存为 PNG",
+      "shareImageCopied": "分享图片已复制到剪贴板",
+      "composerOpenedRenderFailed": "编辑器已打开但渲染失败",
+      "composerOpenedCopyUnavailable": "编辑器已打开但复制不可用"
+    },
+    "edit": {
+      "title": "编辑个人资料",
+      "editAvatar": "编辑头像",
+      "processing": "处理中...",
+      "replacePhoto": "替换照片",
+      "uploadPhoto": "上传照片",
+      "remove": "移除",
+      "useColor": "使用颜色 {{color}}",
+      "colorsApplyInfo": "颜色将应用于头像背景",
+      "displayName": "显示名称",
+      "yourName": "你的名字",
+      "username": "用户名",
+      "cancel": "取消",
+      "save": "保存"
+    }
+  },
+  "plugin": {
+    "pluginsTab": "插件",
+    "skillsTab": "技能",
+    "title": "插件库",
+    "searchPlugins": "搜索插件...",
+    "searchSkills": "搜索技能...",
+    "skillsNeedWorkspace": "技能需要打开工作区",
+    "pluginsUnavailable": "插件不可用",
+    "pluginsNoDiscovery": "无插件发现可用",
+    "noInstalledPlugins": "没有已安装的插件",
+    "onlyInstalled": "仅显示已安装",
+    "skillsUnavailable": "技能不可用",
+    "skillsNoDiscovery": "无技能发现可用",
+    "noSkillsFound": "未找到技能",
+    "noSkillsMatch": "没有匹配搜索的技能",
+    "skillsSection": "技能",
+    "noDescriptionAvailable": "无可用描述"
+  },
+  "project": {
+    "scripts": {
+      "nameRequired": "名称为必填项",
+      "commandRequired": "命令为必填项",
+      "failedToSave": "保存脚本失败",
+      "runName": "运行 {{name}}",
+      "scriptActions": "脚本操作",
+      "setup": "设置",
+      "editName": "编辑名称",
+      "addAction": "添加操作",
+      "editAction": "编辑操作",
+      "addActionTitle": "添加操作",
+      "actionsDescription": "操作按顺序在脚本执行时运行。",
+      "name": "名称",
+      "chooseIcon": "选择图标",
+      "keybinding": "快捷键",
+      "keybindingHint": "例如 Cmd+Shift+R",
+      "command": "命令",
+      "runOnWorktree": "在工作树上运行",
+      "delete": "删除",
+      "cancel": "取消",
+      "saveChanges": "保存更改",
+      "saveAction": "保存操作",
+      "deleteActionTitle": "删除操作",
+      "deleteActionDesc": "确定要删除此操作吗？",
+      "deleteAction": "删除"
+    }
+  },
+  "ui": {
+    "toast": {
+      "copyError": "复制错误信息",
+      "copiedError": "已复制错误信息",
+      "copy": "复制",
+      "copied": "已复制",
+      "dismissToast": "关闭通知",
+      "undo": "撤销",
+      "orViewArchivedIn": "或在以下位置查看已归档的对话",
+      "settings": "设置"
+    },
+    "spinner": {
+      "loading": "加载中"
+    },
+    "combobox": {
+      "remove": "移除"
+    }
+  },
+  "errors": {
+    "providerAdapter": {
+      "validationFailed": "Provider 适配器验证失败（{{provider}}）在 {{operation}}：{{issue}}",
+      "unknownThread": "未知的 {{provider}} 适配器线程：{{threadId}}",
+      "threadClosed": "{{provider}} 适配器线程已关闭：{{threadId}}",
+      "requestFailed": "Provider 适配器请求失败（{{provider}}）{{method}}：{{detail}}",
+      "processError": "Provider 适配器处理错误（{{provider}}）线程 {{threadId}}：{{detail}}"
+    },
+    "provider": {
+      "validationFailed": "Provider 验证失败在 {{operation}}：{{issue}}",
+      "notImplemented": "Provider '{{provider}}' 尚未实现",
+      "unknownThread": "未知的 Provider 线程：{{threadId}}",
+      "sessionDirectoryPersistenceError": "Provider 会话目录持久化错误在 {{operation}}：{{detail}}"
+    },
+    "git": {
+      "commandFailed": "Git 命令失败在 {{operation}}：{{command}}（{{cwd}}）- {{detail}}",
+      "checkoutDirtyWorktree": "未提交的更改阻止了切换到 {{branch}}：\n{{fileList}}",
+      "githubCliFailed": "GitHub CLI 失败在 {{operation}}：{{detail}}",
+      "textGenerationFailed": "文本生成失败在 {{operation}}：{{detail}}",
+      "managerFailed": "Git 管理器失败在 {{operation}}：{{detail}}"
+    },
+    "checkpoint": {
+      "unavailable": "检查点不可用于线程 {{threadId}} 轮次 {{turnCount}}：{{detail}}",
+      "invariantViolation": "检查点不变性违反在 {{operation}}：{{detail}}"
+    },
+    "toolCallFailed": "工具调用失败。"
+  },
+  "app": {
+    "back": "返回",
+    "backWithShortcut": "返回（{{shortcut}}）",
+    "forward": "前进",
+    "forwardWithShortcut": "前进（{{shortcut}}）",
+    "minimize": "最小化",
+    "restore": "恢复",
+    "maximize": "最大化",
+    "close": "关闭",
+    "recentViews": "最近浏览",
+    "current": "当前",
+    "splitView": "分屏视图",
+    "pinned": "已固定",
+    "recentViewCount": "最近浏览 {{count}}",
+    "worldCup2026": "2026 世界杯",
+    "whatsNew": {
+      "viewChangelog": "查看完整更新日志",
+      "gotIt": "知道了",
+      "title": "新功能",
+      "backToWhatsNew": "返回新功能",
+      "completeChangelog": "完整更新日志",
+      "everyCuratedRelease": "所有精选版本"
+    }
+  },
+  "shortcuts": {
+    "title": "键盘快捷键",
+    "description": "所有可用的键盘快捷键一览。",
+    "searchPlaceholder": "搜索快捷键...",
+    "noResults": "没有匹配的快捷键"
+  },
+  "plan": {
+    "badge": "计划",
+    "closeSidebar": "关闭计划侧边栏",
+    "steps": "步骤",
+    "fullPlan": "完整计划",
+    "noActivePlan": "无活动计划",
+    "willAppear": "你的计划将显示在此处"
+  },
+  "pdf": {
+    "couldNotOpen": "无法打开 PDF",
+    "loadingPdf": "正在加载 PDF...",
+    "viewerToolbar": {
+      "pageLabel": "第 {{current}} 页，共 {{total}} 页",
+      "zoomIn": "放大",
+      "zoomOut": "缩小",
+      "zoomLevel": "缩放：{{level}}%",
+      "fitToPage": "适应页面",
+      "togglePresentation": "切换演示模式",
+      "openInApp": "在应用中打开",
+      "download": "下载",
+      "print": "打印"
+    }
+  },
+  "image": {
+    "couldNotDownload": "无法下载图片",
+    "fileUnavailable": "图片文件不可用",
+    "downloadImage": "下载图片",
+    "download": "下载",
+    "couldNotOpen": "无法在查看器中打开图片"
   },
   "_meta": {
     "description": "中文翻译文件",
     "lastUpdated": "2026-07-05",
-    "totalKeys": 337
+    "totalKeys": 1256
   }
 }

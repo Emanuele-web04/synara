@@ -263,7 +263,10 @@
     "archiveUndo": {
       "undo": "Undo",
       "viewArchived": "View archived chats in Settings"
-    }
+    },
+    "renameChat": "Rename chat",
+    "renameChatDescription": "Give a new name to this chat so you can identify it later.",
+    "toggleThreadSidebar": "Toggle thread sidebar"
   },
   "chat": {
     "sessionStatus": {
@@ -384,6 +387,280 @@
       "closePreview": "Close image preview",
       "previousImage": "Previous image",
       "nextImage": "Next image"
+    },
+    "activeTaskList": {
+      "tasksCompleted": "{{completed}} out of {{total}} tasks completed",
+      "openTasksSidebar": "Open tasks sidebar",
+      "expandTaskBanner": "Expand task banner",
+      "collapseTaskBanner": "Collapse task banner",
+      "backgroundTasks_one": "{{count}} background agent",
+      "backgroundTasks_other": "{{count}} background agents"
+    },
+    "agentActivity": {
+      "back": "Back",
+      "updates_one": "{{count}} update",
+      "updates_other": "{{count}} updates",
+      "promptSection": "Prompt",
+      "resultSection": "Result",
+      "agentsSection": "Agents",
+      "activitySection": "Activity",
+      "open": "Open"
+    },
+    "composerAutomation": {
+      "settingUp": "Setting up automation",
+      "cancelSetup": "Cancel automation setup"
+    },
+    "composerControls": {
+      "moreControls": "More composer controls",
+      "mode": "Mode",
+      "build": "Build",
+      "plan": "Plan",
+      "hidePlanSidebar": "Hide plan sidebar",
+      "showPlanSidebar": "Show plan sidebar"
+    },
+    "composerExtras": {
+      "extras": "Composer extras",
+      "addImage": "Add image",
+      "planMode": "Plan mode",
+      "fast": "Fast",
+      "default": "Default"
+    },
+    "composerPendingUserInputPanel": {
+      "previousQuestion": "Previous question",
+      "nextQuestion": "Next question",
+      "selectOneOrMore": "Select one or more."
+    },
+    "fileLineComment": {
+      "localComment": "Local comment",
+      "commentOn": "Comment on {{lineLabel}}",
+      "requestChange": "Request change",
+      "comment": "Comment"
+    },
+    "generatedImage": {
+      "generatedImage": "Generated image",
+      "couldNotDownload": "Could not download generated image",
+      "downloadImage": "Download generated image",
+      "expandImage": "Expand generated image",
+      "expand": "Expand",
+      "download": "Download"
+    },
+    "gitPanel": {
+      "unavailableForThread": "Source control is unavailable for this thread.",
+      "title": "Source control",
+      "closeLabel": "Close source control",
+      "refreshLabel": "Refresh changes",
+      "loading": "Loading changes...",
+      "noChanges": "No changes in the working tree.",
+      "staged": "Staged",
+      "noStaged": "No staged changes.",
+      "unstageFile": "Unstage file",
+      "unstageAll": "Unstage all",
+      "changes": "Changes",
+      "noUnstaged": "No unstaged changes.",
+      "stageFile": "Stage file",
+      "stageAll": "Stage all",
+      "selectFileDiff": "Select a file to view its diff."
+    },
+    "localDirectory": {
+      "folderNotFound": "Folder not found.",
+      "permissionDenied": "Permission denied.",
+      "notAFolder": "Not a folder.",
+      "unableToLoadFolders": "Unable to load folders.",
+      "stillConnecting": "App is still connecting. Try again in a moment.",
+      "goUpDirectory": "Go up one directory",
+      "useThisFolder": "Use this folder",
+      "matchesDeeper": "Matches deeper",
+      "waitingHomeDir": "Waiting for home directory from server...",
+      "loadingLocalFiles": "Loading local files...",
+      "searchingNestedFiles": "Searching nested files...",
+      "noMatches": "No matches.",
+      "noFilesOrFolders": "No files or folders here.",
+      "showingTopMatches": "Showing top matches. Keep typing to narrow."
+    },
+    "messageCopy": {
+      "copiedToast": "Copied!",
+      "failedToCopyToast": "Failed to copy",
+      "copyMessage": "Copy message",
+      "copyToClipboard": "Copy to clipboard"
+    },
+    "messageTrail": {
+      "messageNavigation": "Message navigation",
+      "messageLabel": "Message {{ordinal}}: {{preview}}"
+    },
+    "modelEffort": {
+      "ultrathink": "Ultrathink",
+      "thinkingOn": "On",
+      "thinkingOff": "Off",
+      "changeModelAndReasoning": "Change model and reasoning",
+      "changeModel": "Change model",
+      "speed": "Speed",
+      "fast": "Fast",
+      "default": "Default"
+    },
+    "openInPicker": {
+      "openInEditor": "Open in editor",
+      "open": "Open",
+      "editorOptions": "Editor options",
+      "noEditorsFound": "No installed editors found",
+      "addAction": "Add action"
+    },
+    "projectPicker": {
+      "workInProject": "Work in a project",
+      "connecting": "App is still connecting. Try again in a moment.",
+      "unableToLoadFolders": "Unable to load folders.",
+      "unableToSelectProject": "Unable to select project.",
+      "unableToOpenFolderPicker": "Unable to open the folder picker.",
+      "unableToUpdateProject": "Unable to update project.",
+      "newProject": "New project",
+      "addNewProject": "Add new project",
+      "addingProject": "Adding project...",
+      "openingFolderPicker": "Opening folder picker...",
+      "searchProjects": "Search projects",
+      "dontWorkInProject": "Don't work in a project",
+      "loadingFolders": "Loading folders…",
+      "noFolders": "No folders found",
+      "noMatches": "No matches",
+      "activeFolders": "Active folders",
+      "foldersOnThisMac": "Folders on this Mac"
+    },
+    "proposedPlan": {
+      "copiedToast": "Plan copied as markdown",
+      "copyFailedToast": "Could not copy plan",
+      "workspaceUnavailable": "Workspace path is unavailable",
+      "workspaceUnavailableDesc": "This thread does not have a workspace path to download into.",
+      "downloadedToast": "Plan downloaded",
+      "downloadFailedToast": "Could not download plan",
+      "unknownError": "An error occurred.",
+      "exportUnavailable": "Export is unavailable",
+      "exportUnavailableDesc": "Exporting plans requires the desktop app.",
+      "exportedToast": "Plan exported",
+      "exportFailedToast": "Could not export plan",
+      "downloadToFolder": "Download to .plan folder",
+      "exportFile": "Export markdown file",
+      "copied": "Copied",
+      "copyAsMarkdown": "Copy as markdown"
+    },
+    "providerHealthBanner": {
+      "unavailable": "{{providerLabel}} unavailable",
+      "limitedAvailability": "{{providerLabel}} limited availability",
+      "statusTitle": "{{providerLabel}} status",
+      "dismissLabel": "Dismiss provider status"
+    },
+    "providerModelPicker": {
+      "checking": "Checking",
+      "signIn": "Sign in",
+      "unavailable": "Unavailable",
+      "loadingModels": "Loading models",
+      "noPiModels": "No Pi models found",
+      "noMatches": "No matches",
+      "searchModels": "Search models or providers",
+      "comingSoon": "Coming soon",
+      "changeModel": "Change model"
+    },
+    "queuedActions": {
+      "steer": "Steer",
+      "deleteQueued": "Delete queued follow-up",
+      "queuedActions": "Queued follow-up actions",
+      "editQueuedPrompt": "Edit queued prompt",
+      "deleteQueuedPrompt": "Delete queued prompt"
+    },
+    "rateLimit": {
+      "resetsInSeconds": " Resets in {{seconds}}s.",
+      "resetsInMinutes": " Resets in {{minutes}}m.",
+      "rateLimitReached": "Rate limit reached.",
+      "approachingRateLimit": "Approaching rate limit",
+      "dismissStatus": "Dismiss rate limit status"
+    },
+    "threadError": {
+      "dismissError": "Dismiss error"
+    },
+    "traitsPicker": {
+      "defaultSuffix": " (default)",
+      "thinking": "Thinking",
+      "onDefault": "On (default)",
+      "off": "Off",
+      "context": "Context",
+      "variant": "Variant",
+      "effort": "Effort",
+      "removeUltrathink": "Remove Ultrathink from the prompt to change effort.",
+      "speed": "Speed",
+      "default": "Default",
+      "fast": "Fast",
+      "mode": "Mode",
+      "agent": "Agent",
+      "changeEffortContextSpeed": "Change effort, context, and speed",
+      "options": "Options"
+    },
+    "transcriptSelection": {
+      "selectionActions": "Selection actions",
+      "highlight": "Highlight",
+      "underline": "Underline",
+      "addToChat": "Add to chat"
+    },
+    "workspaceExplorer": {
+      "loadingDirectory": "Loading directory...",
+      "couldNotLoadDirectory": "Could not load directory.",
+      "noWorkspace": "No workspace.",
+      "searchFiles": "Search files...",
+      "searchFilesAriaLabel": "Search files",
+      "couldNotSearchFiles": "Could not search files.",
+      "noMatchingFiles": "No matching files.",
+      "showingTopMatches": "Showing the top matches. Refine the search to narrow them down.",
+      "searchFilesByPath": "Search files by name or path."
+    },
+    "workspaceFilePreviewHeader": {
+      "source": "Source",
+      "sourceTitle": "Source view — select text to reference exact lines in chat",
+      "preview": "Preview",
+      "previewTitle": "Rendered preview — browse and toggle task lists",
+      "filePath": "File path",
+      "shownPartially": "Shown partially",
+      "markdownView": "Markdown view",
+      "moreActions": "More actions",
+      "referenceInChat": "Reference in chat",
+      "askWhyChanged": "Ask why this changed"
+    },
+    "timeline": {
+      "editMessage": "Edit message",
+      "editAndResend": "Edit and resend",
+      "revertToThisMessage": "Revert to this message",
+      "pinToPanel": "Pin to panel",
+      "unpinFromPanel": "Unpin from panel",
+      "showLess": "Show less",
+      "showMore": "Show more",
+      "showNMore": "Show {{count}} more",
+      "showNMoreToolCalls": "+{{count}} more tool calls",
+      "workedFor": "Worked for {{elapsed}}",
+      "details": "Details",
+      "edited": "Edited",
+      "openThread": "Open thread",
+      "latest": "Latest",
+      "summaryLabel": "Summary",
+      "rawCall": "Raw call",
+      "nMore": "+{{count}} more",
+      "sendMessageToStart": "Send a message to start the conversation.",
+      "imagePreview": "Preview {{name}}",
+      "failed": " — failed",
+      "emptyResponse": "(empty response)",
+      "workingFor": "Working for {{seconds}}s"
+    },
+    "header": {
+      "chatHistory": "Chat history",
+      "noChatsInProject": "No chats in this project yet",
+      "newEditorRailItem": "New editor rail item",
+      "new": "New",
+      "newChat": "New chat",
+      "newTerminal": "New terminal",
+      "chatIndex": "Chat {{index}}",
+      "closeTitle": "Close {{title}}",
+      "closeTerminal": "Close Terminal",
+      "closeSelectedSide": "Close selected Side",
+      "terminal": "Terminal",
+      "toggleDiffPanel": "Toggle diff panel",
+      "toggleDiffPanelWithShortcut": "Toggle diff panel ({{shortcut}})",
+      "diffPanelUnavailable": "Diff panel is unavailable because this project is not a git repository.",
+      "handOff": "Hand off",
+      "handoffTo": "Handoff to {{provider}}"
     }
   },
   "environment": {
@@ -418,7 +695,43 @@
       "clickToRenameTitle": "Click or press Enter to rename",
       "unpinMessage": "Unpin message",
       "unpin": "Unpin"
-    }
+    },
+    "localServers": {
+      "label": "Local Servers",
+      "noServers": "No servers found",
+      "countRunning": "{{count}} running",
+      "refreshLocalServers": "Refresh local servers",
+      "refresh": "Refresh",
+      "stopServer": "Stop server {{name}}",
+      "scanningPorts": "Scanning ports...",
+      "scanningLocalPorts": "Scanning local ports",
+      "couldNotScan": "Could not scan ports",
+      "scanFailed": "Scan failed",
+      "willAppear": "Running servers will appear here"
+    },
+    "markers": {
+      "label": "Markers",
+      "unavailableLabel": "{{label}} (unavailable)",
+      "markNotDone": "Mark not done",
+      "markDone": "Mark done",
+      "jumpToF2Rename": "Jump to marker. Press F2 to rename.",
+      "unavailableEnterToRename": "Marker unavailable. Press Enter to rename.",
+      "clickJumpDoubleClickRename": "Click to jump, double-click to rename",
+      "sourceTextUnavailable": "Source text unavailable",
+      "removeMarker": "Remove marker",
+      "remove": "Remove"
+    },
+    "title": "Environment",
+    "togglePanel": "Toggle environment panel",
+    "usage": "Usage",
+    "editor": "Editor",
+    "editorView": "Editor view",
+    "openInEditor": "Open in {{editor}}",
+    "openInEditorDefault": "Open in editor",
+    "projectInstructions": "Project instructions",
+    "projectInstructionsPlaceholder": "Add project instructions here...",
+    "copyToNotepad": "Copy to notepad",
+    "appendToNotepad": "Append to notepad"
   },
   "kanban": {
     "column": {
@@ -456,7 +769,20 @@
       "couldNotSendDraft": "Could not send draft",
       "doneDerived": "Done is derived automatically",
       "doneDerivedDescription": "Cards move here when their runs complete."
-    }
+    },
+    "onlyImages": "Only image files are allowed",
+    "fileNotAdded": "File could not be added",
+    "filesNotAdded": "{{count}} files could not be added",
+    "newTask": "New task",
+    "dialogDescription": "Create a new task in the kanban board.",
+    "localFoldersUnavailable": "Local folders are unavailable",
+    "placeholder": "Describe the task...",
+    "attachImages": "Attach images",
+    "sendAsDraft": "Send as draft",
+    "creating": "Creating...",
+    "createTask": "Create task",
+    "chooseProject": "Choose a project",
+    "noProject": "No project"
   },
   "workspace": {
     "title": "Workspace",
@@ -840,11 +1166,368 @@
       "repairSucceededDescription": "Local state has been repaired.",
       "repairFailed": "Repair failed",
       "repairFailedGeneric": "An error occurred while repairing local state."
+    },
+    "backToApp": "Back to app",
+    "searchPlaceholder": "Search settings...",
+    "noMatching": "No matching settings",
+    "gitToastPreviewDescription": "Git commit toast preview",
+    "gitToastPreviewOn": "Preview on",
+    "gitToastPreview": "Preview"
+  },
+  "filePreview": {
+    "loadingFile": "Loading file...",
+    "noWorkspace": "No workspace is attached to this chat.",
+    "selectFileFromExplorer": "Select a file from the explorer.",
+    "couldNotCreatePreview": "Could not create local file preview grant.",
+    "couldNotReadFile": "Could not read file.",
+    "comment": "Comment",
+    "commentOnLine": "Comment on line {{lineNumber}}",
+    "lineCount": "{{count}} lines"
+  },
+  "editor": {
+    "workspaceLabel": "Workspace",
+    "noWorkspace": "No workspace",
+    "switchProject": "Switch project",
+    "hideChatPanel": "Hide chat panel",
+    "showChatPanel": "Show chat panel",
+    "switchToChatView": "Switch to chat view",
+    "chatLabel": "Chat",
+    "loadingChangedFiles": "Loading changed files...",
+    "changedFiles": "Changed files",
+    "noFilesInDiff": "No files in this diff.",
+    "resizeChatPanel": "Resize chat panel",
+    "dragToResizeChatPanel": "Drag to resize chat panel",
+    "editorActivityBar": "Editor activity bar",
+    "files": "Files",
+    "diff": "Diff",
+    "hideFilesSidebar": "Hide files sidebar",
+    "hideDiffSidebar": "Hide diff sidebar",
+    "hideSearchSidebar": "Hide search sidebar",
+    "searchFiles": "Search files"
+  },
+  "browser": {
+    "panel": {
+      "couldNotCompleteAction": "Couldn't complete that browser action.",
+      "restoringBrowser": "Restoring browser",
+      "local": "Local",
+      "refreshLocalServers": "Refresh local servers",
+      "scanningLocalServers": "Scanning local servers",
+      "checkingLocalhostPorts": "Checking localhost ports",
+      "noLocalServers": "No local servers",
+      "tryAnotherBrowserUrl": "Try another browser URL",
+      "maxAttachmentsExceeded": "You can attach up to {{count}} references per message.",
+      "screenshotTooLarge": "'{{name}}' exceeds the {{limit}} attachment limit.",
+      "browserScreenshotCopied": "Browser screenshot copied",
+      "goBack": "Go back",
+      "goForward": "Go forward",
+      "reload": "Reload",
+      "searchOrEnterUrl": "Search or enter a URL",
+      "copyScreenshot": "Copy screenshot",
+      "copyLink": "Copy link",
+      "browserActions": "Browser actions",
+      "newTab": "New tab",
+      "captureScreenshot": "Capture screenshot",
+      "openExternally": "Open externally",
+      "closeBrowserPanel": "Close browser panel",
+      "browserUnavailable": "Browser is unavailable.",
+      "untitled": "Untitled",
+      "closeTab": "Close tab",
+      "browserIsSleeping": "Browser is sleeping",
+      "restoringCachedBrowser": "Restoring cached browser",
+      "startingBrowser": "Starting browser..."
     }
+  },
+  "toolCallDetails": {
+    "title": "Tool call",
+    "editPayload": "Edit payload captured for this tool call.",
+    "commandPayload": "Command payload captured for this tool call.",
+    "noPayload": "No detailed payload was available for this tool call.",
+    "filesSection": "Files",
+    "diffSection": "Diff",
+    "editsSection": "Edits",
+    "writtenContent": "Written Content",
+    "before": "Before",
+    "after": "After",
+    "outputSection": "Output",
+    "stdout": "Stdout",
+    "stderr": "Stderr",
+    "exitCode": "Exit code {{code}}",
+    "truncated": "Truncated"
+  },
+  "rightDock": {
+    "addPanel": "Add panel",
+    "collapsePanel": "Collapse panel",
+    "closePanel": "Close {{label}}"
+  },
+  "messages": {
+    "timeline": {
+      "sentViaAutomation": "Sent via Automation",
+      "steeringConversation": "Steering conversation",
+      "preparingWorktree": "Preparing worktree...",
+      "failed": "— failed",
+      "showLess": "Show less",
+      "showMore": "Show more",
+      "showMoreCount": "Show {{count}} more",
+      "editMessage": "Edit message",
+      "editAndResend": "Edit and resend",
+      "revertToThisMessage": "Revert to this message",
+      "emptyResponse": "(empty response)",
+      "moreToolCalls": "+{{count}} more tool calls",
+      "workedFor": "Worked for {{elapsed}}",
+      "details": "Details",
+      "unpinFromPanel": "Unpin from panel",
+      "pinToPanel": "Pin to panel",
+      "editedFiles": "Edited {{count}} {{count, plural, one {file} other {files}}}",
+      "undo": "Undo",
+      "collapseChangedFilesList": "Collapse changed files list",
+      "expandChangedFilesList": "Expand changed files list",
+      "showMoreFiles": "Show {{count}} more {{count, plural, one {file} other {files}}}",
+      "workingFor": "Working for",
+      "thinking": "Thinking",
+      "sendMessageToStart": "Send a message to start the conversation."
+    }
+  },
+  "ui": {
+    "toast": {
+      "copyError": "Copy error message",
+      "copiedError": "Copied error message",
+      "copy": "Copy",
+      "copied": "Copied",
+      "dismissToast": "Dismiss toast",
+      "undo": "Undo",
+      "orViewArchivedIn": "or view archived chats in",
+      "settings": "Settings"
+    },
+    "spinner": {
+      "loading": "Loading"
+    },
+    "combobox": {
+      "remove": "Remove"
+    }
+  },
+  "terminal": {
+    "viewportPane": {
+      "defaultTerminal": "Terminal",
+      "terminal": "Terminal",
+      "closeTerminal": "Close {{name}}",
+      "newTerminalTab": "New terminal tab",
+      "moveToOwnTab": "Move to own tab",
+      "splitRight": "Split right",
+      "splitDown": "Split down",
+      "collapseIntoDrawer": "Collapse into drawer",
+      "expandIntoWorkspace": "Expand into workspace",
+      "collapseSidePanel": "Collapse side panel",
+      "openSidePanel": "Open side panel",
+      "closeActiveTab": "Close active tab"
+    },
+    "searchLabel": "Search terminal",
+    "findPrevious": "Find previous",
+    "findNext": "Find next",
+    "toggleRegex": "Use regular expression",
+    "toggleCaseSensitive": "Match case",
+    "toggleWholeWord": "Match whole word",
+    "scrollToBottom": "Scroll to bottom"
+  },
+  "theme": {
+    "darkTheme": "Dark",
+    "lightTheme": "Light",
+    "systemUsingSlot": "System (using {{variant}})",
+    "activeThemeNow": "Active theme now",
+    "usedWhenSwitch": "Used when you switch to {{variant}}",
+    "inactiveWhileLocked": "Inactive while locked to {{mode}}",
+    "copied": "Copied",
+    "copiedDescription": "{{variant}} theme copied to clipboard",
+    "copyFailed": "Copy failed",
+    "copyFailedDescription": "Failed to copy theme to clipboard",
+    "reset": "Reset",
+    "copy": "Copy",
+    "accent": "Accent",
+    "background": "Background",
+    "foreground": "Foreground",
+    "uiFont": "UI font",
+    "codeFont": "Code font",
+    "translucentSidebar": "Translucent sidebar",
+    "contrast": "Contrast",
+    "systemDefault": "System default",
+    "resetToDefault": "Reset to default",
+    "resetColor": "Reset {{name}} to default",
+    "import": "Import",
+    "importDialogTitle": "Import theme ({{variant}})",
+    "importDescription": "Paste a theme share string to import a {{variant}} theme configuration.",
+    "themeShareString": "Theme share string",
+    "cancel": "Cancel",
+    "imported": "Theme imported",
+    "importUpdated": "{{variant}} theme updated from share string",
+    "importError": "Invalid theme share string"
+  },
+  "profile": {
+    "share": {
+      "title": "Share Profile Card",
+      "copy": "Copy",
+      "copyStatCard": "Copy stat card",
+      "save": "Save",
+      "saveStatCard": "Save stat card",
+      "shareTo": "Share to {{label}}",
+      "copied": "Copied!",
+      "renderFailed": "Render failed",
+      "copyUnavailable": "Copy unavailable",
+      "savedPng": "Saved as PNG",
+      "shareImageCopied": "Share image copied to clipboard",
+      "composerOpenedRenderFailed": "Composer opened but render failed",
+      "composerOpenedCopyUnavailable": "Composer opened but copy unavailable"
+    },
+    "edit": {
+      "title": "Edit Profile",
+      "editAvatar": "Edit avatar",
+      "processing": "Processing...",
+      "replacePhoto": "Replace photo",
+      "uploadPhoto": "Upload photo",
+      "remove": "Remove",
+      "useColor": "Use color {{color}}",
+      "colorsApplyInfo": "Colors apply to the avatar background",
+      "displayName": "Display name",
+      "yourName": "Your name",
+      "username": "Username",
+      "cancel": "Cancel",
+      "save": "Save"
+    }
+  },
+  "plugin": {
+    "pluginsTab": "Plugins",
+    "skillsTab": "Skills",
+    "title": "Plugin Library",
+    "searchPlugins": "Search plugins...",
+    "searchSkills": "Search skills...",
+    "skillsNeedWorkspace": "Skills require an open workspace",
+    "pluginsUnavailable": "Plugins unavailable",
+    "pluginsNoDiscovery": "No plugin discovery available",
+    "noInstalledPlugins": "No installed plugins",
+    "onlyInstalled": "Showing installed only",
+    "skillsUnavailable": "Skills unavailable",
+    "skillsNoDiscovery": "No skill discovery available",
+    "noSkillsFound": "No skills found",
+    "noSkillsMatch": "No skills match your search",
+    "skillsSection": "Skills",
+    "noDescriptionAvailable": "No description available"
+  },
+  "project": {
+    "scripts": {
+      "nameRequired": "Name is required",
+      "commandRequired": "Command is required",
+      "failedToSave": "Failed to save script",
+      "runName": "Run {{name}}",
+      "scriptActions": "Script actions",
+      "setup": "Setup",
+      "editName": "Edit name",
+      "addAction": "Add action",
+      "editAction": "Edit action",
+      "addActionTitle": "Add action",
+      "actionsDescription": "Actions run in order when this script is executed.",
+      "name": "Name",
+      "chooseIcon": "Choose icon",
+      "keybinding": "Keybinding",
+      "keybindingHint": "e.g. Cmd+Shift+R",
+      "command": "Command",
+      "runOnWorktree": "Run on worktree",
+      "delete": "Delete",
+      "cancel": "Cancel",
+      "saveChanges": "Save changes",
+      "saveAction": "Save action",
+      "deleteActionTitle": "Delete action",
+      "deleteActionDesc": "Are you sure you want to delete this action?",
+      "deleteAction": "Delete"
+    }
+  },
+  "errors": {
+    "providerAdapter": {
+      "validationFailed": "Provider adapter validation failed ({{provider}}) in {{operation}}: {{issue}}",
+      "unknownThread": "Unknown {{provider}} adapter thread: {{threadId}}",
+      "threadClosed": "{{provider}} adapter thread is closed: {{threadId}}",
+      "requestFailed": "Provider adapter request failed ({{provider}}) for {{method}}: {{detail}}",
+      "processError": "Provider adapter process error ({{provider}}) for thread {{threadId}}: {{detail}}"
+    },
+    "provider": {
+      "validationFailed": "Provider validation failed in {{operation}}: {{issue}}",
+      "notImplemented": "Provider '{{provider}}' is not implemented",
+      "unknownThread": "Unknown provider thread: {{threadId}}",
+      "sessionDirectoryPersistenceError": "Provider session directory persistence error in {{operation}}: {{detail}}"
+    },
+    "git": {
+      "commandFailed": "Git command failed in {{operation}}: {{command}} ({{cwd}}) - {{detail}}",
+      "checkoutDirtyWorktree": "Uncommitted changes block checkout to {{branch}}:\n{{fileList}}",
+      "githubCliFailed": "GitHub CLI failed in {{operation}}: {{detail}}",
+      "textGenerationFailed": "Text generation failed in {{operation}}: {{detail}}",
+      "managerFailed": "Git manager failed in {{operation}}: {{detail}}"
+    },
+    "checkpoint": {
+      "unavailable": "Checkpoint unavailable for thread {{threadId}} turn {{turnCount}}: {{detail}}",
+      "invariantViolation": "Checkpoint invariant violation in {{operation}}: {{detail}}"
+    },
+    "toolCallFailed": "Tool call failed."
+  },
+  "app": {
+    "back": "Back",
+    "backWithShortcut": "Back ({{shortcut}})",
+    "forward": "Forward",
+    "forwardWithShortcut": "Forward ({{shortcut}})",
+    "minimize": "Minimize",
+    "restore": "Restore",
+    "maximize": "Maximize",
+    "close": "Close",
+    "recentViews": "Recent views",
+    "current": "Current",
+    "splitView": "Split view",
+    "pinned": "Pinned",
+    "recentViewCount": "Recent view {{count}}",
+    "worldCup2026": "World Cup 2026",
+    "whatsNew": {
+      "viewChangelog": "View complete changelog",
+      "gotIt": "Got it",
+      "title": "What's new",
+      "backToWhatsNew": "Back to what's new",
+      "completeChangelog": "Complete changelog",
+      "everyCuratedRelease": "Every curated release"
+    }
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "description": "All available keyboard shortcuts in one place.",
+    "searchPlaceholder": "Search shortcuts...",
+    "noResults": "No shortcuts match your search"
+  },
+  "plan": {
+    "badge": "Plan",
+    "closeSidebar": "Close plan sidebar",
+    "steps": "Steps",
+    "fullPlan": "Full plan",
+    "noActivePlan": "No active plan",
+    "willAppear": "Your plan will appear here"
+  },
+  "pdf": {
+    "couldNotOpen": "Could not open PDF",
+    "loadingPdf": "Loading PDF...",
+    "viewerToolbar": {
+      "pageLabel": "Page {{current}} of {{total}}",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out",
+      "zoomLevel": "Zoom: {{level}}%",
+      "fitToPage": "Fit to page",
+      "togglePresentation": "Toggle presentation",
+      "openInApp": "Open in app",
+      "download": "Download",
+      "print": "Print"
+    }
+  },
+  "image": {
+    "couldNotDownload": "Could not download image",
+    "fileUnavailable": "Image file is unavailable",
+    "downloadImage": "Download image",
+    "download": "Download",
+    "couldNotOpen": "Could not open image in viewer"
   },
   "_meta": {
     "description": "English translation file",
     "lastUpdated": "2026-07-05",
-    "totalKeys": 370
+    "totalKeys": 1256
   }
 }
