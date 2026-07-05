@@ -155,7 +155,7 @@ describe("prompt history navigation", () => {
       direction: "older",
       history,
       currentPrompt: "draft in progress",
-      currentCursor: 0,
+      currentExpandedCursor: 0,
       selectionCollapsed: true,
       state: null,
     });
@@ -163,7 +163,7 @@ describe("prompt history navigation", () => {
     expect(first).toMatchObject({
       handled: true,
       prompt: "third prompt",
-      cursor: "third prompt".length,
+      expandedCursor: "third prompt".length,
       state: { index: 0, draft: "draft in progress" },
     });
 
@@ -171,7 +171,7 @@ describe("prompt history navigation", () => {
       direction: "older",
       history,
       currentPrompt: first.prompt,
-      currentCursor: first.cursor,
+      currentExpandedCursor: first.expandedCursor,
       selectionCollapsed: true,
       state: first.state,
     });
@@ -179,7 +179,7 @@ describe("prompt history navigation", () => {
     expect(second).toMatchObject({
       handled: true,
       prompt: "second prompt",
-      cursor: "second prompt".length,
+      expandedCursor: "second prompt".length,
       state: { index: 1, draft: "draft in progress" },
     });
 
@@ -187,7 +187,7 @@ describe("prompt history navigation", () => {
       direction: "newer",
       history,
       currentPrompt: second.prompt,
-      currentCursor: second.prompt.length,
+      currentExpandedCursor: second.prompt.length,
       selectionCollapsed: true,
       state: second.state,
     });
@@ -202,7 +202,7 @@ describe("prompt history navigation", () => {
       direction: "newer",
       history,
       currentPrompt: newer.prompt,
-      currentCursor: newer.prompt.length,
+      currentExpandedCursor: newer.prompt.length,
       selectionCollapsed: true,
       state: newer.state,
     });
@@ -210,7 +210,7 @@ describe("prompt history navigation", () => {
     expect(restored).toEqual({
       handled: true,
       prompt: "draft in progress",
-      cursor: "draft in progress".length,
+      expandedCursor: "draft in progress".length,
       state: null,
     });
   });
@@ -220,24 +220,24 @@ describe("prompt history navigation", () => {
       direction: "older",
       history: ["first line\nsecond line"],
       currentPrompt: "",
-      currentCursor: 0,
+      currentExpandedCursor: 0,
       selectionCollapsed: true,
       state: null,
     });
 
-    expect(older.cursor).toBe("first line".length);
+    expect(older.expandedCursor).toBe("first line".length);
 
     const newer = resolvePromptHistoryNavigation({
       direction: "newer",
       history: ["first line\nsecond line", "older"],
       currentPrompt: "older",
-      currentCursor: "older".length,
+      currentExpandedCursor: "older".length,
       selectionCollapsed: true,
       state: { index: 1, draft: "" },
     });
 
     expect(newer.prompt).toBe("first line\nsecond line");
-    expect(newer.cursor).toBe("first line\nsecond line".length);
+    expect(newer.expandedCursor).toBe("first line\nsecond line".length);
   });
 
   it("can navigate newer immediately after recalling a multiline prompt with ArrowUp", () => {
@@ -246,19 +246,19 @@ describe("prompt history navigation", () => {
       direction: "older",
       history,
       currentPrompt: "",
-      currentCursor: 0,
+      currentExpandedCursor: 0,
       selectionCollapsed: true,
       state: null,
     });
 
     expect(recalled.prompt).toBe("newer line one\nnewer line two");
-    expect(recalled.cursor).toBe("newer line one".length);
+    expect(recalled.expandedCursor).toBe("newer line one".length);
 
     const restoredDraft = resolvePromptHistoryNavigation({
       direction: "newer",
       history,
       currentPrompt: recalled.prompt,
-      currentCursor: recalled.cursor,
+      currentExpandedCursor: recalled.expandedCursor,
       selectionCollapsed: true,
       state: recalled.state,
     });
@@ -266,7 +266,7 @@ describe("prompt history navigation", () => {
     expect(restoredDraft).toEqual({
       handled: true,
       prompt: "",
-      cursor: 0,
+      expandedCursor: 0,
       state: null,
     });
   });
@@ -277,7 +277,7 @@ describe("prompt history navigation", () => {
         direction: "older",
         history: ["previous"],
         currentPrompt: "first\nsecond",
-        currentCursor: "first\ns".length,
+        currentExpandedCursor: "first\ns".length,
         selectionCollapsed: true,
         state: null,
       }).handled,
@@ -288,43 +288,83 @@ describe("prompt history navigation", () => {
         direction: "older",
         history: ["previous"],
         currentPrompt: "draft",
-        currentCursor: 0,
+        currentExpandedCursor: 0,
         selectionCollapsed: false,
         state: null,
       }).handled,
     ).toBe(false);
   });
 
-  it("resets stale history state when the active entry no longer matches history", () => {
+  it("does not navigate from lower lines even when the first line is long", () => {
+    // Cursor offsets are expanded (raw string indices). A collapsed cursor —
+    // where an inline chip like "@apps/web/src/components/ChatView.tsx" counts
+    // as one unit — would sit below the first line's raw end and wrongly hijack
+    // ArrowUp from the second line; expanded offsets must be used instead.
+    const prompt = "@apps/web/src/components/ChatView.tsx fix this\nplease keep the draft";
+    const secondLineCursor = prompt.indexOf("please") + "plea".length;
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: prompt,
+        currentExpandedCursor: secondLineCursor,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+  });
+
+  it("restarts from the newest entry when older navigation loses its place", () => {
     const older = resolvePromptHistoryNavigation({
       direction: "older",
       history: ["new prompt"],
       currentPrompt: "old prompt",
-      currentCursor: 0,
+      currentExpandedCursor: 0,
       selectionCollapsed: true,
       state: { index: 0, draft: "draft" },
     });
 
     expect(older).toEqual({
-      handled: false,
-      prompt: "old prompt",
-      cursor: 0,
-      state: null,
+      handled: true,
+      prompt: "new prompt",
+      expandedCursor: "new prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restarts from the newest entry when the stored index falls outside history", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["only prompt"],
+      currentPrompt: "recalled from longer history",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 5, draft: "draft" },
     });
 
+    expect(older).toEqual({
+      handled: true,
+      prompt: "only prompt",
+      expandedCursor: "only prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restores the draft when newer navigation loses its place", () => {
     const newer = resolvePromptHistoryNavigation({
       direction: "newer",
       history: ["new prompt"],
       currentPrompt: "old prompt",
-      currentCursor: "old prompt".length,
+      currentExpandedCursor: "old prompt".length,
       selectionCollapsed: true,
       state: { index: 0, draft: "draft" },
     });
 
     expect(newer).toEqual({
-      handled: false,
-      prompt: "old prompt",
-      cursor: "old prompt".length,
+      handled: true,
+      prompt: "draft",
+      expandedCursor: "draft".length,
       state: null,
     });
   });

@@ -112,10 +112,15 @@ export interface PromptHistoryNavigationState {
 
 export type PromptHistoryDirection = "older" | "newer";
 
+// All cursor values in prompt history navigation are EXPANDED offsets — raw
+// indices into the prompt string. Collapsed composer cursors (where inline
+// token chips like mentions count as a single unit) must be expanded before
+// calling in and collapsed again before being applied to composer state, or
+// the line-boundary math below misfires on any prompt containing a chip.
 export interface PromptHistoryNavigationResult {
   handled: boolean;
   prompt: string;
-  cursor: number;
+  expandedCursor: number;
   state: PromptHistoryNavigationState | null;
 }
 
@@ -143,19 +148,24 @@ export function derivePromptHistoryFromMessages(
   return history;
 }
 
-export function isComposerCursorOnFirstLine(prompt: string, cursor: number): boolean {
-  const boundedCursor = Math.max(0, Math.min(prompt.length, cursor));
+// `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
+export function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
   const firstLineEnd = prompt.indexOf("\n");
   return firstLineEnd < 0 || boundedCursor <= firstLineEnd;
 }
 
-export function isComposerCursorOnLastLine(prompt: string, cursor: number): boolean {
-  const boundedCursor = Math.max(0, Math.min(prompt.length, cursor));
+// `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
+export function isComposerCursorOnLastLine(prompt: string, expandedCursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
   const lastLineStart = prompt.lastIndexOf("\n") + 1;
   return boundedCursor >= lastLineStart;
 }
 
-function cursorForPromptHistoryItem(prompt: string, direction: PromptHistoryDirection): number {
+function expandedCursorForPromptHistoryItem(
+  prompt: string,
+  direction: PromptHistoryDirection,
+): number {
   if (direction === "older") {
     const firstLineEnd = prompt.indexOf("\n");
     return firstLineEnd < 0 ? prompt.length : firstLineEnd;
@@ -167,81 +177,66 @@ export function resolvePromptHistoryNavigation(input: {
   direction: PromptHistoryDirection;
   history: readonly string[];
   currentPrompt: string;
-  currentCursor: number;
+  currentExpandedCursor: number;
   selectionCollapsed: boolean;
   state: PromptHistoryNavigationState | null;
 }): PromptHistoryNavigationResult {
+  const notHandled = (
+    state: PromptHistoryNavigationState | null,
+  ): PromptHistoryNavigationResult => ({
+    handled: false,
+    prompt: input.currentPrompt,
+    expandedCursor: input.currentExpandedCursor,
+    state,
+  });
   if (!input.selectionCollapsed || input.history.length === 0) {
-    return {
-      handled: false,
-      prompt: input.currentPrompt,
-      cursor: input.currentCursor,
-      state: input.state,
-    };
+    return notHandled(input.state);
   }
+  // The active history entry the composer should still be showing. When it no
+  // longer matches (history changed under us or the index fell out of range),
+  // the browse lost its place: never keep navigating from a bogus index, and
+  // never abandon the saved draft — restart from the newest entry when going
+  // older, or restore the draft when going newer.
+  const activeEntry = input.state ? input.history[input.state.index] : undefined;
+  const stateIsStale =
+    input.state !== null && (activeEntry === undefined || input.currentPrompt !== activeEntry);
 
   if (input.direction === "older") {
-    if (!isComposerCursorOnFirstLine(input.currentPrompt, input.currentCursor)) {
-      return {
-        handled: false,
-        prompt: input.currentPrompt,
-        cursor: input.currentCursor,
-        state: input.state,
-      };
+    if (!isComposerCursorOnFirstLine(input.currentPrompt, input.currentExpandedCursor)) {
+      return notHandled(input.state);
     }
-    if (
-      input.state &&
-      input.currentPrompt !== (input.history[input.state.index] ?? input.currentPrompt)
-    ) {
-      return {
-        handled: false,
-        prompt: input.currentPrompt,
-        cursor: input.currentCursor,
-        state: null,
-      };
-    }
-    const nextState: PromptHistoryNavigationState = input.state
-      ? {
-          ...input.state,
-          index: Math.min(input.state.index + 1, input.history.length - 1),
-        }
-      : {
-          index: 0,
-          draft: input.currentPrompt,
-        };
+    const nextState: PromptHistoryNavigationState =
+      input.state === null
+        ? { index: 0, draft: input.currentPrompt }
+        : stateIsStale
+          ? { index: 0, draft: input.state.draft }
+          : {
+              ...input.state,
+              index: Math.min(input.state.index + 1, input.history.length - 1),
+            };
     const nextPrompt = input.history[nextState.index] ?? input.currentPrompt;
     return {
       handled: true,
       prompt: nextPrompt,
-      cursor: cursorForPromptHistoryItem(nextPrompt, "older"),
+      expandedCursor: expandedCursorForPromptHistoryItem(nextPrompt, "older"),
       state: nextState,
     };
   }
 
   if (!input.state) {
-    return {
-      handled: false,
-      prompt: input.currentPrompt,
-      cursor: input.currentCursor,
-      state: null,
-    };
+    return notHandled(null);
   }
   const cursorCanNavigateNewer =
-    isComposerCursorOnLastLine(input.currentPrompt, input.currentCursor) ||
-    isComposerCursorOnFirstLine(input.currentPrompt, input.currentCursor);
+    isComposerCursorOnLastLine(input.currentPrompt, input.currentExpandedCursor) ||
+    isComposerCursorOnFirstLine(input.currentPrompt, input.currentExpandedCursor);
   if (!cursorCanNavigateNewer) {
-    return {
-      handled: false,
-      prompt: input.currentPrompt,
-      cursor: input.currentCursor,
-      state: input.state,
-    };
+    return notHandled(input.state);
   }
-  if (input.currentPrompt !== (input.history[input.state.index] ?? input.currentPrompt)) {
+  if (stateIsStale) {
     return {
-      handled: false,
-      prompt: input.currentPrompt,
-      cursor: input.currentCursor,
+      handled: true,
+      prompt: input.state.draft,
+      expandedCursor: input.state.draft.length,
       state: null,
     };
   }
@@ -254,7 +249,7 @@ export function resolvePromptHistoryNavigation(input: {
     return {
       handled: true,
       prompt: nextPrompt,
-      cursor: cursorForPromptHistoryItem(nextPrompt, "newer"),
+      expandedCursor: expandedCursorForPromptHistoryItem(nextPrompt, "newer"),
       state: nextState,
     };
   }
@@ -262,7 +257,7 @@ export function resolvePromptHistoryNavigation(input: {
   return {
     handled: true,
     prompt: input.state.draft,
-    cursor: input.state.draft.length,
+    expandedCursor: input.state.draft.length,
     state: null,
   };
 }
