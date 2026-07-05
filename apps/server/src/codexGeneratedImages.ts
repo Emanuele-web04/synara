@@ -160,10 +160,6 @@ export function codexConfiguredHomePathsFromSettings(
     candidates.set(codexHomeCandidateKey(candidate), candidate);
   };
 
-  const defaultHomePath = settings.providers.codex.homePath?.trim();
-  if (defaultHomePath && settings.providers.codex.enabled !== false) {
-    addCandidate(defaultHomePath);
-  }
   for (const instance of deriveProviderInstances(settings)) {
     if (instance.driver !== "codex" || !instance.enabled) {
       continue;
