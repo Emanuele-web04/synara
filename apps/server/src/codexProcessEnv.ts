@@ -5,6 +5,7 @@
 // Depends on: Codex home path helpers, shared Codex config parsing, login-shell env reader.
 
 import {
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -34,6 +35,11 @@ const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+
+interface CodexOverlayEntryLinker {
+  readonly symlink: typeof symlinkSync;
+  readonly copyFile: typeof copyFileSync;
+}
 
 export function resolveCodexBrowserUsePipePath(
   input: {
@@ -99,6 +105,29 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
   return output.join("\n");
 }
 
+export function linkOrCopyCodexOverlayEntry(
+  input: {
+    readonly entryName: string;
+    readonly sourcePath: string;
+    readonly targetPath: string;
+    readonly type: "dir" | "file";
+  },
+  linker: CodexOverlayEntryLinker = {
+    symlink: symlinkSync,
+    copyFile: copyFileSync,
+  },
+): void {
+  try {
+    linker.symlink(input.sourcePath, input.targetPath, input.type);
+  } catch (error: unknown) {
+    if (input.type === "file" && CODEX_OVERLAY_SHARED_STATE_FILES.has(input.entryName)) {
+      linker.copyFile(input.sourcePath, input.targetPath);
+      return;
+    }
+    throw error;
+  }
+}
+
 function ensureCodexOverlaySymlink(input: {
   readonly entryName: string;
   readonly sourcePath: string;
@@ -130,7 +159,7 @@ function ensureCodexOverlaySymlink(input: {
     }
   }
 
-  symlinkSync(input.sourcePath, input.targetPath, input.type);
+  linkOrCopyCodexOverlayEntry(input);
 }
 
 function prepareDpCodeCodexHomeOverlay(input: {
