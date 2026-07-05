@@ -161,7 +161,7 @@ export function codexConfiguredHomePathsFromSettings(
   };
 
   const defaultHomePath = settings.providers.codex.homePath?.trim();
-  if (defaultHomePath) {
+  if (defaultHomePath && settings.providers.codex.enabled !== false) {
     addCandidate(defaultHomePath);
   }
   for (const instance of deriveProviderInstances(settings)) {

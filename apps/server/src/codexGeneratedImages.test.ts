@@ -260,4 +260,28 @@ describe("codexConfiguredHomePathsFromSettings", () => {
       `expected disabled account overlay root to be absent, got ${JSON.stringify(roots)}`,
     );
   });
+
+  it("excludes disabled default Codex homes from the generated-image allowlist", () => {
+    process.env.SYNARA_HOME = "/synara-disabled-default/runtime";
+    const settings = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        codex: {
+          ...DEFAULT_SERVER_SETTINGS.providers.codex,
+          enabled: false,
+          homePath: "/codex-test/.codex-disabled-default",
+        },
+      },
+    };
+
+    const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.ok(
+      roots.every((root) => !root.includes(".codex-disabled-default")),
+      `expected disabled default home to be absent, got ${JSON.stringify(roots)}`,
+    );
+  });
 });

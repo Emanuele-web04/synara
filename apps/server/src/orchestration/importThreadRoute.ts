@@ -17,6 +17,7 @@ import {
   type OrchestrationImportThreadInput,
   type ProviderKind,
   type ProviderStartOptions,
+  type ServerSettings,
   type ThreadHandoffImportedMessage,
   type ThreadId,
 } from "@synara/contracts";
@@ -24,6 +25,7 @@ import {
   providerStartOptionsFromInstance,
   resolveModelSelectionInstanceId,
   resolveProviderInstance,
+  type ResolvedProviderInstance,
 } from "@synara/shared/providerInstances";
 import {
   deriveAssociatedWorktreeMetadata,
@@ -196,6 +198,24 @@ function mapProviderSessionStatusToOrchestrationStatus(
     default:
       return "ready";
   }
+}
+
+export function resolveImportedThreadProviderOptionsForSettings(
+  settings: ServerSettings,
+  modelSelection: ModelSelection,
+): {
+  readonly instance: ResolvedProviderInstance;
+  readonly providerOptions: ProviderStartOptions | undefined;
+} {
+  const instanceId = resolveModelSelectionInstanceId(modelSelection);
+  const instance = resolveProviderInstance(settings, { instanceId });
+  if (!instance) {
+    throw importMessagesError(`Unknown provider instance '${instanceId}' for thread import.`);
+  }
+  if (!instance.enabled) {
+    throw importMessagesError(`Provider instance '${instanceId}' is disabled for thread import.`);
+  }
+  return { instance, providerOptions: providerStartOptionsFromInstance(instance) };
 }
 
 export interface ImportThreadHandlerOptions {
@@ -482,6 +502,27 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     });
   });
 
+  const resolveThreadProviderOptions = Effect.fn(function* (input: {
+    readonly modelSelection: ModelSelection;
+  }) {
+    const settings = yield* options.serverSettings.getSettings.pipe(
+      Effect.mapError((cause) =>
+        importMessagesError(
+          cause instanceof Error && cause.message.length > 0
+            ? cause.message
+            : "Failed to load provider instance settings.",
+        ),
+      ),
+    );
+    return yield* Effect.try({
+      try: () => resolveImportedThreadProviderOptionsForSettings(settings, input.modelSelection),
+      catch: (cause) =>
+        cause instanceof ImportThreadError
+          ? cause
+          : importMessagesError("Failed to resolve provider instance for thread import."),
+    });
+  });
+
   return Effect.fnUntraced(function* (body: ImportThreadRequest) {
     const threadOption = yield* options.projectionSnapshotQuery.getThreadDetailById(body.threadId);
     if (Option.isNone(threadOption)) {
@@ -514,17 +555,16 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         : [],
     });
     const externalId = body.externalId.trim();
-    const providerOptions = yield* resolveThreadProviderOptions({
+    const resolvedProvider = yield* resolveThreadProviderOptions({
       modelSelection: thread.modelSelection,
     });
+    const provider = resolvedProvider.instance.driver;
+    const providerOptions = resolvedProvider.providerOptions;
 
     const importedProviderContext =
-      (thread.modelSelection.provider === "codex" ||
-        thread.modelSelection.provider === "droid" ||
-        thread.modelSelection.provider === "opencode") &&
-      project
+      (provider === "codex" || provider === "droid" || provider === "opencode") && project
         ? yield* resolveImportedProviderThreadContext({
-            provider: thread.modelSelection.provider,
+            provider,
             externalId,
             projectWorkspaceRoot: project.workspaceRoot,
             ...(cwd ? { fallbackCwd: cwd } : {}),
@@ -541,7 +581,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
       });
     }
 
-    if (thread.modelSelection.provider === "claudeAgent") {
+    if (provider === "claudeAgent") {
       yield* ensureClaudeThreadImportable({
         cwd,
         externalId,
@@ -550,44 +590,45 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
     }
 
     const importResumeCursor = providerResumeCursorForImport(
-      thread.modelSelection.provider,
+      provider,
       externalId,
     );
     const session = yield* options.providerService.startSession(thread.id, {
       threadId: thread.id,
-      provider: thread.modelSelection.provider,
+      provider,
       ...((importedProviderContext?.runtimeCwd ?? cwd)
         ? { cwd: importedProviderContext?.runtimeCwd ?? cwd }
         : {}),
       modelSelection: thread.modelSelection,
-      ...(thread.modelSelection.provider === "codex"
+      ...(provider === "codex"
         ? { forkSourceResumeCursor: importResumeCursor }
         : { resumeCursor: importResumeCursor }),
       runtimeMode: thread.runtimeMode,
     });
 
     yield* Effect.gen(function* () {
-      if (thread.modelSelection.provider === "codex") {
+      if (provider === "codex") {
         yield* importCodexThreadHistory({
           threadId: thread.id,
           importedAt: session.updatedAt,
         });
-      } else if (thread.modelSelection.provider === "claudeAgent") {
+      } else if (provider === "claudeAgent") {
         yield* importClaudeThreadHistory({
           threadId: thread.id,
           externalId,
           cwd,
+          ...(providerOptions ? { providerOptions } : {}),
           importedAt: session.updatedAt,
         });
-      } else if (thread.modelSelection.provider === "droid") {
+      } else if (provider === "droid") {
         yield* importDroidThreadHistory({
           threadId: thread.id,
           externalId,
           importedAt: session.updatedAt,
         });
-      } else if (thread.modelSelection.provider === "opencode") {
+      } else if (provider === "opencode") {
         yield* importOpenCodeCompatibleThreadHistory({
-          provider: thread.modelSelection.provider,
+          provider,
           threadId: thread.id,
           importedAt: session.updatedAt,
         });

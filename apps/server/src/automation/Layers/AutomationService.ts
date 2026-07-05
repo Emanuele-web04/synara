@@ -164,7 +164,9 @@ function resolveAutomationTurnProviderOptionsForSettings(
       }),
     );
   }
-  return Effect.succeed(providerOptionsForSelectedInstance(selectionInstance));
+  // Instance-backed turns carry only the selected model instance id. The provider reactor
+  // resolves live launch options at dispatch time so secrets never enter orchestration events.
+  return Effect.succeed(undefined);
 }
 
 export function resolveAutomationCompletionTextGenerationInputForSettings(
