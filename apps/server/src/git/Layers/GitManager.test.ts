@@ -7,7 +7,12 @@ import { it } from "@effect/vitest";
 import { Effect, FileSystem, Layer, PlatformError, Scope } from "effect";
 import { expect } from "vitest";
 import type { GitActionProgressEvent } from "@t3tools/contracts";
-import type { ModelSelection, ProviderStartOptions } from "@t3tools/contracts";
+import type {
+  GitPullRequestCheck,
+  GitPullRequestComment,
+  ModelSelection,
+  ProviderStartOptions,
+} from "@t3tools/contracts";
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
@@ -15,6 +20,7 @@ import {
   type GitHubCliShape,
   type GitHubPullRequestSummary,
   GitHubCli,
+  PULL_REQUEST_SUMMARY_JSON_FIELDS,
 } from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
@@ -47,7 +53,11 @@ interface FakeGhScenario {
     headRepositoryOwnerLogin?: string | null;
   };
   repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
+  pullRequestChecks?: GitPullRequestCheck[];
+  pullRequestReviewComments?: GitPullRequestComment[];
+  pullRequestReviewCommentsTruncated?: boolean;
   failWith?: GitHubCliError;
+  reviewCommentsError?: GitHubCliError;
   createPullRequestError?: GitHubCliError;
 }
 
@@ -521,7 +531,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
             "--limit",
             String(input.limit ?? 1),
             "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
+            PULL_REQUEST_SUMMARY_JSON_FIELDS,
           ],
         }).pipe(
           Effect.map((result) => {
@@ -605,13 +615,7 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       getPullRequest: (input) =>
         execute({
           cwd: input.cwd,
-          args: [
-            "pr",
-            "view",
-            input.reference,
-            "--json",
-            "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner",
-          ],
+          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
         }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
       getRepositoryCloneUrls: (input) =>
         execute({
@@ -623,6 +627,33 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           cwd: input.cwd,
           args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
         }).pipe(Effect.asVoid),
+      getPullRequestWithChecks: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "view",
+            input.reference,
+            "--json",
+            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+          ],
+        }).pipe(
+          Effect.map((result) => ({
+            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
+            checks: scenario.pullRequestChecks ?? [],
+          })),
+        ),
+      getPullRequestReviewComments: (input) => {
+        ghCalls.push(
+          `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
+        );
+        return scenario.reviewCommentsError
+          ? Effect.fail(scenario.reviewCommentsError)
+          : Effect.succeed({
+              comments: scenario.pullRequestReviewComments ?? [],
+              truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
+            });
+      },
     },
     ghCalls,
   };
@@ -2164,6 +2195,128 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         state: "open",
       });
       expect(ghCalls.some((call) => call.startsWith("pr view 42 "))).toBe(true);
+    }),
+  );
+
+  it.effect("loads PR snapshots with checks and review comments", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const checks: GitPullRequestCheck[] = [
+        { name: "Format, Lint, Typecheck", status: "pending", url: null },
+        { name: "Release Smoke", status: "success", url: "https://ci.example/2" },
+      ];
+      const comments: GitPullRequestComment[] = [
+        {
+          id: "11",
+          author: "codex-bot",
+          body: "Avoid returning shims directly",
+          path: "CursorAcpCommand.ts",
+          url: "https://github.com/pingdotgg/codething-mvp/pull/42#discussion_r11",
+          createdAt: "2026-07-01T10:00:00Z",
+        },
+      ];
+
+      const { manager, ghCalls } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 42,
+            title: "Snapshot PR",
+            url: "https://github.enterprise.test/pingdotgg/codething-mvp/pull/42",
+            baseRefName: "main",
+            headRefName: "feature/snapshot-pr",
+            state: "open",
+          },
+          pullRequestChecks: checks,
+          pullRequestReviewComments: comments,
+          pullRequestReviewCommentsTruncated: true,
+        },
+      });
+
+      const result = yield* manager.pullRequestSnapshot({
+        cwd: repoDir,
+        reference: "#42",
+      });
+
+      expect(result.pullRequest.number).toBe(42);
+      expect(result.checks).toEqual(checks);
+      expect(result.comments).toEqual(comments);
+      expect(result.commentsTruncated).toBe(true);
+      expect(result.commentsError).toBeNull();
+      expect(ghCalls).toContain(
+        `pr view 42 --json ${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
+      );
+      // Owner/repo come from the PR URL, not the local checkout's remotes.
+      expect(ghCalls).toContain(
+        "api graphql reviewThreads github.enterprise.test/pingdotgg/codething-mvp#42",
+      );
+    }),
+  );
+
+  it.effect("keeps checks when PR review comments cannot be loaded", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const checks: GitPullRequestCheck[] = [
+        { name: "Format, Lint, Typecheck", status: "success", url: "https://ci.example/1" },
+      ];
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 43,
+            title: "Checks still visible",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/43",
+            baseRefName: "main",
+            headRefName: "feature/checks-still-visible",
+            state: "open",
+          },
+          pullRequestChecks: checks,
+          reviewCommentsError: new GitHubCliError({
+            operation: "getPullRequestReviewComments",
+            detail: "GraphQL rate limit exceeded.",
+          }),
+        },
+      });
+
+      const result = yield* manager.pullRequestSnapshot({
+        cwd: repoDir,
+        reference: "#43",
+      });
+
+      expect(result.checks).toEqual(checks);
+      expect(result.comments).toEqual([]);
+      expect(result.commentsTruncated).toBe(false);
+      expect(result.commentsError).toContain("GraphQL rate limit exceeded");
+    }),
+  );
+
+  it.effect("fails PR snapshots when the repository cannot be derived from the URL", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 7,
+            title: "Odd URL",
+            url: "https://example.test/not-a-pr",
+            baseRefName: "main",
+            headRefName: "feature/odd-url",
+            state: "open",
+          },
+        },
+      });
+
+      const errorMessage = yield* manager
+        .pullRequestSnapshot({ cwd: repoDir, reference: "#7" })
+        .pipe(
+          Effect.flip,
+          Effect.map((error) => error.message),
+        );
+      expect(errorMessage).toContain("Could not determine the repository");
     }),
   );
 

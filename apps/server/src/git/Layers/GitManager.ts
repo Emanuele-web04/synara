@@ -105,11 +105,27 @@ interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
 }
 
+// Host + owner/repo extraction from a PR web URL. Used to query the repository that owns
+// the PR even when the local checkout's remotes point at a fork or a GitHub Enterprise host.
+function parsePullRequestRepositoryFromUrl(
+  url: string,
+): { host: string; owner: string; repo: string } | null {
+  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(url.trim());
+  const host = match?.[1]?.trim() ?? "";
+  const owner = match?.[2]?.trim() ?? "";
+  const repo = match?.[3]?.trim() ?? "";
+  return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
+}
+
+// github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
+// which is only well-defined for PRs hosted on github.com.
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   const trimmed = url.trim();
-  const match = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
-  const repositoryName = match?.[1]?.trim() ?? "";
-  return repositoryName.length > 0 ? repositoryName : null;
+  if (!/^https:\/\//i.test(trimmed)) {
+    return null;
+  }
+  const repository = parsePullRequestRepositoryFromUrl(trimmed);
+  return repository && repository.host.toLowerCase() === "github.com" ? repository.repo : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(
@@ -1532,6 +1548,58 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
+  const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
+    function* (input) {
+      const reference = normalizePullRequestReference(input.reference);
+      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
+      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+        cwd: input.cwd,
+        reference,
+      });
+      const pullRequest = toResolvedPullRequest(summary);
+
+      const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+      if (!repository) {
+        return yield* gitManagerError(
+          "pullRequestSnapshot",
+          `Could not determine the repository from the pull request URL: ${pullRequest.url}`,
+        );
+      }
+
+      const commentsResult = yield* gitHubCli
+        .getPullRequestReviewComments({
+          cwd: input.cwd,
+          host: repository.host,
+          owner: repository.owner,
+          repo: repository.repo,
+          number: pullRequest.number,
+        })
+        .pipe(
+          Effect.map((result) => ({
+            comments: result.comments,
+            commentsTruncated: result.truncated,
+            commentsError: null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              comments: [],
+              commentsTruncated: false,
+              commentsError: error.message,
+            }),
+          ),
+        );
+
+      return {
+        pullRequest,
+        checks,
+        comments: commentsResult.comments,
+        commentsTruncated: commentsResult.commentsTruncated,
+        commentsError: commentsResult.commentsError,
+      };
+    },
+  );
+
   const preparePullRequestThread: GitManagerShape["preparePullRequestThread"] = Effect.fnUntraced(
     function* (input) {
       const normalizedReference = normalizePullRequestReference(input.reference);
@@ -2779,6 +2847,7 @@ The local stash entry was kept for recovery.`,
     readWorkingTreeDiff,
     summarizeDiff,
     resolvePullRequest,
+    pullRequestSnapshot,
     preparePullRequestThread,
     handoffThread,
     runStackedAction,
