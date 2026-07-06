@@ -2312,17 +2312,27 @@ export default function Sidebar() {
   }, [isOnSettings, isOnStudio]);
 
   const handleBackToAppFromSettings = useCallback(() => {
-    const target =
-      lastActiveSidebarSegmentRef.current === "studio"
-        ? resolveBackToStudioTarget()
-        : resolveBackToThreadsTarget();
+    const fromStudio = lastActiveSidebarSegmentRef.current === "studio";
+    const target = fromStudio ? resolveBackToStudioTarget() : resolveBackToThreadsTarget();
 
     if (navigateToBackTarget(target)) {
       return;
     }
 
+    // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the
+    // Studio segment with nothing restorable lands back in Studio, not on a fresh home draft.
+    if (fromStudio) {
+      void handleNewStudioChat();
+      return;
+    }
     void navigate({ to: "/" });
-  }, [navigate, navigateToBackTarget, resolveBackToStudioTarget, resolveBackToThreadsTarget]);
+  }, [
+    handleNewStudioChat,
+    navigate,
+    navigateToBackTarget,
+    resolveBackToStudioTarget,
+    resolveBackToThreadsTarget,
+  ]);
 
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
