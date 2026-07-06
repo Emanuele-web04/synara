@@ -41,6 +41,9 @@ import {
 const nowIso = () => new Date().toISOString();
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
 const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
+// Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
+// use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
+const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -229,6 +232,20 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
       const nextProjectKind = command.kind ?? "project";
       if (nextProjectKind === "project") {
+        // The app-managed Studio container owns its root exclusively and is never retired here:
+        // silently deleting it would orphan Studio threads, so adding its folder as a project
+        // is rejected outright.
+        const existingStudioProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: STUDIO_PROJECT_KIND_SET },
+        )[0];
+        if (existingStudioProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingStudioProject.id}' already uses workspace root '${existingStudioProject.workspaceRoot}'.`,
+          });
+        }
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -265,15 +282,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         }
       }
       if (nextProjectKind === "studio") {
-        const existingStudioProject = listActiveProjectsByWorkspaceRoot(
+        // Cross-kind on purpose: a regular project already using this root would otherwise
+        // coexist with the Studio container, breaking workspace-root-to-project uniqueness
+        // that shell snapshot mapping and duplicate recovery rely on.
+        const existingOwningProject = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
-          { kinds: STUDIO_PROJECT_KIND_SET },
+          { kinds: WORKSPACE_OWNING_PROJECT_KIND_SET },
         )[0];
-        if (existingStudioProject) {
+        if (existingOwningProject) {
           return yield* new OrchestrationCommandInvariantError({
             commandType: command.type,
-            detail: `Project '${existingStudioProject.id}' already uses workspace root '${existingStudioProject.workspaceRoot}'.`,
+            detail: `Project '${existingOwningProject.id}' already uses workspace root '${existingOwningProject.workspaceRoot}'.`,
           });
         }
       }
@@ -316,12 +336,14 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
       if (command.workspaceRoot !== undefined && nextProjectKind !== "chat") {
+        // Cross-kind like project.create: a root move may not land on a root owned by either
+        // a regular project or the Studio container.
         yield* requireProjectWorkspaceRootAvailable({
           readModel,
           command,
           workspaceRoot: command.workspaceRoot,
           excludeProjectId: command.projectId,
-          ...(nextProjectKind === "studio" ? { kinds: STUDIO_PROJECT_KIND_SET } : {}),
+          kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
         });
       }
       yield* validateProjectPinLimit({

@@ -1039,6 +1039,84 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
+  it("rejects Studio and regular projects claiming each other's workspace root", async () => {
+    const system = await createOrchestrationSystem();
+    const { engine } = system;
+    const createdAt = now();
+
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-cross-kind-studio-create"),
+        projectId: asProjectId("project-cross-kind-studio"),
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/tmp/synara-cross-kind-studio",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-cross-kind-project-create"),
+        projectId: asProjectId("project-cross-kind-app"),
+        kind: "project",
+        title: "App",
+        workspaceRoot: "/tmp/synara-cross-kind-app",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+
+    // Adding the Studio container's folder as a regular project must not create a second
+    // active project on that root (the empty container would otherwise be silently retired).
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-cross-kind-project-on-studio-root"),
+          projectId: asProjectId("project-on-studio-root"),
+          kind: "project",
+          title: "Studio folder",
+          workspaceRoot: "/tmp/synara-cross-kind-studio",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    // Creating a Studio container on a root an existing regular project owns must fail too.
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.create",
+          commandId: CommandId.makeUnsafe("cmd-cross-kind-studio-on-project-root"),
+          projectId: asProjectId("project-studio-on-project-root"),
+          kind: "studio",
+          title: "Studio",
+          workspaceRoot: "/tmp/synara-cross-kind-app",
+          defaultModelSelection: null,
+          createdAt,
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    // Root moves are covered by the same cross-kind ownership rule.
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-cross-kind-project-root-update"),
+          projectId: asProjectId("project-cross-kind-app"),
+          workspaceRoot: "/tmp/synara-cross-kind-studio",
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
+    await system.dispose();
+  });
+
   it("rejects moving a Studio container onto another Studio workspace root", async () => {
     const system = await createOrchestrationSystem();
     const { engine } = system;
