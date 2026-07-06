@@ -2410,11 +2410,13 @@ export default function Sidebar() {
   }, [createWorkspace, navigateToWorkspace]);
 
   useEffect(() => {
-    if (!homeDir) {
+    // Same hydration gate as the Studio prewarm below: persisted paths make homeDir truthy
+    // immediately on reload, well before the first shell snapshot arrives.
+    if (!threadsHydrated || !homeDir) {
       return;
     }
     prewarmHomeChatProject({ homeDir, chatWorkspaceRoot });
-  }, [chatWorkspaceRoot, homeDir]);
+  }, [chatWorkspaceRoot, homeDir, threadsHydrated]);
   useEffect(() => {
     if (!threadsHydrated || !studioSectionVisible || !studioWorkspaceRoot) {
       return;

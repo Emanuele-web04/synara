@@ -14,6 +14,7 @@ import {
   isDuplicateProjectCreateError,
   resolveContainerCandidateCwd,
 } from "./projectCreateRecovery";
+import { waitForProjectSnapshotHydration } from "./projectSnapshotHydration";
 import { resolveServerChatWorkspaceRoot, type ServerWorkspacePaths } from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
 
@@ -250,6 +251,11 @@ export async function ensureHomeChatProject(
     return null;
   }
 
+  // Never decide "the container doesn't exist" against an unhydrated store: a prewarm firing
+  // before the first shell snapshot (persisted paths make homeDir truthy immediately on reload)
+  // would otherwise dispatch a duplicate or misrooted project.create.
+  await waitForProjectSnapshotHydration();
+
   const { canonicalProjectId } = findCanonicalHomeProject(paths);
   if (canonicalProjectId) {
     scheduleHomeChatFixup(paths);
@@ -307,7 +313,16 @@ export function isHomeChatContainerProject(
   project: Pick<Project, "cwd" | "kind" | "name" | "remoteName"> | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  if (!project || !paths.homeDir) {
+  if (!project) {
+    return false;
+  }
+  // Before any server path resolves (first launch, cleared storage), trust the kind alone so
+  // chat-surface projects aren't mis-partitioned during boot — mirrors isStudioContainerProject.
+  // Once paths are known, the root checks below decide, so drifted rows stay excluded.
+  if (!paths.homeDir && !paths.chatWorkspaceRoot?.trim()) {
+    return project.kind === "chat";
+  }
+  if (!paths.homeDir) {
     return false;
   }
   return (

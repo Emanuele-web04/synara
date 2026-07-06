@@ -335,13 +335,18 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         projectId: command.projectId,
       });
       const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
-      if (command.workspaceRoot !== undefined && nextProjectKind !== "chat") {
-        // Cross-kind like project.create: a root move may not land on a root owned by either
-        // a regular project or the Studio container.
+      // Ownership must hold for the project's *effective* root, not only when the root field is
+      // present on the command: a kind-only update (e.g. chat -> studio) would otherwise slip a
+      // second workspace-owning project onto a root that a project- or studio-kind row already
+      // claims, bypassing the same cross-kind rule project.create enforces.
+      const ownershipMayChange =
+        command.workspaceRoot !== undefined ||
+        (command.kind !== undefined && command.kind !== (existingProject.kind ?? "project"));
+      if (ownershipMayChange && nextProjectKind !== "chat") {
         yield* requireProjectWorkspaceRootAvailable({
           readModel,
           command,
-          workspaceRoot: command.workspaceRoot,
+          workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
           excludeProjectId: command.projectId,
           kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
         });

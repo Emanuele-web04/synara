@@ -1114,6 +1114,31 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("already uses workspace root");
 
+    // A kind-only update must not bypass ownership either: a chat project sitting on an owned
+    // root cannot become a workspace-owning kind without the root check running.
+    await system.run(
+      engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.makeUnsafe("cmd-cross-kind-chat-create"),
+        projectId: asProjectId("project-cross-kind-chat"),
+        kind: "chat",
+        title: "Home",
+        workspaceRoot: "/tmp/synara-cross-kind-studio",
+        defaultModelSelection: null,
+        createdAt,
+      }),
+    );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-cross-kind-chat-kind-only-update"),
+          projectId: asProjectId("project-cross-kind-chat"),
+          kind: "studio",
+        }),
+      ),
+    ).rejects.toThrow("already uses workspace root");
+
     await system.dispose();
   });
 

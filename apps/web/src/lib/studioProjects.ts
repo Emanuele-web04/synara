@@ -7,6 +7,7 @@ import { type ProjectId, type ThreadId } from "@t3tools/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
+import { waitForProjectSnapshotHydration } from "./projectSnapshotHydration";
 import { useStore } from "../store";
 import type { Project } from "../types";
 import {
@@ -29,36 +30,6 @@ interface StudioContainerCandidate {
   readonly kind?: Project["kind"] | undefined;
   readonly cwd?: string | undefined;
   readonly workspaceRoot?: string | undefined;
-}
-
-// Studio creation must wait for the first shell snapshot so an already-persisted hidden
-// container is visible before we decide to dispatch another `project.create`.
-function waitForProjectSnapshotHydration(): Promise<void> {
-  if (useStore.getState().threadsHydrated) {
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    let settled = false;
-    let unsubscribe: (() => void) | null = null;
-    const finish = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      unsubscribe?.();
-      resolve();
-    };
-
-    unsubscribe = useStore.subscribe((state) => {
-      if (state.threadsHydrated) {
-        finish();
-      }
-    });
-    if (useStore.getState().threadsHydrated) {
-      finish();
-    }
-  });
 }
 
 export function isStudioContainerProject(
