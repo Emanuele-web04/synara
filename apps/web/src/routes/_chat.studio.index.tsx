@@ -75,6 +75,9 @@ function StudioIndexRouteView() {
     return { threadId: latestStudioThreadId };
   }, [latestStudioThreadId, studioDraftThreadId]);
 
+  // Deliberately NOT `{ fresh: true }` (unlike the "/" route): when the resolver returns null
+  // because a Studio draft exists, handleNewStudioChat reopens that stored draft instead of
+  // minting a new one per visit — a fresh draft each landing would litter the hidden container.
   const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
 
   // Don't wait on the splash below forever: if the welcome never delivers a Studio root

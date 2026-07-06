@@ -40,8 +40,12 @@ function ChatIndexRouteView() {
         lastThreadRoute: readSidebarUiState().lastThreadRoute,
         availableThreadIds: new Set(
           threadIds.filter((threadId) => {
+            // Fail closed: a thread we can't classify is not restorable from "/". Summaries are
+            // built from the same snapshot as threadIds, so this only ever excludes a thread if
+            // that invariant breaks — and then a fresh draft beats restoring into the wrong
+            // segment.
             const summary = sidebarThreadSummaryById[threadId];
-            return !summary || !studioProjectIds.has(summary.projectId);
+            return summary !== undefined && !studioProjectIds.has(summary.projectId);
           }),
         ),
         availableSplitViewIds,
