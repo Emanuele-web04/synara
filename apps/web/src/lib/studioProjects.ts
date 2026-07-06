@@ -65,13 +65,29 @@ export function isStudioContainerProject(
   project: Pick<Project, "cwd" | "kind"> | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  const studioWorkspaceRoot = resolveServerStudioWorkspaceRoot(paths);
-  if (!project || !studioWorkspaceRoot || project.kind !== "studio") {
+  if (!project || project.kind !== "studio") {
     return false;
+  }
+  const studioWorkspaceRoot = resolveServerStudioWorkspaceRoot(paths);
+  // Until the server welcome delivers the Studio root, trust the kind alone: rejecting here
+  // would briefly mis-partition Studio threads (sidebar segments, Kanban, empty landing) while
+  // the app boots. Once the root is known, keep the containment check so a container whose
+  // cwd drifted outside the configured root is treated as orphaned rather than as Studio.
+  if (!studioWorkspaceRoot) {
+    return true;
   }
   return (
     workspaceRootsEqual(project.cwd, studioWorkspaceRoot) ||
     isWorkspaceRootWithin(project.cwd, studioWorkspaceRoot)
+  );
+}
+
+export function collectStudioProjectIds<T extends Pick<Project, "id" | "cwd" | "kind">>(
+  projects: readonly T[],
+  paths: ServerWorkspacePaths,
+): Set<ProjectId> {
+  return new Set(
+    projects.filter((project) => isStudioContainerProject(project, paths)).map((p) => p.id),
   );
 }
 

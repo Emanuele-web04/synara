@@ -20,7 +20,7 @@ import { sortThreadsForSidebar } from "../components/Sidebar.logic";
 import { SplashScreen } from "../components/SplashScreen";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
-import { findStudioDraftThreadId, isStudioContainerProject } from "../lib/studioProjects";
+import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspaceStore } from "../workspaceStore";
 
@@ -39,14 +39,7 @@ function StudioIndexRouteView() {
   const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
 
   const studioProjectIds = useMemo(
-    () =>
-      new Set(
-        projects
-          .filter((project) =>
-            isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
-          )
-          .map((project) => project.id),
-      ),
+    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
   // An existing Studio draft (if any) always wins over restoring a prior thread: reopening it is

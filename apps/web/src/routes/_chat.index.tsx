@@ -4,7 +4,7 @@
 // Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 
 import {
   RestoreOrCreateChatRoute,
@@ -13,22 +13,40 @@ import {
 import { readSidebarUiState } from "../components/Sidebar.uiState";
 import { resolveRestorableThreadRoute } from "../chatRouteRestore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
+import { collectStudioProjectIds } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
+import { useWorkspaceStore } from "../workspaceStore";
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
+  const projects = useStore((state) => state.projects);
+  const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
   const createFreshChat = useCallback(() => handleNewChat({ fresh: true }), [handleNewChat]);
 
-  // Home chats can restore any thread, keyed off the last visited route.
+  // Home chats restore the last visited route, except Studio threads — those belong to the
+  // /studio surface, and restoring one from "/" would silently switch the user into the Studio
+  // segment. A Studio lastThreadRoute falls through to a fresh home-chat draft instead.
+  const studioProjectIds = useMemo(
+    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+    [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
+  );
   const resolveRestoreRoute = useCallback<RestoreRouteResolver>(
     ({ availableSplitViewIds }) =>
       resolveRestorableThreadRoute({
         lastThreadRoute: readSidebarUiState().lastThreadRoute,
-        availableThreadIds: new Set(threadIds),
+        availableThreadIds: new Set(
+          threadIds.filter((threadId) => {
+            const summary = sidebarThreadSummaryById[threadId];
+            return !summary || !studioProjectIds.has(summary.projectId);
+          }),
+        ),
         availableSplitViewIds,
       }),
-    [threadIds],
+    [sidebarThreadSummaryById, studioProjectIds, threadIds],
   );
 
   return (

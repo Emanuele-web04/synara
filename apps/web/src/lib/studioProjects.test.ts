@@ -92,14 +92,23 @@ describe("studioProjects", () => {
     ).toBe(true);
   });
 
-  it("rejects non-Studio project kinds and missing server Studio roots", () => {
+  it("rejects non-Studio kinds and drifted roots, but trusts the kind before the root arrives", () => {
     expect(
       isStudioContainerProject(makeProject({ kind: "project" }), {
         homeDir: "/Users/tester",
         studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
       }),
     ).toBe(false);
-    expect(isStudioContainerProject(makeProject(), { homeDir: "/Users/tester" })).toBe(false);
+    // A studio-kind container whose cwd drifted outside the configured root is orphaned.
+    expect(
+      isStudioContainerProject(makeProject({ cwd: "/Users/tester/Elsewhere" }), {
+        homeDir: "/Users/tester",
+        studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      }),
+    ).toBe(false);
+    // Before the welcome delivers the Studio root, the kind alone identifies the container so
+    // Studio threads aren't mis-partitioned during boot.
+    expect(isStudioContainerProject(makeProject(), { homeDir: "/Users/tester" })).toBe(true);
   });
 
   it("finds an existing Studio container project", () => {

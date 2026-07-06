@@ -145,6 +145,7 @@ import {
 } from "../lib/threadArchive";
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import {
+  collectStudioProjectIds,
   findStudioDraftThreadId,
   isStudioContainerProject,
   prewarmStudioProject,
@@ -1549,14 +1550,7 @@ export default function Sidebar() {
   const sidebarThreads = useStore(selectSidebarThreads);
   const sidebarDisplayThreads = useStore(selectSidebarDisplayThreads);
   const studioProjectIdSet = useMemo(
-    () =>
-      new Set(
-        projects
-          .filter((project) =>
-            isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
-          )
-          .map((project) => project.id),
-      ),
+    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
   const { nonStudioThreads: nonStudioSidebarThreads, studioThreads: studioSidebarThreads } =
