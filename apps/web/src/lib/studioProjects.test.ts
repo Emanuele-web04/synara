@@ -288,6 +288,39 @@ describe("studioProjects", () => {
     });
   });
 
+  it("hydrates a freshly created Studio container into the store before resolving", async () => {
+    useStore.setState({ projects: [], threadsHydrated: true });
+
+    const projectPromise = ensureStudioProject({
+      homeDir: "/Users/tester",
+      studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+    });
+    await vi.waitFor(() => {
+      expect(nativeApiMock.dispatchedCommands).toHaveLength(1);
+    });
+    // The follow-up shell snapshot now includes the created container; ensureStudioProject must
+    // sync it into the store before resolving so no consumer sees an unknown project id.
+    const createCommand = nativeApiMock.dispatchedCommands[0] as { projectId: ProjectId };
+    nativeApiMock.shellSnapshotProjects = [
+      {
+        id: createCommand.projectId,
+        kind: "studio",
+        title: "Studio",
+        workspaceRoot: "/Users/tester/Documents/Synara/Studio",
+        defaultModelSelection: null,
+        scripts: [],
+        isPinned: false,
+        createdAt: "2026-06-21T00:00:00.000Z",
+        updatedAt: "2026-06-21T00:00:00.000Z",
+      },
+    ];
+
+    await expect(projectPromise).resolves.toBe(createCommand.projectId);
+    expect(
+      useStore.getState().projects.some((project) => project.id === createCommand.projectId),
+    ).toBe(true);
+  });
+
   it("recovers and hydrates the existing Studio project when the server rejects a duplicate create", async () => {
     const existingProjectId = "project-server-studio" as ProjectId;
     nativeApiMock.dispatchError = new Error(

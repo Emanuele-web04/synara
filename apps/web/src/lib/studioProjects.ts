@@ -137,14 +137,14 @@ interface StudioRecoverySnapshot {
   readonly projects: readonly StudioContainerCandidate[];
 }
 
-// Reuses the shared duplicate-create retry/backoff loop (see projectCreateRecovery.ts) instead of
-// hand-rolling a snapshot-retry loop: checks the local store first, then falls back to a fresh
-// shell snapshot, syncing it into the store only once it actually contains the recovered project.
-async function recoverDuplicateStudioContainer(
+// Waits (shared retry/backoff loop, see projectCreateRecovery.ts) until the given container id
+// is visible in the local store: checks the store first, then pulls fresh shell snapshots,
+// syncing one in only once it actually contains the project. Resolves null when it never shows.
+async function waitForStudioContainerInStore(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
-): Promise<ProjectId | null> {
+): Promise<StudioContainerCandidate | null> {
   const { match } = await waitForSnapshotMatch<StudioRecoverySnapshot, StudioContainerCandidate>({
     loadSnapshot: async () => {
       const localProjects = useStore.getState().projects;
@@ -161,7 +161,15 @@ async function recoverDuplicateStudioContainer(
     findMatch: (snapshot) => findStudioContainerCandidateById(snapshot.projects, projectId, paths),
   });
 
-  return match?.id ?? null;
+  return match;
+}
+
+async function recoverDuplicateStudioContainer(
+  api: NonNullable<ReturnType<typeof readNativeApi>>,
+  projectId: ProjectId,
+  paths: ServerWorkspacePaths,
+): Promise<ProjectId | null> {
+  return (await waitForStudioContainerInStore(api, projectId, paths))?.id ?? null;
 }
 
 export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<ProjectId | null> {
@@ -216,10 +224,20 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
           if (recoveredProjectId) {
             return recoveredProjectId;
           }
+          // The root is owned by a project that isn't a Studio container (the server enforces
+          // cross-kind ownership). Adopting a user's visible project into the hidden container
+          // would make it vanish from Projects, so surface the conflict instead.
+          throw new Error(
+            `Studio can't use "${workspaceRoot}" because another project already uses that folder. Remove or move that project, then retry.`,
+            { cause: error },
+          );
         }
       }
       throw error;
     }
+    // Make the fresh container visible in the local store before returning, so segment
+    // derivation and thread partitioning never see a draft pointing at an unknown project.
+    await waitForStudioContainerInStore(api, projectId, paths);
     return projectId;
   })().finally(() => {
     pendingStudioCreationByWorkspaceRoot.delete(workspaceRoot);

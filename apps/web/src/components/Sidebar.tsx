@@ -146,7 +146,6 @@ import {
 import { isHomeChatContainerProject, prewarmHomeChatProject } from "../lib/chatProjects";
 import {
   collectStudioProjectIds,
-  findStudioDraftThreadId,
   isStudioContainerProject,
   prewarmStudioProject,
 } from "../lib/studioProjects";
@@ -1305,9 +1304,6 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const draftThreadsByThreadId = useComposerDraftStore((store) => store.draftThreadsByThreadId);
-  const projectDraftThreadIdByProjectId = useComposerDraftStore(
-    (store) => store.projectDraftThreadIdByProjectId,
-  );
   const temporaryThreadIds = useTemporaryThreadStore((store) => store.temporaryThreadIds);
   const clearTemporaryThread = useTemporaryThreadStore((store) => store.clearTemporaryThread);
   const persistedPinnedProjectIds = usePinnedProjectsStore((store) => store.pinnedProjectIds);
@@ -1563,15 +1559,6 @@ export default function Sidebar() {
       () => partitionSidebarThreadsByProjectIds(sidebarThreads, studioProjectIdSet),
       [sidebarThreads, studioProjectIdSet],
     );
-  const studioDraftThreadId = useMemo(
-    () =>
-      findStudioDraftThreadId({
-        studioProjectIds: studioProjectIdSet,
-        projectDraftThreadIdByProjectId,
-        draftThreadsByThreadId,
-      }),
-    [draftThreadsByThreadId, projectDraftThreadIdByProjectId, studioProjectIdSet],
-  );
   const {
     nonStudioThreads: nonStudioSidebarDisplayThreads,
     studioThreads: studioSidebarDisplayThreads,
@@ -2348,10 +2335,10 @@ export default function Sidebar() {
         return;
       }
       if (view === "studio") {
-        if (studioDraftThreadId) {
-          void handleNewStudioChat();
-          return;
-        }
+        // Remembered route first — it already treats the stored Studio draft as a valid target
+        // (resolveBackToStudioTarget includes studioDraftThreadIds), so switching back to Studio
+        // returns to the thread you were on, not an old empty draft. handleNewStudioChat stays
+        // the fallback and reopens the stored draft when there is nothing to restore.
         if (navigateToBackTarget(resolveBackToStudioTarget())) {
           return;
         }
@@ -2373,7 +2360,6 @@ export default function Sidebar() {
       resolveBackToStudioTarget,
       resolveBackToThreadsTarget,
       routeWorkspaceId,
-      studioDraftThreadId,
       workspacePages,
     ],
   );
