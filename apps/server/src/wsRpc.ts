@@ -768,9 +768,18 @@ export const makeWsRpcLayer = () =>
           ),
         [WS_METHODS.studioListRecentOutputs]: (input) =>
           rpcEffect(
-            listRecentStudioOutputs({
-              outboxRoot: path.join(config.studioWorkspaceRoot, "Outbox"),
-              limit: input.limit,
+            Effect.gen(function* () {
+              // Self-heal the Studio folder tree: an accepted create whose deferred scaffold
+              // failed (crash, transient FS error) must not leave Studio without its Outbox
+              // forever. mkdir -p is idempotent and cheap, and this endpoint only fires while
+              // the Studio UI is actually open. Failures degrade to the empty-list behavior.
+              yield* prepareStudioWorkspaceRoot(config.studioWorkspaceRoot).pipe(
+                Effect.catch(() => Effect.void),
+              );
+              return yield* listRecentStudioOutputs({
+                outboxRoot: path.join(config.studioWorkspaceRoot, "Outbox"),
+                limit: input.limit,
+              });
             }),
             "Failed to list studio outputs",
           ),

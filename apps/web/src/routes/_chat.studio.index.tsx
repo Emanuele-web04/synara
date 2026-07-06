@@ -8,7 +8,7 @@
 // Depends on: Studio project lookup, the shared restore/create route surface, and the Studio
 //             new-chat hook.
 
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
@@ -114,6 +114,16 @@ function StudioIndexRouteView() {
   // minting a new one per visit — a fresh draft each landing would litter the hidden container.
   const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
 
+  // A hidden Studio tab must never start the restore/create flow: a direct /studio link would
+  // otherwise race the sidebar's hidden-section redirect and could mint a hidden Studio draft.
+  const navigate = useNavigate();
+  const studioSectionVisible = appSettings.showStudioSection;
+  useEffect(() => {
+    if (!studioSectionVisible) {
+      void navigate({ to: "/", replace: true });
+    }
+  }, [navigate, studioSectionVisible]);
+
   // Don't wait on the splash below forever: if the welcome never delivers a Studio root
   // (connection trouble, or a server that doesn't report one), surface an error with a retry
   // that re-arms the wait — matching how the home route eventually surfaces failures.
@@ -125,6 +135,10 @@ function StudioIndexRouteView() {
     const timer = window.setTimeout(() => setPathsWaitTimedOut(true), WORKSPACE_PATHS_TIMEOUT_MS);
     return () => window.clearTimeout(timer);
   }, [pathsWaitTimedOut, studioWorkspaceRoot]);
+
+  if (!studioSectionVisible) {
+    return <SplashScreen />;
+  }
 
   // The resolver and `handleNewStudioChat` both read the server welcome's workspace paths.
   // The shared restore/create machinery only guards against an empty *thread* snapshot, so hold

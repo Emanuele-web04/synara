@@ -2277,9 +2277,15 @@ export default function Sidebar() {
   // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
   // async redirect is what made the segment switch feel sluggish. Mirrors
   // resolveBackToThreadsTarget so both segments restore the thread you were last on.
+  // Archived chats are excluded, matching the /studio landing: the sidebar hides them, so
+  // neither the segment switch nor settings back may resurrect one.
+  const activeStudioSidebarThreads = useMemo(
+    () => studioSidebarThreads.filter((thread) => (thread.archivedAt ?? null) === null),
+    [studioSidebarThreads],
+  );
   const resolveBackToStudioTarget = useCallback(
-    () => resolveBackTargetForThreads(studioSidebarThreads, studioDraftThreadIds),
-    [resolveBackTargetForThreads, studioDraftThreadIds, studioSidebarThreads],
+    () => resolveBackTargetForThreads(activeStudioSidebarThreads, studioDraftThreadIds),
+    [activeStudioSidebarThreads, resolveBackTargetForThreads, studioDraftThreadIds],
   );
 
   const resolveBackToThreadsTarget = useCallback(
@@ -2321,6 +2327,17 @@ export default function Sidebar() {
     lastActiveSidebarSegmentRef.current = isOnStudio ? "studio" : "threads";
   }, [isOnSettings, isOnStudio]);
 
+  // Shared Studio fallback: reopen/create via handleNewStudioChat and, on failure, land on
+  // /studio — its splash already displays the error with a retry. Swallowing the result here
+  // would make the segment click appear dead and hide the cross-kind conflict message.
+  const openStudioChatFallback = useCallback(() => {
+    void handleNewStudioChat().then((result) => {
+      if (!result.ok) {
+        void navigate({ to: "/studio" });
+      }
+    });
+  }, [handleNewStudioChat, navigate]);
+
   const handleBackToAppFromSettings = useCallback(() => {
     const fromStudio = lastActiveSidebarSegmentRef.current === "studio";
     const target = fromStudio ? resolveBackToStudioTarget() : resolveBackToThreadsTarget();
@@ -2332,14 +2349,14 @@ export default function Sidebar() {
     // Segment-appropriate fallback, matching handleSidebarViewChange: leaving Settings from the
     // Studio segment with nothing restorable lands back in Studio, not on a fresh home draft.
     if (fromStudio) {
-      void handleNewStudioChat();
+      openStudioChatFallback();
       return;
     }
     void navigate({ to: "/" });
   }, [
-    handleNewStudioChat,
     navigate,
     navigateToBackTarget,
+    openStudioChatFallback,
     resolveBackToStudioTarget,
     resolveBackToThreadsTarget,
   ]);
@@ -2362,7 +2379,7 @@ export default function Sidebar() {
         if (navigateToBackTarget(resolveBackToStudioTarget())) {
           return;
         }
-        void handleNewStudioChat();
+        openStudioChatFallback();
         return;
       }
 
@@ -2374,9 +2391,9 @@ export default function Sidebar() {
     },
     [
       handleNewChat,
-      handleNewStudioChat,
       navigateToBackTarget,
       navigateToWorkspace,
+      openStudioChatFallback,
       resolveBackToStudioTarget,
       resolveBackToThreadsTarget,
       routeWorkspaceId,

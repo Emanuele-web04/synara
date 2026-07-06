@@ -18,7 +18,6 @@ import {
   extractDuplicateProjectCreateProjectId,
   findContainerCandidateById,
   isDuplicateProjectCreateError,
-  resolveContainerCandidateCwd,
   waitForSnapshotMatch,
 } from "./projectCreateRecovery";
 import { newCommandId, newProjectId } from "./utils";
@@ -110,31 +109,15 @@ export function findStudioDraftThreadId(input: {
   return null;
 }
 
-function isStudioContainerCandidate(
-  project: StudioContainerCandidate | null | undefined,
-  paths: ServerWorkspacePaths,
-): boolean {
-  const cwd = resolveContainerCandidateCwd(project);
-  if (!cwd) {
-    return false;
-  }
-  return isStudioContainerProject(
-    {
-      cwd,
-      kind: project?.kind ?? "project",
-    },
-    paths,
-  );
-}
-
+// Matches a container row by id + studio kind only. Root containment is deliberately NOT
+// required here: the id comes from our own create or the server's ownership error, and the
+// server stores the CANONICALIZED (realpath) root — comparing it against the raw configured
+// string would wrongly reject the container whenever the Studio path contains a symlink.
 function findStudioContainerCandidateById<T extends StudioContainerCandidate>(
   projects: readonly T[],
   projectId: ProjectId,
-  paths: ServerWorkspacePaths,
 ): T | null {
-  return findContainerCandidateById(projects, projectId, (project) =>
-    isStudioContainerCandidate(project, paths),
-  );
+  return findContainerCandidateById(projects, projectId, (project) => project.kind === "studio");
 }
 
 interface StudioRecoverySnapshot {
@@ -147,24 +130,23 @@ interface StudioRecoverySnapshot {
 async function waitForStudioContainerInStore(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
-  paths: ServerWorkspacePaths,
   options?: { readonly maxAttempts?: number | undefined },
 ): Promise<StudioContainerCandidate | null> {
   const { match } = await waitForSnapshotMatch<StudioRecoverySnapshot, StudioContainerCandidate>({
     maxAttempts: options?.maxAttempts,
     loadSnapshot: async () => {
       const localProjects = useStore.getState().projects;
-      if (findStudioContainerCandidateById(localProjects, projectId, paths)) {
+      if (findStudioContainerCandidateById(localProjects, projectId)) {
         return { projects: localProjects };
       }
 
       const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
-      if (snapshot && findStudioContainerCandidateById(snapshot.projects, projectId, paths)) {
+      if (snapshot && findStudioContainerCandidateById(snapshot.projects, projectId)) {
         useStore.getState().syncServerShellSnapshot(snapshot);
       }
       return snapshot;
     },
-    findMatch: (snapshot) => findStudioContainerCandidateById(snapshot.projects, projectId, paths),
+    findMatch: (snapshot) => findStudioContainerCandidateById(snapshot.projects, projectId),
   });
 
   return match;
@@ -173,9 +155,8 @@ async function waitForStudioContainerInStore(
 async function recoverDuplicateStudioContainer(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
-  paths: ServerWorkspacePaths,
 ): Promise<ProjectId | null> {
-  return (await waitForStudioContainerInStore(api, projectId, paths))?.id ?? null;
+  return (await waitForStudioContainerInStore(api, projectId))?.id ?? null;
 }
 
 export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<ProjectId | null> {
@@ -225,7 +206,6 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
           const recoveredProjectId = await recoverDuplicateStudioContainer(
             api,
             duplicateProjectId as ProjectId,
-            paths,
           );
           if (recoveredProjectId) {
             return recoveredProjectId;
@@ -245,7 +225,7 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
     // derivation and thread partitioning never see a draft pointing at an unknown project.
     // The result matters: returning the id anyway on a slow snapshot would reopen exactly
     // that window, so fail with a retryable error instead — the retry finds the container.
-    const syncedContainer = await waitForStudioContainerInStore(api, projectId, paths, {
+    const syncedContainer = await waitForStudioContainerInStore(api, projectId, {
       maxAttempts: CREATED_CONTAINER_SYNC_MAX_ATTEMPTS,
     });
     if (!syncedContainer) {
