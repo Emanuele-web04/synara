@@ -505,8 +505,10 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(overlayHome);
-      expect(lstatSync(overlayMemoryPath).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+      if (lstatSync(overlayMemoryPath).isSymbolicLink()) {
+        expect(readlinkSync(overlayMemoryPath)).toBe(sourceMemoryPath);
+      }
+      expect(readFileSync(overlayMemoryPath, "utf8")).toBe("fresh-source-db");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
@@ -533,9 +535,18 @@ describe("buildCodexProcessEnv", () => {
       });
 
       expect(env.CODEX_HOME).toBe(overlayHome);
-      expect(lstatSync(overlayAuthPath).isSymbolicLink()).toBe(true);
-      expect(readlinkSync(overlayAuthPath)).toBe(sourceAuthPath);
+      if (lstatSync(overlayAuthPath).isSymbolicLink()) {
+        expect(readlinkSync(overlayAuthPath)).toBe(sourceAuthPath);
+      }
       expect(readFileSync(overlayAuthPath, "utf8")).toContain("fresh");
+
+      writeFileSync(sourceAuthPath, '{"tokens":{"access_token":"new"}}', "utf8");
+      buildCodexProcessEnv({
+        env: { SYNARA_HOME: runtimeHome },
+        homePath: tempDir,
+        platform: "darwin",
+      });
+      expect(readFileSync(overlayAuthPath, "utf8")).toContain("new");
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
       rmSync(runtimeHome, { recursive: true, force: true });
