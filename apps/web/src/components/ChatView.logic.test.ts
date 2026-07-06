@@ -11,6 +11,7 @@ import {
   isComposerCursorOnFirstLine,
   isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
+  promptStillMatchesActiveHistoryBrowse,
   resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
@@ -33,6 +34,7 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
+  shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
@@ -135,6 +137,67 @@ describe("prompt history navigation", () => {
     ] as const;
 
     expect(derivePromptHistoryFromMessages(messages, 2)).toEqual(["repeat", "repeat"]);
+  });
+
+  it("keeps history browse state for cursor-only movement inside the recalled prompt", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 3, draft: "draft in progress" },
+        history: ["different prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+  });
+
+  it("ends history browse state when the recalled prompt text is edited", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt edited",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start prompt history navigation while a composer menu trigger is active", () => {
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: true,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: false,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(true);
   });
 
   it("detects first and last line cursor positions", () => {

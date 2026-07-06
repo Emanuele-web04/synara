@@ -158,6 +158,7 @@ import {
   buildThreadBreadcrumbs,
   derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  promptStillMatchesActiveHistoryBrowse,
   type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
@@ -167,6 +168,7 @@ import {
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
   resolvePromptHistoryNavigation,
+  shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
@@ -9232,7 +9234,16 @@ export default function ChatView({
           setComposerDraftPromptHistorySavedDraft(threadId, null);
         }
       } else if (!applyingPromptHistoryNavigationRef.current) {
-        if (promptHistoryNavigationRef.current !== null) {
+        const activePromptHistoryNavigation = promptHistoryNavigationRef.current;
+        if (
+          activePromptHistoryNavigation !== null &&
+          !promptStillMatchesActiveHistoryBrowse({
+            state: activePromptHistoryNavigation,
+            history: promptHistory,
+            nextPrompt,
+            appliedPrompt: promptHistoryAppliedPromptRef.current,
+          })
+        ) {
           promptHistoryNavigationRef.current = null;
           setComposerDraftPromptHistorySavedDraft(threadId, null);
         }
@@ -9269,6 +9280,7 @@ export default function ChatView({
       composerTerminalContexts,
       composerCommandPicker,
       onChangeActivePendingUserInputCustomAnswer,
+      promptHistory,
       setPrompt,
       setComposerDraftPromptHistorySavedDraft,
       setComposerDraftTerminalContexts,
@@ -9354,14 +9366,17 @@ export default function ChatView({
     }
 
     if (
-      (key === "ArrowUp" || key === "ArrowDown") &&
-      !event.metaKey &&
-      !event.ctrlKey &&
-      !event.altKey &&
-      !event.shiftKey &&
-      !activePendingProgress &&
-      !isComposerApprovalState &&
-      pendingUserInputs.length === 0
+      shouldHandlePromptHistoryNavigationKey({
+        key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        menuIsActive,
+        hasActivePendingProgress: Boolean(activePendingProgress),
+        isComposerApprovalState,
+        pendingUserInputCount: pendingUserInputs.length,
+      })
     ) {
       const direction = key === "ArrowUp" ? "older" : "newer";
       const previousNavigationState = promptHistoryNavigationRef.current;

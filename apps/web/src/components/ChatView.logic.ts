@@ -148,6 +148,43 @@ export function derivePromptHistoryFromMessages(
   return history;
 }
 
+export function promptStillMatchesActiveHistoryBrowse(input: {
+  state: PromptHistoryNavigationState | null;
+  history: readonly string[];
+  nextPrompt: string;
+  appliedPrompt: string | null;
+}): boolean {
+  if (input.state === null) {
+    return false;
+  }
+  const activeEntry = input.history[input.state.index] ?? null;
+  return input.nextPrompt === activeEntry || input.nextPrompt === input.appliedPrompt;
+}
+
+export function shouldHandlePromptHistoryNavigationKey(input: {
+  key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash";
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  menuIsActive: boolean;
+  hasActivePendingProgress: boolean;
+  isComposerApprovalState: boolean;
+  pendingUserInputCount: number;
+}): boolean {
+  return (
+    (input.key === "ArrowUp" || input.key === "ArrowDown") &&
+    !input.metaKey &&
+    !input.ctrlKey &&
+    !input.altKey &&
+    !input.shiftKey &&
+    !input.menuIsActive &&
+    !input.hasActivePendingProgress &&
+    !input.isComposerApprovalState &&
+    input.pendingUserInputCount === 0
+  );
+}
+
 // `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
 export function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
   const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
