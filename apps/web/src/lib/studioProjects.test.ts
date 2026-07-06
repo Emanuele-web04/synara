@@ -128,6 +128,22 @@ describe("studioProjects", () => {
     ).toBe(studioProject);
   });
 
+  it("prefers the canonical Studio root container over nested studio-kind rows", () => {
+    const nestedStudioProject = makeProject({
+      id: "project-studio-nested" as ProjectId,
+      cwd: "/Users/tester/Documents/Synara/Studio/Outbox",
+    });
+    const canonicalStudioProject = makeProject({ id: "project-studio-root" as ProjectId });
+
+    // Store order must not decide which row backs new Studio chats.
+    expect(
+      findStudioContainerProject([nestedStudioProject, canonicalStudioProject], {
+        homeDir: "/Users/tester",
+        studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      }),
+    ).toBe(canonicalStudioProject);
+  });
+
   it("prefers an unpromoted chat draft for the Studio container", () => {
     const studioProjectId = "project-studio" as ProjectId;
     const studioDraftThreadId = "thread-studio-draft" as ThreadId;
