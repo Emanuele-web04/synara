@@ -132,6 +132,10 @@
       "types": "./src/composerSlashCommands.ts",
       "import": "./src/composerSlashCommands.ts"
     },
+    "./threadExport": {
+      "types": "./src/threadExport.ts",
+      "import": "./src/threadExport.ts"
+    },
     "./editorIcons": {
       "types": "./src/editorIcons.ts",
       "import": "./src/editorIcons.ts"

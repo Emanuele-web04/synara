@@ -7,9 +7,11 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  ThreadId,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
-import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
+import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
+import { DateTime, Effect, Exit, FileSystem, Layer, Option, Path, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
 
 import {
@@ -29,6 +31,8 @@ import { resolveCachedEditorIcon } from "./editorAppIcons";
 import { LOCAL_IMAGE_ROUTE_PATH, resolveAllowedLocalPreviewFile } from "./localImageFiles.ts";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver";
+import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
+import { threadArchiveChunks, threadArchiveFileName } from "./orchestration/exportThreadArchive";
 import type { ServerReadiness } from "./server/readiness";
 import { resolveFavicon, tryParseHost } from "./siteFaviconCache";
 import { isTrustedAppOrigin, normalizeCorsOrigin } from "./trustedOrigins";
@@ -166,6 +170,7 @@ export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
     ),
     authEffectRouteLayer,
     projectFaviconEffectRouteLayer,
+    threadExportEffectRouteLayer,
     siteFaviconEffectRouteLayer,
     editorIconEffectRouteLayer,
     localImageEffectRouteLayer,
@@ -444,6 +449,65 @@ const siteFaviconEffectRouteLayer = HttpRouter.add(
       contentType: favicon.contentType ?? "image/x-icon",
       headers: { "Cache-Control": SITE_FAVICON_CACHE_CONTROL_SUCCESS },
     });
+  }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
+);
+
+// Builds a ZIP export of a single thread (thread.json + transcript.md) and streams
+// it back as a download. Loads only the requested thread detail so the export cost
+// scales with that thread rather than the whole projection; mirrors the auth shape
+// of the other binary GET routes (favicon/attachments).
+const threadExportEffectRouteLayer = HttpRouter.add(
+  "GET",
+  "/api/thread-export",
+  Effect.gen(function* () {
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+
+    const config = yield* ServerConfig;
+    if (!isLegacyTokenAuthorized({ config, url })) {
+      yield* requireAuthenticatedRequest;
+    }
+
+    // Error responses need the trusted-origin CORS headers too: the desktop
+    // app fetches cross-origin (t3://app), and without them the browser masks
+    // a 400/404/409 body as an opaque network failure.
+    const corsHeaders = localPreviewCorsHeaders({ config, request, url });
+
+    const threadIdParam = url.searchParams.get("threadId")?.trim();
+    if (!threadIdParam)
+      return HttpServerResponse.text("Missing threadId parameter", {
+        status: 400,
+        headers: corsHeaders,
+      });
+
+    const snapshotQuery = yield* ProjectionSnapshotQuery;
+    const threadOption = yield* snapshotQuery.getThreadDetailForExportById(
+      ThreadId.makeUnsafe(threadIdParam),
+    );
+    if (Option.isNone(threadOption))
+      return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
+    const thread = threadOption.value;
+
+    const blockedReason = threadExportBlockedReason(thread);
+    if (blockedReason !== null) {
+      return HttpServerResponse.text(blockedReason, { status: 409, headers: corsHeaders });
+    }
+
+    const fileName = threadArchiveFileName({ title: thread.title, isoTimestamp: thread.updatedAt });
+    return HttpServerResponse.stream(
+      Stream.fromAsyncIterable(threadArchiveChunks(thread), (cause) => cause),
+      {
+        status: 200,
+        contentType: "application/zip",
+        headers: {
+          "Content-Disposition": `attachment; filename="${fileName.replaceAll('"', "")}"`,
+          "Cache-Control": "no-store",
+          ...corsHeaders,
+          "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+      },
+    );
   }).pipe(Effect.catchTag("AuthError", (error) => Effect.succeed(authErrorResponse(error)))),
 );
 

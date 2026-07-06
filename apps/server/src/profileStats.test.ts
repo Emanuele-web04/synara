@@ -579,7 +579,7 @@ describe("ProfileStatsQuery", () => {
               'thread-manual-deleted',
               'turn-skill-manual-deleted',
               'user',
-              'Manual deleted /openai-docs should not count',
+              'Manual deleted /openai-docs should still count',
               '[{"name":"openai-docs","path":"/skills/openai-docs/SKILL.md"}]',
               NULL,
               0,
@@ -604,12 +604,15 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
-        expect(stats.insights.skillsExplored).toBe(4);
-        expect(stats.insights.totalSkillsUsed).toBe(7);
-        expect(stats.activity.totalPromptsSent).toBe(3);
-        expect(stats.activity.totalThreads).toBe(2);
-        expect(stats.skills.slice(0, 4)).toEqual([
+        // Retention-hidden and manually deleted threads both keep contributing:
+        // profile stats are lifetime totals and deletion is only a soft hide.
+        expect(stats.insights.skillsExplored).toBe(5);
+        expect(stats.insights.totalSkillsUsed).toBe(8);
+        expect(stats.activity.totalPromptsSent).toBe(4);
+        expect(stats.activity.totalThreads).toBe(3);
+        expect(stats.skills.slice(0, 5)).toEqual([
           { name: "check-code", displayName: "$check-code", kind: "skill", runCount: 4 },
+          { name: "openai-docs", displayName: "$openai-docs", kind: "skill", runCount: 1 },
           { name: "planner", displayName: "$planner", kind: "skill", runCount: 1 },
           { name: "refactor-code", displayName: "$refactor-code", kind: "skill", runCount: 1 },
           { name: "reviewer", displayName: "@reviewer", kind: "agent", runCount: 1 },
@@ -618,7 +621,7 @@ describe("ProfileStatsQuery", () => {
     );
   });
 
-  it("selects the live project with the most native user prompts as most worked", async () => {
+  it("keeps deleted threads and deleted projects in the most-worked ranking", async () => {
     await runProfileStatsTest(
       Effect.gen(function* () {
         const sql = yield* SqlClient.SqlClient;
@@ -801,7 +804,7 @@ describe("ProfileStatsQuery", () => {
               'thread-alpha-deleted',
               'turn-alpha-deleted',
               'user',
-              'deleted thread should not win',
+              'deleted thread still counts',
               0,
               'native',
               '2026-06-14T11:05:00.000Z',
@@ -812,7 +815,7 @@ describe("ProfileStatsQuery", () => {
               'thread-deleted-project',
               'turn-deleted-project',
               'user',
-              'deleted project should not win',
+              'deleted project still counts',
               0,
               'native',
               '2026-06-14T11:35:00.000Z',
@@ -822,16 +825,19 @@ describe("ProfileStatsQuery", () => {
 
         const stats = yield* statsQuery.getProfileStats({ utcOffsetMinutes: 0 });
 
-        expect(stats.activity.totalPromptsSent).toBe(5);
-        expect(stats.activity.totalThreads).toBe(2);
+        // Lifetime totals: deleted threads/projects keep their contribution.
+        expect(stats.activity.totalPromptsSent).toBe(7);
+        expect(stats.activity.totalThreads).toBe(4);
+        // Alpha and Beta tie on prompts (3) and active days (2); the deleted
+        // Alpha thread's later prompt breaks the tie via lastWorkedAt.
         expect(stats.mostWorkedProject).toEqual({
-          projectId: "project-beta",
-          title: "Beta",
-          workspaceRoot: "/work/beta",
+          projectId: "project-alpha",
+          title: "Alpha",
+          workspaceRoot: "/work/alpha",
           promptCount: 3,
-          threadCount: 1,
+          threadCount: 2,
           activeDays: 2,
-          lastWorkedAt: "2026-06-14T10:35:00.000Z",
+          lastWorkedAt: "2026-06-14T11:05:00.000Z",
         });
       }),
     );

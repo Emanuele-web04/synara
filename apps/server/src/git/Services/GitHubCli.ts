@@ -7,9 +7,17 @@
  */
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
+import type { GitPullRequestCheck, GitPullRequestComment } from "@t3tools/contracts";
 
 import type { ProcessRunResult } from "../../processRunner";
 import type { GitHubCliError } from "../Errors.ts";
+
+/**
+ * Field list for `gh pr view/list --json` calls that decode into
+ * {@link GitHubPullRequestSummary} — one source so call sites and tests cannot drift.
+ */
+export const PULL_REQUEST_SUMMARY_JSON_FIELDS =
+  "number,title,url,baseRefName,headRefName,state,mergedAt,isCrossRepository,headRepository,headRepositoryOwner";
 
 export interface GitHubPullRequestSummary {
   readonly number: number;
@@ -27,6 +35,11 @@ export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
   readonly sshUrl: string;
+}
+
+export interface GitHubPullRequestReviewCommentsResult {
+  readonly comments: ReadonlyArray<GitPullRequestComment>;
+  readonly truncated: boolean;
 }
 
 /**
@@ -58,6 +71,34 @@ export interface GitHubCliShape {
     readonly cwd: string;
     readonly reference: string;
   }) => Effect.Effect<GitHubPullRequestSummary, GitHubCliError>;
+
+  /**
+   * Resolve a pull request together with its CI checks (check runs + commit statuses)
+   * in a single `gh pr view` call, so snapshot polling pays one process/API round trip.
+   */
+  readonly getPullRequestWithChecks: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<
+    {
+      readonly summary: GitHubPullRequestSummary;
+      readonly checks: ReadonlyArray<GitPullRequestCheck>;
+    },
+    GitHubCliError
+  >;
+
+  /**
+   * List the root comments of unresolved review threads for a pull request.
+   * Owner/repo are passed explicitly (parsed from the PR URL) so fork checkouts whose
+   * remotes point at a different repository still query the repo that owns the PR.
+   */
+  readonly getPullRequestReviewComments: (input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly number: number;
+  }) => Effect.Effect<GitHubPullRequestReviewCommentsResult, GitHubCliError>;
 
   /**
    * Resolve clone URLs for a GitHub repository.

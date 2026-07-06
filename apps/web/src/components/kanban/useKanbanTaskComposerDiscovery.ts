@@ -265,6 +265,8 @@ export function useKanbanTaskComposerDiscovery(input: UseKanbanTaskComposerDisco
     canOfferReviewCommand: false,
     canOfferForkCommand: false,
     canOfferSideCommand: false,
+    canOfferExportCommand: false,
+    surfaceAppSlashCommands: KANBAN_SUPPORTED_APP_SLASH_COMMANDS,
     dynamicAgents,
   });
   const composerMenuItems = useMemo(

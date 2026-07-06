@@ -6,6 +6,7 @@ import type {
   GitActionProgressEvent,
   GitActionProgressPhase,
   GitStackedAction,
+  ModelSelection,
   ProviderStartOptions,
 } from "@t3tools/contracts";
 import {
@@ -25,6 +26,7 @@ import {
 import { GitCore } from "../Services/GitCore.ts";
 import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
+import { buildGitTextGenerationCallInput } from "../textGenerationSelection.ts";
 import { ServerConfig } from "../../config.ts";
 
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
@@ -75,6 +77,13 @@ interface BranchHeadContext {
   isCrossRepository: boolean;
 }
 
+interface GitTextGenerationParams {
+  textGenerationModel?: string | undefined;
+  textGenerationModelSelection?: ModelSelection | undefined;
+  codexHomePath?: string | undefined;
+  providerOptions?: ProviderStartOptions | undefined;
+}
+
 interface FailedLocalHandoffRecovery {
   worktreeRecreated: boolean;
   worktreeChangesRestored: boolean;
@@ -96,11 +105,27 @@ interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
 }
 
+// Host + owner/repo extraction from a PR web URL. Used to query the repository that owns
+// the PR even when the local checkout's remotes point at a fork or a GitHub Enterprise host.
+function parsePullRequestRepositoryFromUrl(
+  url: string,
+): { host: string; owner: string; repo: string } | null {
+  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(url.trim());
+  const host = match?.[1]?.trim() ?? "";
+  const owner = match?.[2]?.trim() ?? "";
+  const repo = match?.[3]?.trim() ?? "";
+  return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
+}
+
+// github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
+// which is only well-defined for PRs hosted on github.com.
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   const trimmed = url.trim();
-  const match = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
-  const repositoryName = match?.[1]?.trim() ?? "";
-  return repositoryName.length > 0 ? repositoryName : null;
+  if (!/^https:\/\//i.test(trimmed)) {
+    return null;
+  }
+  const repository = parsePullRequestRepositoryFromUrl(trimmed);
+  return repository && repository.host.toLowerCase() === "github.com" ? repository.repo : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(
@@ -1156,17 +1181,16 @@ export const makeGitManager = Effect.gen(function* () {
       return "main";
     });
 
-  const resolveCommitAndBranchSuggestion = (input: {
-    cwd: string;
-    branch: string | null;
-    commitMessage?: string;
-    codexHomePath?: string;
-    providerOptions?: ProviderStartOptions;
-    /** When true, also produce a semantic feature branch name. */
-    includeBranch?: boolean;
-    filePaths?: readonly string[];
-    model?: string;
-  }) =>
+  const resolveCommitAndBranchSuggestion = (
+    input: {
+      cwd: string;
+      branch: string | null;
+      commitMessage?: string;
+      /** When true, also produce a semantic feature branch name. */
+      includeBranch?: boolean;
+      filePaths?: readonly string[];
+    } & GitTextGenerationParams,
+  ) =>
     Effect.gen(function* () {
       const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
       if (!context) {
@@ -1191,10 +1215,8 @@ export const makeGitManager = Effect.gen(function* () {
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
-          ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
           ...(input.includeBranch ? { includeBranch: true } : {}),
-          ...(input.model ? { model: input.model } : {}),
+          ...buildGitTextGenerationCallInput(input),
         })
         .pipe(
           Effect.map((result) => sanitizeCommitMessage(result)),
@@ -1227,9 +1249,7 @@ export const makeGitManager = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     progressReporter?: GitActionProgressReporter,
     actionId?: string,
   ) =>
@@ -1259,9 +1279,7 @@ export const makeGitManager = Effect.gen(function* () {
           branch,
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
-          ...(codexHomePath ? { codexHomePath } : {}),
-          ...(providerOptions ? { providerOptions } : {}),
-          ...(model ? { model } : {}),
+          ...(textGenerationParams ?? {}),
         });
       }
       if (!suggestion) {
@@ -1341,9 +1359,7 @@ export const makeGitManager = Effect.gen(function* () {
   const runPrStep = (
     cwd: string,
     fallbackBranch: string | null,
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
   ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
@@ -1394,9 +1410,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
         diffSummary: limitContext(rangeContext.diffSummary, 20_000),
         diffPatch: limitContext(rangeContext.diffPatch, 60_000),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
-        ...(model ? { model } : {}),
+        ...buildGitTextGenerationCallInput(textGenerationParams ?? {}),
       });
 
       const bodyFile = path.join(tempDir, `t3code-pr-body-${process.pid}-${randomUUID()}.md`);
@@ -1508,9 +1522,12 @@ export const makeGitManager = Effect.gen(function* () {
     const generated = yield* textGeneration.generateDiffSummary({
       cwd: input.cwd,
       patch,
-      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
-      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
-      ...(input.textGenerationModel ? { model: input.textGenerationModel } : {}),
+      ...buildGitTextGenerationCallInput({
+        textGenerationModel: input.textGenerationModel,
+        textGenerationModelSelection: input.textGenerationModelSelection,
+        codexHomePath: input.codexHomePath,
+        providerOptions: input.providerOptions,
+      }),
     });
 
     return {
@@ -1528,6 +1545,58 @@ export const makeGitManager = Effect.gen(function* () {
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
       return { pullRequest };
+    },
+  );
+
+  const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
+    function* (input) {
+      const reference = normalizePullRequestReference(input.reference);
+      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
+      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+        cwd: input.cwd,
+        reference,
+      });
+      const pullRequest = toResolvedPullRequest(summary);
+
+      const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+      if (!repository) {
+        return yield* gitManagerError(
+          "pullRequestSnapshot",
+          `Could not determine the repository from the pull request URL: ${pullRequest.url}`,
+        );
+      }
+
+      const commentsResult = yield* gitHubCli
+        .getPullRequestReviewComments({
+          cwd: input.cwd,
+          host: repository.host,
+          owner: repository.owner,
+          repo: repository.repo,
+          number: pullRequest.number,
+        })
+        .pipe(
+          Effect.map((result) => ({
+            comments: result.comments,
+            commentsTruncated: result.truncated,
+            commentsError: null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              comments: [],
+              commentsTruncated: false,
+              commentsError: error.message,
+            }),
+          ),
+        );
+
+      return {
+        pullRequest,
+        checks,
+        comments: commentsResult.comments,
+        commentsTruncated: commentsResult.commentsTruncated,
+        commentsError: commentsResult.commentsError,
+      };
     },
   );
 
@@ -2476,9 +2545,7 @@ The local stash entry was kept for recovery.`,
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
-    codexHomePath?: string,
-    providerOptions?: ProviderStartOptions,
-    model?: string,
+    textGenerationParams?: GitTextGenerationParams,
     options?: FeatureBranchStepOptions,
   ) =>
     Effect.gen(function* () {
@@ -2487,10 +2554,8 @@ The local stash entry was kept for recovery.`,
         branch,
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
-        ...(codexHomePath ? { codexHomePath } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
         includeBranch: true,
-        ...(model ? { model } : {}),
+        ...(textGenerationParams ?? {}),
       });
       if (!suggestion && !options?.allowCommittedHead) {
         return yield* gitManagerError(
@@ -2612,6 +2677,12 @@ The local stash entry was kept for recovery.`,
 
       const runAction = Effect.gen(function* () {
         const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const textGenerationParams: GitTextGenerationParams = {
+          textGenerationModel: input.textGenerationModel,
+          textGenerationModelSelection: input.textGenerationModelSelection,
+          codexHomePath: input.codexHomePath,
+          providerOptions: input.providerOptions,
+        };
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
           input.action === "push" ||
@@ -2677,9 +2748,7 @@ The local stash entry was kept for recovery.`,
             initialStatus.branch,
             input.commitMessage,
             input.filePaths,
-            input.codexHomePath,
-            input.providerOptions,
-            input.textGenerationModel,
+            textGenerationParams,
             {
               allowCommittedHead: !wantsCommit,
               restoreOriginalBranchRef: committedHeadRestoreRef,
@@ -2704,9 +2773,7 @@ The local stash entry was kept for recovery.`,
                 commitMessageForStep,
                 preResolvedCommitSuggestion,
                 input.filePaths,
-                input.codexHomePath,
-                input.providerOptions,
-                input.textGenerationModel,
+                textGenerationParams,
                 options?.progressReporter,
                 progress.actionId,
               );
@@ -2741,13 +2808,7 @@ The local stash entry was kept for recovery.`,
                 Effect.flatMap(() =>
                   Effect.gen(function* () {
                     currentPhase = "pr";
-                    return yield* runPrStep(
-                      input.cwd,
-                      currentBranch,
-                      input.codexHomePath,
-                      input.providerOptions,
-                      input.textGenerationModel,
-                    );
+                    return yield* runPrStep(input.cwd, currentBranch, textGenerationParams);
                   }),
                 ),
               )
@@ -2786,6 +2847,7 @@ The local stash entry was kept for recovery.`,
     readWorkingTreeDiff,
     summarizeDiff,
     resolvePullRequest,
+    pullRequestSnapshot,
     preparePullRequestThread,
     handoffThread,
     runStackedAction,
