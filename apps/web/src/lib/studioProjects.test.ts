@@ -29,6 +29,28 @@ vi.mock("../nativeApi", () => ({
           throw nativeApiMock.dispatchError;
         }
         nativeApiMock.dispatchedCommands.push(command);
+        // Mirror the real server: an accepted project.create shows up in later shell snapshots,
+        // which the post-create sync in ensureStudioProject waits on before resolving.
+        const typed = command as {
+          type?: string;
+          projectId?: string;
+          kind?: string;
+          title?: string;
+          workspaceRoot?: string;
+        };
+        if (typed.type === "project.create") {
+          nativeApiMock.shellSnapshotProjects.push({
+            id: typed.projectId,
+            kind: typed.kind,
+            title: typed.title,
+            workspaceRoot: typed.workspaceRoot,
+            defaultModelSelection: null,
+            scripts: [],
+            isPinned: false,
+            createdAt: "2026-06-21T00:00:00.000Z",
+            updatedAt: "2026-06-21T00:00:00.000Z",
+          });
+        }
       },
       getShellSnapshot: async () => {
         const projects =

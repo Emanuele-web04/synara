@@ -61,12 +61,17 @@ function StudioIndexRouteView() {
     [draftThreadsByThreadId, projectDraftThreadIdByProjectId, studioProjectIds],
   );
   // Studio threads (sidebar summaries) backing both the remembered-route scope and the
-  // latest-thread fallback below.
+  // latest-thread fallback below. Archived chats are excluded — the sidebar hides them, so the
+  // landing must not resurrect one; an archived-only Studio opens the draft or a fresh chat.
   const studioThreadSummaries = useMemo(
     () =>
       threadIds.flatMap((threadId) => {
         const summary = sidebarThreadSummaryById[threadId];
-        return summary && studioProjectIds.has(summary.projectId) ? [summary] : [];
+        return summary &&
+          (summary.archivedAt ?? null) === null &&
+          studioProjectIds.has(summary.projectId)
+          ? [summary]
+          : [];
       }),
     [sidebarThreadSummaryById, studioProjectIds, threadIds],
   );

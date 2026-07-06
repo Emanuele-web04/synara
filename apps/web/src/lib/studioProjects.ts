@@ -25,6 +25,10 @@ import { newCommandId, newProjectId } from "./utils";
 
 const pendingStudioCreationByWorkspaceRoot = new Map<string, Promise<ProjectId | null>>();
 
+// A successful create's follow-up sync gets a longer retry window than duplicate recovery
+// (~2.3s vs ~0.75s): the row is guaranteed to arrive eventually, so patience beats failing.
+const CREATED_CONTAINER_SYNC_MAX_ATTEMPTS = 10;
+
 interface StudioContainerCandidate {
   readonly id?: ProjectId | undefined;
   readonly kind?: Project["kind"] | undefined;
@@ -144,8 +148,10 @@ async function waitForStudioContainerInStore(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
+  options?: { readonly maxAttempts?: number | undefined },
 ): Promise<StudioContainerCandidate | null> {
   const { match } = await waitForSnapshotMatch<StudioRecoverySnapshot, StudioContainerCandidate>({
+    maxAttempts: options?.maxAttempts,
     loadSnapshot: async () => {
       const localProjects = useStore.getState().projects;
       if (findStudioContainerCandidateById(localProjects, projectId, paths)) {
@@ -237,7 +243,14 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
     }
     // Make the fresh container visible in the local store before returning, so segment
     // derivation and thread partitioning never see a draft pointing at an unknown project.
-    await waitForStudioContainerInStore(api, projectId, paths);
+    // The result matters: returning the id anyway on a slow snapshot would reopen exactly
+    // that window, so fail with a retryable error instead — the retry finds the container.
+    const syncedContainer = await waitForStudioContainerInStore(api, projectId, paths, {
+      maxAttempts: CREATED_CONTAINER_SYNC_MAX_ATTEMPTS,
+    });
+    if (!syncedContainer) {
+      throw new Error("Studio was created but hasn't finished syncing yet. Try again in a moment.");
+    }
     return projectId;
   })().finally(() => {
     pendingStudioCreationByWorkspaceRoot.delete(workspaceRoot);

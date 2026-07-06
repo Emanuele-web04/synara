@@ -608,10 +608,18 @@ export const makeWsRpcLayer = () =>
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           rpcEffect(
             Effect.gen(function* () {
-              const normalizedCommand = yield* normalizeDispatchCommand({ command });
-              return yield* runtimeStartup.enqueueCommand(
+              const { command: normalizedCommand, prepareWorkspaceRoot } =
+                yield* normalizeDispatchCommand({ command });
+              const result = yield* runtimeStartup.enqueueCommand(
                 orchestrationEngine.dispatch(normalizedCommand),
               );
+              // Only scaffold managed workspace-root subdirectories (Inbox/Outbox/work/outputs)
+              // AFTER the decider has accepted the command. A rejected dispatch (e.g. a
+              // cross-kind workspace-root ownership conflict) must never mutate the filesystem.
+              if (prepareWorkspaceRoot) {
+                yield* prepareWorkspaceRoot;
+              }
+              return result;
             }),
             "Failed to dispatch orchestration command",
           ),

@@ -137,6 +137,18 @@ function removePersistedAttachmentPaths(input: {
   );
 }
 
+export interface DispatchCommandNormalizerResult<E> {
+  readonly command: OrchestrationCommand;
+  /**
+   * Deferred workspace-root scaffolding decided during normalization but NOT yet executed.
+   * Callers must run this only after the normalized command has been successfully accepted
+   * by the orchestration decider (e.g. after `orchestrationEngine.dispatch` resolves), so a
+   * rejected dispatch (for example a cross-kind workspace-root ownership conflict) never
+   * mutates the filesystem.
+   */
+  readonly prepareWorkspaceRoot: Effect.Effect<void, E> | null;
+}
+
 export interface DispatchCommandNormalizerOptions<E> {
   readonly attachmentsDir: string;
   readonly chatWorkspaceRoot?: string;
@@ -227,6 +239,25 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
       prepareWhenEqualToRoot: true,
     });
 
+  // Combines the chat + studio scaffolding decisions into a single deferred effect. The
+  // decision logic (kinds, prepareWhenEqualToRoot, isWorkspaceRootWithin/workspaceRootsEqual)
+  // is evaluated eagerly here (it's pure and side-effect-free), but the resulting `prepare`
+  // effect is only *constructed*, never run, until the caller explicitly executes it.
+  const deferredPrepareWorkspaceRoot = (
+    command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >,
+    workspaceRoot: string,
+  ): Effect.Effect<void, E> =>
+    Effect.all(
+      [
+        maybePrepareChatWorkspaceRoot(command, workspaceRoot),
+        maybePrepareStudioWorkspaceRoot(command, workspaceRoot),
+      ],
+      { discard: true },
+    );
+
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
       const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
@@ -235,13 +266,15 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
       );
-      yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
-      yield* maybePrepareStudioWorkspaceRoot(input.command, workspaceRoot);
-      return {
+      const command = {
         ...input.command,
         workspaceRoot,
         createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
+      return {
+        command,
+        prepareWorkspaceRoot: deferredPrepareWorkspaceRoot(input.command, workspaceRoot),
+      };
     }
 
     if (input.command.type === "project.meta.update" && input.command.workspaceRoot !== undefined) {
@@ -251,17 +284,22 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
           createIfMissing: input.command.createWorkspaceRootIfMissing === true,
         },
       );
-      yield* maybePrepareChatWorkspaceRoot(input.command, workspaceRoot);
-      yield* maybePrepareStudioWorkspaceRoot(input.command, workspaceRoot);
-      return {
+      const command = {
         ...input.command,
         workspaceRoot,
         createWorkspaceRootIfMissing: input.command.createWorkspaceRootIfMissing === true,
       } satisfies OrchestrationCommand;
+      return {
+        command,
+        prepareWorkspaceRoot: deferredPrepareWorkspaceRoot(input.command, workspaceRoot),
+      };
     }
 
     if (input.command.type !== "thread.turn.start") {
-      return input.command as OrchestrationCommand;
+      return {
+        command: input.command as OrchestrationCommand,
+        prepareWorkspaceRoot: null,
+      };
     }
     const turnStartCommand = input.command;
 
@@ -322,11 +360,14 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
     );
 
     return {
-      ...turnStartCommand,
-      message: {
-        ...turnStartCommand.message,
-        attachments: normalizedAttachments,
-      },
-    } satisfies OrchestrationCommand;
+      command: {
+        ...turnStartCommand,
+        message: {
+          ...turnStartCommand.message,
+          attachments: normalizedAttachments,
+        },
+      } satisfies OrchestrationCommand,
+      prepareWorkspaceRoot: null,
+    };
   });
 }

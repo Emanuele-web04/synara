@@ -277,6 +277,7 @@ import {
   findWorkspaceRootMatch,
   getFallbackThreadIdAfterDelete,
   getPinnedThreadsForSidebar,
+  getUnpinnedThreadsForSidebar,
   orderPinnedProjectsForSidebar,
   getNextVisibleSidebarThreadId,
   getSidebarThreadIdsToPrewarm,
@@ -4184,13 +4185,20 @@ export default function Sidebar() {
   );
   // Studio threads, flattened the same way the home Chats list is. Skipped entirely while the
   // Studio surface is not showing so thread updates on Projects don't pay for an unused sort.
+  // Pinned threads are hidden here the same way `deriveSidebarProjectData` hides them from
+  // per-project lists, so a pinned Studio chat only ever renders once, inside the Pinned block.
   const studioChatThreadRows = useMemo(() => {
     if (!isOnStudio) {
       return [];
     }
     return buildProjectThreadTree({
       threads: sortThreadsForSidebar(
-        studioProjects.flatMap((project) => sortedSidebarThreadsByProjectId.get(project.id) ?? []),
+        getUnpinnedThreadsForSidebar(
+          studioProjects.flatMap(
+            (project) => sortedSidebarThreadsByProjectId.get(project.id) ?? [],
+          ),
+          pinnedThreadIds,
+        ),
         appSettings.sidebarThreadSortOrder,
       ),
       expandedParentThreadIds: expandedSubagentParentIds,
@@ -4199,6 +4207,7 @@ export default function Sidebar() {
     appSettings.sidebarThreadSortOrder,
     expandedSubagentParentIds,
     isOnStudio,
+    pinnedThreadIds,
     sortedSidebarThreadsByProjectId,
     studioProjects,
   ]);
@@ -6755,6 +6764,7 @@ export default function Sidebar() {
               // Studio is "just chats": a labeled Studio block holding a flat list of threads
               // rooted at the Studio workspace (no project-folder chrome).
               <SidebarGroup className="px-1.5 py-1.5">
+                {renderPinnedThreadsSection()}
                 {renderListSectionHeader(
                   "Studio",
                   <ChatSortMenu

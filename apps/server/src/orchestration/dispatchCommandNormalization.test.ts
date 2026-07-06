@@ -16,7 +16,10 @@ import { Effect } from "effect";
 import type { FileSystem, Path } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { makeDispatchCommandNormalizer } from "./dispatchCommandNormalization";
+import {
+  makeDispatchCommandNormalizer,
+  type DispatchCommandNormalizerResult,
+} from "./dispatchCommandNormalization";
 
 function projectCreateCommand(
   overrides: Partial<Extract<ClientOrchestrationCommand, { type: "project.create" }>> = {},
@@ -34,7 +37,41 @@ function projectCreateCommand(
   };
 }
 
+// Runs the normalized command's deferred `prepareWorkspaceRoot` effect (if any), mirroring
+// what the wsRpc dispatchCommand handler does after a successful `orchestrationEngine.dispatch`.
+async function runPrepareWorkspaceRoot<E>(result: DispatchCommandNormalizerResult<E>) {
+  if (result.prepareWorkspaceRoot) {
+    await Effect.runPromise(result.prepareWorkspaceRoot);
+  }
+}
+
 describe("makeDispatchCommandNormalizer", () => {
+  it("returns a deferred prepare effect instead of scaffolding during normalization", async () => {
+    const preparedRoots: string[] = [];
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareChatWorkspaceRoot: (workspaceRoot) =>
+        Effect.sync(() => {
+          preparedRoots.push(workspaceRoot);
+        }),
+    });
+
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+
+    // Normalization alone must not have scaffolded anything yet.
+    expect(preparedRoots).toEqual([]);
+    expect(result.prepareWorkspaceRoot).not.toBeNull();
+
+    await runPrepareWorkspaceRoot(result);
+
+    // Only after the caller explicitly runs the deferred effect does scaffolding happen.
+    expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
+  });
+
   it("prepares managed date/slug chat workspace roots", async () => {
     const preparedRoots: string[] = [];
     const normalizer = makeDispatchCommandNormalizer<Error>({
@@ -49,7 +86,8 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    await runPrepareWorkspaceRoot(result);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
   });
@@ -68,7 +106,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(
+    const first = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           kind: "project",
@@ -76,13 +114,15 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
       }),
     );
-    await Effect.runPromise(
+    await runPrepareWorkspaceRoot(first);
+    const second = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           workspaceRoot: "/Users/tester/Documents/Synara",
         }),
       }),
     );
+    await runPrepareWorkspaceRoot(second);
 
     expect(preparedRoots).toEqual([]);
   });
@@ -103,7 +143,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(
+    const result = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           kind: "studio",
@@ -112,6 +152,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
       }),
     );
+    await runPrepareWorkspaceRoot(result);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio"]);
   });
@@ -130,7 +171,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
     });
 
-    await Effect.runPromise(
+    const first = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           kind: "studio",
@@ -138,7 +179,8 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
       }),
     );
-    await Effect.runPromise(
+    await runPrepareWorkspaceRoot(first);
+    const second = await Effect.runPromise(
       normalizer({
         command: projectCreateCommand({
           kind: "project",
@@ -146,6 +188,7 @@ describe("makeDispatchCommandNormalizer", () => {
         }),
       }),
     );
+    await runPrepareWorkspaceRoot(second);
 
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/Studio/Outbox"]);
   });
