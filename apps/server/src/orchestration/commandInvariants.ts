@@ -54,13 +54,6 @@ export function listActiveProjectsByWorkspaceRoot(
   );
 }
 
-export function findActiveProjectByWorkspaceRoot(
-  readModel: OrchestrationReadModel,
-  workspaceRoot: string,
-): OrchestrationProject | undefined {
-  return listActiveProjectsByWorkspaceRoot(readModel, workspaceRoot)[0];
-}
-
 export function listThreadsByProjectId(
   readModel: OrchestrationReadModel,
   projectId: ProjectId,

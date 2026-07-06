@@ -66,7 +66,21 @@ export function findStudioContainerProject<T extends Pick<Project, "cwd" | "kind
   projects: readonly T[],
   paths: ServerWorkspacePaths,
 ): T | null {
-  return projects.find((project) => isStudioContainerProject(project, paths)) ?? null;
+  const candidates = projects.filter((project) => isStudioContainerProject(project, paths));
+  // Prefer the canonical container (cwd exactly the Studio root) over any studio-kind row
+  // nested beneath it, so ensure/create flows never bind new Studio chats to a nested project.
+  // isStudioContainerProject stays broad on purpose: nested rows still classify as Studio for
+  // partitioning, they just never win the container lookup.
+  const studioWorkspaceRoot = resolveServerStudioWorkspaceRoot(paths);
+  if (studioWorkspaceRoot) {
+    const canonical = candidates.find((project) =>
+      workspaceRootsEqual(project.cwd, studioWorkspaceRoot),
+    );
+    if (canonical) {
+      return canonical;
+    }
+  }
+  return candidates[0] ?? null;
 }
 
 export function findStudioDraftThreadId(input: {
