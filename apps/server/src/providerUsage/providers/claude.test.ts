@@ -243,8 +243,11 @@ describe("claudeUsageFetcher", () => {
     let throttle = false;
     const authorizations: string[] = [];
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      const headers = (init?.headers ?? {}) as Record<string, string>;
-      authorizations.push(headers.Authorization ?? "");
+      const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (authorization === undefined) {
+        throw new Error("Claude usage request did not include an Authorization header");
+      }
+      authorizations.push(authorization);
       return throttle
         ? rateLimitedResponse(120)
         : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } });

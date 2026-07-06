@@ -10,8 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
+  type ComposerFileAttachment,
   type ComposerImageAttachment,
   type QueuedComposerTurn,
+  captureComposerPromptHistorySavedDraft,
   deriveEffectiveComposerModelState,
   markPromotedDraftThreads,
   resolvePreferredComposerModelSelection,
@@ -48,6 +50,31 @@ function makeImage(input: {
     mimeType,
     sizeBytes: file.size,
     previewUrl: input.previewUrl,
+    file,
+  };
+}
+
+function makeFile(input: {
+  id: string;
+  name?: string;
+  mimeType?: string;
+  sizeBytes?: number;
+  lastModified?: number;
+}): ComposerFileAttachment {
+  const name = input.name ?? "notes.txt";
+  const mimeType = input.mimeType ?? "text/plain";
+  const sizeBytes = input.sizeBytes ?? 4;
+  const lastModified = input.lastModified ?? 1_700_000_000_000;
+  const file = new File([new Uint8Array(sizeBytes).fill(2)], name, {
+    type: mimeType,
+    lastModified,
+  });
+  return {
+    type: "file",
+    id: input.id,
+    name,
+    mimeType,
+    sizeBytes: file.size,
     file,
   };
 }
@@ -325,6 +352,311 @@ describe("composerDraftStore clearComposerContent", () => {
     store.clearComposerContent(threadId);
 
     expect(useComposerDraftStore.getState().draftsByThreadId[threadId]).toBeUndefined();
+  });
+});
+
+describe("composerDraftStore prompt history saved draft", () => {
+  const threadId = ThreadId.makeUnsafe("thread-prompt-history-attachments");
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("moves composer attachments into the prompt-history snapshot while browsing", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "img-history", previewUrl: "blob:history" });
+    const file = makeFile({ id: "file-history" });
+    const persistedAttachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    };
+
+    store.setPrompt(threadId, "draft with attachments");
+    store.addImage(threadId, image);
+    store.addFiles(threadId, [file]);
+    store.syncPersistedAttachments(threadId, [persistedAttachment]);
+    const draftBeforeBrowse = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+
+    useComposerDraftStore.getState().setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId,
+        draft: draftBeforeBrowse,
+        prompt: draftBeforeBrowse.prompt,
+      }),
+    );
+
+    const browsingDraft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    expect(browsingDraft.images).toHaveLength(0);
+    expect(browsingDraft.files).toHaveLength(0);
+    expect(browsingDraft.persistedAttachments).toHaveLength(0);
+    expect(browsingDraft.promptHistorySavedDraft?.prompt).toBe("draft with attachments");
+    expect(browsingDraft.promptHistorySavedDraft?.images.map((entry) => entry.id)).toEqual([
+      "img-history",
+    ]);
+    expect(browsingDraft.promptHistorySavedDraft?.files.map((entry) => entry.id)).toEqual([
+      "file-history",
+    ]);
+    expect(
+      browsingDraft.promptHistorySavedDraft?.persistedAttachments.map((entry) => entry.id),
+    ).toEqual(["img-history"]);
+  });
+
+  it("restores prompt-history snapshot text and attachments together", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "img-restore", previewUrl: "blob:restore" });
+    const file = makeFile({ id: "file-restore" });
+
+    store.setPrompt(threadId, "draft before history");
+    store.addImage(threadId, image);
+    store.addFiles(threadId, [file]);
+    const draftBeforeBrowse = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId,
+        draft: draftBeforeBrowse,
+        prompt: draftBeforeBrowse.prompt,
+      }),
+    );
+    store.setPrompt(threadId, "recalled history prompt");
+
+    useComposerDraftStore.getState().restorePromptHistorySavedDraft(threadId);
+
+    const restoredDraft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    expect(restoredDraft.prompt).toBe("draft before history");
+    expect(restoredDraft.promptHistorySavedDraft).toBeNull();
+    expect(restoredDraft.images.map((entry) => entry.id)).toEqual(["img-restore"]);
+    expect(restoredDraft.files.map((entry) => entry.id)).toEqual(["file-restore"]);
+  });
+
+  it("moves and restores structured composer context with the prompt-history snapshot", () => {
+    const store = useComposerDraftStore.getState();
+    const assistantSelection = {
+      type: "assistant-selection" as const,
+      id: "sel-history",
+      assistantMessageId: "assistant-1",
+      text: "Use this assistant answer",
+    };
+    const terminalContext = makeTerminalContext({
+      id: "ctx-history",
+      text: "bun run check",
+    });
+    const fileComment = {
+      id: "comment-history",
+      path: "apps/web/src/App.tsx",
+      startLine: 4,
+      endLine: 6,
+      text: "Please update this range.",
+    };
+    const pastedText = {
+      id: "paste-history",
+      createdAt: "2026-03-13T12:00:00.000Z",
+      text: "large pasted content",
+      lineCount: 1,
+      charCount: "large pasted content".length,
+    };
+    const selectedSkill = { name: "check-code", path: "/skills/check-code" };
+    const selectedMention = { name: "linear", path: "plugin://linear" };
+
+    store.setPrompt(threadId, "draft with structured context");
+    store.addAssistantSelection(threadId, assistantSelection);
+    store.addTerminalContext(threadId, terminalContext);
+    store.addFileComment(threadId, fileComment);
+    store.addPastedTexts(threadId, [pastedText]);
+    store.setSkills(threadId, [selectedSkill]);
+    store.setMentions(threadId, [selectedMention]);
+    const draftBeforeBrowse = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId,
+        draft: draftBeforeBrowse,
+        prompt: draftBeforeBrowse.prompt,
+      }),
+    );
+
+    const browsingDraft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    expect(browsingDraft.assistantSelections).toHaveLength(0);
+    expect(browsingDraft.terminalContexts).toHaveLength(0);
+    expect(browsingDraft.fileComments).toHaveLength(0);
+    expect(browsingDraft.pastedTexts).toHaveLength(0);
+    expect(browsingDraft.skills).toHaveLength(0);
+    expect(browsingDraft.mentions).toHaveLength(0);
+    expect(
+      browsingDraft.promptHistorySavedDraft?.assistantSelections.map((entry) => entry.id),
+    ).toEqual(["sel-history"]);
+    expect(
+      browsingDraft.promptHistorySavedDraft?.terminalContexts.map((entry) => entry.id),
+    ).toEqual(["ctx-history"]);
+    expect(browsingDraft.promptHistorySavedDraft?.fileComments.map((entry) => entry.id)).toEqual([
+      "comment-history",
+    ]);
+    expect(browsingDraft.promptHistorySavedDraft?.pastedTexts.map((entry) => entry.id)).toEqual([
+      "paste-history",
+    ]);
+    expect(browsingDraft.promptHistorySavedDraft?.skills).toEqual([selectedSkill]);
+    expect(browsingDraft.promptHistorySavedDraft?.mentions).toEqual([selectedMention]);
+
+    store.setPrompt(threadId, "recalled history prompt");
+    store.restorePromptHistorySavedDraft(threadId);
+
+    const restoredDraft = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    expect(restoredDraft.prompt).toBe(draftBeforeBrowse.prompt);
+    expect(restoredDraft.assistantSelections.map((entry) => entry.id)).toEqual(["sel-history"]);
+    expect(restoredDraft.terminalContexts.map((entry) => entry.id)).toEqual(["ctx-history"]);
+    expect(restoredDraft.fileComments.map((entry) => entry.id)).toEqual(["comment-history"]);
+    expect(restoredDraft.pastedTexts.map((entry) => entry.id)).toEqual(["paste-history"]);
+    expect(restoredDraft.skills).toEqual([selectedSkill]);
+    expect(restoredDraft.mentions).toEqual([selectedMention]);
+  });
+
+  it("persists and hydrates prompt-history snapshot images and structured context", () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "img-persist-history", previewUrl: "blob:persist-history" });
+    const persistedAttachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    };
+    const terminalContext = makeTerminalContext({
+      id: "ctx-persist-history",
+      text: "bun run test",
+    });
+    const pastedText = {
+      id: "paste-persist-history",
+      createdAt: "2026-03-13T12:00:00.000Z",
+      text: "persisted paste",
+      lineCount: 1,
+      charCount: "persisted paste".length,
+    };
+    const selectedSkill = { name: "check-code", path: "/skills/check-code" };
+
+    store.setPrompt(threadId, "persist me before history");
+    store.addImage(threadId, image);
+    store.syncPersistedAttachments(threadId, [persistedAttachment]);
+    store.addTerminalContext(threadId, terminalContext);
+    store.addPastedTexts(threadId, [pastedText]);
+    store.setSkills(threadId, [selectedSkill]);
+    const draftBeforeBrowse = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId,
+        draft: draftBeforeBrowse,
+        prompt: draftBeforeBrowse.prompt,
+      }),
+    );
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadId?: Record<string, { promptHistorySavedDraft?: Record<string, unknown> }>;
+    };
+
+    expect(
+      persistedState.draftsByThreadId?.[threadId]?.promptHistorySavedDraft?.attachments,
+    ).toEqual([persistedAttachment]);
+    const persistedSnapshot = persistedState.draftsByThreadId?.[threadId]?.promptHistorySavedDraft;
+    const persistedTerminalContexts = persistedSnapshot?.terminalContexts as
+      | Array<Record<string, unknown>>
+      | undefined;
+    expect(persistedTerminalContexts?.[0]).toMatchObject({
+      id: "ctx-persist-history",
+    });
+    expect(persistedTerminalContexts?.[0]).not.toHaveProperty("text");
+    expect(persistedSnapshot?.pastedTexts).toEqual([
+      {
+        id: "paste-persist-history",
+        createdAt: "2026-03-13T12:00:00.000Z",
+        text: "persisted paste",
+      },
+    ]);
+    expect(persistedSnapshot?.skills).toEqual([selectedSkill]);
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+    const restoredSnapshot = mergedState.draftsByThreadId[threadId]?.promptHistorySavedDraft;
+
+    expect(restoredSnapshot?.images.map((entry) => entry.id)).toEqual(["img-persist-history"]);
+    expect(restoredSnapshot?.files).toEqual([]);
+    expect(restoredSnapshot?.terminalContexts).toEqual([
+      expect.objectContaining({
+        id: "ctx-persist-history",
+        text: "",
+      }),
+    ]);
+    expect(restoredSnapshot?.pastedTexts.map((entry) => entry.id)).toEqual([
+      "paste-persist-history",
+    ]);
+    expect(restoredSnapshot?.skills).toEqual([selectedSkill]);
+  });
+
+  it("syncs persisted images into an existing prompt-history snapshot", async () => {
+    const store = useComposerDraftStore.getState();
+    const image = makeImage({ id: "img-sync-history", previewUrl: "blob:sync-history" });
+    const persistedAttachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,aGk=",
+    };
+
+    store.setPrompt(threadId, "draft before async image persistence");
+    store.addImage(threadId, image);
+    const draftBeforeBrowse = useComposerDraftStore.getState().draftsByThreadId[threadId]!;
+    store.setPromptHistorySavedDraft(
+      threadId,
+      captureComposerPromptHistorySavedDraft({
+        threadId,
+        draft: draftBeforeBrowse,
+        prompt: draftBeforeBrowse.prompt,
+      }),
+    );
+
+    setLocalStorageItem(
+      COMPOSER_DRAFT_STORAGE_KEY,
+      {
+        version: 5,
+        state: {
+          draftsByThreadId: {
+            [threadId]: {
+              prompt: "recalled history prompt",
+              promptHistorySavedDraft: {
+                prompt: "draft before async image persistence",
+                attachments: [persistedAttachment],
+              },
+              attachments: [],
+            },
+          },
+          draftThreadsByThreadId: {},
+          projectDraftThreadIdByProjectId: {},
+        },
+      },
+      Schema.Unknown,
+    );
+    store.syncPromptHistorySavedDraftPersistedAttachments(threadId, [persistedAttachment]);
+    await Promise.resolve();
+
+    const savedDraft =
+      useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft;
+    expect(savedDraft?.persistedAttachments.map((entry) => entry.id)).toEqual(["img-sync-history"]);
+    expect(savedDraft?.nonPersistedImageIds).toEqual([]);
   });
 });
 
