@@ -7453,7 +7453,11 @@ export default function Sidebar() {
           actions={searchPaletteActions}
           projects={searchPaletteProjects}
           projectById={projectById}
-          onCreateChat={() => void handleCreateHomeChat()}
+          onCreateChat={() =>
+            // Segment-aware, matching the sidebar's + action: "New chat" from the palette while
+            // on the Studio segment opens a Studio chat, not a home draft.
+            void (isOnStudio ? handleCreateStudioChat() : handleCreateHomeChat())
+          }
           onCreateThread={handlePrimaryNewThread}
           onAddProjectPath={addProjectFromPath}
           homeDir={homeDir}
