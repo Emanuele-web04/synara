@@ -10,7 +10,9 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import {
   extractDuplicateProjectCreateProjectId,
+  findContainerCandidateById,
   isDuplicateProjectCreateError,
+  resolveContainerCandidateCwd,
 } from "./projectCreateRecovery";
 import { resolveServerChatWorkspaceRoot, type ServerWorkspacePaths } from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
@@ -45,7 +47,7 @@ function isHomeChatContainerCandidate(
   project: HomeChatContainerCandidate | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  const cwd = project?.cwd ?? project?.workspaceRoot ?? "";
+  const cwd = resolveContainerCandidateCwd(project);
   if (!cwd) {
     return false;
   }
@@ -67,10 +69,8 @@ function findHomeChatContainerCandidateById<T extends HomeChatContainerCandidate
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
 ): T | null {
-  return (
-    projects.find(
-      (project) => project.id === projectId && isHomeChatContainerCandidate(project, paths),
-    ) ?? null
+  return findContainerCandidateById(projects, projectId, (project) =>
+    isHomeChatContainerCandidate(project, paths),
   );
 }
 

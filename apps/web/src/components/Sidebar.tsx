@@ -268,7 +268,6 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import {
   describeAddProjectError,
-  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   derivePinnedProjectIdsForSidebar,
   deriveSidebarProjectData,
@@ -292,6 +291,7 @@ import {
   DEBUG_FEATURE_FLAGS_MENU_STORAGE_KEY,
   resolveProjectEmptyState,
   resolveSettingsBackTarget,
+  type SettingsBackTarget,
   resolveSidebarNewThreadEnvMode,
   resolveThreadHoverCardMetadata,
   resolveThreadRowClassName,
@@ -1694,17 +1694,16 @@ export default function Sidebar() {
     ? (projectById.get(activeRouteProjectId) ?? null)
     : null;
   const isOnStudio = isOnStudioRoute || activeRouteProject?.kind === "studio";
-  const nonStudioPinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(nonStudioSidebarDisplayThreads, pinnedThreadIds),
-    [nonStudioSidebarDisplayThreads, pinnedThreadIds],
-  );
-  const studioPinnedThreads = useMemo(
-    () => getPinnedThreadsForSidebar(studioSidebarDisplayThreads, pinnedThreadIds),
-    [pinnedThreadIds, studioSidebarDisplayThreads],
-  );
+  // Only one segment's pinned threads are ever rendered at a time, so derive a single
+  // memo from the already-partitioned active list instead of computing both segments'
+  // pinned lists on every render (hooks can't be conditional, but the inputs can be).
   const pinnedThreads = useMemo(
-    () => (isOnStudio ? studioPinnedThreads : nonStudioPinnedThreads),
-    [isOnStudio, nonStudioPinnedThreads, studioPinnedThreads],
+    () =>
+      getPinnedThreadsForSidebar(
+        isOnStudio ? studioSidebarDisplayThreads : nonStudioSidebarDisplayThreads,
+        pinnedThreadIds,
+      ),
+    [isOnStudio, nonStudioSidebarDisplayThreads, pinnedThreadIds, studioSidebarDisplayThreads],
   );
   useEffect(() => {
     sidebarThreadSummaryByIdRef.current = sidebarThreadSummaryById;
@@ -2231,67 +2230,75 @@ export default function Sidebar() {
     },
     [navigate],
   );
+  // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
+  // settings-back path below) — differs only in which segment's thread list (and, for the
+  // draft-aware settings-back case, draft ids) is passed in.
+  const resolveBackTargetForThreads = useCallback(
+    (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
+      const latestThread =
+        sortThreadsForSidebar(threads, appSettings.sidebarThreadSortOrder)[0] ?? null;
+      const availableThreadIds = new Set<string>(threads.map((thread) => thread.id));
+      if (extraAvailableThreadIds) {
+        for (const threadId of extraAvailableThreadIds) {
+          availableThreadIds.add(threadId);
+        }
+      }
+      return resolveSettingsBackTarget({
+        lastThreadRoute,
+        availableThreadIds,
+        availableSplitViewIds: new Set(
+          Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
+        ),
+        latestThreadId: latestThread?.id ?? null,
+      });
+    },
+    [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
+  );
+
   // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
   // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
   // async redirect is what made the segment switch feel sluggish. Mirrors
   // resolveBackToThreadsTarget so both segments restore the thread you were last on.
-  const resolveBackToStudioTarget = useCallback(() => {
-    const latestThread =
-      sortThreadsForSidebar(studioSidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
-    return resolveSettingsBackTarget({
-      lastThreadRoute,
-      availableThreadIds: new Set(studioSidebarThreads.map((thread) => thread.id)),
-      availableSplitViewIds: new Set(
-        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-      ),
-      latestThreadId: latestThread?.id ?? null,
-    });
-  }, [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById, studioSidebarThreads]);
+  const resolveBackToStudioTarget = useCallback(
+    () => resolveBackTargetForThreads(studioSidebarThreads),
+    [resolveBackTargetForThreads, studioSidebarThreads],
+  );
 
-  const resolveBackToThreadTarget = useCallback(() => {
-    const latestThread =
-      sortThreadsForSidebar(sidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
-    return resolveSettingsBackTarget({
-      lastThreadRoute,
-      availableThreadIds: buildSettingsBackAvailableThreadIds({
-        sidebarThreadSummaryById,
-        draftThreadsByThreadId,
-      }),
-      availableSplitViewIds: new Set(
-        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-      ),
-      latestThreadId: latestThread?.id ?? null,
-    });
-  }, [
-    appSettings.sidebarThreadSortOrder,
-    lastThreadRoute,
-    draftThreadsByThreadId,
-    sidebarThreadSummaryById,
-    sidebarThreads,
-    splitViewsById,
-  ]);
-  const resolveBackToThreadsTarget = useCallback(() => {
-    const latestThread =
-      sortThreadsForSidebar(nonStudioSidebarThreads, appSettings.sidebarThreadSortOrder)[0] ?? null;
-    return resolveSettingsBackTarget({
-      lastThreadRoute,
-      availableThreadIds: new Set(nonStudioSidebarThreads.map((thread) => thread.id)),
-      availableSplitViewIds: new Set(
-        Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-      ),
-      latestThreadId: latestThread?.id ?? null,
-    });
-  }, [
-    appSettings.sidebarThreadSortOrder,
-    lastThreadRoute,
-    nonStudioSidebarThreads,
-    splitViewsById,
-  ]);
+  const resolveBackToThreadsTarget = useCallback(
+    () => resolveBackTargetForThreads(nonStudioSidebarThreads),
+    [nonStudioSidebarThreads, resolveBackTargetForThreads],
+  );
 
-  const handleBackToAppFromSettings = useCallback(() => {
-    const target = resolveBackToThreadTarget();
+  // Settings can be opened from a fresh unsent chat, which has a route id but no persisted
+  // sidebar summary yet. Keep that draft route as a valid return target, scoped to whichever
+  // segment the draft's project belongs to (mirrors buildSettingsBackAvailableThreadIds' intent,
+  // but partitioned per segment instead of merged across both).
+  const studioDraftThreadIds = useMemo(() => {
+    const draftThreadIds = new Set<string>();
+    for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
+      if (studioProjectIdSet.has(draft.projectId)) {
+        draftThreadIds.add(threadId);
+      }
+    }
+    return draftThreadIds;
+  }, [draftThreadsByThreadId, studioProjectIdSet]);
+  const nonStudioDraftThreadIds = useMemo(() => {
+    const draftThreadIds = new Set<string>();
+    for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
+      if (!studioProjectIdSet.has(draft.projectId)) {
+        draftThreadIds.add(threadId);
+      }
+    }
+    return draftThreadIds;
+  }, [draftThreadsByThreadId, studioProjectIdSet]);
 
-    if (target.kind === "thread") {
+  // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
+  // to a thread so callers can fall back to creating a fresh chat/home route otherwise.
+  const navigateToBackTarget = useCallback(
+    (target: SettingsBackTarget) => {
+      if (target.kind !== "thread") {
+        return false;
+      }
       void navigate({
         to: "/$threadId",
         params: { threadId: ThreadId.makeUnsafe(target.threadId) },
@@ -2299,11 +2306,46 @@ export default function Sidebar() {
           splitViewId: target.splitViewId,
         }),
       });
+      return true;
+    },
+    [navigate],
+  );
+
+  // Settings is reachable from either segment (Threads or Studio) and from routes outside the
+  // sidebar entirely (see EnvironmentPanel, __root, etc.), so we can't infer "which segment was
+  // active" from the route once we're already on /settings. Instead we remember the last active
+  // segment continuously (mirrors the lastThreadRoute tracking below) and use that on the way
+  // back. This keeps the back button from bouncing across segments when the remembered thread
+  // route is stale (e.g. its thread was deleted): the segment-scoped resolver falls back to that
+  // *same* segment's latest thread instead of the globally most-recent thread.
+  const lastActiveSidebarSegmentRef = useRef<"studio" | "threads">("threads");
+  useEffect(() => {
+    if (isOnSettings) {
+      return;
+    }
+    lastActiveSidebarSegmentRef.current = isOnStudio ? "studio" : "threads";
+  }, [isOnSettings, isOnStudio]);
+
+  const handleBackToAppFromSettings = useCallback(() => {
+    const target =
+      lastActiveSidebarSegmentRef.current === "studio"
+        ? resolveBackTargetForThreads(studioSidebarThreads, studioDraftThreadIds)
+        : resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds);
+
+    if (navigateToBackTarget(target)) {
       return;
     }
 
     void navigate({ to: "/" });
-  }, [navigate, resolveBackToThreadTarget]);
+  }, [
+    navigate,
+    navigateToBackTarget,
+    nonStudioDraftThreadIds,
+    nonStudioSidebarThreads,
+    resolveBackTargetForThreads,
+    studioDraftThreadIds,
+    studioSidebarThreads,
+  ]);
 
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
@@ -2320,30 +2362,14 @@ export default function Sidebar() {
           void handleNewStudioChat();
           return;
         }
-        const target = resolveBackToStudioTarget();
-        if (target.kind === "thread") {
-          void navigate({
-            to: "/$threadId",
-            params: { threadId: ThreadId.makeUnsafe(target.threadId) },
-            search: () => ({
-              splitViewId: target.splitViewId,
-            }),
-          });
+        if (navigateToBackTarget(resolveBackToStudioTarget())) {
           return;
         }
         void handleNewStudioChat();
         return;
       }
 
-      const target = resolveBackToThreadsTarget();
-      if (target.kind === "thread") {
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: ThreadId.makeUnsafe(target.threadId) },
-          search: () => ({
-            splitViewId: target.splitViewId,
-          }),
-        });
+      if (navigateToBackTarget(resolveBackToThreadsTarget())) {
         return;
       }
 
@@ -2352,7 +2378,7 @@ export default function Sidebar() {
     [
       handleNewChat,
       handleNewStudioChat,
-      navigate,
+      navigateToBackTarget,
       navigateToWorkspace,
       resolveBackToStudioTarget,
       resolveBackToThreadsTarget,

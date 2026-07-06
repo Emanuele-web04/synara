@@ -40,6 +40,9 @@ export function StudioOutputsSection() {
     }
     let cancelled = false;
     const load = () => {
+      if (document.visibilityState !== "visible") {
+        return;
+      }
       api.studio
         .listRecentOutputs({ limit: OUTPUTS_LIMIT })
         .then((result) => {
@@ -53,9 +56,11 @@ export function StudioOutputsSection() {
     };
     load();
     const interval = window.setInterval(load, OUTPUTS_REFRESH_INTERVAL_MS);
+    document.addEventListener("visibilitychange", load);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", load);
     };
   }, [refreshToken]);
 

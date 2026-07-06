@@ -9,10 +9,20 @@ import { Effect, FileSystem, Path } from "effect";
 
 export const DEFAULT_STUDIO_RECENT_OUTPUTS_LIMIT = 20;
 
-// Safety cap on how many directory entries a single request will stat. An Outbox is a
-// personal folder (tens of files), so hitting this means something is wrong with the tree;
-// we rank whatever was scanned instead of stalling the request.
-export const MAX_SCANNED_OUTBOX_ENTRIES = 2_000;
+// Hard ceiling on how many directory entries a single request will ever stat. An Outbox is a
+// personal folder (tens to low thousands of files), so this is deliberately far above any
+// realistic tree size and exists only to bound work for a truly pathological Outbox (e.g. an
+// accidental symlink loop or someone pointing the setting at an unrelated huge directory).
+// Unlike a small cap, this must NOT be relied on to bound normal traffic: every listed entry is
+// statted and ranked by mtime before the result is truncated to `limit`, so a recently modified
+// file is never dropped just because of its position in the (mtime-unaware) directory walk order.
+// If this cap is ever hit, it is logged so the truncation is explicit rather than silent.
+export const MAX_SCANNED_OUTBOX_ENTRIES = 50_000;
+
+// How many `stat` calls run concurrently while scanning the Outbox. Bounded so a very large
+// tree doesn't open thousands of file descriptors at once, while still avoiding the cost of
+// a fully sequential scan on every 30s poll.
+export const STAT_CONCURRENCY = 16;
 
 export interface StudioOutputCandidate {
   readonly name: string;
@@ -55,24 +65,53 @@ export const listRecentStudioOutputs = Effect.fnUntraced(function* (input: {
   const path = yield* Path.Path;
   const limit = input.limit ?? DEFAULT_STUDIO_RECENT_OUTPUTS_LIMIT;
 
-  const relativePaths = yield* fileSystem
+  const allRelativePaths = yield* fileSystem
     .readDirectory(input.outboxRoot, { recursive: true })
     .pipe(Effect.catch(() => Effect.succeed([] as string[])));
 
+  const scanWasTruncated = allRelativePaths.length > MAX_SCANNED_OUTBOX_ENTRIES;
+  if (scanWasTruncated) {
+    yield* Effect.logWarning(
+      "Studio Outbox scan hit the safety cap; some recently modified files may be omitted",
+      {
+        outboxRoot: input.outboxRoot,
+        entryCount: allRelativePaths.length,
+        maxScannedOutboxEntries: MAX_SCANNED_OUTBOX_ENTRIES,
+      },
+    );
+  }
+  const relativePaths = scanWasTruncated
+    ? allRelativePaths.slice(0, MAX_SCANNED_OUTBOX_ENTRIES)
+    : allRelativePaths;
+
+  // Stat every listed entry (bounded concurrency, not a sequential loop) so a 30s poll never
+  // pays for thousands of serial round-trips. Every candidate is statted and ranked by mtime
+  // below before the result is truncated to `limit`, so ranking is never biased by directory
+  // walk order.
+  const statResults = yield* Effect.forEach(
+    relativePaths,
+    (rawRelativePath) => {
+      const fullPath = path.join(input.outboxRoot, rawRelativePath);
+      return fileSystem.stat(fullPath).pipe(
+        Effect.map((info) => ({ rawRelativePath, fullPath, info })),
+        Effect.catch(() => Effect.succeed(null)),
+      );
+    },
+    { concurrency: STAT_CONCURRENCY },
+  );
+
   const candidates: StudioOutputCandidate[] = [];
-  for (const rawRelativePath of relativePaths.slice(0, MAX_SCANNED_OUTBOX_ENTRIES)) {
-    const fullPath = path.join(input.outboxRoot, rawRelativePath);
-    const info = yield* fileSystem.stat(fullPath).pipe(Effect.catch(() => Effect.succeed(null)));
-    if (!info || info.type !== "File") {
+  for (const result of statResults) {
+    if (!result || result.info.type !== "File") {
       continue;
     }
     candidates.push({
-      name: path.basename(rawRelativePath),
+      name: path.basename(result.rawRelativePath),
       // Contract paths always use "/" so hidden-file filtering and the web's subfolder
       // labels behave the same on Windows (readDirectory returns "\"-separated paths there).
-      relativePath: rawRelativePath.split(path.sep).join("/"),
-      fullPath,
-      modifiedAtMs: info.mtime?.getTime() ?? 0,
+      relativePath: result.rawRelativePath.split(path.sep).join("/"),
+      fullPath: result.fullPath,
+      modifiedAtMs: result.info.mtime?.getTime() ?? 0,
     });
   }
 

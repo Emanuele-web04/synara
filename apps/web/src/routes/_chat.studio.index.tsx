@@ -1,18 +1,22 @@
 // FILE: _chat.studio.index.tsx
-// Purpose: Landing for the Studio surface — restore the latest Studio chat, or reopen its draft.
+// Purpose: Landing for the Studio surface — restore the latest Studio chat or its draft, falling
+//          back to creating a fresh Studio chat. Reuses the shared restore/create route surface so
+//          Studio gets the same empty-bootstrap-snapshot recovery machinery as the home route
+//          (a hard refresh or deep link can otherwise land on a briefly-empty snapshot and create
+//          a duplicate Studio thread).
 // Layer: Routing
-// Depends on: Studio project lookup plus the Studio new-chat hook.
-//
-// Studio is a secondary surface reached by clicking the segment (threads are already hydrated),
-// so it intentionally skips the cold-start remembered-route recovery dance the primary "/" route
-// needs. Keeping it simple and direct avoids the silent-splash hangs that machinery can cause.
+// Depends on: Studio project lookup, the shared restore/create route surface, and the Studio
+//             new-chat hook.
 
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useMemo } from "react";
 
 import { useAppSettings } from "../appSettings";
+import {
+  RestoreOrCreateChatRoute,
+  type RestoreRouteResolver,
+} from "../components/RestoreOrCreateChatRoute";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
-import { SplashScreen } from "../components/SplashScreen";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { findStudioDraftThreadId, isStudioContainerProject } from "../lib/studioProjects";
@@ -22,8 +26,6 @@ import { useWorkspaceStore } from "../workspaceStore";
 function StudioIndexRouteView() {
   const { settings: appSettings } = useAppSettings();
   const { handleNewStudioChat } = useHandleNewStudioChat();
-  const navigate = useNavigate();
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const projects = useStore((state) => state.projects);
   const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
@@ -46,6 +48,9 @@ function StudioIndexRouteView() {
       ),
     [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
+  // An existing Studio draft (if any) always wins over restoring a prior thread: reopening it is
+  // handled by `handleNewStudioChat` itself (it restores the project's stored draft thread), so
+  // the resolver below defers to `createFreshChat` in that case.
   const studioDraftThreadId = useMemo(
     () =>
       findStudioDraftThreadId({
@@ -65,67 +70,19 @@ function StudioIndexRouteView() {
     return sortThreadsForSidebar(studioThreads, appSettings.sidebarThreadSortOrder)[0]?.id ?? null;
   }, [appSettings.sidebarThreadSortOrder, sidebarThreadSummaryById, studioProjectIds, threadIds]);
 
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [attempt, setAttempt] = useState(0);
-  const initiatedAttemptRef = useRef(-1);
-
-  useEffect(() => {
-    if (!threadsHydrated) {
-      return;
+  const resolveRestoreRoute = useCallback<RestoreRouteResolver>(() => {
+    if (studioDraftThreadId || !latestStudioThreadId) {
+      return null;
     }
-    // Run exactly once per attempt (retry bumps `attempt`), even as memoized inputs settle.
-    if (initiatedAttemptRef.current === attempt) {
-      return;
-    }
-    initiatedAttemptRef.current = attempt;
+    return { threadId: latestStudioThreadId };
+  }, [latestStudioThreadId, studioDraftThreadId]);
 
-    let cancelled = false;
-    setErrorMessage(null);
-
-    void (async () => {
-      try {
-        if (studioDraftThreadId) {
-          const result = await handleNewStudioChat();
-          if (!cancelled && !result.ok) {
-            setErrorMessage(result.error);
-          }
-          return;
-        }
-        if (latestStudioThreadId) {
-          await navigate({
-            to: "/$threadId",
-            params: { threadId: latestStudioThreadId },
-            replace: true,
-          });
-          return;
-        }
-        const result = await handleNewStudioChat();
-        if (!cancelled && !result.ok) {
-          setErrorMessage(result.error);
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setErrorMessage(error instanceof Error ? error.message : "Unable to open Studio.");
-        }
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    attempt,
-    handleNewStudioChat,
-    latestStudioThreadId,
-    navigate,
-    studioDraftThreadId,
-    threadsHydrated,
-  ]);
+  const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
 
   return (
-    <SplashScreen
-      errorMessage={errorMessage}
-      onRetry={errorMessage ? () => setAttempt((value) => value + 1) : null}
+    <RestoreOrCreateChatRoute
+      resolveRestoreRoute={resolveRestoreRoute}
+      createFreshChat={createFreshChat}
     />
   );
 }

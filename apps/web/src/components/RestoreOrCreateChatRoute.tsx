@@ -1,22 +1,23 @@
 // FILE: RestoreOrCreateChatRoute.tsx
-// Purpose: Restore the last visited thread route on launch (scoped to a caller-supplied set of
-//          restorable threads), falling back to creating a fresh draft. Shared by the home-chat
-//          index route and the Studio index route so both behave identically.
+// Purpose: Shared cold-start machinery for chat index routes — guards against briefly-empty
+//          bootstrap snapshots, then defers to a caller-supplied resolver to pick the thread
+//          route to restore, falling back to creating a fresh draft. Used by the home-chat index
+//          route and the Studio index route so both get identical empty-snapshot recovery.
 // Layer: Routing
-// Depends on: sidebar UI persistence plus a caller-supplied fresh-chat creator.
+// Depends on: sidebar UI persistence plus caller-supplied restore/fresh-chat policy.
 
 import { ThreadId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { SplashScreen } from "./SplashScreen";
-import { readSidebarUiState } from "./Sidebar.uiState";
 import {
   type EmptyRouteRestoreRecoveryState,
-  resolveRestorableThreadRoute,
+  type LastThreadRoute,
   shouldHoldRememberedRouteFallback,
   shouldStartRememberedRouteRecovery,
 } from "../chatRouteRestore";
+import { readSidebarUiState } from "./Sidebar.uiState";
 import {
   refreshEmptyRouteRestoreSnapshot,
   waitForEmptyRouteRestoreFallbackDelay,
@@ -26,13 +27,24 @@ import { readNativeApi } from "../nativeApi";
 import { useSplitViewStore } from "../splitViewStore";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 
+export type RestoreRouteResolverInput = {
+  // Split views currently known to the client. Callers that support split-view restore should
+  // filter their resolved route's `splitViewId` against this set.
+  readonly availableSplitViewIds: ReadonlySet<string>;
+};
+
+// Resolves which thread route (if any) this surface should restore to. Returning `null` defers
+// to `createFreshChat` (e.g. because there is a draft to reopen instead of an existing thread).
+export type RestoreRouteResolver = (input: RestoreRouteResolverInput) => LastThreadRoute | null;
+
 export function RestoreOrCreateChatRoute({
-  restorableThreadIds,
+  resolveRestoreRoute,
   createFreshChat,
 }: {
-  // Threads eligible to be restored on this surface (all threads for home chats, only Studio
-  // threads for Studio). The remembered-route recovery still keys off the total thread count.
-  readonly restorableThreadIds: readonly ThreadId[];
+  // Surface-specific policy for picking the thread route to restore (e.g. the last-visited route
+  // for home chats, the latest Studio thread or draft for Studio). The remembered-route recovery
+  // below still keys off the total thread count, which is shared across surfaces.
+  readonly resolveRestoreRoute: RestoreRouteResolver;
   readonly createFreshChat: () => Promise<StartContainerChatResult>;
 }) {
   const navigate = useNavigate();
@@ -103,9 +115,7 @@ export function RestoreOrCreateChatRoute({
         return;
       }
 
-      const restorableRoute = resolveRestorableThreadRoute({
-        lastThreadRoute,
-        availableThreadIds: new Set(restorableThreadIds),
+      const restorableRoute = resolveRestoreRoute({
         availableSplitViewIds: new Set(splitViewIds),
       });
       if (restorableRoute) {
@@ -138,7 +148,7 @@ export function RestoreOrCreateChatRoute({
     createFreshChat,
     emptyRestoreRecoveryState,
     navigate,
-    restorableThreadIds,
+    resolveRestoreRoute,
     splitViewIds,
     splitViewsHydrated,
     threadIds.length,

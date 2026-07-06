@@ -6,7 +6,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useCallback } from "react";
 
-import { RestoreOrCreateChatRoute } from "../components/RestoreOrCreateChatRoute";
+import {
+  RestoreOrCreateChatRoute,
+  type RestoreRouteResolver,
+} from "../components/RestoreOrCreateChatRoute";
+import { readSidebarUiState } from "../components/Sidebar.uiState";
+import { resolveRestorableThreadRoute } from "../chatRouteRestore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 
@@ -15,9 +20,22 @@ function ChatIndexRouteView() {
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
   const createFreshChat = useCallback(() => handleNewChat({ fresh: true }), [handleNewChat]);
 
-  // Home chats can restore any thread.
+  // Home chats can restore any thread, keyed off the last visited route.
+  const resolveRestoreRoute = useCallback<RestoreRouteResolver>(
+    ({ availableSplitViewIds }) =>
+      resolveRestorableThreadRoute({
+        lastThreadRoute: readSidebarUiState().lastThreadRoute,
+        availableThreadIds: new Set(threadIds),
+        availableSplitViewIds,
+      }),
+    [threadIds],
+  );
+
   return (
-    <RestoreOrCreateChatRoute restorableThreadIds={threadIds} createFreshChat={createFreshChat} />
+    <RestoreOrCreateChatRoute
+      resolveRestoreRoute={resolveRestoreRoute}
+      createFreshChat={createFreshChat}
+    />
   );
 }
 

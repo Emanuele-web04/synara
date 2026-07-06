@@ -55,7 +55,6 @@ export function useKanbanBoard(): KanbanBoard {
     );
     const otherProjects = allProjects.filter(
       (project) =>
-        project.kind === "project" &&
         !isHomeChatContainerProject(project, { homeDir, chatWorkspaceRoot }) &&
         !isStudioContainerProject(project, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
     );

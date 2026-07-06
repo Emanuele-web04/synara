@@ -152,44 +152,80 @@ export interface DispatchCommandNormalizerOptions<E> {
 }
 
 export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormalizerOptions<E>) {
+  // Shared "should we scaffold this managed workspace root's subdirectories" guard for both
+  // container kinds. The two kinds intentionally differ in exactly one respect
+  // (`prepareWhenEqualToRoot`):
+  //   - chat: per-thread project workspace roots always live strictly WITHIN chatWorkspaceRoot
+  //     (see buildChatWorkspaceFolderPath in chatFirstSend.ts); the shared chatWorkspaceRoot
+  //     itself is never used directly as a project's root, so exact equality must be excluded
+  //     to avoid ever scaffolding "work"/"outputs" straight into the shared parent directory.
+  //   - studio: the Studio container project's workspace root IS exactly studioWorkspaceRoot
+  //     (see ensureStudioProject in studioProjects.ts), so exact equality must trigger prepare.
+  const maybePrepareWorkspaceRoot = (input: {
+    readonly kind: "chat" | "studio";
+    readonly command: Extract<
+      ClientOrchestrationCommand,
+      { type: "project.create" | "project.meta.update" }
+    >;
+    readonly workspaceRoot: string;
+    readonly configuredWorkspaceRoot: string | undefined;
+    readonly prepare: ((workspaceRoot: string) => Effect.Effect<void, E>) | undefined;
+    readonly prepareWhenEqualToRoot: boolean;
+  }) => {
+    const {
+      kind,
+      command,
+      workspaceRoot,
+      configuredWorkspaceRoot,
+      prepare,
+      prepareWhenEqualToRoot,
+    } = input;
+    if (
+      command.kind !== kind ||
+      command.createWorkspaceRootIfMissing !== true ||
+      !configuredWorkspaceRoot ||
+      !prepare
+    ) {
+      return Effect.void;
+    }
+    const isWithin = isWorkspaceRootWithin(workspaceRoot, configuredWorkspaceRoot);
+    const isEqual = workspaceRootsEqual(workspaceRoot, configuredWorkspaceRoot);
+    const shouldPrepare = prepareWhenEqualToRoot ? isWithin || isEqual : isWithin && !isEqual;
+    if (!shouldPrepare) {
+      return Effect.void;
+    }
+    return prepare(workspaceRoot);
+  };
   const maybePrepareChatWorkspaceRoot = (
     command: Extract<
       ClientOrchestrationCommand,
       { type: "project.create" | "project.meta.update" }
     >,
     workspaceRoot: string,
-  ) => {
-    if (
-      command.kind !== "chat" ||
-      command.createWorkspaceRootIfMissing !== true ||
-      !options.chatWorkspaceRoot ||
-      !options.prepareChatWorkspaceRoot ||
-      !isWorkspaceRootWithin(workspaceRoot, options.chatWorkspaceRoot) ||
-      workspaceRootsEqual(workspaceRoot, options.chatWorkspaceRoot)
-    ) {
-      return Effect.void;
-    }
-    return options.prepareChatWorkspaceRoot(workspaceRoot);
-  };
+  ) =>
+    maybePrepareWorkspaceRoot({
+      kind: "chat",
+      command,
+      workspaceRoot,
+      configuredWorkspaceRoot: options.chatWorkspaceRoot,
+      prepare: options.prepareChatWorkspaceRoot,
+      prepareWhenEqualToRoot: false,
+    });
   const maybePrepareStudioWorkspaceRoot = (
     command: Extract<
       ClientOrchestrationCommand,
       { type: "project.create" | "project.meta.update" }
     >,
     workspaceRoot: string,
-  ) => {
-    if (
-      command.kind !== "studio" ||
-      command.createWorkspaceRootIfMissing !== true ||
-      !options.studioWorkspaceRoot ||
-      !options.prepareStudioWorkspaceRoot ||
-      (!isWorkspaceRootWithin(workspaceRoot, options.studioWorkspaceRoot) &&
-        !workspaceRootsEqual(workspaceRoot, options.studioWorkspaceRoot))
-    ) {
-      return Effect.void;
-    }
-    return options.prepareStudioWorkspaceRoot(workspaceRoot);
-  };
+  ) =>
+    maybePrepareWorkspaceRoot({
+      kind: "studio",
+      command,
+      workspaceRoot,
+      configuredWorkspaceRoot: options.studioWorkspaceRoot,
+      prepare: options.prepareStudioWorkspaceRoot,
+      prepareWhenEqualToRoot: true,
+    });
 
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {

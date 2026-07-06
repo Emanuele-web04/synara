@@ -15,13 +15,14 @@ import {
 } from "./serverWorkspacePaths";
 import {
   extractDuplicateProjectCreateProjectId,
+  findContainerCandidateById,
   isDuplicateProjectCreateError,
+  resolveContainerCandidateCwd,
+  waitForSnapshotMatch,
 } from "./projectCreateRecovery";
 import { newCommandId, newProjectId } from "./utils";
 
 const pendingStudioCreationByWorkspaceRoot = new Map<string, Promise<ProjectId | null>>();
-const DUPLICATE_STUDIO_RECOVERY_MAX_ATTEMPTS = 6;
-const DUPLICATE_STUDIO_RECOVERY_DELAY_MS = 50;
 
 interface StudioContainerCandidate {
   readonly id?: ProjectId | undefined;
@@ -57,12 +58,6 @@ function waitForProjectSnapshotHydration(): Promise<void> {
     if (useStore.getState().threadsHydrated) {
       finish();
     }
-  });
-}
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
   });
 }
 
@@ -114,7 +109,7 @@ function isStudioContainerCandidate(
   project: StudioContainerCandidate | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  const cwd = project?.cwd ?? project?.workspaceRoot ?? "";
+  const cwd = resolveContainerCandidateCwd(project);
   if (!cwd) {
     return false;
   }
@@ -132,43 +127,40 @@ function findStudioContainerCandidateById<T extends StudioContainerCandidate>(
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
 ): T | null {
-  return (
-    projects.find(
-      (project) => project.id === projectId && isStudioContainerCandidate(project, paths),
-    ) ?? null
+  return findContainerCandidateById(projects, projectId, (project) =>
+    isStudioContainerCandidate(project, paths),
   );
 }
 
+interface StudioRecoverySnapshot {
+  readonly projects: readonly StudioContainerCandidate[];
+}
+
+// Reuses the shared duplicate-create retry/backoff loop (see projectCreateRecovery.ts) instead of
+// hand-rolling a snapshot-retry loop: checks the local store first, then falls back to a fresh
+// shell snapshot, syncing it into the store only once it actually contains the recovered project.
 async function recoverDuplicateStudioContainer(
   api: NonNullable<ReturnType<typeof readNativeApi>>,
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
 ): Promise<ProjectId | null> {
-  for (let attempt = 1; attempt <= DUPLICATE_STUDIO_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
-    const localProject = findStudioContainerCandidateById(
-      useStore.getState().projects,
-      projectId,
-      paths,
-    );
-    if (localProject?.id) {
-      return localProject.id;
-    }
-
-    const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
-    if (snapshot) {
-      const snapshotProject = findStudioContainerCandidateById(snapshot.projects, projectId, paths);
-      if (snapshotProject?.id) {
-        useStore.getState().syncServerShellSnapshot(snapshot);
-        return snapshotProject.id;
+  const { match } = await waitForSnapshotMatch<StudioRecoverySnapshot, StudioContainerCandidate>({
+    loadSnapshot: async () => {
+      const localProjects = useStore.getState().projects;
+      if (findStudioContainerCandidateById(localProjects, projectId, paths)) {
+        return { projects: localProjects };
       }
-    }
 
-    if (attempt < DUPLICATE_STUDIO_RECOVERY_MAX_ATTEMPTS) {
-      await wait(DUPLICATE_STUDIO_RECOVERY_DELAY_MS * attempt);
-    }
-  }
+      const snapshot = await api.orchestration.getShellSnapshot().catch(() => null);
+      if (snapshot && findStudioContainerCandidateById(snapshot.projects, projectId, paths)) {
+        useStore.getState().syncServerShellSnapshot(snapshot);
+      }
+      return snapshot;
+    },
+    findMatch: (snapshot) => findStudioContainerCandidateById(snapshot.projects, projectId, paths),
+  });
 
-  return null;
+  return match?.id ?? null;
 }
 
 export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<ProjectId | null> {
