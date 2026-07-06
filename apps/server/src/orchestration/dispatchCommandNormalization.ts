@@ -260,6 +260,11 @@ export function makeDispatchCommandNormalizer<E>(options: DispatchCommandNormali
 
   return Effect.fnUntraced(function* (input: { readonly command: ClientOrchestrationCommand }) {
     if (input.command.type === "project.create") {
+      // Known trade-off: canonicalization may create the (empty) root directory before the
+      // decider validates ownership — realpath-based canonicalization needs the directory to
+      // exist, and comparing lexical paths instead would mis-handle symlinked roots. A rejected
+      // command can therefore leave an empty directory behind, but never scaffolding: the
+      // subdirectory prepare is deferred until the dispatch is accepted (see wsRpc).
       const workspaceRoot = yield* options.canonicalizeProjectWorkspaceRoot(
         input.command.workspaceRoot,
         {

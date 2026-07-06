@@ -109,17 +109,21 @@ function validateProjectPinLimit(input: {
   readonly wasPinned?: boolean;
   readonly staleProjectIds?: ReadonlySet<string>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (input.command.isPinned !== true) {
-    return Effect.void;
-  }
-
-  if (input.nextKind !== "project") {
+  // The kind invariant must hold for the EFFECTIVE pin state, not only when the command sets
+  // isPinned: a kind-only update (e.g. project -> studio) would otherwise carry an existing pin
+  // onto a kind that can never be pinned.
+  const nextIsPinned = input.command.isPinned ?? input.wasPinned ?? false;
+  if (nextIsPinned && input.nextKind !== "project") {
     return Effect.fail(
       new OrchestrationCommandInvariantError({
         commandType: input.command.type,
         detail: `Only projects can be pinned.`,
       }),
     );
+  }
+
+  if (input.command.isPinned !== true) {
+    return Effect.void;
   }
 
   if (input.nextDeletedAt !== undefined && input.nextDeletedAt !== null) {

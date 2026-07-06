@@ -1114,6 +1114,27 @@ describe("OrchestrationEngine", () => {
       ),
     ).rejects.toThrow("already uses workspace root");
 
+    // A kind-only update must not carry an existing pin onto a kind that can never be pinned.
+    await system.run(
+      engine.dispatch({
+        type: "project.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-cross-kind-pin-app"),
+        projectId: asProjectId("project-cross-kind-app"),
+        isPinned: true,
+      }),
+    );
+    await expect(
+      system.run(
+        engine.dispatch({
+          type: "project.meta.update",
+          commandId: CommandId.makeUnsafe("cmd-cross-kind-pinned-kind-change"),
+          projectId: asProjectId("project-cross-kind-app"),
+          kind: "studio",
+          workspaceRoot: "/tmp/synara-cross-kind-pinned-studio",
+        }),
+      ),
+    ).rejects.toThrow("Only projects can be pinned.");
+
     // A kind-only update must not bypass ownership either: a chat project sitting on an owned
     // root cannot become a workspace-owning kind without the root check running.
     await system.run(

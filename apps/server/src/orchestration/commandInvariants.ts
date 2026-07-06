@@ -101,12 +101,14 @@ export function requireProjectWorkspaceRootAvailable(input: {
   readonly excludeProjectId?: ProjectId;
   readonly kinds?: ReadonlySet<ProjectKind>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
+  // Skip the excluded project BEFORE picking, not after: if corrupt state ever leaves two
+  // active owners on one root, the project being updated must not mask the other owner.
   const existingProject = listActiveProjectsByWorkspaceRoot(
     input.readModel,
     input.workspaceRoot,
     input.kinds ? { kinds: input.kinds } : undefined,
-  )[0];
-  if (!existingProject || existingProject.id === input.excludeProjectId) {
+  ).find((project) => project.id !== input.excludeProjectId);
+  if (!existingProject) {
     return Effect.void;
   }
   return Effect.fail(
