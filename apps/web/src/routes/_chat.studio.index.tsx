@@ -9,7 +9,7 @@
 //             new-chat hook.
 
 import { createFileRoute } from "@tanstack/react-router";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAppSettings } from "../appSettings";
 import {
@@ -23,6 +23,10 @@ import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { collectStudioProjectIds, findStudioDraftThreadId } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
 import { useWorkspaceStore } from "../workspaceStore";
+
+// How long the splash below waits for the welcome's Studio root before surfacing an error —
+// generous next to a normal welcome round-trip, mirroring the home route's eventual error+retry.
+const WORKSPACE_PATHS_TIMEOUT_MS = 10_000;
 
 function StudioIndexRouteView() {
   const { settings: appSettings } = useAppSettings();
@@ -73,12 +77,33 @@ function StudioIndexRouteView() {
 
   const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
 
+  // Don't wait on the splash below forever: if the welcome never delivers a Studio root
+  // (connection trouble, or a server that doesn't report one), surface an error with a retry
+  // that re-arms the wait — matching how the home route eventually surfaces failures.
+  const [pathsWaitTimedOut, setPathsWaitTimedOut] = useState(false);
+  useEffect(() => {
+    if (studioWorkspaceRoot || pathsWaitTimedOut) {
+      return;
+    }
+    const timer = window.setTimeout(() => setPathsWaitTimedOut(true), WORKSPACE_PATHS_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [pathsWaitTimedOut, studioWorkspaceRoot]);
+
   // The resolver and `handleNewStudioChat` both read the server welcome's workspace paths.
   // The shared restore/create machinery only guards against an empty *thread* snapshot, so hold
   // the splash until the welcome arrives — otherwise a snapshot that hydrates first would make
   // the resolver miss existing Studio threads and the fallback create fail against a null root.
   if (!studioWorkspaceRoot) {
-    return <SplashScreen />;
+    return (
+      <SplashScreen
+        errorMessage={
+          pathsWaitTimedOut
+            ? "Studio is taking too long to load — the server has not reported its Studio folder yet."
+            : null
+        }
+        onRetry={pathsWaitTimedOut ? () => setPathsWaitTimedOut(false) : null}
+      />
+    );
   }
 
   return (

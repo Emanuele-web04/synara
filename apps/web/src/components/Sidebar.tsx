@@ -1198,17 +1198,22 @@ function SidebarSegmentedPicker({
   if (views.length < 2) {
     return null;
   }
-  const activeIndex = Math.max(0, views.indexOf(activeView));
+  // activeView can name a hidden view (e.g. a Studio thread is open while the Studio section is
+  // toggled off) — show no selection then, instead of parking the thumb on the wrong segment.
+  const activeIndex = views.indexOf(activeView);
   return (
     <div className="px-3 pb-2.5">
       <div className="sidebar-segmented-picker relative isolate inline-flex w-full rounded-lg p-0.5">
         {/* Single highlighted pill that glides between segments instead of snapping per-button. */}
         <div
           aria-hidden
-          className="sidebar-segmented-thumb pointer-events-none absolute inset-y-0.5 left-0.5 z-0 rounded-md transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]"
+          className={cn(
+            "sidebar-segmented-thumb pointer-events-none absolute inset-y-0.5 left-0.5 z-0 rounded-md transition-transform duration-300 ease-[cubic-bezier(0.32,0.72,0,1)]",
+            activeIndex < 0 && "opacity-0",
+          )}
           style={{
             width: `calc((100% - 0.25rem) / ${views.length})`,
-            transform: `translateX(${activeIndex * 100}%)`,
+            transform: `translateX(${Math.max(0, activeIndex) * 100}%)`,
           }}
         />
         {views.map((view) => {
@@ -2225,8 +2230,8 @@ export default function Sidebar() {
     [navigate],
   );
   // Shared resolver behind resolveBackToStudioTarget/resolveBackToThreadsTarget (and the
-  // settings-back path below) — differs only in which segment's thread list (and, for the
-  // draft-aware settings-back case, draft ids) is passed in.
+  // settings-back path below) — differs only in which segment's thread list and draft ids are
+  // passed in.
   const resolveBackTargetForThreads = useCallback(
     (threads: readonly SidebarThreadSummary[], extraAvailableThreadIds?: ReadonlySet<string>) => {
       const latestThread =
@@ -2249,23 +2254,9 @@ export default function Sidebar() {
     [appSettings.sidebarThreadSortOrder, lastThreadRoute, splitViewsById],
   );
 
-  // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
-  // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
-  // async redirect is what made the segment switch feel sluggish. Mirrors
-  // resolveBackToThreadsTarget so both segments restore the thread you were last on.
-  const resolveBackToStudioTarget = useCallback(
-    () => resolveBackTargetForThreads(studioSidebarThreads),
-    [resolveBackTargetForThreads, studioSidebarThreads],
-  );
-
-  const resolveBackToThreadsTarget = useCallback(
-    () => resolveBackTargetForThreads(nonStudioSidebarThreads),
-    [nonStudioSidebarThreads, resolveBackTargetForThreads],
-  );
-
-  // Settings can be opened from a fresh unsent chat, which has a route id but no persisted
-  // sidebar summary yet. Keep that draft route as a valid return target, scoped to whichever
-  // segment the draft's project belongs to.
+  // Fresh unsent chats have a route id but no persisted sidebar summary yet. Keep those draft
+  // routes valid return targets — scoped to whichever segment the draft's project belongs to —
+  // for both the settings back button and the segment switcher.
   const studioDraftThreadIds = useMemo(() => {
     const draftThreadIds = new Set<string>();
     for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
@@ -2284,6 +2275,20 @@ export default function Sidebar() {
     }
     return draftThreadIds;
   }, [draftThreadsByThreadId, studioProjectIdSet]);
+
+  // Where the Studio segment lands, resolved directly (remembered Studio route, else the latest
+  // Studio chat) instead of bouncing through the "/studio" splash route — that extra hop +
+  // async redirect is what made the segment switch feel sluggish. Mirrors
+  // resolveBackToThreadsTarget so both segments restore the thread you were last on.
+  const resolveBackToStudioTarget = useCallback(
+    () => resolveBackTargetForThreads(studioSidebarThreads, studioDraftThreadIds),
+    [resolveBackTargetForThreads, studioDraftThreadIds, studioSidebarThreads],
+  );
+
+  const resolveBackToThreadsTarget = useCallback(
+    () => resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds),
+    [nonStudioDraftThreadIds, nonStudioSidebarThreads, resolveBackTargetForThreads],
+  );
 
   // Navigates to a resolved settings-back / segment-switch target. Returns whether it navigated
   // to a thread so callers can fall back to creating a fresh chat/home route otherwise.
@@ -2322,23 +2327,15 @@ export default function Sidebar() {
   const handleBackToAppFromSettings = useCallback(() => {
     const target =
       lastActiveSidebarSegmentRef.current === "studio"
-        ? resolveBackTargetForThreads(studioSidebarThreads, studioDraftThreadIds)
-        : resolveBackTargetForThreads(nonStudioSidebarThreads, nonStudioDraftThreadIds);
+        ? resolveBackToStudioTarget()
+        : resolveBackToThreadsTarget();
 
     if (navigateToBackTarget(target)) {
       return;
     }
 
     void navigate({ to: "/" });
-  }, [
-    navigate,
-    navigateToBackTarget,
-    nonStudioDraftThreadIds,
-    nonStudioSidebarThreads,
-    resolveBackTargetForThreads,
-    studioDraftThreadIds,
-    studioSidebarThreads,
-  ]);
+  }, [navigate, navigateToBackTarget, resolveBackToStudioTarget, resolveBackToThreadsTarget]);
 
   const handleSidebarViewChange = useCallback(
     (view: SidebarView) => {
