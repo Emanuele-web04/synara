@@ -156,7 +156,10 @@ import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
+  derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  promptStillMatchesActiveHistoryBrowse,
+  type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
@@ -164,6 +167,8 @@ import {
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
+  resolvePromptHistoryNavigation,
+  shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
@@ -954,6 +959,7 @@ export default function ChatView({
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
+  const composerPromptHistorySavedDraft = composerDraft.promptHistorySavedDraft;
   const composerImages = composerDraft.images;
   const composerFiles = composerDraft.files;
   const composerAssistantSelections = composerDraft.assistantSelections;
@@ -996,6 +1002,9 @@ export default function ChatView({
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftPromptHistorySavedDraft = useComposerDraftStore(
+    (store) => store.setPromptHistorySavedDraft,
+  );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftProviderModelOptions = useComposerDraftStore(
     (store) => store.setProviderModelOptions,
@@ -1226,6 +1235,10 @@ export default function ChatView({
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
   const pendingComposerFocusRef = useRef(false);
+  const promptHistoryNavigationRef = useRef<PromptHistoryNavigationState | null>(null);
+  const applyingPromptHistoryNavigationRef = useRef(false);
+  const expectedPromptHistoryPromptRef = useRef<string | null>(null);
+  const promptHistoryAppliedPromptRef = useRef<string | null>(null);
   const composerFormHeightRef = useRef(0);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
@@ -1252,6 +1265,34 @@ export default function ChatView({
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const activatedThreadIdRef = useRef<ThreadId | null>(null);
+  useEffect(() => {
+    promptHistoryNavigationRef.current = null;
+    applyingPromptHistoryNavigationRef.current = false;
+    expectedPromptHistoryPromptRef.current = null;
+    promptHistoryAppliedPromptRef.current = null;
+  }, [threadId]);
+  // While a history browse is active the persisted draft prompt holds a
+  // recalled entry and the user's real draft sits in promptHistorySavedDraft.
+  // A non-null saved draft with no live navigation state means the browse was
+  // interrupted (thread switch, reload, unmount) — put the real draft back.
+  useEffect(() => {
+    if (promptHistoryNavigationRef.current !== null || composerPromptHistorySavedDraft === null) {
+      return;
+    }
+    setComposerDraftPrompt(threadId, composerPromptHistorySavedDraft);
+    setComposerCursor(
+      collapseExpandedComposerCursor(
+        composerPromptHistorySavedDraft,
+        composerPromptHistorySavedDraft.length,
+      ),
+    );
+    setComposerDraftPromptHistorySavedDraft(threadId, null);
+  }, [
+    composerPromptHistorySavedDraft,
+    setComposerDraftPrompt,
+    setComposerDraftPromptHistorySavedDraft,
+    threadId,
+  ]);
   const setRestoredQueuedSourceProposedPlan = useCallback(
     (targetThreadId: ThreadId, source: RestoredComposerSourceProposedPlan | null) => {
       restoredQueuedSourceProposedPlanRef.current = source;
@@ -2687,6 +2728,14 @@ export default function ChatView({
     pendingAutomationConversation,
     threadId,
   ]);
+  const promptHistory = useMemo(() => {
+    const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+    const activeMessageIds = new Set(activeMessages.map((message) => message.id));
+    const pendingOptimisticMessages = optimisticUserMessages.filter(
+      (message) => !activeMessageIds.has(message.id),
+    );
+    return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
+  }, [activeThread?.messages, optimisticUserMessages]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -3673,6 +3722,7 @@ export default function ChatView({
         value: promptRef.current,
         cursor: composerCursor,
         expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+        selectionCollapsed: true,
         terminalContextIds: composerTerminalContexts.map((context) => context.id),
       };
       const insertion = insertInlineTerminalContextPlaceholder(
@@ -5039,8 +5089,20 @@ export default function ChatView({
 
   useEffect(() => {
     promptRef.current = prompt;
+    if (
+      promptHistoryNavigationRef.current !== null &&
+      prompt !== promptHistoryAppliedPromptRef.current
+    ) {
+      // Another writer (queued-turn restore, automation restore, insertion)
+      // replaced the prompt while a history browse was active. The new prompt
+      // is authoritative: end the browse and drop the saved pre-browse draft
+      // so it cannot clobber this prompt later.
+      promptHistoryNavigationRef.current = null;
+      expectedPromptHistoryPromptRef.current = null;
+      setComposerDraftPromptHistorySavedDraft(threadId, null);
+    }
     setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
-  }, [prompt]);
+  }, [prompt, setComposerDraftPromptHistorySavedDraft, threadId]);
 
   useLayoutEffect(() => {
     updateSelectedComposerSkills(composerSkills);
@@ -6023,6 +6085,9 @@ export default function ChatView({
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       setRestoredQueuedSourceProposedPlan(threadId, null);
       clearComposerDraftContent(threadId);
@@ -7233,6 +7298,9 @@ export default function ChatView({
     // Queued turns are dispatched from their captured snapshot, so this send path
     // must not clear a separate live draft the user may already be editing.
     if (queuedChatTurn === null) {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       clearComposerDraftContent(threadIdForSend, { preservePreviewUrls: true });
       if (isLivePlanFollowUpSubmission) {
@@ -8748,6 +8816,7 @@ export default function ChatView({
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   } => {
     const editorSnapshot = composerEditorRef.current?.readSnapshot();
@@ -8758,12 +8827,18 @@ export default function ChatView({
       value: promptRef.current,
       cursor: composerCursor,
       expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+      selectionCollapsed: true,
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerTerminalContexts]);
 
   const resolveActiveComposerTrigger = useCallback((): {
-    snapshot: { value: string; cursor: number; expandedCursor: number };
+    snapshot: {
+      value: string;
+      cursor: number;
+      expandedCursor: number;
+      selectionCollapsed: boolean;
+    };
     trigger: ComposerTrigger | null;
   } => {
     const snapshot = readComposerSnapshot();
@@ -9129,6 +9204,15 @@ export default function ChatView({
       terminalContextIds: string[],
     ) => {
       if (activePendingProgress?.activeQuestion && activePendingUserInput) {
+        const interruptedNavigation = promptHistoryNavigationRef.current;
+        if (interruptedNavigation !== null) {
+          // An active question ended the history browse while the persisted
+          // prompt still held a recalled entry; put the real draft back.
+          promptHistoryNavigationRef.current = null;
+          setPrompt(interruptedNavigation.draft);
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        }
+        expectedPromptHistoryPromptRef.current = null;
         onChangeActivePendingUserInputCustomAnswer(
           activePendingProgress.activeQuestion.id,
           nextPrompt,
@@ -9137,6 +9221,32 @@ export default function ChatView({
           cursorAdjacentToMention,
         );
         return;
+      }
+      const expectedPromptHistoryPrompt = expectedPromptHistoryPromptRef.current;
+      if (expectedPromptHistoryPrompt !== null) {
+        if (nextPrompt === expectedPromptHistoryPrompt) {
+          expectedPromptHistoryPromptRef.current = null;
+        } else {
+          // The user edited past the recalled entry: the edited text is the
+          // draft now, so the saved pre-browse draft must not be restored.
+          promptHistoryNavigationRef.current = null;
+          expectedPromptHistoryPromptRef.current = null;
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        }
+      } else if (!applyingPromptHistoryNavigationRef.current) {
+        const activePromptHistoryNavigation = promptHistoryNavigationRef.current;
+        if (
+          activePromptHistoryNavigation !== null &&
+          !promptStillMatchesActiveHistoryBrowse({
+            state: activePromptHistoryNavigation,
+            history: promptHistory,
+            nextPrompt,
+            appliedPrompt: promptHistoryAppliedPromptRef.current,
+          })
+        ) {
+          promptHistoryNavigationRef.current = null;
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        }
       }
       const restoredQueuedSource = restoredQueuedSourceProposedPlanRef.current;
       if (
@@ -9170,7 +9280,9 @@ export default function ChatView({
       composerTerminalContexts,
       composerCommandPicker,
       onChangeActivePendingUserInputCustomAnswer,
+      promptHistory,
       setPrompt,
+      setComposerDraftPromptHistorySavedDraft,
       setComposerDraftTerminalContexts,
       setComposerCommandPicker,
       setRestoredQueuedSourceProposedPlan,
@@ -9253,7 +9365,64 @@ export default function ChatView({
       }
     }
 
+    if (
+      shouldHandlePromptHistoryNavigationKey({
+        key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        menuIsActive,
+        hasActivePendingProgress: Boolean(activePendingProgress),
+        isComposerApprovalState,
+        pendingUserInputCount: pendingUserInputs.length,
+      })
+    ) {
+      const direction = key === "ArrowUp" ? "older" : "newer";
+      const previousNavigationState = promptHistoryNavigationRef.current;
+      const result = resolvePromptHistoryNavigation({
+        direction,
+        history: promptHistory,
+        currentPrompt: snapshot.value,
+        // Line-boundary math needs raw string offsets; the collapsed cursor
+        // undercounts inline token chips (mentions, links, slash commands).
+        currentExpandedCursor: snapshot.expandedCursor,
+        selectionCollapsed: snapshot.selectionCollapsed,
+        state: previousNavigationState,
+      });
+      if (result.handled) {
+        promptHistoryNavigationRef.current = result.state;
+        if (result.state === null) {
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        } else if (previousNavigationState === null) {
+          setComposerDraftPromptHistorySavedDraft(threadId, result.state.draft);
+        }
+        applyingPromptHistoryNavigationRef.current = true;
+        expectedPromptHistoryPromptRef.current = result.prompt;
+        promptHistoryAppliedPromptRef.current = result.prompt;
+        promptRef.current = result.prompt;
+        setPrompt(result.prompt);
+        setComposerCursor(collapseExpandedComposerCursor(result.prompt, result.expandedCursor));
+        // Recalled text replaces the whole prompt; suppress trigger detection
+        // so an entry ending in a mention/slash token cannot pop a menu that
+        // would capture the next arrow keypress.
+        setComposerTrigger(null);
+        window.requestAnimationFrame(() => {
+          applyingPromptHistoryNavigationRef.current = false;
+        });
+        return true;
+      }
+    }
+
     if (key === "Enter" && !event.shiftKey) {
+      if (promptHistoryNavigationRef.current !== null) {
+        // Sending commits the recalled text as the prompt; drop the saved
+        // draft here (not just in the send path) so it cannot linger and
+        // resurrect a stale draft if the send is rejected.
+        promptHistoryNavigationRef.current = null;
+        setComposerDraftPromptHistorySavedDraft(threadId, null);
+      }
+      expectedPromptHistoryPromptRef.current = null;
       void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
       return true;
     }
