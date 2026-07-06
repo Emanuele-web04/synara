@@ -17,6 +17,7 @@ import {
   type RestoreRouteResolver,
 } from "../components/RestoreOrCreateChatRoute";
 import { sortThreadsForSidebar } from "../components/Sidebar.logic";
+import { SplashScreen } from "../components/SplashScreen";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewStudioChat } from "../hooks/useHandleNewStudioChat";
 import { findStudioDraftThreadId, isStudioContainerProject } from "../lib/studioProjects";
@@ -78,6 +79,14 @@ function StudioIndexRouteView() {
   }, [latestStudioThreadId, studioDraftThreadId]);
 
   const createFreshChat = useCallback(() => handleNewStudioChat(), [handleNewStudioChat]);
+
+  // The resolver and `handleNewStudioChat` both read the server welcome's workspace paths.
+  // The shared restore/create machinery only guards against an empty *thread* snapshot, so hold
+  // the splash until the welcome arrives — otherwise a snapshot that hydrates first would make
+  // the resolver miss existing Studio threads and the fallback create fail against a null root.
+  if (!studioWorkspaceRoot) {
+    return <SplashScreen />;
+  }
 
   return (
     <RestoreOrCreateChatRoute

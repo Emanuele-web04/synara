@@ -2271,8 +2271,7 @@ export default function Sidebar() {
 
   // Settings can be opened from a fresh unsent chat, which has a route id but no persisted
   // sidebar summary yet. Keep that draft route as a valid return target, scoped to whichever
-  // segment the draft's project belongs to (mirrors buildSettingsBackAvailableThreadIds' intent,
-  // but partitioned per segment instead of merged across both).
+  // segment the draft's project belongs to.
   const studioDraftThreadIds = useMemo(() => {
     const draftThreadIds = new Set<string>();
     for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
