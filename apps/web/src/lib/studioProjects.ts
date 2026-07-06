@@ -161,6 +161,11 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
     return null;
   }
 
+  // Same shape as ensureHomeChatProject: never consult the local store before the first shell
+  // snapshot. Store rows only ever come from server syncs today, but waiting first keeps this
+  // safe even if project rows ever become locally persisted or partially populated.
+  await waitForProjectSnapshotHydration();
+
   const existingProject = findStudioContainerProject(useStore.getState().projects, paths);
   if (existingProject) {
     return existingProject.id;
@@ -172,12 +177,6 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
   }
 
   const creationPromise = (async () => {
-    await waitForProjectSnapshotHydration();
-    const hydratedExistingProject = findStudioContainerProject(useStore.getState().projects, paths);
-    if (hydratedExistingProject) {
-      return hydratedExistingProject.id;
-    }
-
     const projectId = newProjectId();
     try {
       await api.orchestration.dispatchCommand({
