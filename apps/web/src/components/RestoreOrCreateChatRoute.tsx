@@ -62,6 +62,9 @@ export function RestoreOrCreateChatRoute({
     useState<EmptyRouteRestoreRecoveryState>("idle");
   const mountedRef = useRef(true);
   const emptyRestoreRecoveryRunRef = useRef(0);
+  // One fresh-chat creation at a time per mount: a dep change mid-create re-runs the effect,
+  // and without this guard the superseded run and the new run could both mint a draft.
+  const createFreshChatInFlightRef = useRef(false);
 
   useEffect(() => {
     return () => {
@@ -133,7 +136,16 @@ export function RestoreOrCreateChatRoute({
         return;
       }
 
-      const result = await createFreshChat();
+      if (cancelled || createFreshChatInFlightRef.current) {
+        return;
+      }
+      createFreshChatInFlightRef.current = true;
+      let result: StartContainerChatResult;
+      try {
+        result = await createFreshChat();
+      } finally {
+        createFreshChatInFlightRef.current = false;
+      }
       if (cancelled || result.ok) {
         return;
       }
