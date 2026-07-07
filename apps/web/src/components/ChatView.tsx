@@ -4414,7 +4414,9 @@ export default function ChatView({
           error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
         );
         if (options?.throwOnError) {
-          throw error instanceof Error ? error : new Error(`Failed to run script "${script.name}".`);
+          throw error instanceof Error
+            ? error
+            : new Error(`Failed to run script "${script.name}".`);
         }
         return null;
       }

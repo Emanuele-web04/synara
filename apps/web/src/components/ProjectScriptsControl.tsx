@@ -13,13 +13,7 @@ import {
   PlusIcon,
   SettingsIcon,
 } from "~/lib/icons";
-import React, {
-  type FormEvent,
-  type KeyboardEvent,
-  useCallback,
-  useMemo,
-  useState,
-} from "react";
+import React, { type FormEvent, type KeyboardEvent, useCallback, useMemo, useState } from "react";
 
 import {
   keybindingValueForCommand,
@@ -372,18 +366,13 @@ export default function ProjectScriptsControl({
         </ChatHeaderSplitGroup>
       ) : showInlineControls ? (
         <ChatHeaderButton
-          className={cn(
-            "gap-1.5 px-2.5",
-            hideInlineLabel && "px-2",
-          )}
+          className={cn("gap-1.5 px-2.5", hideInlineLabel && "px-2")}
           onClick={openAddDialog}
           aria-label="Add action"
           title="Add action"
         >
           <PlusIcon className="size-3.5" />
-          <span
-            className={cn("font-normal", hideInlineLabel ? "sr-only" : "hidden sm:inline")}
-          >
+          <span className={cn("font-normal", hideInlineLabel ? "sr-only" : "hidden sm:inline")}>
             Add action
           </span>
         </ChatHeaderButton>
