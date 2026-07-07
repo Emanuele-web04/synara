@@ -142,6 +142,14 @@ export function useProviderModelCatalog(input: {
       enabled: selectedProvider === "kilo" || discoveryEnabled,
     }),
   );
+  const piDynamicAgentsQuery = useQuery(
+    providerAgentsQueryOptions({
+      provider: "pi",
+      agentDir: settings.piAgentDir || null,
+      cwd: discoveryCwd,
+      enabled: selectedProvider === "pi" || discoveryEnabled,
+    }),
+  );
 
   const cursorRuntimeModels = useMemo(
     () =>
@@ -325,7 +333,9 @@ export function useProviderModelCatalog(input: {
         ? (kiloDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
         : selectedProvider === "opencode"
           ? (openCodeDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
-          : (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS);
+          : selectedProvider === "pi"
+            ? (piDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS)
+            : (codexDynamicAgentsQuery.data?.agents ?? EMPTY_PROVIDER_AGENTS);
   const selectedRuntimeAgents = useMemo<ReadonlyArray<ProviderAgentDescriptor>>(
     () =>
       selectedDynamicAgents.map((agent) =>

@@ -802,6 +802,326 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-start"]);
   });
 
+  it("surfaces Pi subagent titles and prompts from tool input data", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "pi-subagent-start",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            toolCallId: "call-1",
+            toolName: "subagent",
+            input: {
+              agent: "explore",
+              name: "dispatch-smoke-test",
+              title: "Subagent dispatch smoke test",
+              task: "Inspect the repository and report whether dispatch worked.",
+              model: "windsurf/swe-1.6",
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "pi-subagent-start",
+      itemType: "collab_agent_tool_call",
+      toolTitle: "Subagent dispatch smoke test",
+      subagentAction: {
+        tool: "subagent",
+        status: "inProgress",
+        model: "windsurf/swe-1.6",
+        prompt: "Inspect the repository and report whether dispatch worked.",
+      },
+    });
+  });
+
+  it("keeps routed Pi subagent tool completions so details include result and child metadata", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "pi-subagent-start",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task started",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            toolCallId: "call-1",
+            toolName: "subagent",
+            item: {
+              type: "collabAgentToolCall",
+              toolName: "subagent",
+              input: {
+                title: "Repository smoke check",
+                task: "Inspect the repository root and report the main packages/apps.",
+              },
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "pi-subagent-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent task",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent task",
+          detail: "Inspected apps/server, apps/web, packages/contracts, and packages/shared.",
+          data: {
+            toolCallId: "call-1",
+            toolName: "subagent",
+            item: {
+              type: "collabAgentToolCall",
+              toolName: "subagent",
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [
+                {
+                  threadId: "child-provider-1",
+                  agentId: "explore",
+                  agentNickname: "repo-smoke",
+                  prompt: "Inspect the repository root and report the main packages/apps.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "pi-subagent-complete",
+      itemType: "collab_agent_tool_call",
+      toolTitle: "Repository smoke check",
+      detail: "Inspected apps/server, apps/web, packages/contracts, and packages/shared.",
+      subagents: [
+        {
+          threadId: "child-provider-1",
+          agentId: "explore",
+          nickname: "repo-smoke",
+          prompt: "Inspect the repository root and report the main packages/apps.",
+        },
+      ],
+    });
+  });
+
+  it("keeps thread-scoped Pi subagent result messages with visible turn filtering", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-tool",
+        turnId: "turn-1",
+        summary: "Visible tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [
+                {
+                  threadId: "child-provider-1",
+                  agentNickname: "smoke-test",
+                  prompt: "Run a harmless subagent smoke test.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "pi-subagent-result",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent result",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent result",
+          detail: "Subagent launched successfully and changed no files.",
+          data: {
+            parentTurnId: "turn-1",
+            item: {
+              parentTurnId: "turn-1",
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [
+                {
+                  threadId: "child-provider-1",
+                  agentNickname: "smoke-test",
+                  prompt: "Run a harmless subagent smoke test.",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-1"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-1")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual(["visible-tool", "pi-subagent-result"]);
+    expect(entries[1]).toMatchObject({
+      detail: "Subagent launched successfully and changed no files.",
+      subagents: [{ threadId: "child-provider-1", nickname: "smoke-test" }],
+    });
+  });
+
+  it("hides thread-scoped Pi subagent result messages that have no launch turn", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "current" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "thread-scoped-subagent-result-without-parent",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent result",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent result",
+          detail: "Unscoped subagent output should stay hidden while turn 2 is visible.",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "unknown" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual([]);
+  });
+
+  it("does not leak old thread-scoped collab completions into the visible work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-tool",
+        turnId: "turn-2",
+        summary: "Visible tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "visible-subagent-launch",
+        turnId: "turn-2",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        summary: "Subagent task",
+        kind: "tool.started",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "inProgress",
+          title: "Subagent task",
+          data: {
+            item: {
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "current" }],
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "old-thread-scoped-subagent-result",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Subagent result",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Subagent result",
+          detail: "Old subagent output should stay hidden while turn 2 is visible.",
+          data: {
+            parentTurnId: "turn-1",
+            item: {
+              parentTurnId: "turn-1",
+              receiverThreadIds: ["child-provider-1"],
+              receiverAgents: [{ threadId: "child-provider-1", agentNickname: "old" }],
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual(["visible-tool"]);
+  });
+
+  it("does not leak old turn-stamped collab completions into the visible work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "visible-tool",
+        turnId: "turn-2",
+        summary: "Visible tool",
+        kind: "tool.started",
+      }),
+      makeActivity({
+        id: "old-opencode-task-result",
+        turnId: "turn-1",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Task",
+        kind: "tool.completed",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          status: "completed",
+          title: "Task",
+          detail: "Old task result should stay hidden while turn 2 is visible.",
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"), {
+      visibleTurnIds: new Set([TurnId.makeUnsafe("turn-2")]),
+    });
+
+    expect(entries.map((entry) => entry.id)).toEqual(["visible-tool"]);
+  });
+
   it("omits task start and completion lifecycle entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

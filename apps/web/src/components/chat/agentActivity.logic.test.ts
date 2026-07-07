@@ -109,4 +109,250 @@ describe("deriveAgentActivityTimelineState", () => {
       detail: "Full changelog report\nwith many file references and implementation notes.",
     });
   });
+
+  it("groups delayed subagent result rows with the launch activity", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "agent-task-start",
+        label: "Subagent smoke test",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Subagent smoke test",
+        subagentAction: {
+          tool: "subagent",
+          status: "inProgress",
+          summaryText: "Agent activity",
+          prompt: "Run a harmless subagent smoke test.",
+        },
+        subagents: [
+          {
+            threadId: "child-provider-1",
+            providerThreadId: "child-provider-1",
+            nickname: "smoke-test",
+            prompt: "Run a harmless subagent smoke test.",
+          },
+        ],
+      }),
+      workEntry({
+        id: "agent-task-result",
+        label: "Subagent result",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Subagent result",
+        detail: "Subagent launched successfully from /home/ethan/synara and changed no files.",
+        subagents: [
+          {
+            threadId: "child-provider-1",
+            providerThreadId: "child-provider-1",
+            nickname: "smoke-test",
+            prompt: "Run a harmless subagent smoke test.",
+          },
+        ],
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual(["agent-task-start"]);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      id: "agent-task-start",
+      toolTitle: "Subagent smoke test",
+      detail: "Subagent launched successfully from /home/ethan/synara and changed no files.",
+      subagents: [{ threadId: "child-provider-1", nickname: "smoke-test" }],
+    });
+    expect(state.detailById.get("agent-task-start")?.entries.map((entry) => entry.id)).toEqual([
+      "agent-task-start",
+      "agent-task-result",
+    ]);
+  });
+
+  it("groups single subagent launch and result rows by child identity", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "agent-task-start",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent activity",
+        subagentAction: {
+          tool: "subagent",
+          status: "inProgress",
+          summaryText: "Agent activity",
+          prompt: "Run a smoke test and report back briefly.",
+        },
+        subagents: [
+          {
+            threadId: "child-provider-1",
+            providerThreadId: "child-provider-1",
+            nickname: "subagent-smoke-test",
+          },
+        ],
+      }),
+      workEntry({
+        id: "agent-task-result",
+        label: "Spawning 1 agent",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Spawning 1 agent",
+        detail: "Subagent smoke test succeeded. No files were modified.",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "completed",
+          summaryText: "Spawning 1 agent",
+        },
+        subagents: [
+          {
+            threadId: "child-provider-1",
+            providerThreadId: "child-provider-1",
+            nickname: "subagent-smoke-test",
+          },
+        ],
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual(["agent-task-start"]);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      detail: "Subagent smoke test succeeded. No files were modified.",
+      subagents: [{ threadId: "child-provider-1", nickname: "subagent-smoke-test" }],
+    });
+    expect(state.detailById.get("agent-task-start")?.entries.map((entry) => entry.id)).toEqual([
+      "agent-task-start",
+      "agent-task-result",
+    ]);
+  });
+
+  it("omits redundant single-agent launch rows when a parallel dispatch summary exists", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "parallel-summary",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent activity",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "completed",
+          summaryText: "Agent activity",
+        },
+        subagents: [
+          { threadId: "child-one", providerThreadId: "child-one", nickname: "one" },
+          { threadId: "child-two", providerThreadId: "child-two", nickname: "two" },
+          { threadId: "child-three", providerThreadId: "child-three", nickname: "three" },
+        ],
+      }),
+      workEntry({
+        id: "launch-one",
+        label: "Spawning 1 agent",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Spawning 1 agent",
+        detail: "parallel-test-one(explore)",
+        preview: "parallel-test-one [explore]",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "inProgress",
+          summaryText: "Spawning 1 agent",
+        },
+        subagents: [{ threadId: "child-one", providerThreadId: "child-one", nickname: "one" }],
+      }),
+      workEntry({
+        id: "launch-two",
+        label: "Spawning 1 agent",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Spawning 1 agent",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "inProgress",
+          summaryText: "Spawning 1 agent",
+        },
+        subagents: [{ threadId: "child-two", providerThreadId: "child-two", nickname: "two" }],
+      }),
+      workEntry({
+        id: "launch-three",
+        label: "Spawning 1 agent",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Spawning 1 agent",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "inProgress",
+          summaryText: "Spawning 1 agent",
+        },
+        subagents: [
+          { threadId: "child-three", providerThreadId: "child-three", nickname: "three" },
+        ],
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual(["parallel-summary"]);
+    expect(state.timelineWorkEntries[0]?.subagents?.map((subagent) => subagent.threadId)).toEqual([
+      "child-one",
+      "child-two",
+      "child-three",
+    ]);
+  });
+
+  it("keeps matching single-agent result details in the grouped activity", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "parallel-summary",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent activity",
+        subagents: [
+          { threadId: "child-one", providerThreadId: "child-one", nickname: "one" },
+          { threadId: "child-two", providerThreadId: "child-two", nickname: "two" },
+        ],
+      }),
+      workEntry({
+        id: "result-one",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent result",
+        detail: "Child one found the relevant files.",
+        subagentAction: {
+          tool: "spawnAgent",
+          status: "completed",
+          summaryText: "Agent activity",
+        },
+        subagents: [{ threadId: "child-one", providerThreadId: "child-one", nickname: "one" }],
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual(["parallel-summary"]);
+    expect(state.timelineWorkEntries[0]).toMatchObject({
+      detail: "Child one found the relevant files.",
+    });
+    expect(state.detailById.get("parallel-summary")?.entries.map((entry) => entry.id)).toEqual([
+      "parallel-summary",
+      "result-one",
+    ]);
+  });
+
+  it("does not group independent launches by prompt or nickname alone", () => {
+    const state = deriveAgentActivityTimelineState([
+      workEntry({
+        id: "agent-task-one",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent activity",
+        subagentAction: {
+          tool: "subagent",
+          status: "completed",
+          summaryText: "Agent activity",
+          prompt: "Run the shared smoke check.",
+        },
+        subagents: [{ threadId: "first-child", nickname: "smoke-test" }],
+      }),
+      workEntry({
+        id: "agent-task-two",
+        label: "Agent activity",
+        itemType: "collab_agent_tool_call",
+        toolTitle: "Agent activity",
+        subagentAction: {
+          tool: "subagent",
+          status: "completed",
+          summaryText: "Agent activity",
+          prompt: "Run the shared smoke check.",
+        },
+        subagents: [{ threadId: "second-child", nickname: "smoke-test" }],
+      }),
+    ]);
+
+    expect(state.timelineWorkEntries.map((entry) => entry.id)).toEqual([
+      "agent-task-one",
+      "agent-task-two",
+    ]);
+  });
 });

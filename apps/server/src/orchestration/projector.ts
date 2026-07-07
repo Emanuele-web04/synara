@@ -21,6 +21,10 @@ import { Effect, Schema } from "effect";
 
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
+  mergeProjectedMessageStreaming,
+  mergeProjectedMessageText,
+} from "./messageProjectionMerge.ts";
+import {
   MessageSentPayloadSchema,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
@@ -715,12 +719,16 @@ export function projectEvent(
               entry.id === message.id
                 ? {
                     ...entry,
-                    text: message.streaming
-                      ? `${entry.text}${message.text}`
-                      : message.text.length > 0
-                        ? message.text
-                        : entry.text,
-                    streaming: message.streaming,
+                    text: mergeProjectedMessageText({
+                      existingText: entry.text,
+                      existingStreaming: entry.streaming,
+                      incomingText: message.text,
+                      incomingStreaming: message.streaming,
+                    }),
+                    streaming: mergeProjectedMessageStreaming({
+                      existingStreaming: entry.streaming,
+                      incomingStreaming: message.streaming,
+                    }),
                     source: message.source,
                     updatedAt: message.updatedAt,
                     turnId: resolveStableMessageTurnId({

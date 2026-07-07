@@ -35,6 +35,7 @@ const MIN_DETAIL_BOTTOM_INSET_PX = 64;
 
 interface AgentActivityDetailViewProps {
   detail: AgentActivityDetail;
+  parentThreadId: string;
   bottomContentInsetPx?: number | undefined;
   chatFontSizePx: number;
   contentInsetRightPx?: number | undefined;
@@ -47,6 +48,7 @@ interface AgentActivityDetailViewProps {
 
 export const AgentActivityDetailView = memo(function AgentActivityDetailView({
   detail,
+  parentThreadId,
   bottomContentInsetPx,
   chatFontSizePx,
   contentInsetRightPx,
@@ -152,6 +154,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
                 <SubagentDetailRow
                   key={subagent.threadId}
                   subagent={subagent}
+                  parentThreadId={parentThreadId}
                   textStyle={chatTypographyStyle}
                   {...(onOpenThread ? { onOpenThread } : {})}
                 />
@@ -228,6 +231,7 @@ function AgentActivityEventRow(props: {
 
 function SubagentDetailRow(props: {
   subagent: WorkLogSubagent;
+  parentThreadId: string;
   textStyle: CSSProperties;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
@@ -240,6 +244,9 @@ function SubagentDetailRow(props: {
   const modelLabel = formatSubagentModelLabel(props.subagent.model);
   const statusLabel = humanizeSubagentStatus(props.subagent.rawStatus, props.subagent.isActive);
   const canOpenThread = Boolean(props.onOpenThread);
+  const targetThreadId =
+    props.subagent.resolvedThreadId ??
+    `subagent:${props.parentThreadId}:${props.subagent.providerThreadId ?? props.subagent.threadId}`;
 
   return (
     <div className="flex items-start gap-2.5 rounded-md border border-border/40 bg-background/45 px-3 py-2">
@@ -276,11 +283,7 @@ function SubagentDetailRow(props: {
             : "cursor-default opacity-50",
         )}
         disabled={!canOpenThread}
-        onClick={() =>
-          props.onOpenThread?.(
-            ThreadId.makeUnsafe(props.subagent.resolvedThreadId ?? props.subagent.threadId),
-          )
-        }
+        onClick={() => props.onOpenThread?.(ThreadId.makeUnsafe(targetThreadId))}
       >
         Open
       </button>

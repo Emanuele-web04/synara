@@ -2363,6 +2363,30 @@ const make = Effect.gen(function* () {
       const proposedPlanDelta =
         event.type === "turn.proposed.delta" ? event.payload.delta : undefined;
 
+      if (
+        isChildThreadEvent &&
+        event.type === "item.completed" &&
+        event.payload.itemType === "user_message" &&
+        event.payload.detail &&
+        event.itemId
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.messages.import",
+          commandId: providerCommandId(event, "user-message-import"),
+          threadId: thread.id,
+          messages: [
+            {
+              messageId: MessageId.makeUnsafe(`user:${event.itemId}`),
+              role: "user",
+              text: event.payload.detail,
+              createdAt: event.createdAt,
+              updatedAt: event.createdAt,
+            },
+          ],
+          createdAt: event.createdAt,
+        });
+      }
+
       if (assistantDelta && assistantDelta.length > 0) {
         const assistantMessageId = MessageId.makeUnsafe(
           `assistant:${event.itemId ?? event.turnId ?? event.eventId}`,

@@ -4236,6 +4236,180 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(false);
   });
 
+  it("imports provider user-message lifecycle events into subagent child threads", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-child-user-message"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("pi-subagent-prompt-child-provider-1"),
+      providerRefs: {
+        providerThreadId: "child-provider-1",
+        providerParentThreadId: "parent-provider-1",
+      },
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "Subagent prompt",
+        detail: "Run a deterministic child-thread prompt smoke test.",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-child-user-message-replayed"),
+      provider: "pi",
+      createdAt: new Date().toISOString(),
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("pi-subagent-prompt-child-provider-1"),
+      providerRefs: {
+        providerThreadId: "child-provider-1",
+        providerParentThreadId: "parent-provider-1",
+      },
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "Subagent prompt",
+        detail: "Run a deterministic child-thread prompt smoke test.",
+      },
+    });
+
+    const childThread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.id === "subagent:thread-1:child-provider-1" &&
+        entry.messages.some(
+          (message: { role: string; text: string }) =>
+            message.role === "user" &&
+            message.text === "Run a deterministic child-thread prompt smoke test.",
+        ),
+      2000,
+      asThreadId("subagent:thread-1:child-provider-1"),
+    );
+
+    expect(
+      childThread.messages.map((message) => ({ role: message.role, text: message.text })),
+    ).toEqual([{ role: "user", text: "Run a deterministic child-thread prompt smoke test." }]);
+  });
+
+  it("does not append duplicate child assistant text when synthetic transcript events replay", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-child-replay-streaming-mode"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("message-child-replay-streaming-mode"),
+          role: "user",
+          text: "stream child transcript please",
+          attachments: [],
+        },
+        assistantDeliveryMode: "streaming",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await harness.drain();
+
+    const providerRefs = {
+      providerThreadId: "child-provider-1",
+      providerParentThreadId: "parent-provider-1",
+    };
+    const emitChildAssistantTranscript = (): void => {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId("evt-child-assistant-delta-replay"),
+        provider: "pi",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-child-replay"),
+        itemId: asItemId("item-child-assistant-replay"),
+        providerRefs,
+        payload: {
+          streamKind: "assistant_text",
+          delta: "Child answer.",
+        },
+      });
+      harness.emit({
+        type: "item.completed",
+        eventId: asEventId("evt-child-assistant-completed-replay"),
+        provider: "pi",
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-child-replay"),
+        itemId: asItemId("item-child-assistant-replay"),
+        providerRefs,
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+          detail: "Child answer.",
+        },
+      });
+    };
+
+    emitChildAssistantTranscript();
+
+    await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-child-assistant-replay" &&
+            message.text === "Child answer." &&
+            !message.streaming,
+        ),
+      2000,
+      asThreadId("subagent:thread-1:child-provider-1"),
+    );
+
+    emitChildAssistantTranscript();
+    await harness.drain();
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const childThread = readModel.threads.find(
+      (entry) => entry.id === "subagent:thread-1:child-provider-1",
+    );
+    const childMessage = childThread?.messages.find(
+      (entry) => entry.id === "assistant:item-child-assistant-replay",
+    );
+
+    expect(childMessage?.text).toBe("Child answer.");
+    expect(childMessage?.streaming).toBe(false);
+  });
+
+  it("does not import parent-thread provider user-message lifecycle events", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-parent-user-message"),
+      provider: "pi",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      itemId: asItemId("parent-prompt-1"),
+      payload: {
+        itemType: "user_message",
+        status: "completed",
+        title: "User message",
+        detail: "This parent prompt should not be imported a second time.",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const parentThread = readModel.threads.find((entry) => entry.id === "thread-1");
+
+    expect(parentThread?.messages).toEqual([]);
+  });
+
   it("handles collab receiver and child provider refs on the same event without duplicate thread creation", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

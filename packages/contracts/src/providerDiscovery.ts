@@ -289,6 +289,7 @@ export type ProviderListModelsResult = typeof ProviderListModelsResult.Type;
 export const ProviderListAgentsInput = Schema.Struct({
   provider: ProviderDiscoveryKind,
   binaryPath: Schema.optional(TrimmedNonEmptyString),
+  agentDir: Schema.optional(TrimmedNonEmptyString),
   cwd: Schema.optional(TrimmedNonEmptyString),
 });
 export type ProviderListAgentsInput = typeof ProviderListAgentsInput.Type;
@@ -298,6 +299,7 @@ export const ProviderAgentDescriptor = Schema.Struct({
   displayName: TrimmedNonEmptyString,
   description: Schema.optional(TrimmedNonEmptyString),
   model: Schema.optional(TrimmedNonEmptyString),
+  scope: Schema.optional(Schema.Literals(["global", "project"])),
 });
 export type ProviderAgentDescriptor = typeof ProviderAgentDescriptor.Type;
 

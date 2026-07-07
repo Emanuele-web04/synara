@@ -80,6 +80,10 @@ import {
   toSafeThreadAttachmentSegment,
 } from "../../attachmentStore.ts";
 import { deriveThreadSummaryState } from "@t3tools/shared/threadSummary";
+import {
+  mergeProjectedMessageStreaming,
+  mergeProjectedMessageText,
+} from "../messageProjectionMerge.ts";
 
 export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
@@ -1076,12 +1080,14 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
-          const nextText =
-            Option.isSome(existingMessage) && event.payload.streaming
-              ? `${existingMessage.value.text}${event.payload.text}`
-              : Option.isSome(existingMessage) && event.payload.text.length === 0
-                ? existingMessage.value.text
-                : event.payload.text;
+          const nextText = mergeProjectedMessageText({
+            existingText: Option.isSome(existingMessage) ? existingMessage.value.text : undefined,
+            existingStreaming: Option.isSome(existingMessage)
+              ? existingMessage.value.isStreaming
+              : undefined,
+            incomingText: event.payload.text,
+            incomingStreaming: event.payload.streaming,
+          });
           const nextAttachments =
             event.payload.attachments !== undefined
               ? yield* materializeAttachmentsForProjection({
@@ -1108,7 +1114,12 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...(event.payload.dispatchOrigin !== undefined
               ? { dispatchOrigin: event.payload.dispatchOrigin }
               : {}),
-            isStreaming: event.payload.streaming,
+            isStreaming: mergeProjectedMessageStreaming({
+              existingStreaming: Option.isSome(existingMessage)
+                ? existingMessage.value.isStreaming
+                : undefined,
+              incomingStreaming: event.payload.streaming,
+            }),
             source: event.payload.source,
             createdAt:
               (Option.isSome(existingMessage) ? existingMessage.value.createdAt : null) ??

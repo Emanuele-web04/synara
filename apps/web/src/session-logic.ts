@@ -724,9 +724,24 @@ function shouldOmitRoutedCollabAgentToolActivity(activity: OrchestrationThreadAc
   if (asTrimmedString(payload?.itemType) !== "collab_agent_tool_call") {
     return false;
   }
-  // Routed subagent activity is rendered through child-thread/subagent surfaces;
-  // generic OpenCode task calls have no receiver metadata and need a chat row.
-  return extractCollabSubagents(payload).length > 0;
+  // Routed subagent message echoes without a provider tool-call id are rendered through
+  // child-thread/subagent surfaces. Real tool lifecycle updates must stay in the parent
+  // work log so the openable activity detail can merge the start prompt with the final
+  // result and child-agent metadata.
+  if (extractCollabSubagents(payload).length === 0) {
+    return false;
+  }
+  const data = asRecord(payload?.data);
+  const item = collabPayloadItem(payload);
+  const toolCallId = asTrimmedString(
+    data?.toolCallId ?? data?.callId ?? item?.toolCallId ?? item?.callId,
+  );
+  if (toolCallId) {
+    return false;
+  }
+  // Keep completed result text in the parent work log; the agent activity detail
+  // groups it with the launch row so users can see the actual subagent report.
+  return activity.kind !== "tool.completed" || !asTrimmedString(payload.detail);
 }
 
 export function findLatestProposedPlan(
@@ -844,6 +859,14 @@ export function deriveWorkLogEntries(
   );
 }
 
+function threadScopedSubagentResultMatchesVisibleTurn(
+  payload: Record<string, unknown> | null,
+  visibleTurnIds: ReadonlySet<TurnId | string>,
+): boolean {
+  const parentTurnId = extractCollabParentTurnId(payload);
+  return parentTurnId ? visibleTurnIds.has(parentTurnId) : false;
+}
+
 function shouldKeepActivityForWorkLog(
   activity: OrchestrationThreadActivity,
   latestTurnId: TurnId | undefined,
@@ -858,6 +881,23 @@ function shouldKeepActivityForWorkLog(
   // keep them so the transcript card survives once the thread has turn-stamped messages.
   if (activity.kind === "automation.created") {
     return true;
+  }
+
+  // Pi subagent reports can arrive after the parent turn via a thread-scoped
+  // custom message. Keep only those thread-scoped result activities when the
+  // visible transcript turn filter is active; turn-stamped provider tool rows
+  // should still obey the normal visible-turn filter.
+  if (activity.kind === "tool.completed" && activity.turnId === null) {
+    const payload = asRecord(activity.payload);
+    if (
+      asTrimmedString(payload?.itemType) === "collab_agent_tool_call" &&
+      asTrimmedString(payload?.detail)
+    ) {
+      if (visibleTurnIds && visibleTurnIds.size > 0) {
+        return threadScopedSubagentResultMatchesVisibleTurn(payload, visibleTurnIds);
+      }
+      return true;
+    }
   }
 
   // An empty set means the transcript has no turn-stamped assistant messages
@@ -1083,19 +1123,32 @@ function extractCollabTaskOutputDetail(payload: Record<string, unknown> | null):
   return null;
 }
 
+function extractCollabParentTurnId(payload: Record<string, unknown> | null): string | null {
+  if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
+    return null;
+  }
+  const data = asRecord(payload?.data);
+  const item = collabPayloadItem(payload);
+  return asTrimmedString(data?.parentTurnId ?? item?.parentTurnId);
+}
+
 function extractCollabActionTitle(payload: Record<string, unknown> | null): string | null {
   if (extractWorkLogItemType(payload) !== "collab_agent_tool_call") {
     return null;
   }
   const item = collabPayloadItem(payload);
-  const input = asRecord(item?.input);
+  const input = collabPayloadInput(item);
   const state = asRecord(item?.state);
   const candidates = [
     state?.title,
     item?.title,
     payload?.title,
+    input?.title,
     input?.description,
     item?.description,
+    input?.name,
+    item?.task,
+    input?.task,
   ];
   for (const candidate of candidates) {
     const title = asTrimmedString(candidate);
@@ -1461,8 +1514,12 @@ function collabPayloadItem(
   return asRecord(data?.item) ?? data;
 }
 
+function collabPayloadInput(item: Record<string, unknown> | null): Record<string, unknown> | null {
+  return asRecord(item?.input) ?? asRecord(item?.args) ?? asRecord(item?.rawInput);
+}
+
 function inferSubagentActionTool(item: Record<string, unknown> | null): string | null {
-  const directTool = asTrimmedString(item?.tool ?? item?.name);
+  const directTool = asTrimmedString(item?.tool ?? item?.toolName ?? item?.name);
   if (directTool) {
     return directTool;
   }
@@ -1510,7 +1567,7 @@ function extractCollabAction(
   }
 
   const item = collabPayloadItem(payload);
-  const itemInput = asRecord(item?.input);
+  const itemInput = collabPayloadInput(item);
   const tool = inferSubagentActionTool(item);
   const status = asTrimmedString(item?.status ?? payload?.status) ?? "in_progress";
   const model = asTrimmedString(
@@ -1518,10 +1575,21 @@ function extractCollabAction(
       item?.modelName ??
       item?.model_name ??
       item?.requestedModel ??
-      item?.requested_model,
+      item?.requested_model ??
+      itemInput?.model ??
+      itemInput?.modelName ??
+      itemInput?.model_name ??
+      itemInput?.requestedModel ??
+      itemInput?.requested_model,
   );
   const prompt = asTrimmedString(
-    item?.prompt ?? item?.task ?? item?.message ?? itemInput?.prompt ?? itemInput?.description,
+    item?.prompt ??
+      item?.task ??
+      item?.message ??
+      itemInput?.prompt ??
+      itemInput?.task ??
+      itemInput?.message ??
+      itemInput?.description,
   );
   const agentStates = decodeSubagentAgentStates(item);
   const receiverThreadIds = decodeSubagentReceiverThreadIds(item);
