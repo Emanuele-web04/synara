@@ -112,6 +112,52 @@ function makeFakeOutboxLayer(input: {
 }
 
 describe("listRecentStudioOutputs", () => {
+  it("recurses through subdirectories and never descends into hidden ones", async () => {
+    const outboxRoot = "/studio/Outbox";
+    const listingsByDirectory = new Map<string, string[]>([
+      [outboxRoot, ["Content", ".hidden", "root.md"]],
+      [`${outboxRoot}/Content`, ["nested.md"]],
+      [`${outboxRoot}/.hidden`, ["ignored.md"]],
+    ]);
+    const directories = new Set([`${outboxRoot}/Content`, `${outboxRoot}/.hidden`]);
+    const readDirectoryCalls: string[] = [];
+    const fileSystemLayer = FileSystem.layerNoop({
+      readDirectory: (dirPath: string) => {
+        readDirectoryCalls.push(dirPath);
+        return Effect.succeed(listingsByDirectory.get(dirPath) ?? []);
+      },
+      stat: (fullPath: string) =>
+        Effect.succeed({
+          type: directories.has(fullPath) ? ("Directory" as const) : ("File" as const),
+          mtime: new Date(fullPath.endsWith("nested.md") ? 2_000 : 1_000),
+          atime: undefined,
+          birthtime: undefined,
+          dev: 0,
+          ino: undefined,
+          mode: 0,
+          nlink: undefined,
+          uid: undefined,
+          gid: undefined,
+          rdev: undefined,
+          size: FileSystem.Size(0),
+          blksize: undefined,
+          blocks: undefined,
+        } satisfies FileSystem.File.Info),
+    });
+    const layer = Layer.merge(fileSystemLayer, Path.layer);
+
+    const result = await Effect.runPromise(
+      listRecentStudioOutputs({ outboxRoot, limit: 10 }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual([
+      "Content/nested.md",
+      "root.md",
+    ]);
+    // The hidden directory is pruned during the walk, not just filtered from the result.
+    expect(readDirectoryCalls).not.toContain(`${outboxRoot}/.hidden`);
+  });
+
   it("ranks by mtime across every scanned entry instead of dropping entries past the old fixed cap position", async () => {
     // The historical bug truncated the raw (mtime-unaware) directory listing to a fixed cap
     // *before* stat/rank ran, so a recently modified file positioned past that cap in walk
