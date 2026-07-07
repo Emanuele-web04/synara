@@ -44,6 +44,10 @@ const GitPrStepStatus = Schema.Literals(["created", "opened_existing", "skipped_
 const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
+// GitHub's mergeability is eventually consistent: "unknown" is a real transient state
+// while GitHub recomputes after a push, not a decode fallback to branch on.
+export const GitPullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
+export type GitPullRequestMergeability = typeof GitPullRequestMergeability.Type;
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
 const GitHandoffThreadMode = Schema.Literals(["local", "worktree"]);
 
@@ -73,6 +77,13 @@ const GitResolvedPullRequest = Schema.Struct({
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
   state: GitPullRequestState,
+  isDraft: Schema.Boolean,
+  mergeability: GitPullRequestMergeability,
+  // Null when `gh` did not report diff sizes, so the UI can hide the stat instead of
+  // rendering a misleading "+0 −0".
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+  changedFiles: Schema.NullOr(NonNegativeInt),
 });
 export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
@@ -281,6 +292,11 @@ const GitStatusPr = Schema.Struct({
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
   state: GitStatusPrState,
+  isDraft: Schema.Boolean,
+  mergeability: GitPullRequestMergeability,
+  additions: Schema.NullOr(NonNegativeInt),
+  deletions: Schema.NullOr(NonNegativeInt),
+  changedFiles: Schema.NullOr(NonNegativeInt),
 });
 
 export const GitStatusResult = Schema.Struct({

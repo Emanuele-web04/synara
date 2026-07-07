@@ -294,6 +294,7 @@ import {
   type SidebarDerivedProjectData,
   shouldShowDebugFeatureFlagsMenu,
   resolvePrStatePresentation,
+  type PrStatePresentation,
   shouldPrunePinnedThreads,
   shouldClearThreadSelectionOnMouseDown,
   sortProjectsForSidebar,
@@ -849,7 +850,7 @@ interface TerminalStatusIndicator {
 }
 
 interface PrStatusIndicator {
-  label: "PR open" | "PR closed" | "PR merged";
+  label: PrStatePresentation["label"];
   colorClass: string;
   icon: LucideIcon;
   tooltip: string;
@@ -858,6 +859,8 @@ interface PrStatusIndicator {
 
 type ThreadPr = GitStatusResult["pr"];
 
+// Also accepts persisted `lastKnownPr` entries, whose draft/mergeability/diff fields are
+// optional because older rows predate them.
 function toThreadPr(
   pr:
     | NonNullable<ThreadPr>
@@ -868,6 +871,11 @@ function toThreadPr(
         baseBranch: string;
         headBranch: string;
         state: "open" | "closed" | "merged";
+        isDraft?: boolean | undefined;
+        mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
+        additions?: number | null | undefined;
+        deletions?: number | null | undefined;
+        changedFiles?: number | null | undefined;
       },
 ): ThreadPr {
   return {
@@ -877,6 +885,11 @@ function toThreadPr(
     baseBranch: pr.baseBranch,
     headBranch: pr.headBranch,
     state: pr.state,
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? null,
+    deletions: pr.deletions ?? null,
+    changedFiles: pr.changedFiles ?? null,
   };
 }
 
@@ -911,7 +924,7 @@ function terminalStatusFromThreadState(input: {
 
 function prStatusIndicator(pr: ThreadPr): PrStatusIndicator | null {
   if (!pr) return null;
-  const presentation = resolvePrStatePresentation(pr.state);
+  const presentation = resolvePrStatePresentation(pr);
   return {
     label: presentation.label,
     colorClass: presentation.colorClass,

@@ -416,8 +416,409 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.topProvider).toBe("claudeAgent");
         expect(tokenStats.topProviderPercent).toBeCloseTo(83.3);
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
+        // Token-based model mix mirrors the token ranking, not the turn counts.
+        expect(tokenStats.models).toEqual([
+          { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
+          { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+        ]);
         // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
+      }),
+    );
+  });
+
+  it("attributes token deltas to the model selected for each turn, including usedTokens-only adapters", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        // thread-switch is currently on Opus, but the first turn ran on Fable.
+        // Attributing by the thread's latest selection would hand every token to
+        // Opus. thread-mixed reports BOTH counters: only the cumulative rows may
+        // drive its series, or the dip recovery would double-count.
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES
+            (
+              'thread-switch',
+              'project-profile',
+              'Switch Thread',
+              '{"provider":"claudeAgent","model":"claude-opus-4-8"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T09:00:00.000Z',
+              '2026-06-13T09:00:00.000Z',
+              NULL
+            ),
+            (
+              'thread-mixed',
+              'project-profile',
+              'Mixed Counters Thread',
+              '{"provider":"codex","model":"gpt-5-codex"}',
+              'full-access',
+              'default',
+              'local',
+              '2026-06-13T11:00:00.000Z',
+              '2026-06-13T11:00:00.000Z',
+              NULL
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-switch-1',
+              'thread',
+              'thread-switch',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T09:01:00.000Z',
+              'client',
+              '{"threadId":"thread-switch","messageId":"message-switch-1","modelSelection":{"provider":"claudeAgent","model":"claude-fable-5"}}',
+              '{}'
+            ),
+            (
+              'event-switch-2',
+              'thread',
+              'thread-switch',
+              2,
+              'thread.turn-start-requested',
+              '2026-06-13T09:20:00.000Z',
+              'client',
+              '{"threadId":"thread-switch","messageId":"message-switch-2","modelSelection":{"provider":"claudeAgent","model":"claude-opus-4-8"}}',
+              '{}'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id,
+            turn_id,
+            pending_message_id,
+            state,
+            requested_at,
+            checkpoint_files_json
+          )
+          VALUES
+            (
+              'thread-switch',
+              'turn-switch-1',
+              'message-switch-1',
+              'completed',
+              '2026-06-13T09:01:00.000Z',
+              '[]'
+            ),
+            (
+              'thread-switch',
+              'turn-switch-2',
+              'message-switch-2',
+              'completed',
+              '2026-06-13T09:20:00.000Z',
+              '[]'
+            )
+        `;
+
+        // thread-switch never reports the cumulative counter (like the Claude
+        // adapter below the context window), so usedTokens drives its series.
+        // thread-mixed dips to context scale mid-thread and recovers: only the
+        // cumulative rows count (6000 total, not 6000 + the dip recovery).
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES
+            (
+              'activity-switch-1',
+              'thread-switch',
+              'turn-switch-1',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1000}',
+              1,
+              '2026-06-13T09:02:00.000Z'
+            ),
+            (
+              'activity-switch-2',
+              'thread-switch',
+              'turn-switch-1',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":3000}',
+              2,
+              '2026-06-13T09:03:00.000Z'
+            ),
+            (
+              'activity-switch-3',
+              'thread-switch',
+              'turn-switch-2',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":5000}',
+              3,
+              '2026-06-13T09:21:00.000Z'
+            ),
+            (
+              'activity-mixed-1',
+              'thread-mixed',
+              'turn-mixed-1',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":3000,"totalProcessedTokens":4000}',
+              1,
+              '2026-06-13T11:02:00.000Z'
+            ),
+            (
+              'activity-mixed-2',
+              'thread-mixed',
+              'turn-mixed-1',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":500}',
+              2,
+              '2026-06-13T11:03:00.000Z'
+            ),
+            (
+              'activity-mixed-3',
+              'thread-mixed',
+              'turn-mixed-1',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":4500,"totalProcessedTokens":6000}',
+              3,
+              '2026-06-13T11:04:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.available).toBe(true);
+        expect(tokenStats.lifetimeTotalTokens).toBe(11000);
+        expect(tokenStats.topProvider).toBe("codex");
+        expect(tokenStats.models).toEqual([
+          { provider: "codex", model: "gpt-5-codex", tokens: 6000, percent: 54.5 },
+          { provider: "claudeAgent", model: "claude-fable-5", tokens: 3000, percent: 27.3 },
+          { provider: "claudeAgent", model: "claude-opus-4-8", tokens: 2000, percent: 18.2 },
+        ]);
+      }),
+    );
+  });
+
+  it("counts usedTokens-only model groups in threads that also have cumulative telemetry", async () => {
+    await runProfileStatsTest(
+      Effect.gen(function* () {
+        const sql = yield* SqlClient.SqlClient;
+        const statsQuery = yield* ProfileStatsQuery;
+
+        yield* sql`
+          INSERT INTO projection_threads (
+            thread_id,
+            project_id,
+            title,
+            model_selection_json,
+            runtime_mode,
+            interaction_mode,
+            env_mode,
+            created_at,
+            updated_at,
+            deleted_at
+          )
+          VALUES (
+            'thread-hybrid',
+            'project-profile',
+            'Hybrid Telemetry Thread',
+            '{"provider":"codex","model":"gpt-5-codex"}',
+            'full-access',
+            'default',
+            'local',
+            '2026-06-13T12:00:00.000Z',
+            '2026-06-13T12:00:00.000Z',
+            NULL
+          )
+        `;
+
+        yield* sql`
+          INSERT INTO orchestration_events (
+            event_id,
+            aggregate_kind,
+            stream_id,
+            stream_version,
+            event_type,
+            occurred_at,
+            actor_kind,
+            payload_json,
+            metadata_json
+          )
+          VALUES
+            (
+              'event-hybrid-codex',
+              'thread',
+              'thread-hybrid',
+              1,
+              'thread.turn-start-requested',
+              '2026-06-13T12:01:00.000Z',
+              'client',
+              '{"threadId":"thread-hybrid","messageId":"message-hybrid-codex","modelSelection":{"provider":"codex","model":"gpt-5-codex"}}',
+              '{}'
+            ),
+            (
+              'event-hybrid-claude',
+              'thread',
+              'thread-hybrid',
+              2,
+              'thread.turn-start-requested',
+              '2026-06-13T12:10:00.000Z',
+              'client',
+              '{"threadId":"thread-hybrid","messageId":"message-hybrid-claude","modelSelection":{"provider":"claudeAgent","model":"claude-haiku-4-5"}}',
+              '{}'
+            )
+        `;
+
+        yield* sql`
+          INSERT INTO projection_turns (
+            thread_id,
+            turn_id,
+            pending_message_id,
+            state,
+            requested_at,
+            checkpoint_files_json
+          )
+          VALUES
+            (
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'message-hybrid-codex',
+              'completed',
+              '2026-06-13T12:01:00.000Z',
+              '[]'
+            ),
+            (
+              'thread-hybrid',
+              'turn-hybrid-claude',
+              'message-hybrid-claude',
+              'completed',
+              '2026-06-13T12:10:00.000Z',
+              '[]'
+            )
+        `;
+
+        // Codex has cumulative totals, so its usedTokens-only dip is ignored.
+        // Claude never reports cumulative totals in this thread, so its own
+        // usedTokens series is still counted instead of being dropped.
+        yield* sql`
+          INSERT INTO projection_thread_activities (
+            activity_id,
+            thread_id,
+            turn_id,
+            tone,
+            kind,
+            summary,
+            payload_json,
+            sequence,
+            created_at
+          )
+          VALUES
+            (
+              'activity-hybrid-codex-1',
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1200,"totalProcessedTokens":2000}',
+              1,
+              '2026-06-13T12:02:00.000Z'
+            ),
+            (
+              'activity-hybrid-codex-dip',
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":300}',
+              2,
+              '2026-06-13T12:03:00.000Z'
+            ),
+            (
+              'activity-hybrid-codex-2',
+              'thread-hybrid',
+              'turn-hybrid-codex',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1500,"totalProcessedTokens":2500}',
+              3,
+              '2026-06-13T12:04:00.000Z'
+            ),
+            (
+              'activity-hybrid-claude-1',
+              'thread-hybrid',
+              'turn-hybrid-claude',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":700}',
+              4,
+              '2026-06-13T12:11:00.000Z'
+            ),
+            (
+              'activity-hybrid-claude-2',
+              'thread-hybrid',
+              'turn-hybrid-claude',
+              'info',
+              'context-window.updated',
+              'tokens updated',
+              '{"usedTokens":1700}',
+              5,
+              '2026-06-13T12:12:00.000Z'
+            )
+        `;
+
+        const tokenStats = yield* statsQuery.getProfileTokenStats({ utcOffsetMinutes: 0 });
+
+        expect(tokenStats.lifetimeTotalTokens).toBe(4200);
+        expect(tokenStats.models).toEqual([
+          { provider: "codex", model: "gpt-5-codex", tokens: 2500, percent: 59.5 },
+          { provider: "claudeAgent", model: "claude-haiku-4-5", tokens: 1700, percent: 40.5 },
+        ]);
       }),
     );
   });
@@ -1028,6 +1429,9 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.available).toBe(true);
         expect(tokenStats.lifetimeTotalTokens).toBe(1500);
         expect(tokenStats.providers).toEqual([]);
+        expect(tokenStats.models).toEqual([
+          { provider: "unknown", model: "unknown", tokens: 1500, percent: 100 },
+        ]);
       }),
     );
   });

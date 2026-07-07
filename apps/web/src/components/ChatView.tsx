@@ -4214,18 +4214,13 @@ export default function ChatView({
     isTerminalPrimarySurface,
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
   });
+  // Every close (header toggle or panel action click) stores the cross-chat preference,
+  // so a dismissed panel stays closed when switching threads until it is toggled back on.
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
-  const [environmentPanelActionDismissedThreadId, setEnvironmentPanelActionDismissedThreadId] =
-    useState<ThreadId | null>(null);
-  // Action clicks close the current panel, but only the header toggle owns cross-chat preference.
-  useEffect(() => {
-    setEnvironmentPanelActionDismissedThreadId(null);
-  }, [threadId]);
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
-    actionDismissed: environmentPanelActionDismissedThreadId === threadId,
     userPreferenceOpen: environmentPanelPreferenceOpen,
   });
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
@@ -10098,7 +10093,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelActionDismissedThreadId(threadId),
+    onClose: () => setEnvironmentPanelPreferenceOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10108,10 +10103,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: (open: boolean) => {
-          setEnvironmentPanelActionDismissedThreadId(null);
-          setEnvironmentPanelPreferenceOpen(open);
-        },
+        onOpenChange: setEnvironmentPanelPreferenceOpen,
       }
     : null;
 

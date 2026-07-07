@@ -620,6 +620,42 @@ function asPositiveFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+interface CompactModelUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly totalTokens: number;
+}
+
+// Claude's SDK reports a per-model token breakdown on the turn result (subagent
+// models included). Persist a compact copy on the turn.completed activity so
+// token stats can attribute multi-model turns exactly; cache reads/writes fold
+// into inputTokens, matching how the adapters build context-window snapshots.
+function compactTurnModelUsage(
+  modelUsage: Record<string, unknown> | undefined,
+): Record<string, CompactModelUsage> | undefined {
+  if (!modelUsage) {
+    return undefined;
+  }
+  const compact: Record<string, CompactModelUsage> = {};
+  for (const [model, value] of Object.entries(modelUsage)) {
+    const usage = asObject(value);
+    if (!usage) {
+      continue;
+    }
+    const inputTokens =
+      (asPositiveFiniteNumber(usage.inputTokens) ?? 0) +
+      (asPositiveFiniteNumber(usage.cacheReadInputTokens) ?? 0) +
+      (asPositiveFiniteNumber(usage.cacheCreationInputTokens) ?? 0);
+    const outputTokens = asPositiveFiniteNumber(usage.outputTokens) ?? 0;
+    const totalTokens = inputTokens + outputTokens;
+    if (totalTokens <= 0) {
+      continue;
+    }
+    compact[model] = { inputTokens, outputTokens, totalTokens };
+  }
+  return Object.keys(compact).length > 0 ? compact : undefined;
+}
+
 // Convert session-configured Claude window labels into the max-token shape the web meter uses.
 function buildConfiguredContextWindowPayload(
   event: ProviderRuntimeEvent,
@@ -1191,6 +1227,7 @@ function runtimeEventToActivities(
 
     case "turn.completed": {
       const state = runtimeTurnState(event);
+      const modelUsage = compactTurnModelUsage(event.payload.modelUsage);
       return [
         {
           id: event.eventId,
@@ -1200,6 +1237,7 @@ function runtimeEventToActivities(
           summary: state === "failed" ? "Turn failed" : "Turn completed",
           payload: toActivityPayload({
             state,
+            ...(modelUsage ? { modelUsage } : {}),
             ...(typeof event.payload.totalCostUsd === "number"
               ? { totalCostUsd: event.payload.totalCostUsd }
               : {}),

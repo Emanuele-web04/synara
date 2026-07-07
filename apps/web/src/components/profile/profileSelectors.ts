@@ -22,6 +22,17 @@ export interface ProfileTopProviderSelection {
   readonly metric: "tokens" | "turns";
 }
 
+export interface ProfileModelUsageEntry {
+  readonly provider: ProviderKind | "unknown";
+  readonly model: string;
+  readonly percent: number;
+}
+
+export interface ProfileModelUsageSelection {
+  readonly entries: ReadonlyArray<ProfileModelUsageEntry>;
+  readonly metric: "tokens" | "turns";
+}
+
 // Prefer tokens/day when available; fall back to prompt counts while token stats load.
 export function selectProfileHeatmap(
   stats: ProfileStats,
@@ -51,4 +62,17 @@ export function selectProfileTopProvider(
     percent: stats.insights.topProviderPercent,
     metric: "turns",
   };
+}
+
+// Prefer the token-based model mix (tokens are attributed to the model each turn
+// actually ran with) and fall back to turn counts while token stats load or when
+// no provider emitted token telemetry.
+export function selectProfileModelUsage(
+  stats: ProfileStats,
+  tokenStats: ProfileTokenStats | null,
+): ProfileModelUsageSelection {
+  if (tokenStats?.available && tokenStats.models.length > 0) {
+    return { entries: tokenStats.models, metric: "tokens" };
+  }
+  return { entries: stats.providerModels, metric: "turns" };
 }

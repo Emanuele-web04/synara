@@ -17,7 +17,11 @@ import { ProviderIcon } from "~/components/ProviderIcon";
 import { Button } from "~/components/ui/button";
 import { Skeleton } from "~/components/ui/skeleton";
 import { ActivityHeatmap } from "../profile/ActivityHeatmap";
-import { selectProfileHeatmap, selectProfileTopProvider } from "../profile/profileSelectors";
+import {
+  selectProfileHeatmap,
+  selectProfileModelUsage,
+  selectProfileTopProvider,
+} from "../profile/profileSelectors";
 import { ShareDialog } from "../profile/ShareDialog";
 import { EditProfileDialog } from "../profile/EditProfileDialog";
 import { useProfileHandle } from "../profile/useProfileHandle";
@@ -83,6 +87,7 @@ function ProfileContent({
   // Tokens/day when available, prompts/day otherwise — shared with ShareCard.
   const heatmap = selectProfileHeatmap(stats, tokenStats);
   const topProvider = selectProfileTopProvider(stats, tokenStats);
+  const modelUsage = selectProfileModelUsage(stats, tokenStats);
   const peakHourLabel = formatPeakHourLabel(stats.activeHours.startHour);
   const mostWorkedProjectLabel = formatMostWorkedProjectLabel(stats.mostWorkedProject);
 
@@ -229,9 +234,9 @@ function ProfileContent({
       {/* Model usage */}
       <section className="flex flex-col gap-3">
         <h3 className="text-sm font-medium">Model usage</h3>
-        {stats.providerModels.length > 0 ? (
+        {modelUsage.entries.length > 0 ? (
           <ul className="grid grid-cols-1 gap-x-12 gap-y-3 sm:grid-cols-2">
-            {stats.providerModels.slice(0, 6).map((entry) => (
+            {modelUsage.entries.slice(0, 6).map((entry) => (
               <ModelUsageRow
                 key={`${entry.provider}:${entry.model}`}
                 provider={entry.provider}

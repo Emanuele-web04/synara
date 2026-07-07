@@ -407,6 +407,11 @@ export default function GitActionsControl({
       baseBranch: string;
       headBranch: string;
       state: "open" | "closed" | "merged";
+      isDraft?: boolean;
+      mergeability?: "mergeable" | "conflicting" | "unknown";
+      additions?: number | null;
+      deletions?: number | null;
+      changedFiles?: number | null;
     }) => {
       if (!activeThreadId) {
         return;

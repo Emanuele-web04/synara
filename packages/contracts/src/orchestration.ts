@@ -535,6 +535,13 @@ export const OrchestrationThreadPullRequest = Schema.Struct({
   baseBranch: TrimmedNonEmptyString,
   headBranch: TrimmedNonEmptyString,
   state: Schema.Literals(["open", "closed", "merged"]),
+  // Optional so `last_known_pr_json` rows persisted before these fields existed still
+  // decode. Literals stay inline: importing git.ts here would create an import cycle.
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeability: Schema.optional(Schema.Literals(["mergeable", "conflicting", "unknown"])),
+  additions: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  deletions: Schema.optional(Schema.NullOr(NonNegativeInt)),
+  changedFiles: Schema.optional(Schema.NullOr(NonNegativeInt)),
 });
 export type OrchestrationThreadPullRequest = typeof OrchestrationThreadPullRequest.Type;
 

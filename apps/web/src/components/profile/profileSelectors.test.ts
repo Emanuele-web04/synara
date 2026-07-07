@@ -6,7 +6,11 @@
 import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { selectProfileHeatmap, selectProfileTopProvider } from "./profileSelectors";
+import {
+  selectProfileHeatmap,
+  selectProfileModelUsage,
+  selectProfileTopProvider,
+} from "./profileSelectors";
 
 const promptHeatmapCell = {
   day: "2026-07-01",
@@ -44,7 +48,10 @@ const baseStats = {
     skillsExplored: 0,
     totalSkillsUsed: 0,
   },
-  providerModels: [],
+  providerModels: [
+    { provider: "codex", model: "gpt-5-codex", turnCount: 2, percent: 66.7 },
+    { provider: "claudeAgent", model: "claude-sonnet-4-6", turnCount: 1, percent: 33.3 },
+  ],
   skills: [],
   mostUsedSkill: null,
   mostWorkedProject: null,
@@ -67,6 +74,10 @@ const tokenStats = {
   unavailableProviders: [],
   topProvider: "claudeAgent",
   topProviderPercent: 83.3,
+  models: [
+    { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
+    { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+  ],
   heatmapMetric: "tokens",
   heatmap: [tokenHeatmapCell],
 } satisfies ProfileTokenStats;
@@ -82,6 +93,10 @@ describe("profile selectors", () => {
       cells: [tokenHeatmapCell],
       unit: "tokens",
     });
+    expect(selectProfileModelUsage(baseStats, tokenStats)).toEqual({
+      entries: tokenStats.models,
+      metric: "tokens",
+    });
   });
 
   it("falls back to core profile stats while token telemetry is unavailable", () => {
@@ -93,6 +108,17 @@ describe("profile selectors", () => {
     expect(selectProfileHeatmap(baseStats, null)).toEqual({
       cells: [promptHeatmapCell],
       unit: "prompts",
+    });
+    expect(selectProfileModelUsage(baseStats, null)).toEqual({
+      entries: baseStats.providerModels,
+      metric: "turns",
+    });
+  });
+
+  it("falls back to turn-based model usage when token telemetry has no model rows", () => {
+    expect(selectProfileModelUsage(baseStats, { ...tokenStats, models: [] })).toEqual({
+      entries: baseStats.providerModels,
+      metric: "turns",
     });
   });
 });

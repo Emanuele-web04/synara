@@ -21,7 +21,11 @@ import {
 import { ServerConfig } from "./config";
 import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite";
 import { ProfileStatsQuery, ProfileStatsQueryLive } from "./profileStats";
-import { ProfileStatsArchive, ProfileStatsArchiveLive } from "./profileStatsArchive";
+import {
+  aggregateThreadTokenRows,
+  ProfileStatsArchive,
+  ProfileStatsArchiveLive,
+} from "./profileStatsArchive";
 
 interface DeletedCheckpointRefCall {
   readonly cwd: string;
@@ -252,6 +256,73 @@ describe("ProfileStatsArchive", () => {
     deletedCheckpointRefCalls.length = 0;
     isGitRepositoryImpl = () => Effect.succeed(true);
     deleteCheckpointRefsImpl = (input) => Effect.sync(() => recordDeletedCheckpointRefs(input));
+  });
+
+  it("archives usedTokens-only model groups even when another group has cumulative telemetry", () => {
+    const rows = aggregateThreadTokenRows([
+      {
+        totalProcessedTokens: 2000,
+        usedTokens: 1200,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:02:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 300,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:03:00.000Z",
+      },
+      {
+        totalProcessedTokens: 2500,
+        usedTokens: 1500,
+        provider: "codex",
+        model: "gpt-5-codex",
+        createdAt: "2026-06-13T12:04:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 700,
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5",
+        createdAt: "2026-06-13T12:11:00.000Z",
+      },
+      {
+        totalProcessedTokens: null,
+        usedTokens: 1700,
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5",
+        createdAt: "2026-06-13T12:12:00.000Z",
+      },
+    ]);
+
+    expect(rows).toEqual([
+      {
+        createdAt: "2026-06-13T12:02:00.000Z",
+        provider: "codex",
+        model: "gpt-5-codex",
+        tokens: 2000,
+      },
+      {
+        createdAt: "2026-06-13T12:04:00.000Z",
+        provider: "codex",
+        model: "gpt-5-codex",
+        tokens: 500,
+      },
+      {
+        createdAt: "2026-06-13T12:11:00.000Z",
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5",
+        tokens: 700,
+      },
+      {
+        createdAt: "2026-06-13T12:12:00.000Z",
+        provider: "claudeAgent",
+        model: "claude-haiku-4-5",
+        tokens: 1000,
+      },
+    ]);
   });
 
   it("purges a thread's rows while keeping every profile stat unchanged", async () => {

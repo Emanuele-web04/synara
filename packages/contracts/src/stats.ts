@@ -43,6 +43,17 @@ export const ProfileProviderUsage = Schema.Struct({
 });
 export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
 
+// Token-based model mix. Tokens are attributed to the model selected for the
+// turn that processed them (thread selection is only a legacy-data fallback),
+// so switching models mid-thread keeps each model's share accurate.
+export const ProfileTokenModelUsage = Schema.Struct({
+  provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  model: TrimmedNonEmptyString,
+  tokens: NonNegativeInt,
+  percent: Schema.Number,
+});
+export type ProfileTokenModelUsage = typeof ProfileTokenModelUsage.Type;
+
 export const ProfileSkillUsage = Schema.Struct({
   name: TrimmedNonEmptyString,
   displayName: TrimmedNonEmptyString,
@@ -152,6 +163,9 @@ export const ProfileTokenStats = Schema.Struct({
   // Most-used provider by tokens processed, among providers with token telemetry.
   topProvider: Schema.NullOr(ProviderKind),
   topProviderPercent: Schema.NullOr(Schema.Number),
+  // Per-model token shares; clients prefer this over the turn-based
+  // ProfileStats.providerModels when token telemetry is available.
+  models: Schema.Array(ProfileTokenModelUsage),
   heatmapMetric: Schema.Literal("tokens"),
   heatmap: Schema.Array(ProfileHeatmapCell),
 });

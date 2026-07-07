@@ -82,6 +82,7 @@ interface MostWorkedProjectRow {
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
+  readonly model: string | null;
   readonly tokens: number;
 }
 
@@ -422,15 +423,23 @@ function normalizeProviderKind(value: unknown): ProviderKind | "unknown" {
     : "unknown";
 }
 
+interface TokenModelUsageCount {
+  readonly provider: ProviderKind | "unknown";
+  readonly model: string;
+  tokens: number;
+}
+
 interface TokenActivityAggregate {
   readonly tokensByDay: Map<string, number>;
   readonly tokensByProvider: Map<ProviderKind, number>;
+  readonly tokensByProviderModel: Map<string, TokenModelUsageCount>;
   readonly lifetime: number;
 }
 
 function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivityAggregate {
   const tokensByDay = new Map<string, number>();
   const tokensByProvider = new Map<ProviderKind, number>();
+  const tokensByProviderModel = new Map<string, TokenModelUsageCount>();
   let lifetime = 0;
   for (const row of rows) {
     const day = nonEmptyString(row.day);
@@ -444,8 +453,16 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     if (provider !== "unknown") {
       tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
     }
+    const model = nonEmptyString(row.model) ?? "unknown";
+    const providerModelKey = `${provider}\u0000${model}`;
+    const existing = tokensByProviderModel.get(providerModelKey);
+    if (existing) {
+      existing.tokens += tokens;
+    } else {
+      tokensByProviderModel.set(providerModelKey, { provider, model, tokens });
+    }
   }
-  return { tokensByDay, tokensByProvider, lifetime };
+  return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
 }
 
 function computeStreaks(
@@ -544,6 +561,41 @@ function buildMostWorkedProject(row: MostWorkedProjectRow | undefined): MostWork
   };
 }
 
+// ── Shared SQL ─────────────────────────────────────────────────────────
+
+// Maps every turn to the provider/model selected when it was started: turn-start
+// events carry the pending messageId, which projection_turns links back to the
+// turn_id that token activities reference. Shared by the live token stats query
+// and the delete-time archive snapshot so both attribute token deltas the same
+// way. Pass `scope` to restrict the CTE to a single thread (archive path).
+export function turnModelSelectionCte(
+  sql: SqlClient.SqlClient,
+  scope?: { readonly threadId: string },
+) {
+  const turnThreadMatch = scope
+    ? sql`${scope.threadId}`
+    : sql.literal("json_extract(e.payload_json, '$.threadId')");
+  const eventThreadScope = scope
+    ? sql`AND COALESCE(json_extract(e.payload_json, '$.threadId'), e.stream_id) = ${scope.threadId}`
+    : sql.literal("");
+  return sql`
+    SELECT
+      pt.thread_id AS thread_id,
+      pt.turn_id AS turn_id,
+      MAX(json_extract(e.payload_json, '$.modelSelection.provider')) AS provider,
+      MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
+    FROM orchestration_events e
+    JOIN projection_turns pt
+      ON pt.thread_id = ${turnThreadMatch}
+     AND pt.pending_message_id = json_extract(e.payload_json, '$.messageId')
+    WHERE e.event_type = 'thread.turn-start-requested'
+      ${eventThreadScope}
+      AND pt.turn_id IS NOT NULL
+      AND json_type(e.payload_json, '$.modelSelection') = 'object'
+    GROUP BY pt.thread_id, pt.turn_id
+  `;
+}
+
 // ── Service ────────────────────────────────────────────────────────────
 
 export interface ProfileStatsQueryShape {
@@ -626,57 +678,181 @@ const makeProfileStatsQuery = Effect.gen(function* () {
 
   // Token usage for EVERY provider, straight from Synara's own DB (no external
   // ~/.codex/~/.claude archives, so it is provider-agnostic AND per-instance). Each
-  // `context-window.updated` activity carries the running `totalProcessedTokens`; the
-  // positive per-thread delta is the tokens processed in that step, bucketed by the
-  // caller's local day and attributed to the thread's provider.
+  // `context-window.updated` activity carries a running per-thread token counter;
+  // the positive delta is the tokens processed in that step, bucketed by the
+  // caller's local day. Deltas are attributed to the provider/model selected for
+  // the turn that processed them (activity turn_id → turn's pending message →
+  // turn-start modelSelection); the thread's current selection is only a fallback
+  // for legacy rows, so switching models mid-thread keeps history accurate.
+  // Counter scale: totalProcessedTokens is the preferred cumulative counter.
+  // Some provider/model groups only emit usedTokens; keep those as separate
+  // fallback series so a mixed-provider thread does not drop their tokens.
   const queryTokenActivity = (tz: string) =>
     legacyCompatibleQuery(
       "profileStats.tokenActivity",
       sql<TokenDayRow>`
-        WITH ev AS (
+        WITH turn_model AS (
+          ${turnModelSelectionCte(sql)}
+        ),
+        ev AS (
           SELECT
             a.thread_id AS thread_id,
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
-            CASE
-              WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
-              THEN COALESCE(json_extract(th.model_selection_json, '$.provider'), 'unknown')
-              ELSE 'unknown'
-            END AS provider,
-            CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tot,
+            COALESCE(
+              tm.provider,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.provider')
+              END,
+              'unknown'
+            ) AS provider,
+            COALESCE(
+              tm.model,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.model')
+              END,
+              'unknown'
+            ) AS model,
+            CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER) AS tp,
+            CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS ut,
             a.sequence AS sequence,
             a.created_at AS created_at,
             a.activity_id AS activity_id
           FROM projection_thread_activities a
           JOIN projection_threads th ON th.thread_id = a.thread_id
+          LEFT JOIN turn_model tm
+            ON tm.thread_id = a.thread_id
+           AND tm.turn_id = a.turn_id
           WHERE a.kind = 'context-window.updated'
-            AND json_extract(a.payload_json, '$.totalProcessedTokens') IS NOT NULL
+            AND COALESCE(
+              json_extract(a.payload_json, '$.totalProcessedTokens'),
+              json_extract(a.payload_json, '$.usedTokens')
+            ) IS NOT NULL
         ),
-        delta AS (
+        provider_model_scale AS (
+          SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
+          FROM ev
+          GROUP BY thread_id, provider, model
+        ),
+        cumulative_kept AS (
           SELECT
             day,
             provider,
-            MAX(0, tot - LAG(tot, 1, 0) OVER (
-              PARTITION BY thread_id
-              ORDER BY
-                CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
-                sequence ASC,
-                created_at ASC,
-                activity_id ASC
-            )) AS d
+            model,
+            thread_id,
+            tp AS tot,
+            sequence,
+            created_at,
+            activity_id
           FROM ev
+          WHERE tp IS NOT NULL
+        ),
+        cumulative_delta AS (
+          SELECT
+            day,
+            provider,
+            model,
+            CASE
+              WHEN previous_tot IS NULL OR tot < previous_tot THEN tot
+              ELSE MAX(0, tot - previous_tot)
+            END AS d
+          FROM (
+            SELECT
+              day,
+              provider,
+              model,
+              tot,
+              LAG(tot) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_tot
+            FROM cumulative_kept
+          )
+        ),
+        used_only_kept AS (
+          SELECT
+            ev.day AS day,
+            ev.provider AS provider,
+            ev.model AS model,
+            ev.thread_id AS thread_id,
+            ev.ut AS tot,
+            ev.sequence AS sequence,
+            ev.created_at AS created_at,
+            ev.activity_id AS activity_id
+          FROM ev
+          JOIN provider_model_scale pms
+            ON pms.thread_id = ev.thread_id
+           AND pms.provider = ev.provider
+           AND pms.model = ev.model
+          WHERE ev.tp IS NULL
+            AND ev.ut IS NOT NULL
+            AND NOT pms.has_cumulative
+        ),
+        used_only_delta AS (
+          SELECT
+            day,
+            provider,
+            model,
+            CASE
+              WHEN previous_tot IS NULL THEN tot
+              WHEN tot < previous_tot
+                AND (provider != previous_provider OR model != previous_model)
+              THEN tot
+              ELSE MAX(0, tot - previous_tot)
+            END AS d
+          FROM (
+            SELECT
+              day,
+              provider,
+              model,
+              tot,
+              LAG(tot) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_tot,
+              LAG(provider) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_provider,
+              LAG(model) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_model
+            FROM used_only_kept
+          )
         ),
         all_tokens AS (
-          SELECT day, provider, d FROM delta
+          SELECT day, provider, model, d FROM cumulative_delta
+          UNION ALL
+          SELECT day, provider, model, d FROM used_only_delta
           UNION ALL
           SELECT
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             COALESCE(a.provider, 'unknown') AS provider,
+            COALESCE(a.model, 'unknown') AS model,
             a.tokens AS d
           FROM profile_stats_deleted_tokens a
         )
-        SELECT day, provider, SUM(d) AS tokens
+        SELECT day, provider, model, SUM(d) AS tokens
         FROM all_tokens
-        GROUP BY day, provider
+        GROUP BY day, provider, model
       `,
     );
 
@@ -1047,7 +1223,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
       const todayKey = localToday(input.utcOffsetMinutes);
       const rows = yield* queryTokenActivity(tz);
       const turnInsightRows = yield* queryTurnInsights();
-      const { tokensByDay, tokensByProvider, lifetime } = aggregateTokenActivity(rows);
+      const { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime } =
+        aggregateTokenActivity(rows);
 
       let peakDay: string | null = null;
       let peakDayTokens: number | null = null;
@@ -1090,6 +1267,25 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           ? percent1(tokensByProvider.get(topProvider) ?? 0, totalProviderTokens)
           : null;
 
+      // Token-based model mix, same shape/cap as the turn-based providerModels.
+      // Percent is the share of ALL counted tokens (lifetime), unknowns included,
+      // so the list always sums to ~100%.
+      const models = [...tokensByProviderModel.values()]
+        .filter((row) => row.tokens > 0)
+        .toSorted(
+          (left, right) =>
+            right.tokens - left.tokens ||
+            compareNullableText(left.provider, right.provider) ||
+            compareNullableText(left.model, right.model),
+        )
+        .slice(0, 8)
+        .map((row) => ({
+          provider: row.provider,
+          model: row.model,
+          tokens: row.tokens,
+          percent: percent1(row.tokens, lifetime),
+        }));
+
       return {
         available,
         lifetimeTotalTokens: available ? lifetime : null,
@@ -1099,6 +1295,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
         unavailableProviders,
         topProvider,
         topProviderPercent,
+        models,
         heatmapMetric: "tokens",
         heatmap: buildHeatmap(tokensByDay, todayKey),
       } satisfies ProfileTokenStats;

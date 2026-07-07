@@ -17,6 +17,7 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationThreadPullRequest,
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProjectCreateCommand,
   THREAD_NOTES_MAX_CHARS,
@@ -47,6 +48,40 @@ const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
+const decodeThreadPullRequest = Schema.decodeUnknownEffect(OrchestrationThreadPullRequest);
+
+it.effect("decodes last-known PRs persisted before draft/mergeability/diff fields existed", () =>
+  Effect.gen(function* () {
+    const legacy = yield* decodeThreadPullRequest({
+      number: 42,
+      title: "Legacy PR",
+      url: "https://github.com/o/r/pull/42",
+      baseBranch: "main",
+      headBranch: "feature/legacy",
+      state: "open",
+    });
+    assert.equal(legacy.number, 42);
+    assert.equal(legacy.isDraft, undefined);
+    assert.equal(legacy.mergeability, undefined);
+
+    const enriched = yield* decodeThreadPullRequest({
+      number: 43,
+      title: "Enriched PR",
+      url: "https://github.com/o/r/pull/43",
+      baseBranch: "main",
+      headBranch: "feature/enriched",
+      state: "open",
+      isDraft: true,
+      mergeability: "conflicting",
+      additions: 38,
+      deletions: 36,
+      changedFiles: 3,
+    });
+    assert.equal(enriched.isDraft, true);
+    assert.equal(enriched.mergeability, "conflicting");
+    assert.equal(enriched.additions, 38);
+  }),
+);
 
 it.effect("preserves thread activity payloads through the RPC JSON codec", () =>
   Effect.gen(function* () {

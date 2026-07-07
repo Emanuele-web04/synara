@@ -147,6 +147,11 @@ describe("GitStatusBroadcasterLive", () => {
             state: "open",
             baseBranch: "main",
             headBranch: "feature/status-refresh",
+            isDraft: false,
+            mergeability: "unknown",
+            additions: null,
+            deletions: null,
+            changedFiles: null,
           },
         };
         const second = yield* broadcaster.getStatus({ cwd: "/repo" });
@@ -188,6 +193,11 @@ describe("GitStatusBroadcasterLive", () => {
             state: "open",
             baseBranch: "main",
             headBranch: "feature/status-refresh",
+            isDraft: false,
+            mergeability: "unknown",
+            additions: null,
+            deletions: null,
+            changedFiles: null,
           },
         };
         const third = yield* broadcaster.getStatus({ cwd: "/repo" });

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -16,12 +15,7 @@ import type {
 
 import { GitCommandError, GitHubCliError, TextGenerationError } from "../Errors.ts";
 import { type GitManagerShape } from "../Services/GitManager.ts";
-import {
-  type GitHubCliShape,
-  type GitHubPullRequestSummary,
-  GitHubCli,
-  PULL_REQUEST_SUMMARY_JSON_FIELDS,
-} from "../Services/GitHubCli.ts";
+import { GitHubCli, PULL_REQUEST_SUMMARY_JSON_FIELDS } from "../Services/GitHubCli.ts";
 import {
   type AutomationIntentGenerationInput,
   type AutomationIntentGenerationResult,
@@ -33,33 +27,9 @@ import {
 } from "../Services/TextGeneration.ts";
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
+import { createGitHubCliWithFakeGh, type FakeGhScenario } from "../testing/fakeGitHubCli.ts";
 import { makeGitManager } from "./GitManager.ts";
 import { ServerConfig } from "../../config.ts";
-
-interface FakeGhScenario {
-  prListSequence?: string[];
-  prListByHeadSelector?: Record<string, string>;
-  createdPrUrl?: string;
-  defaultBranch?: string;
-  pullRequest?: {
-    number: number;
-    title: string;
-    url: string;
-    baseRefName: string;
-    headRefName: string;
-    state?: "open" | "closed" | "merged";
-    isCrossRepository?: boolean;
-    headRepositoryNameWithOwner?: string | null;
-    headRepositoryOwnerLogin?: string | null;
-  };
-  repositoryCloneUrls?: Record<string, { url: string; sshUrl: string }>;
-  pullRequestChecks?: GitPullRequestCheck[];
-  pullRequestReviewComments?: GitPullRequestComment[];
-  pullRequestReviewCommentsTruncated?: boolean;
-  failWith?: GitHubCliError;
-  reviewCommentsError?: GitHubCliError;
-  createPullRequestError?: GitHubCliError;
-}
 
 interface FakeGitTextGeneration {
   generateCommitMessage: (input: {
@@ -119,31 +89,6 @@ interface FakeGitTextGeneration {
   evaluateAutomationCompletion: (
     input: AutomationCompletionEvaluationInput,
   ) => Effect.Effect<AutomationCompletionEvaluationResult, TextGenerationError>;
-}
-
-type FakePullRequest = NonNullable<FakeGhScenario["pullRequest"]>;
-
-function runGitSyncForFakeGh(cwd: string, args: readonly string[]): void {
-  const result = spawnSync("git", args, {
-    cwd,
-    encoding: "utf8",
-  });
-  if (result.status === 0) {
-    return;
-  }
-  throw new GitHubCliError({
-    operation: "execute",
-    detail: `Failed to simulate gh checkout with git ${args.join(" ")}: ${result.stderr?.trim() || "unknown error"}`,
-  });
-}
-
-function isGitHubCliError(error: unknown): error is GitHubCliError {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    (error as { _tag?: unknown })._tag === "GitHubCliError"
-  );
 }
 
 function makeTempDir(
@@ -349,316 +294,6 @@ function createTextGeneration(overrides: Partial<FakeGitTextGeneration> = {}): T
   };
 }
 
-function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
-  service: GitHubCliShape;
-  ghCalls: string[];
-} {
-  const prListQueue = [...(scenario.prListSequence ?? [])];
-  const ghCalls: string[] = [];
-
-  const execute: GitHubCliShape["execute"] = (input) => {
-    const args = [...input.args];
-    ghCalls.push(args.join(" "));
-
-    if (scenario.failWith) {
-      return Effect.fail(scenario.failWith);
-    }
-
-    if (args[0] === "pr" && args[1] === "list") {
-      const headSelectorIndex = args.findIndex((value) => value === "--head");
-      const headSelector =
-        headSelectorIndex >= 0 && headSelectorIndex < args.length - 1
-          ? args[headSelectorIndex + 1]
-          : undefined;
-      const mappedStdout =
-        typeof headSelector === "string"
-          ? scenario.prListByHeadSelector?.[headSelector]
-          : undefined;
-      const stdout = (mappedStdout ?? prListQueue.shift() ?? "[]") + "\n";
-      return Effect.succeed({
-        stdout,
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-    }
-
-    if (args[0] === "pr" && args[1] === "create") {
-      if (scenario.createPullRequestError) {
-        return Effect.fail(scenario.createPullRequestError);
-      }
-      return Effect.succeed({
-        stdout:
-          (scenario.createdPrUrl ?? "https://github.com/pingdotgg/codething-mvp/pull/101") + "\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-    }
-
-    if (args[0] === "pr" && args[1] === "view") {
-      const pullRequest: FakePullRequest = scenario.pullRequest ?? {
-        number: 101,
-        title: "Pull request",
-        url: "https://github.com/pingdotgg/codething-mvp/pull/101",
-        baseRefName: "main",
-        headRefName: "feature/pull-request",
-        state: "open",
-      };
-      return Effect.succeed({
-        stdout:
-          JSON.stringify({
-            ...pullRequest,
-            ...(pullRequest.headRepositoryNameWithOwner
-              ? {
-                  headRepository: {
-                    nameWithOwner: pullRequest.headRepositoryNameWithOwner,
-                  },
-                }
-              : {}),
-            ...(pullRequest.headRepositoryOwnerLogin
-              ? {
-                  headRepositoryOwner: {
-                    login: pullRequest.headRepositoryOwnerLogin,
-                  },
-                }
-              : {}),
-          }) + "\n",
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-    }
-
-    if (args[0] === "pr" && args[1] === "checkout") {
-      return Effect.try({
-        try: () => {
-          const headBranch = scenario.pullRequest?.headRefName;
-          if (headBranch) {
-            const existingBranch = spawnSync(
-              "git",
-              ["show-ref", "--verify", "--quiet", `refs/heads/${headBranch}`],
-              {
-                cwd: input.cwd,
-                encoding: "utf8",
-              },
-            );
-            if (existingBranch.status === 0) {
-              runGitSyncForFakeGh(input.cwd, ["checkout", headBranch]);
-            } else {
-              runGitSyncForFakeGh(input.cwd, ["checkout", "-b", headBranch]);
-            }
-          }
-          return {
-            stdout: "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            timedOut: false,
-          };
-        },
-        catch: (error) =>
-          isGitHubCliError(error)
-            ? error
-            : new GitHubCliError({
-                operation: "execute",
-                detail:
-                  error instanceof Error
-                    ? `Failed to simulate gh checkout: ${error.message}`
-                    : "Failed to simulate gh checkout.",
-              }),
-      });
-    }
-
-    if (args[0] === "repo" && args[1] === "view") {
-      const repository = args[2];
-      if (typeof repository === "string" && args.includes("nameWithOwner,url,sshUrl")) {
-        const cloneUrls = scenario.repositoryCloneUrls?.[repository];
-        if (!cloneUrls) {
-          return Effect.fail(
-            new GitHubCliError({
-              operation: "execute",
-              detail: `Unexpected repository lookup: ${repository}`,
-            }),
-          );
-        }
-        return Effect.succeed({
-          stdout:
-            JSON.stringify({
-              nameWithOwner: repository,
-              url: cloneUrls.url,
-              sshUrl: cloneUrls.sshUrl,
-            }) + "\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          timedOut: false,
-        });
-      }
-      return Effect.succeed({
-        stdout: `${scenario.defaultBranch ?? "main"}\n`,
-        stderr: "",
-        code: 0,
-        signal: null,
-        timedOut: false,
-      });
-    }
-
-    return Effect.fail(
-      new GitHubCliError({
-        operation: "execute",
-        detail: `Unexpected gh command: ${args.join(" ")}`,
-      }),
-    );
-  };
-
-  return {
-    service: {
-      execute,
-      listOpenPullRequests: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "list",
-            "--head",
-            input.headSelector,
-            "--state",
-            "open",
-            "--limit",
-            String(input.limit ?? 1),
-            "--json",
-            PULL_REQUEST_SUMMARY_JSON_FIELDS,
-          ],
-        }).pipe(
-          Effect.map((result) => {
-            const parsed = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
-            return parsed.map<GitHubPullRequestSummary>((pullRequest) => {
-              const summary: {
-                number: number;
-                title: string;
-                url: string;
-                baseRefName: string;
-                headRefName: string;
-                state?: Exclude<GitHubPullRequestSummary["state"], undefined>;
-                isCrossRepository?: boolean;
-                headRepositoryNameWithOwner?: string | null;
-                headRepositoryOwnerLogin?: string | null;
-              } = {
-                number: pullRequest.number as number,
-                title: pullRequest.title as string,
-                url: pullRequest.url as string,
-                baseRefName: pullRequest.baseRefName as string,
-                headRefName: pullRequest.headRefName as string,
-              };
-              if (typeof pullRequest.state === "string") {
-                summary.state = pullRequest.state as Exclude<
-                  GitHubPullRequestSummary["state"],
-                  undefined
-                >;
-              }
-              if (typeof pullRequest.isCrossRepository === "boolean") {
-                summary.isCrossRepository = pullRequest.isCrossRepository;
-              }
-              if (
-                pullRequest.headRepository &&
-                typeof pullRequest.headRepository === "object" &&
-                typeof (pullRequest.headRepository as { nameWithOwner?: unknown }).nameWithOwner ===
-                  "string"
-              ) {
-                summary.headRepositoryNameWithOwner = (
-                  pullRequest.headRepository as { nameWithOwner: string }
-                ).nameWithOwner;
-              }
-              if (
-                pullRequest.headRepositoryOwner &&
-                typeof pullRequest.headRepositoryOwner === "object" &&
-                typeof (pullRequest.headRepositoryOwner as { login?: unknown }).login === "string"
-              ) {
-                summary.headRepositoryOwnerLogin = (
-                  pullRequest.headRepositoryOwner as { login: string }
-                ).login;
-              }
-              return summary;
-            });
-          }),
-        ),
-      createPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "create",
-            "--base",
-            input.baseBranch,
-            "--head",
-            input.headSelector,
-            "--title",
-            input.title,
-            "--body-file",
-            input.bodyFile,
-          ],
-        }).pipe(Effect.asVoid),
-      getDefaultBranch: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["repo", "view", "--json", "defaultBranchRef", "--jq", ".defaultBranchRef.name"],
-        }).pipe(
-          Effect.map((result) => {
-            const value = result.stdout.trim();
-            return value.length > 0 ? value : null;
-          }),
-        ),
-      getPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["pr", "view", input.reference, "--json", PULL_REQUEST_SUMMARY_JSON_FIELDS],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout) as GitHubPullRequestSummary)),
-      getRepositoryCloneUrls: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["repo", "view", input.repository, "--json", "nameWithOwner,url,sshUrl"],
-        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
-      checkoutPullRequest: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
-        }).pipe(Effect.asVoid),
-      getPullRequestWithChecks: (input) =>
-        execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "view",
-            input.reference,
-            "--json",
-            `${PULL_REQUEST_SUMMARY_JSON_FIELDS},statusCheckRollup`,
-          ],
-        }).pipe(
-          Effect.map((result) => ({
-            summary: JSON.parse(result.stdout) as GitHubPullRequestSummary,
-            checks: scenario.pullRequestChecks ?? [],
-          })),
-        ),
-      getPullRequestReviewComments: (input) => {
-        ghCalls.push(
-          `api graphql reviewThreads ${input.host}/${input.owner}/${input.repo}#${input.number}`,
-        );
-        return scenario.reviewCommentsError
-          ? Effect.fail(scenario.reviewCommentsError)
-          : Effect.succeed({
-              comments: scenario.pullRequestReviewComments ?? [],
-              truncated: scenario.pullRequestReviewCommentsTruncated ?? false,
-            });
-      },
-    },
-    ghCalls,
-  };
-}
-
 function runStackedAction(
   manager: GitManagerShape,
   input: {
@@ -761,6 +396,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
                 url: "https://github.com/pingdotgg/codething-mvp/pull/13",
                 baseRefName: "main",
                 headRefName: "feature/status-open-pr",
+                isDraft: true,
+                mergeable: "CONFLICTING",
+                additions: 38,
+                deletions: 36,
+                changedFiles: 3,
               },
             ]),
           ],
@@ -776,6 +416,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseBranch: "main",
         headBranch: "feature/status-open-pr",
         state: "open",
+        isDraft: true,
+        mergeability: "conflicting",
+        additions: 38,
+        deletions: 36,
+        changedFiles: 3,
       });
     }),
   );
@@ -830,9 +475,14 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           baseBranch: "main",
           headBranch: "statemachine",
           state: "open",
+          isDraft: false,
+          mergeability: "unknown",
+          additions: null,
+          deletions: null,
+          changedFiles: null,
         });
         expect(ghCalls).toContain(
-          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
+          "pr list --head jasonLaster:statemachine --state all --limit 20 --json number,title,url,baseRefName,headRefName,state,mergedAt,isDraft,mergeable,additions,deletions,changedFiles,isCrossRepository,headRepository,headRepositoryOwner,updatedAt",
         );
       }),
     30_000,
@@ -872,6 +522,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseBranch: "main",
         headBranch: "feature/status-merged-pr",
         state: "merged",
+        isDraft: false,
+        mergeability: "unknown",
+        additions: null,
+        deletions: null,
+        changedFiles: null,
       });
     }),
   );
@@ -919,6 +574,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseBranch: "main",
         headBranch: "feature/status-open-over-merged",
         state: "open",
+        isDraft: false,
+        mergeability: "unknown",
+        additions: null,
+        deletions: null,
+        changedFiles: null,
       });
     }),
   );
@@ -2193,6 +1853,11 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         baseBranch: "main",
         headBranch: "feature/resolve-pr",
         state: "open",
+        isDraft: false,
+        mergeability: "unknown",
+        additions: null,
+        deletions: null,
+        changedFiles: null,
       });
       expect(ghCalls.some((call) => call.startsWith("pr view 42 "))).toBe(true);
     }),

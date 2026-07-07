@@ -316,12 +316,8 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
 
 export function resolveEnvironmentPanelOpen(input: {
   defaultOpen: boolean;
-  actionDismissed: boolean;
   userPreferenceOpen: boolean | null;
 }): boolean {
-  if (input.actionDismissed) {
-    return false;
-  }
   return input.userPreferenceOpen ?? input.defaultOpen;
 }
 

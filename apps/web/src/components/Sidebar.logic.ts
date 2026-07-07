@@ -1420,15 +1420,37 @@ export function deriveSidebarProjectData(input: {
 
 /** Shared PR-state presentation so sidebar badges and kanban cards color PRs identically. */
 export interface PrStatePresentation {
-  label: "PR open" | "PR closed" | "PR merged";
+  label: "PR open" | "PR closed" | "PR merged" | "PR draft" | "PR has conflicts";
   colorClass: string;
   iconKind: "pull-request" | "merged-simple";
 }
 
-export function resolvePrStatePresentation(
-  state: "open" | "closed" | "merged",
-): PrStatePresentation {
-  if (state === "open") {
+/**
+ * Draft and mergeability are optional because persisted `lastKnownPr` entries written
+ * before those fields existed lack them; absence falls back to the plain state badge.
+ * Precedence for open PRs: conflicts (actionable) over draft (informational).
+ */
+export function resolvePrStatePresentation(pr: {
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean | undefined;
+  mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
+}): PrStatePresentation {
+  if (pr.state === "open") {
+    if (pr.mergeability === "conflicting") {
+      return {
+        label: "PR has conflicts",
+        colorClass: "text-amber-600 dark:text-amber-300/90",
+        iconKind: "pull-request",
+      };
+    }
+    if (pr.isDraft === true) {
+      return {
+        label: "PR draft",
+        // GitHub renders drafts gray; reuse the closed treatment so draft reads as "not live yet".
+        colorClass: "text-zinc-500 dark:text-zinc-400/80",
+        iconKind: "pull-request",
+      };
+    }
     return {
       label: "PR open",
       // Match the diff "+" green so an opened PR reads as the same positive signal.
@@ -1436,7 +1458,7 @@ export function resolvePrStatePresentation(
       iconKind: "pull-request",
     };
   }
-  if (state === "closed") {
+  if (pr.state === "closed") {
     return {
       label: "PR closed",
       colorClass: "text-zinc-500 dark:text-zinc-400/80",

@@ -996,6 +996,76 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages).toHaveLength(0);
   });
 
+  it("persists a compact per-model token breakdown on turn.completed activities", async () => {
+    const harness = await createHarness();
+
+    harness.setProviderSession({
+      threadId: asThreadId("thread-1"),
+      provider: "claudeAgent",
+      status: "running",
+      runtimeMode: "approval-required",
+      createdAt: "2026-03-01T10:00:00.000Z",
+      updatedAt: "2026-03-01T10:00:00.000Z",
+      activeTurnId: asTurnId("turn-1"),
+    });
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-model-usage"),
+      provider: "claudeAgent",
+      createdAt: "2026-03-01T10:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-1"),
+      payload: {
+        state: "completed",
+        modelUsage: {
+          "claude-fable-5": {
+            inputTokens: 100,
+            outputTokens: 40,
+            cacheReadInputTokens: 800,
+            cacheCreationInputTokens: 60,
+            webSearchRequests: 0,
+            costUSD: 0.12,
+            contextWindow: 200000,
+          },
+          "claude-haiku-4-5": {
+            inputTokens: 0,
+            outputTokens: 0,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            webSearchRequests: 0,
+            costUSD: 0,
+            contextWindow: 200000,
+          },
+        },
+      },
+    } as ProviderRuntimeEvent);
+
+    const thread = await waitForThread(harness.engine, (candidate) =>
+      candidate.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-turn-completed-model-usage",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (candidate: ProviderRuntimeTestActivity) => candidate.id === "evt-turn-completed-model-usage",
+    );
+    // Zero-usage models are dropped; cache reads/writes fold into inputTokens.
+    expect(activity).toMatchObject({
+      kind: "turn.completed",
+      payload: {
+        state: "completed",
+        modelUsage: {
+          "claude-fable-5": { inputTokens: 960, outputTokens: 40, totalTokens: 1000 },
+        },
+      },
+    });
+    const persistedModelUsage = (
+      activity?.payload as { modelUsage?: Record<string, unknown> } | undefined
+    )?.modelUsage;
+    expect(Object.keys(persistedModelUsage ?? {})).toEqual(["claude-fable-5"]);
+  });
+
   it("projects MCP tool progress into thread activity with preserved tool metadata", async () => {
     const harness = await createHarness();
 

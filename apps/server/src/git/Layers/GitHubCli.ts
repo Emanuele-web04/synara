@@ -70,6 +70,25 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
   });
 }
 
+// GitHub reports MERGEABLE/CONFLICTING/UNKNOWN; UNKNOWN also stands in for the
+// transient window right after a push while GitHub recomputes mergeability.
+function normalizePullRequestMergeability(
+  mergeable: string | null | undefined,
+): "mergeable" | "conflicting" | "unknown" {
+  switch (mergeable) {
+    case "MERGEABLE":
+      return "mergeable";
+    case "CONFLICTING":
+      return "conflicting";
+    default:
+      return "unknown";
+  }
+}
+
+function normalizeDiffCount(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
 function normalizePullRequestState(input: {
   state?: string | null | undefined;
   mergedAt?: string | null | undefined;
@@ -93,6 +112,11 @@ const RawGitHubPullRequestSchema = Schema.Struct({
   headRefName: TrimmedNonEmptyString,
   state: Schema.optional(Schema.NullOr(Schema.String)),
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  additions: Schema.optional(Schema.NullOr(Schema.Number)),
+  deletions: Schema.optional(Schema.NullOr(Schema.Number)),
+  changedFiles: Schema.optional(Schema.NullOr(Schema.Number)),
   isCrossRepository: Schema.optional(Schema.Boolean),
   headRepository: Schema.optional(
     Schema.NullOr(
@@ -108,6 +132,7 @@ const RawGitHubPullRequestSchema = Schema.Struct({
       }),
     ),
   ),
+  updatedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
@@ -256,6 +281,12 @@ function normalizePullRequestSummary(
     baseRefName: raw.baseRefName,
     headRefName: raw.headRefName,
     state: normalizePullRequestState(raw),
+    isDraft: raw.isDraft === true,
+    mergeability: normalizePullRequestMergeability(raw.mergeable),
+    additions: normalizeDiffCount(raw.additions),
+    deletions: normalizeDiffCount(raw.deletions),
+    changedFiles: normalizeDiffCount(raw.changedFiles),
+    updatedAt: raw.updatedAt?.trim() || null,
     ...(typeof raw.isCrossRepository === "boolean"
       ? { isCrossRepository: raw.isCrossRepository }
       : {}),
@@ -385,6 +416,7 @@ function decodeGitHubJson<S extends Schema.Top>(
   schema: S,
   operation:
     | "listOpenPullRequests"
+    | "listPullRequests"
     | "getPullRequest"
     | "getRepositoryCloneUrls"
     | "getPullRequestWithChecks"
@@ -403,6 +435,41 @@ function decodeGitHubJson<S extends Schema.Top>(
   );
 }
 
+const decodeRawPullRequestEntry = Schema.decodeUnknownSync(RawGitHubPullRequestSchema);
+
+/**
+ * Decode + normalize a `gh pr list --json` payload. Exported so test fakes parse fixtures
+ * through the exact same schema/normalization as the live layer instead of re-implementing it.
+ *
+ * Entries are decoded individually: one malformed PR (a gh quirk or API oddity) must not
+ * hide the healthy PRs in the same list. Only a payload that is not a JSON array fails.
+ */
+export function decodePullRequestListJson(
+  raw: string,
+  operation: "listOpenPullRequests" | "listPullRequests" = "listPullRequests",
+): Effect.Effect<ReadonlyArray<GitHubPullRequestSummary>, GitHubCliError> {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) {
+    return Effect.succeed([]);
+  }
+  return decodeGitHubJson(
+    trimmed,
+    Schema.Array(Schema.Unknown),
+    operation,
+    "GitHub CLI returned invalid PR list JSON.",
+  ).pipe(
+    Effect.map((entries) =>
+      entries.flatMap((entry) => {
+        try {
+          return [normalizePullRequestSummary(decodeRawPullRequestEntry(entry))];
+        } catch {
+          return [];
+        }
+      }),
+    ),
+  );
+}
+
 const makeGitHubCli = Effect.sync(() => {
   const execute: GitHubCliShape["execute"] = (input) =>
     Effect.tryPromise({
@@ -414,37 +481,48 @@ const makeGitHubCli = Effect.sync(() => {
       catch: (error) => normalizeGitHubCliError("execute", error),
     });
 
+  // One implementation behind both list methods so the field list, decoding, and
+  // normalization cannot drift between the open-only and any-state lookups.
+  const listPullRequestsWithState = (
+    input: { readonly cwd: string; readonly headSelector: string; readonly limit?: number },
+    options: {
+      readonly state: "open" | "all";
+      readonly defaultLimit: number;
+      readonly operation: "listOpenPullRequests" | "listPullRequests";
+    },
+  ) =>
+    execute({
+      cwd: input.cwd,
+      args: [
+        "pr",
+        "list",
+        "--head",
+        input.headSelector,
+        "--state",
+        options.state,
+        "--limit",
+        String(input.limit ?? options.defaultLimit),
+        "--json",
+        PULL_REQUEST_SUMMARY_JSON_FIELDS,
+      ],
+    }).pipe(
+      Effect.flatMap((result) => decodePullRequestListJson(result.stdout, options.operation)),
+    );
+
   const service = {
     execute,
     listOpenPullRequests: (input) =>
-      execute({
-        cwd: input.cwd,
-        args: [
-          "pr",
-          "list",
-          "--head",
-          input.headSelector,
-          "--state",
-          "open",
-          "--limit",
-          String(input.limit ?? 1),
-          "--json",
-          PULL_REQUEST_SUMMARY_JSON_FIELDS,
-        ],
-      }).pipe(
-        Effect.map((result) => result.stdout.trim()),
-        Effect.flatMap((raw) =>
-          raw.length === 0
-            ? Effect.succeed([])
-            : decodeGitHubJson(
-                raw,
-                Schema.Array(RawGitHubPullRequestSchema),
-                "listOpenPullRequests",
-                "GitHub CLI returned invalid PR list JSON.",
-              ),
-        ),
-        Effect.map((pullRequests) => pullRequests.map(normalizePullRequestSummary)),
-      ),
+      listPullRequestsWithState(input, {
+        state: "open",
+        defaultLimit: 1,
+        operation: "listOpenPullRequests",
+      }),
+    listPullRequests: (input) =>
+      listPullRequestsWithState(input, {
+        state: "all",
+        defaultLimit: 20,
+        operation: "listPullRequests",
+      }),
     getPullRequest: (input) =>
       execute({
         cwd: input.cwd,

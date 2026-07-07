@@ -644,48 +644,21 @@ describe("environment panel visibility", () => {
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: null,
       }),
     ).toBe(true);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: false,
       }),
     ).toBe(false);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: false,
-        actionDismissed: false,
         userPreferenceOpen: true,
       }),
     ).toBe(true);
-  });
-
-  it("treats action dismissals as transient closes instead of stored preferences", () => {
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: true,
-        userPreferenceOpen: null,
-      }),
-    ).toBe(false);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: false,
-        userPreferenceOpen: null,
-      }),
-    ).toBe(true);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: false,
-        actionDismissed: true,
-        userPreferenceOpen: true,
-      }),
-    ).toBe(false);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {

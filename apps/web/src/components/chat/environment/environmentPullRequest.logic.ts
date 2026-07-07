@@ -63,6 +63,31 @@ export function withStableCheckKeys(
   });
 }
 
+export interface PullRequestDiffStat {
+  additions: number;
+  deletions: number;
+  /** e.g. "3 files" — null when the file count was not reported */
+  filesLabel: string | null;
+}
+
+// Null when gh reported no diff sizes at all, so the panel can omit the row instead of
+// showing a misleading "+0 −0".
+export function summarizePullRequestDiffStat(pr: {
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
+}): PullRequestDiffStat | null {
+  if (pr.additions === null && pr.deletions === null && pr.changedFiles === null) {
+    return null;
+  }
+  return {
+    additions: pr.additions ?? 0,
+    deletions: pr.deletions ?? 0,
+    filesLabel:
+      pr.changedFiles === null ? null : `${pr.changedFiles} ${pluralize(pr.changedFiles, "file")}`,
+  };
+}
+
 export function summarizePullRequestComments(count: number, truncated = false): string {
   if (count === 0) return truncated ? "Comments may exist" : "No comments";
   const noun = pluralize(count, "comment");
@@ -81,33 +106,73 @@ function truncate(text: string, maxLength: number): string {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1).trimEnd()}…` : text;
 }
 
-// Bots (and humans) often lead with a markdown heading or bold summary line; strip that
-// formatting so the popup reads like the GitHub review list.
+// Bots (and humans) often lead with markdown/HTML noise — severity badges like
+// `<sub>![P2 Badge](https://img.shields.io/…)</sub>`, headings, bold, links; strip it so the
+// popup reads like the GitHub review list. Badge images keep their alt label minus the
+// "Badge" suffix ("P2 Badge" → "P2") because the severity is real signal.
 function stripInlineMarkdown(line: string): string {
-  return line
+  const codeSpans: string[] = [];
+  // Inline code may contain JSX/generic syntax like `<Button>` or `Promise<T>`.
+  // Protect it before stripping HTML wrapper tags so the display text keeps the code.
+  const protectedLine = line.replace(/`([^`]*?)`/g, (_match, code: string) => {
+    const index = codeSpans.push(code) - 1;
+    return `\u0000code-span-${index}\u0000`;
+  });
+  const stripped = protectedLine
+    .replace(/!\[\s*badge\s*\]\([^)]*\)/gi, "") // image whose alt is only "Badge" → nothing
+    .replace(/!\[([^\]]*?)(?:\s+badge)?\]\([^)]*\)/gi, "$1") // markdown image → alt text
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // markdown link → link text
+    .replace(/<\/?[a-zA-Z][^<>]*>/g, "") // HTML tags (<sub>, <img …>, <details>, …)
     .replace(/^#{1,6}\s+/, "")
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
-    .replace(/`(.+?)`/g, "$1")
+    .replace(/\s{2,}/g, " ")
     .trim();
+  return codeSpans.reduce(
+    (text, code, index) => text.replace(`\u0000code-span-${index}\u0000`, () => code),
+    stripped,
+  );
+}
+
+// True for lines that are nothing but images/HTML (e.g. a shields.io severity badge on its
+// own line). Their stripped remnant ("P2") is a prefix, not a standalone title.
+function isDecorationOnlyLine(line: string): boolean {
+  if (line.trim().length === 0) {
+    return false;
+  }
+  return (
+    line
+      .replace(/!\[[^\]]*\]\([^)]*\)/g, "")
+      .replace(/<\/?[a-zA-Z][^<>]*>/g, "")
+      .trim().length === 0
+  );
 }
 
 export function describePullRequestComment(
   comment: GitPullRequestComment,
 ): PullRequestCommentDisplay {
-  const lines = comment.body.split("\n").map((line) => line.trim());
-  const firstLine = lines.find((line) => line.length > 0);
-  if (!firstLine) {
+  // Strip markup per line before picking the title so a leading badge line cannot shadow
+  // the real summary line below it.
+  const lines = comment.body
+    .split("\n")
+    .map((raw) => ({ text: stripInlineMarkdown(raw), decorationOnly: isDecorationOnlyLine(raw) }))
+    .filter((line) => line.text.length > 0);
+  const first = lines[0];
+  if (!first) {
     return { title: "(empty comment)", snippet: null };
   }
-  const title = truncate(stripInlineMarkdown(firstLine), COMMENT_TITLE_MAX_LENGTH);
+  // A badge-only first line folds into the next line: "P2" + "Missing null check" reads as
+  // one title instead of a cryptic "P2" row.
+  const second = lines[1];
+  const titleText = first.decorationOnly && second ? `${first.text} ${second.text}` : first.text;
+  const snippetStart = first.decorationOnly && second ? 2 : 1;
   const restText = lines
-    .slice(lines.indexOf(firstLine) + 1)
-    .filter((line) => line.length > 0)
+    .slice(snippetStart)
+    .map((line) => line.text)
     .join(" ")
     .trim();
   return {
-    title,
+    title: truncate(titleText, COMMENT_TITLE_MAX_LENGTH),
     snippet: restText.length > 0 ? truncate(restText, COMMENT_SNIPPET_MAX_LENGTH) : null,
   };
 }
@@ -150,4 +215,19 @@ export function buildFixReviewCommentsPrompt(input: {
       ]
     : [];
   return [header, ...items, ...footer].join("\n\n");
+}
+
+// Handed to the agent by the conflicts row's "Fix" button. The prompt names the PR branch
+// as it exists on GitHub but points the agent at the current checkout: fork threads check
+// the PR out under a different local branch name (e.g. `t3code/pr-N/<branch>`).
+export function buildResolveConflictsPrompt(input: {
+  prNumber: number;
+  prUrl: string;
+  baseBranch: string;
+  headBranch: string;
+}): string {
+  return [
+    `PR #${input.prNumber} (${input.prUrl}) has merge conflicts with its base branch \`${input.baseBranch}\`. Its PR branch is \`${input.headBranch}\` on GitHub; in this workspace it is the currently checked-out branch (the local name may differ).`,
+    `Update the checked-out PR branch with the latest \`${input.baseBranch}\` (merge or rebase, matching this repository's convention), resolve every conflict while preserving the intent of both sides, and verify the project still builds/tests before pushing the resolution.`,
+  ].join("\n");
 }

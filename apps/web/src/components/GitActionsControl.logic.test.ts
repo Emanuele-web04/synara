@@ -16,6 +16,25 @@ import {
   summarizeGitResult,
 } from "./GitActionsControl.logic";
 
+function statusPr(
+  overrides: Partial<NonNullable<GitStatusResult["pr"]>> = {},
+): NonNullable<GitStatusResult["pr"]> {
+  return {
+    number: 10,
+    title: "Open PR",
+    url: "https://example.com/pr/10",
+    baseBranch: "main",
+    headBranch: "feature/test",
+    state: "open",
+    isDraft: false,
+    mergeability: "unknown",
+    additions: null,
+    deletions: null,
+    changedFiles: null,
+    ...overrides,
+  };
+}
+
 function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
   return {
     branch: "feature/test",
@@ -38,14 +57,7 @@ describe("when: branch is clean and has an open PR", () => {
   it("resolveQuickAction opens the existing PR", () => {
     const quick = resolveQuickAction(
       status({
-        pr: {
-          number: 10,
-          title: "Open PR",
-          url: "https://example.com/pr/10",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 10, title: "Open PR", url: "https://example.com/pr/10" }),
       }),
       false,
     );
@@ -55,14 +67,7 @@ describe("when: branch is clean and has an open PR", () => {
   it("buildMenuItems disables commit/push and enables open PR", () => {
     const items = buildMenuItems(
       status({
-        pr: {
-          number: 11,
-          title: "Existing PR",
-          url: "https://example.com/pr/11",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 11, title: "Existing PR", url: "https://example.com/pr/11" }),
       }),
       false,
     );
@@ -158,14 +163,7 @@ describe("when: branch is clean, ahead, and has an open PR", () => {
     const quick = resolveQuickAction(
       status({
         aheadCount: 3,
-        pr: {
-          number: 13,
-          title: "Open PR",
-          url: "https://example.com/pr/13",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 13, title: "Open PR", url: "https://example.com/pr/13" }),
       }),
       false,
     );
@@ -176,14 +174,7 @@ describe("when: branch is clean, ahead, and has an open PR", () => {
     const items = buildMenuItems(
       status({
         aheadCount: 2,
-        pr: {
-          number: 12,
-          title: "Existing PR",
-          url: "https://example.com/pr/12",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 12, title: "Existing PR", url: "https://example.com/pr/12" }),
       }),
       false,
     );
@@ -566,14 +557,7 @@ describe("when: working tree has local changes", () => {
     const quick = resolveQuickAction(
       status({
         hasWorkingTreeChanges: true,
-        pr: {
-          number: 16,
-          title: "Existing PR",
-          url: "https://example.com/pr/16",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 16, title: "Existing PR", url: "https://example.com/pr/16" }),
       }),
       false,
     );
@@ -869,14 +853,7 @@ describe("when: branch has no upstream configured", () => {
       status({
         hasUpstream: false,
         aheadCount: 0,
-        pr: {
-          number: 14,
-          title: "Existing PR",
-          url: "https://example.com/pr/14",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 14, title: "Existing PR", url: "https://example.com/pr/14" }),
       }),
       false,
     );
@@ -892,14 +869,7 @@ describe("when: branch has no upstream configured", () => {
       status({
         hasUpstream: false,
         aheadCount: 1,
-        pr: {
-          number: 15,
-          title: "Existing PR",
-          url: "https://example.com/pr/15",
-          baseBranch: "main",
-          headBranch: "feature/test",
-          state: "open",
-        },
+        pr: statusPr({ number: 15, title: "Existing PR", url: "https://example.com/pr/15" }),
       }),
       false,
     );

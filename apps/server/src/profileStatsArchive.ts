@@ -22,7 +22,7 @@ import {
   checkpointRefForThreadTurnStart,
   CHECKPOINT_REFS_PREFIX,
 } from "./checkpointing/Utils";
-import { aggregateProfileSkillUsageRows } from "./profileStats";
+import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
 import { THREAD_RETENTION_COMMAND_ID_PREFIX } from "./threadRetention";
 
 interface PurgeThreadRow {
@@ -40,7 +40,16 @@ interface TurnEventRow {
 }
 
 interface TokenActivityRow {
+  // Cumulative counter (totalProcessedTokens) and context-window counter
+  // (usedTokens); which one drives the delta series is decided per thread,
+  // mirroring profileStats.queryTokenActivity.
   readonly totalProcessedTokens: number | bigint | null;
+  readonly usedTokens: number | bigint | null;
+  // Per-turn attribution resolved in SQL (turn-start modelSelection); NULL when
+  // the activity has no attributable turn, in which case the thread's own
+  // selection applies as the fallback.
+  readonly provider: string | null;
+  readonly model: string | null;
   readonly createdAt: string | null;
 }
 
@@ -74,6 +83,8 @@ export interface ThreadTurnSnapshotRow {
 
 export interface ThreadTokenSnapshotRow {
   readonly createdAt: string;
+  readonly provider: string | null;
+  readonly model: string | null;
   readonly tokens: number;
 }
 
@@ -220,32 +231,106 @@ export function aggregateThreadTurnSnapshotRows(
   return [...counts.values()];
 }
 
+function tokenCounterValue(value: number | bigint | null): number | null {
+  const total = typeof value === "bigint" ? Number(value) : value;
+  return total !== null && Number.isFinite(total) ? total : null;
+}
+
+function tokenProviderModelKey(provider: string | null, model: string | null): string {
+  return `${provider ?? ""}\u0000${model ?? ""}`;
+}
+
+function addTokenSnapshotRow(
+  rows: Map<string, ThreadTokenSnapshotRow>,
+  row: ThreadTokenSnapshotRow,
+): void {
+  const key = `${row.createdAt}\u0000${tokenProviderModelKey(row.provider, row.model)}`;
+  const existing = rows.get(key);
+  if (existing) {
+    rows.set(key, { ...existing, tokens: existing.tokens + row.tokens });
+  } else {
+    rows.set(key, row);
+  }
+}
+
 // Mirrors the LAG-based delta in profileStats.queryTokenActivity: rows must be
 // ordered the same way that query orders them, and the first total counts fully.
+// Cumulative rows stay thread-wide; usedTokens rows are counted only for
+// provider/model groups that never emit cumulative totals.
 // Deltas keep the original activity timestamp (raw, unparsed) so read-time
 // DATETIME(created_at, tz) bucketing stays identical to the live query for any
-// client UTC offset.
+// client UTC offset, and are keyed by the row's per-turn provider/model (the
+// thread's own selection fills in rows without turn attribution).
 export function aggregateThreadTokenRows(
   rows: ReadonlyArray<TokenActivityRow>,
+  fallbackSelection?: { readonly provider: string | null; readonly model: string | null },
 ): ThreadTokenSnapshotRow[] {
-  const tokensByTimestamp = new Map<string, number>();
-  let previousTotal = 0;
+  const tokensByKey = new Map<string, ThreadTokenSnapshotRow>();
+  const cumulativeProviderModels = new Set<string>();
   for (const row of rows) {
-    const total =
-      typeof row.totalProcessedTokens === "bigint"
-        ? Number(row.totalProcessedTokens)
-        : row.totalProcessedTokens;
-    if (total === null || !Number.isFinite(total)) {
+    if (tokenCounterValue(row.totalProcessedTokens) === null) {
       continue;
     }
-    const delta = Math.max(0, total - previousTotal);
-    previousTotal = total;
+    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    cumulativeProviderModels.add(tokenProviderModelKey(provider, model));
+  }
+
+  let previousCumulativeTotal: number | null = null;
+  for (const row of rows) {
+    const total = tokenCounterValue(row.totalProcessedTokens);
+    if (total === null) {
+      continue;
+    }
+    const delta =
+      previousCumulativeTotal === null || total < previousCumulativeTotal
+        ? total
+        : Math.max(0, total - previousCumulativeTotal);
+    previousCumulativeTotal = total;
     if (delta <= 0 || row.createdAt === null) {
       continue;
     }
-    tokensByTimestamp.set(row.createdAt, (tokensByTimestamp.get(row.createdAt) ?? 0) + delta);
+    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    addTokenSnapshotRow(tokensByKey, {
+      createdAt: row.createdAt,
+      provider,
+      model,
+      tokens: delta,
+    });
   }
-  return [...tokensByTimestamp.entries()].map(([createdAt, tokens]) => ({ createdAt, tokens }));
+
+  let previousUsedTotal: number | null = null;
+  let previousUsedProviderModelKey: string | null = null;
+  for (const row of rows) {
+    const provider = readString(row.provider) ?? fallbackSelection?.provider ?? null;
+    const model = readString(row.model) ?? fallbackSelection?.model ?? null;
+    const providerModelKey = tokenProviderModelKey(provider, model);
+    if (cumulativeProviderModels.has(providerModelKey)) {
+      continue;
+    }
+    const total = tokenCounterValue(row.usedTokens);
+    if (total === null) {
+      continue;
+    }
+    const delta =
+      previousUsedTotal === null ||
+      (total < previousUsedTotal && providerModelKey !== previousUsedProviderModelKey)
+        ? total
+        : Math.max(0, total - previousUsedTotal);
+    previousUsedTotal = total;
+    previousUsedProviderModelKey = providerModelKey;
+    if (delta <= 0 || row.createdAt === null) {
+      continue;
+    }
+    addTokenSnapshotRow(tokensByKey, {
+      createdAt: row.createdAt,
+      provider,
+      model,
+      tokens: delta,
+    });
+  }
+  return [...tokensByKey.values()];
 }
 
 // ── Service ────────────────────────────────────────────────────────────
@@ -433,20 +518,36 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         WHERE event_type = 'thread.turn-start-requested'
           AND COALESCE(json_extract(payload_json, '$.threadId'), stream_id) = ${threadId}
       `;
+      // Same counters and per-turn attribution as the live
+      // profileStats.queryTokenActivity: both token counters come back raw so
+      // aggregateThreadTokenRows can split cumulative and used-only fallback
+      // series, and the turn join pins each delta to the selected model.
       const tokenActivityRows = yield* sql<TokenActivityRow>`
+        WITH turn_model AS (
+          ${turnModelSelectionCte(sql, { threadId })}
+        )
         SELECT
-          CAST(json_extract(payload_json, '$.totalProcessedTokens') AS INTEGER)
+          CAST(json_extract(a.payload_json, '$.totalProcessedTokens') AS INTEGER)
             AS totalProcessedTokens,
-          created_at AS createdAt
-        FROM projection_thread_activities
-        WHERE thread_id = ${threadId}
-          AND kind = 'context-window.updated'
-          AND json_extract(payload_json, '$.totalProcessedTokens') IS NOT NULL
+          CAST(json_extract(a.payload_json, '$.usedTokens') AS INTEGER) AS usedTokens,
+          tm.provider AS provider,
+          tm.model AS model,
+          a.created_at AS createdAt
+        FROM projection_thread_activities a
+        LEFT JOIN turn_model tm
+          ON tm.thread_id = a.thread_id
+         AND tm.turn_id = a.turn_id
+        WHERE a.thread_id = ${threadId}
+          AND a.kind = 'context-window.updated'
+          AND COALESCE(
+            json_extract(a.payload_json, '$.totalProcessedTokens'),
+            json_extract(a.payload_json, '$.usedTokens')
+          ) IS NOT NULL
         ORDER BY
-          CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
-          sequence ASC,
-          created_at ASC,
-          activity_id ASC
+          CASE WHEN a.sequence IS NULL THEN 0 ELSE 1 END ASC,
+          a.sequence ASC,
+          a.created_at ASC,
+          a.activity_id ASC
       `;
       const skillMessageRows = yield* sql<SkillMessageRow>`
         SELECT
@@ -462,8 +563,11 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       `;
 
       const turnRows = aggregateThreadTurnSnapshotRows(turnEventRows, thread.modelSelectionJson);
-      const tokenProvider = parseModelSelectionJson(thread.modelSelectionJson)?.provider ?? null;
-      const tokenRows = aggregateThreadTokenRows(tokenActivityRows);
+      const threadSelection = parseModelSelectionJson(thread.modelSelectionJson);
+      const tokenRows = aggregateThreadTokenRows(tokenActivityRows, {
+        provider: threadSelection?.provider ?? null,
+        model: threadSelection?.model ?? null,
+      });
       const skillRows = aggregateProfileSkillUsageRows(skillMessageRows);
       const hasStatsContribution = hasProfileStatsContribution({
         promptRows: skillMessageRows,
@@ -512,8 +616,8 @@ const makeProfileStatsArchive = Effect.gen(function* () {
         yield* Effect.forEach(
           tokenRows,
           (row) => sql`
-            INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, tokens)
-            VALUES (${threadId}, ${row.createdAt}, ${tokenProvider}, ${row.tokens})
+            INSERT INTO profile_stats_deleted_tokens (thread_id, created_at, provider, model, tokens)
+            VALUES (${threadId}, ${row.createdAt}, ${row.provider}, ${row.model}, ${row.tokens})
           `,
           { concurrency: 1, discard: true },
         );
