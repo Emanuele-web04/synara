@@ -947,6 +947,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resolvedThreadId: providerThreadId,
         requestedRuntimeMode: input.runtimeMode,
       }).pipe(this.runPromise);
+      const currentOwner = this.sessions.get(threadId);
+      if (currentOwner && currentOwner !== context) {
+        // A concurrent start won the slot while we were initializing. Tear down
+        // only our own context and hand back the winner's session instead of
+        // clobbering it.
+        this.disposeContextResources(context);
+        return { ...currentOwner.session };
+      }
+
       this.emitLifecycleEvent(context, "session/ready", `Connected to thread ${providerThreadId}`);
       return { ...context.session };
     } catch (error) {
@@ -957,7 +966,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           lastError: message,
         });
         this.emitErrorEvent(context, "session/startFailed", message);
-        this.stopSession(threadId);
+        this.disposeIfCurrent(threadId, context);
       } else {
         this.emitEvent({
           id: EventId.makeUnsafe(randomUUID()),
@@ -1480,6 +1489,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         resumeCursor: { threadId: forkedProviderThreadId },
       });
       this.emitLifecycleEvent(context, "session/threadOpenResolved", "Codex thread/fork resolved.");
+      const currentOwner = this.sessions.get(threadId);
+      if (currentOwner && currentOwner !== context) {
+        // A concurrent start/fork won the slot while we were initializing. Tear
+        // down only our own context and hand back the winner's fork result
+        // instead of clobbering it.
+        this.disposeContextResources(context);
+        const winnerResumeThreadId = readResumeCursorThreadId(currentOwner.session.resumeCursor);
+        return {
+          threadId,
+          resumeCursor: {
+            threadId: winnerResumeThreadId ?? forkedProviderThreadId,
+          },
+        };
+      }
+
       this.emitLifecycleEvent(
         context,
         "session/ready",
@@ -1500,7 +1524,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
           lastError: message,
         });
         this.emitErrorEvent(context, "session/threadForkFailed", message);
-        this.stopSession(threadId);
+        this.disposeIfCurrent(threadId, context);
       }
       throw new Error(message, { cause: error });
     }
@@ -1691,6 +1715,23 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       return;
     }
 
+    this.disposeContextResources(context);
+
+    this.updateSession(context, {
+      status: "closed",
+      activeTurnId: undefined,
+    });
+    this.emitLifecycleEvent(context, "session/closed", "Session stopped");
+    this.sessions.delete(threadId);
+  }
+
+  /**
+   * Releases exactly the per-context resources a single `CodexSessionContext`
+   * owns (child process, readline handle, pending requests) without touching
+   * the `this.sessions` map. Safe to call on a context that no longer owns
+   * its threadId slot (e.g. it lost a concurrent start/fork race).
+   */
+  private disposeContextResources(context: CodexSessionContext): void {
     context.stopping = true;
 
     for (const pending of context.pending.values()) {
@@ -1706,13 +1747,20 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     if (!context.child.killed) {
       killChildTree(context.child);
     }
+  }
 
-    this.updateSession(context, {
-      status: "closed",
-      activeTurnId: undefined,
-    });
-    this.emitLifecycleEvent(context, "session/closed", "Session stopped");
-    this.sessions.delete(threadId);
+  /**
+   * Tears down `context` only if it still owns the `threadId` slot in
+   * `this.sessions`. If a concurrent start/fork has already replaced it, this
+   * disposes only `context`'s own resources and leaves the current (healthy)
+   * owner of the slot untouched.
+   */
+  private disposeIfCurrent(threadId: ThreadId, context: CodexSessionContext): void {
+    if (this.sessions.get(threadId) === context) {
+      this.stopSession(threadId);
+    } else {
+      this.disposeContextResources(context);
+    }
   }
 
   listSessions(): ProviderSession[] {
