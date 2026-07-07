@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useStore } from "../store";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "./chatProjects";
+import { PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS } from "./projectSnapshotHydration";
 
 const NOW = "2026-06-26T21:00:00.000Z";
 
@@ -198,6 +199,29 @@ describe("isHomeChatContainerProject", () => {
     expect(dispatchCommand).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "project.create" }),
     );
+  });
+
+  it("gives up and returns null without dispatching once the hydration wait times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const dispatchCommand = vi.fn(async (_command: { type: string }) => {});
+      vi.stubGlobal("window", {
+        nativeApi: { orchestration: { dispatchCommand, getShellSnapshot: vi.fn() } },
+      });
+      useStore.setState({ projects: [], threadsHydrated: false });
+
+      const projectPromise = ensureHomeChatProject({
+        homeDir: "/Users/tester",
+        chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      });
+
+      await vi.advanceTimersByTimeAsync(PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS);
+
+      await expect(projectPromise).resolves.toBeNull();
+      expect(dispatchCommand).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("deduplicates concurrent Home chat creation requests while hydration is pending", async () => {

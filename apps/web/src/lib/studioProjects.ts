@@ -7,7 +7,10 @@ import { type ProjectId, type ThreadId } from "@t3tools/contracts";
 import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
 import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
-import { waitForProjectSnapshotHydration } from "./projectSnapshotHydration";
+import {
+  PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  waitForProjectSnapshotHydration,
+} from "./projectSnapshotHydration";
 import { useStore } from "../store";
 import type { Project } from "../types";
 import {
@@ -172,8 +175,14 @@ export async function ensureStudioProject(paths: ServerWorkspacePaths): Promise<
 
   // Same shape as ensureHomeChatProject: never consult the local store before the first shell
   // snapshot. Store rows only ever come from server syncs today, but waiting first keeps this
-  // safe even if project rows ever become locally persisted or partially populated.
-  await waitForProjectSnapshotHydration();
+  // safe even if project rows ever become locally persisted or partially populated. Bound the
+  // wait so a stuck connection surfaces a user-visible error instead of hanging forever.
+  const hydrated = await waitForProjectSnapshotHydration({
+    timeoutMs: PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  });
+  if (!hydrated) {
+    return null;
+  }
 
   const existingProject = findStudioContainerProject(useStore.getState().projects, paths);
   if (existingProject) {

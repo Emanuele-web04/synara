@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
 
 import {
   CommandId,
@@ -29,6 +28,7 @@ import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
+import { realpathNearestExisting } from "./realpathNearestExisting";
 import { listRecentStudioOutputs } from "./studioOutputs";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
@@ -415,11 +415,10 @@ export const makeWsRpcLayer = () =>
             message: `Project path is not a directory: ${normalizedWorkspaceRoot}`,
           });
         }
-        try {
-          return realpathSync.native(normalizedWorkspaceRoot);
-        } catch {
-          return normalizedWorkspaceRoot;
-        }
+        return yield* realpathNearestExisting(normalizedWorkspaceRoot).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+        );
       });
       // One mkdir loop shared by every container kind; the relative directory set is the
       // only thing that varies (general chats scaffold work/outputs, Studio mirrors the

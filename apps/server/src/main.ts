@@ -13,8 +13,7 @@ import { NetService } from "@t3tools/shared/Net";
 import {
   DEFAULT_PORT,
   deriveServerPaths,
-  resolveDefaultChatWorkspaceRoot,
-  resolveDefaultStudioWorkspaceRoot,
+  resolveCanonicalWorkspaceRoots,
   resolveStaticDir,
   ServerConfig,
   type RuntimeMode,
@@ -213,13 +212,16 @@ const ServerConfigLive = (input: CliInput) =>
         env.host ??
         (mode === "desktop" ? "127.0.0.1" : undefined);
 
+      const { homeDir, chatWorkspaceRoot, studioWorkspaceRoot } =
+        yield* resolveCanonicalWorkspaceRoots({ homeDir: userHomeDir });
+
       const config: ServerConfigShape = {
         mode,
         port,
         cwd: cliConfig.cwd,
-        homeDir: userHomeDir,
-        chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: userHomeDir }),
-        studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: userHomeDir }),
+        homeDir,
+        chatWorkspaceRoot,
+        studioWorkspaceRoot,
         host,
         baseDir,
         ...derivedPaths,

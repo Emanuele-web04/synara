@@ -13,6 +13,7 @@ import {
   findStudioContainerProject,
   isStudioContainerProject,
 } from "./studioProjects";
+import { PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS } from "./projectSnapshotHydration";
 
 const nativeApiMock = vi.hoisted(() => ({
   dispatchedCommands: [] as unknown[],
@@ -278,6 +279,25 @@ describe("studioProjects", () => {
 
     await expect(projectPromise).resolves.toBe(existingProject.id);
     expect(nativeApiMock.dispatchedCommands).toEqual([]);
+  });
+
+  it("gives up and returns null without dispatching once the hydration wait times out", async () => {
+    vi.useFakeTimers();
+    try {
+      useStore.setState({ projects: [], threadsHydrated: false });
+
+      const projectPromise = ensureStudioProject({
+        homeDir: "/Users/tester",
+        studioWorkspaceRoot: "/Users/tester/Documents/Synara/Studio",
+      });
+
+      await vi.advanceTimersByTimeAsync(PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS);
+
+      await expect(projectPromise).resolves.toBeNull();
+      expect(nativeApiMock.dispatchedCommands).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("deduplicates concurrent Studio creation requests while hydration is pending", async () => {

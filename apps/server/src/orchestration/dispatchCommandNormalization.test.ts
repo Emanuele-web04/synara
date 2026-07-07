@@ -72,6 +72,32 @@ describe("makeDispatchCommandNormalizer", () => {
     expect(preparedRoots).toEqual(["/Users/tester/Documents/Synara/2026-06-11/chat"]);
   });
 
+  it("retries the deferred prepare effect on transient failures before succeeding", async () => {
+    let callCount = 0;
+    const normalizer = makeDispatchCommandNormalizer<Error>({
+      attachmentsDir: "/tmp/attachments",
+      chatWorkspaceRoot: "/Users/tester/Documents/Synara",
+      fileSystem: {} as FileSystem.FileSystem,
+      path: {} as Path.Path,
+      canonicalizeProjectWorkspaceRoot: (workspaceRoot) => Effect.succeed(workspaceRoot),
+      prepareChatWorkspaceRoot: () =>
+        Effect.suspend(() => {
+          callCount += 1;
+          if (callCount < 3) {
+            return Effect.fail(new Error("transient FS error"));
+          }
+          return Effect.void;
+        }),
+    });
+
+    const result = await Effect.runPromise(normalizer({ command: projectCreateCommand() }));
+    expect(result.prepareWorkspaceRoot).not.toBeNull();
+
+    await runPrepareWorkspaceRoot(result);
+
+    expect(callCount).toBe(3);
+  });
+
   it("prepares managed date/slug chat workspace roots", async () => {
     const preparedRoots: string[] = [];
     const normalizer = makeDispatchCommandNormalizer<Error>({

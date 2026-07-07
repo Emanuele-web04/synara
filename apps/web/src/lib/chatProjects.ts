@@ -14,7 +14,10 @@ import {
   isDuplicateProjectCreateError,
   resolveContainerCandidateCwd,
 } from "./projectCreateRecovery";
-import { waitForProjectSnapshotHydration } from "./projectSnapshotHydration";
+import {
+  PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  waitForProjectSnapshotHydration,
+} from "./projectSnapshotHydration";
 import { resolveServerChatWorkspaceRoot, type ServerWorkspacePaths } from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
 
@@ -253,8 +256,14 @@ export async function ensureHomeChatProject(
 
   // Never decide "the container doesn't exist" against an unhydrated store: a prewarm firing
   // before the first shell snapshot (persisted paths make homeDir truthy immediately on reload)
-  // would otherwise dispatch a duplicate or misrooted project.create.
-  await waitForProjectSnapshotHydration();
+  // would otherwise dispatch a duplicate or misrooted project.create. Bound the wait so a stuck
+  // connection surfaces a user-visible error instead of hanging "new chat" forever.
+  const hydrated = await waitForProjectSnapshotHydration({
+    timeoutMs: PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  });
+  if (!hydrated) {
+    return null;
+  }
 
   const { canonicalProjectId } = findCanonicalHomeProject(paths);
   if (canonicalProjectId) {

@@ -1554,6 +1554,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(context.value, {
           threadId: ThreadId.makeUnsafe("thread-context"),
           projectId: asProjectId("project-context"),
+          projectKind: "project",
           workspaceRoot: "/tmp/context-workspace",
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
@@ -1589,6 +1590,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         assert.deepEqual(fullThreadDiffContext.value, {
           threadId: ThreadId.makeUnsafe("thread-context"),
           projectId: asProjectId("project-context"),
+          projectKind: "project",
           workspaceRoot: "/tmp/context-workspace",
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
