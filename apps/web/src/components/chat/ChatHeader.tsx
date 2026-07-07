@@ -523,7 +523,6 @@ export const ChatHeader = memo(function ChatHeader({
   const { isMobile, state } = useSidebar();
   const headerRef = useRef<HTMLDivElement>(null);
   const [compact, setCompact] = useState(false);
-  const [openAddActionNonce, setOpenAddActionNonce] = useState(0);
   const {
     additions: diffAdditions,
     deletions: diffDeletions,
@@ -779,16 +778,12 @@ export const ChatHeader = memo(function ChatHeader({
             </ComposerPickerMenuPopup>
           </Menu>
         ) : null}
-        {/* Keep the shared project-action dialog mounted for the Open-in picker's
-            "Add action" entry, but hide the inline quick-run button (play + chevron)
-            from the header. */}
         {activeProjectScripts ? (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
-            openAddActionNonce={openAddActionNonce}
-            showInlineControls={false}
+            hideInlineLabel={compact}
             onRunScript={onRunProjectScript}
             onAddScript={onAddProjectScript}
             onUpdateScript={onUpdateProjectScript}
@@ -843,15 +838,12 @@ export const ChatHeader = memo(function ChatHeader({
         ) : (
           <>
             {/* Open in editor: dedicated split-button with an editor switcher; the project
-                "Add action" entry lives at the bottom of that same menu. */}
+                action control now lives beside Hand off as its own project command surface. */}
             {activeProjectName ? (
               <OpenInPicker
                 keybindings={keybindings}
                 availableEditors={availableEditors}
                 openInTarget={openInTarget}
-                {...(activeProjectScripts
-                  ? { onAddAction: () => setOpenAddActionNonce((current) => current + 1) }
-                  : {})}
               />
             ) : null}
 
