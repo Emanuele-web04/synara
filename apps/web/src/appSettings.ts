@@ -164,11 +164,10 @@ export const AppSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
-  // (rootless chats not tied to a project). `showWorkspaceSection` controls the
-  // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
-  // shown, so the switcher is hidden by default and only appears when Workspace is
-  // enabled in Settings (see the sidebar segmented picker).
+  // (rootless chats not tied to a project). `showStudioSection` and
+  // `showWorkspaceSection` control optional tabs in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these

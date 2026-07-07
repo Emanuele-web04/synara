@@ -1,144 +1,89 @@
 // FILE: _chat.index.tsx
 // Purpose: Restores the last chat route on app launch, falling back to a fresh home-chat draft.
 // Layer: Routing
-// Depends on: sidebar UI persistence plus shared new-chat handler for the empty-state fallback.
+// Depends on: the shared restore/create route surface plus the home-chat new-chat handler.
 
-import { ThreadId } from "@t3tools/contracts";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createFileRoute } from "@tanstack/react-router";
+import { useCallback, useMemo } from "react";
 
-import { SplashScreen } from "../components/SplashScreen";
+import {
+  RestoreOrCreateChatRoute,
+  type RestoreRouteResolver,
+} from "../components/RestoreOrCreateChatRoute";
 import { readSidebarUiState } from "../components/Sidebar.uiState";
-import {
-  type EmptyRouteRestoreRecoveryState,
-  resolveRestorableThreadRoute,
-  shouldHoldRememberedRouteFallback,
-  shouldStartRememberedRouteRecovery,
-} from "../chatRouteRestore";
-import {
-  refreshEmptyRouteRestoreSnapshot,
-  waitForEmptyRouteRestoreFallbackDelay,
-} from "../chatRouteRecovery";
+import { resolveRestorableThreadRoute } from "../chatRouteRestore";
+import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewChat } from "../hooks/useHandleNewChat";
-import { readNativeApi } from "../nativeApi";
-import { useSplitViewStore } from "../splitViewStore";
+import { collectStudioProjectIds } from "../lib/studioProjects";
 import { EMPTY_THREAD_IDS, useStore } from "../store";
+import { useWorkspaceStore } from "../workspaceStore";
 
 function ChatIndexRouteView() {
   const { handleNewChat } = useHandleNewChat();
-  const navigate = useNavigate();
-  const threadsHydrated = useStore((store) => store.threadsHydrated);
   const threadIds = useStore((state) => state.threadIds ?? EMPTY_THREAD_IDS);
-  const splitViewsHydrated = useSplitViewStore((state) => state.hasHydrated);
-  const splitViewsById = useSplitViewStore((state) => state.splitViewsById);
-  const splitViewIds = useMemo(
-    () => Object.keys(splitViewsById).filter((splitViewId) => splitViewsById[splitViewId]),
-    [splitViewsById],
+  const projects = useStore((state) => state.projects);
+  const sidebarThreadSummaryById = useStore((state) => state.sidebarThreadSummaryById);
+  const draftThreadsByThreadId = useComposerDraftStore((state) => state.draftThreadsByThreadId);
+  const homeDir = useWorkspaceStore((state) => state.homeDir);
+  const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
+  const createFreshChat = useCallback(() => handleNewChat({ fresh: true }), [handleNewChat]);
+
+  // Home chats restore the last visited route, except Studio threads — those belong to the
+  // /studio surface, and restoring one from "/" would silently switch the user into the Studio
+  // segment. A Studio lastThreadRoute falls through to a fresh home-chat draft instead.
+  const studioProjectIds = useMemo(
+    () => collectStudioProjectIds(projects, { homeDir, chatWorkspaceRoot, studioWorkspaceRoot }),
+    [chatWorkspaceRoot, homeDir, projects, studioWorkspaceRoot],
   );
-  const [attempt, setAttempt] = useState(0);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [emptyRestoreRecoveryState, setEmptyRestoreRecoveryState] =
-    useState<EmptyRouteRestoreRecoveryState>("idle");
-  const mountedRef = useRef(true);
-  const emptyRestoreRecoveryRunRef = useRef(0);
-
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (threadIds.length > 0 && emptyRestoreRecoveryState !== "idle") {
-      emptyRestoreRecoveryRunRef.current += 1;
-      setEmptyRestoreRecoveryState("idle");
-    }
-  }, [emptyRestoreRecoveryState, threadIds.length]);
-
-  useEffect(() => {
-    if (!threadsHydrated || !splitViewsHydrated) {
-      return;
-    }
-
-    let cancelled = false;
-    setErrorMessage(null);
-
-    void (async () => {
-      const lastThreadRoute = readSidebarUiState().lastThreadRoute;
+  // Fresh unsent chats have a route id but no persisted sidebar summary yet, so the thread-id
+  // filter above never matches them — mirrors the /studio landing's draft handling (and
+  // Sidebar's segment-scoped draft sets) so a cold start on "/" can restore an unsent home draft
+  // instead of always minting a new one. Only plain, still-unsent chat drafts qualify: a
+  // non-"chat" entry point isn't a home-chat draft, and `promotedTo` means the draft already
+  // became a real thread, so its stale id is no longer a valid restore target (matches the
+  // filtering findStudioDraftThreadId applies when picking Studio's current draft).
+  const nonStudioDraftThreadIds = useMemo(() => {
+    const draftThreadIds = new Set<string>();
+    for (const [threadId, draft] of Object.entries(draftThreadsByThreadId)) {
       if (
-        shouldStartRememberedRouteRecovery({
-          lastThreadRoute,
-          availableThreadCount: threadIds.length,
-          recoveryState: emptyRestoreRecoveryState,
-        })
+        !studioProjectIds.has(draft.projectId) &&
+        draft.entryPoint === "chat" &&
+        draft.promotedTo === undefined
       ) {
-        const recoveryRun = (emptyRestoreRecoveryRunRef.current += 1);
-        setEmptyRestoreRecoveryState("pending");
-        await Promise.all([
-          refreshEmptyRouteRestoreSnapshot(readNativeApi()).catch(() => false),
-          waitForEmptyRouteRestoreFallbackDelay(),
-        ]);
-        if (mountedRef.current && emptyRestoreRecoveryRunRef.current === recoveryRun) {
-          setEmptyRestoreRecoveryState("done");
-        }
-        return;
+        draftThreadIds.add(threadId);
       }
-
-      if (
-        shouldHoldRememberedRouteFallback({
-          lastThreadRoute,
-          availableThreadCount: threadIds.length,
-          recoveryState: emptyRestoreRecoveryState,
-        })
-      ) {
-        return;
+    }
+    return draftThreadIds;
+  }, [draftThreadsByThreadId, studioProjectIds]);
+  const resolveRestoreRoute = useCallback<RestoreRouteResolver>(
+    ({ availableSplitViewIds }) => {
+      const availableThreadIds = new Set<string>(
+        threadIds.filter((threadId) => {
+          // Fail closed: a thread we can't classify is not restorable from "/". Summaries are
+          // built from the same snapshot as threadIds, so this only ever excludes a thread if
+          // that invariant breaks — and then a fresh draft beats restoring into the wrong
+          // segment.
+          const summary = sidebarThreadSummaryById[threadId];
+          return summary !== undefined && !studioProjectIds.has(summary.projectId);
+        }),
+      );
+      for (const draftThreadId of nonStudioDraftThreadIds) {
+        availableThreadIds.add(draftThreadId);
       }
-
-      const restorableRoute = resolveRestorableThreadRoute({
-        lastThreadRoute,
-        availableThreadIds: new Set(threadIds),
-        availableSplitViewIds: new Set(splitViewIds),
+      return resolveRestorableThreadRoute({
+        lastThreadRoute: readSidebarUiState().lastThreadRoute,
+        availableThreadIds,
+        availableSplitViewIds,
       });
-      if (restorableRoute) {
-        if (cancelled) {
-          return;
-        }
-        await navigate({
-          to: "/$threadId",
-          params: { threadId: ThreadId.makeUnsafe(restorableRoute.threadId) },
-          replace: true,
-          search: () => ({
-            splitViewId: restorableRoute.splitViewId,
-          }),
-        });
-        return;
-      }
-
-      const result = await handleNewChat({ fresh: true });
-      if (cancelled || result.ok) {
-        return;
-      }
-      setErrorMessage(result.error);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    attempt,
-    emptyRestoreRecoveryState,
-    handleNewChat,
-    navigate,
-    splitViewIds,
-    splitViewsHydrated,
-    threadIds,
-    threadsHydrated,
-  ]);
+    },
+    [nonStudioDraftThreadIds, sidebarThreadSummaryById, studioProjectIds, threadIds],
+  );
 
   return (
-    <SplashScreen
-      errorMessage={errorMessage}
-      onRetry={errorMessage ? () => setAttempt((value) => value + 1) : null}
+    <RestoreOrCreateChatRoute
+      resolveRestoreRoute={resolveRestoreRoute}
+      createFreshChat={createFreshChat}
     />
   );
 }

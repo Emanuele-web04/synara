@@ -3,6 +3,7 @@ import type {
   OrchestrationProject,
   OrchestrationReadModel,
   OrchestrationThread,
+  ProjectKind,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -37,25 +38,20 @@ export function findProjectById(
 export function listActiveProjectsByWorkspaceRoot(
   readModel: OrchestrationReadModel,
   workspaceRoot: string,
+  options?: { readonly kinds?: ReadonlySet<ProjectKind> },
 ): ReadonlyArray<OrchestrationProject> {
   const normalizedWorkspaceRoot = normalizeWorkspaceRootForComparison(workspaceRoot, {
     platform: process.platform,
   });
+  const acceptedKinds = options?.kinds ?? new Set<ProjectKind>(["project"]);
   return readModel.projects.filter(
     (project) =>
       project.deletedAt === null &&
-      project.kind === "project" &&
+      acceptedKinds.has(project.kind ?? "project") &&
       normalizeWorkspaceRootForComparison(project.workspaceRoot, {
         platform: process.platform,
       }) === normalizedWorkspaceRoot,
   );
-}
-
-export function findActiveProjectByWorkspaceRoot(
-  readModel: OrchestrationReadModel,
-  workspaceRoot: string,
-): OrchestrationProject | undefined {
-  return listActiveProjectsByWorkspaceRoot(readModel, workspaceRoot)[0];
 }
 
 export function listThreadsByProjectId(
@@ -103,9 +99,16 @@ export function requireProjectWorkspaceRootAvailable(input: {
   readonly command: OrchestrationCommand;
   readonly workspaceRoot: string;
   readonly excludeProjectId?: ProjectId;
+  readonly kinds?: ReadonlySet<ProjectKind>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  const existingProject = findActiveProjectByWorkspaceRoot(input.readModel, input.workspaceRoot);
-  if (!existingProject || existingProject.id === input.excludeProjectId) {
+  // Skip the excluded project BEFORE picking, not after: if corrupt state ever leaves two
+  // active owners on one root, the project being updated must not mask the other owner.
+  const existingProject = listActiveProjectsByWorkspaceRoot(
+    input.readModel,
+    input.workspaceRoot,
+    input.kinds ? { kinds: input.kinds } : undefined,
+  ).find((project) => project.id !== input.excludeProjectId);
+  if (!existingProject) {
     return Effect.void;
   }
   return Effect.fail(

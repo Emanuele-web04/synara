@@ -20,6 +20,7 @@ import { CheckpointStore } from "./checkpointing/Services/CheckpointStore";
 import {
   checkpointRefForThreadMessageStart,
   checkpointRefForThreadTurnStart,
+  resolveProjectCwdForKind,
   CHECKPOINT_REFS_PREFIX,
 } from "./checkpointing/Utils";
 import { aggregateProfileSkillUsageRows, turnModelSelectionCte } from "./profileStats";
@@ -132,8 +133,11 @@ function normalizeThreadEnvironmentMode(value: string | null): ThreadEnvironment
 }
 
 function threadWorkspaceCwdForCheckpointCleanup(thread: PurgeThreadRow): string | null {
-  const projectCwd =
-    thread.projectKind === "chat" && thread.worktreePath === null ? null : thread.workspaceRoot;
+  const projectCwd = resolveProjectCwdForKind({
+    kind: thread.projectKind,
+    workspaceRoot: thread.workspaceRoot,
+    worktreePath: thread.worktreePath,
+  });
   return resolveThreadWorkspaceCwd({
     projectCwd,
     envMode: normalizeThreadEnvironmentMode(thread.envMode),

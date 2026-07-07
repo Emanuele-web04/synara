@@ -1,4 +1,4 @@
-import { CheckpointRef, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, ProjectId, ThreadId, TurnId, type ProjectKind } from "@t3tools/contracts";
 import { Effect, Layer, Option } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -15,6 +15,7 @@ import { CheckpointDiffQuery } from "../Services/CheckpointDiffQuery.ts";
 function makeThreadCheckpointContext(input: {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly projectKind?: ProjectKind;
   readonly workspaceRoot: string;
   readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
@@ -25,6 +26,7 @@ function makeThreadCheckpointContext(input: {
   return {
     threadId: input.threadId,
     projectId: input.projectId,
+    projectKind: input.projectKind ?? "project",
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
@@ -45,6 +47,7 @@ function makeThreadCheckpointContext(input: {
 function makeFullThreadDiffContext(input: {
   readonly projectId: ProjectId;
   readonly threadId: ThreadId;
+  readonly projectKind?: ProjectKind;
   readonly workspaceRoot: string;
   readonly envMode?: "local" | "worktree";
   readonly worktreePath: string | null;
@@ -54,6 +57,7 @@ function makeFullThreadDiffContext(input: {
   return {
     threadId: input.threadId,
     projectId: input.projectId,
+    projectKind: input.projectKind ?? "project",
     workspaceRoot: input.workspaceRoot,
     envMode: input.envMode ?? "local",
     worktreePath: input.worktreePath,
@@ -348,6 +352,138 @@ describe("CheckpointDiffQueryLive", () => {
         }).pipe(Effect.provide(layer)),
       ),
     ).rejects.toThrow("Workspace path missing");
+  });
+
+  it("fails for a chat-kind project with no materialized worktree, since chat containers have no real cwd", async () => {
+    const projectId = ProjectId.makeUnsafe("project-chat");
+    const threadId = ThreadId.makeUnsafe("thread-chat");
+    const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+
+    const threadCheckpointContext = makeThreadCheckpointContext({
+      projectId,
+      threadId,
+      projectKind: "chat",
+      workspaceRoot: "/tmp/chat-root",
+      envMode: "local",
+      worktreePath: null,
+      checkpointTurnCount: 1,
+      checkpointRef: toCheckpointRef,
+    });
+
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      copyCheckpointRef: () => Effect.succeed(true),
+      hasCheckpointRef: () => Effect.succeed(true),
+      restoreCheckpoint: () => Effect.succeed(true),
+      diffCheckpoints: () => Effect.succeed("diff patch"),
+      deleteCheckpointRefs: () => Effect.void,
+    };
+
+    const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(ProjectionSnapshotQuery, {
+          getSnapshot: () => Effect.die("unused"),
+          getCommandReadModel: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getSnapshotSequence: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getProjectShellById: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          getFullThreadDiffContext: () => Effect.die("unused"),
+          getThreadShellById: () => Effect.die("unused"),
+          findSyntheticSubagentParentThread: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailForExportById: () => Effect.die("unused"),
+          getThreadDetailSnapshotById: () => Effect.die("unused"),
+        }),
+      ),
+    );
+
+    await expect(
+      Effect.runPromise(
+        Effect.gen(function* () {
+          const query = yield* CheckpointDiffQuery;
+          return yield* query.getTurnDiff({
+            threadId,
+            fromTurnCount: 0,
+            toTurnCount: 1,
+          });
+        }).pipe(Effect.provide(layer)),
+      ),
+    ).rejects.toThrow("Workspace path missing");
+  });
+
+  it("uses the workspace root as a real cwd for a studio-kind project", async () => {
+    const projectId = ProjectId.makeUnsafe("project-studio");
+    const threadId = ThreadId.makeUnsafe("thread-studio");
+    const toCheckpointRef = checkpointRefForThreadTurn(threadId, 1);
+    const diffCheckpointsCalls: Array<{ readonly cwd: string }> = [];
+
+    const threadCheckpointContext = makeThreadCheckpointContext({
+      projectId,
+      threadId,
+      projectKind: "studio",
+      workspaceRoot: "/tmp/studio-root",
+      envMode: "local",
+      worktreePath: null,
+      checkpointTurnCount: 1,
+      checkpointRef: toCheckpointRef,
+    });
+
+    const checkpointStore: CheckpointStoreShape = {
+      isGitRepository: () => Effect.succeed(true),
+      captureCheckpoint: () => Effect.void,
+      copyCheckpointRef: () => Effect.succeed(true),
+      hasCheckpointRef: () => Effect.succeed(true),
+      restoreCheckpoint: () => Effect.succeed(true),
+      diffCheckpoints: ({ cwd }) =>
+        Effect.sync(() => {
+          diffCheckpointsCalls.push({ cwd });
+          return "diff patch";
+        }),
+      deleteCheckpointRefs: () => Effect.void,
+    };
+
+    const layer = CheckpointDiffQueryLive.pipe(
+      Layer.provideMerge(Layer.succeed(CheckpointStore, checkpointStore)),
+      Layer.provideMerge(
+        Layer.succeed(ProjectionSnapshotQuery, {
+          getSnapshot: () => Effect.die("unused"),
+          getCommandReadModel: () => Effect.die("unused"),
+          getCounts: () => Effect.die("unused"),
+          getSnapshotSequence: () => Effect.die("unused"),
+          getShellSnapshot: () => Effect.die("unused"),
+          getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getProjectShellById: () => Effect.die("unused"),
+          getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
+          getThreadCheckpointContext: () => Effect.succeed(Option.some(threadCheckpointContext)),
+          getFullThreadDiffContext: () => Effect.die("unused"),
+          getThreadShellById: () => Effect.die("unused"),
+          findSyntheticSubagentParentThread: () => Effect.die("unused"),
+          getThreadDetailById: () => Effect.die("unused"),
+          getThreadDetailForExportById: () => Effect.die("unused"),
+          getThreadDetailSnapshotById: () => Effect.die("unused"),
+        }),
+      ),
+    );
+
+    const result = await Effect.runPromise(
+      Effect.gen(function* () {
+        const query = yield* CheckpointDiffQuery;
+        return yield* query.getTurnDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+        });
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(diffCheckpointsCalls).toEqual([{ cwd: "/tmp/studio-root" }]);
+    expect(result.diff).toBe("diff patch");
   });
 
   it("fails cleanly when the selected checkpoint is still missing", async () => {

@@ -1,5 +1,12 @@
 import { Encoding } from "effect";
-import { CheckpointRef, MessageId, ProjectId, type ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  CheckpointRef,
+  MessageId,
+  ProjectId,
+  type ProjectKind,
+  type ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
 export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
@@ -34,6 +41,30 @@ export function checkpointRefForThreadTurnLive(threadId: ThreadId, turnId: TurnI
   );
 }
 
+/**
+ * Decide whether a project's `workspaceRoot` should be treated as a thread's
+ * real, usable working directory.
+ *
+ * - `chat` projects are throwaway sandboxes with no durable working
+ *   directory of their own: their `workspaceRoot` is not a real cwd until a
+ *   worktree has actually been materialized for the thread, so it must be
+ *   suppressed (treated as absent) until then.
+ * - `studio` projects always have a real, durable cwd (the Studio root), so
+ *   their `workspaceRoot` is used as-is, exactly like every other kind.
+ * - Every other kind (including the default `project` kind, and an
+ *   unresolved/undefined project) treats `workspaceRoot` as the real cwd.
+ */
+export function resolveProjectCwdForKind(input: {
+  readonly kind: ProjectKind | string | null | undefined;
+  readonly workspaceRoot: string | null;
+  readonly worktreePath: string | null | undefined;
+}): string | null {
+  if (input.kind === "chat" && !input.worktreePath) {
+    return null;
+  }
+  return input.workspaceRoot;
+}
+
 export function resolveThreadWorkspaceCwd(input: {
   readonly thread: {
     readonly projectId: ProjectId;
@@ -42,15 +73,16 @@ export function resolveThreadWorkspaceCwd(input: {
   };
   readonly projects: ReadonlyArray<{
     readonly id: ProjectId;
-    readonly kind?: "project" | "chat" | undefined;
+    readonly kind?: ProjectKind | undefined;
     readonly workspaceRoot: string;
   }>;
 }): string | undefined {
   const project = input.projects.find((entry) => entry.id === input.thread.projectId);
-  const projectCwd =
-    project?.kind === "chat" && !input.thread.worktreePath
-      ? null
-      : (project?.workspaceRoot ?? null);
+  const projectCwd = resolveProjectCwdForKind({
+    kind: project?.kind,
+    workspaceRoot: project?.workspaceRoot ?? null,
+    worktreePath: input.thread.worktreePath,
+  });
   return (
     resolveSharedThreadWorkspaceCwd({
       projectCwd,

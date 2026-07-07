@@ -10,8 +10,14 @@ import { useStore } from "../store";
 import { getThreadFromState } from "../threadDerivation";
 import {
   extractDuplicateProjectCreateProjectId,
+  findContainerCandidateById,
   isDuplicateProjectCreateError,
+  resolveContainerCandidateCwd,
 } from "./projectCreateRecovery";
+import {
+  PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  waitForProjectSnapshotHydration,
+} from "./projectSnapshotHydration";
 import { resolveServerChatWorkspaceRoot, type ServerWorkspacePaths } from "./serverWorkspacePaths";
 import { newCommandId, newProjectId } from "./utils";
 
@@ -45,7 +51,7 @@ function isHomeChatContainerCandidate(
   project: HomeChatContainerCandidate | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  const cwd = project?.cwd ?? project?.workspaceRoot ?? "";
+  const cwd = resolveContainerCandidateCwd(project);
   if (!cwd) {
     return false;
   }
@@ -67,10 +73,8 @@ function findHomeChatContainerCandidateById<T extends HomeChatContainerCandidate
   projectId: ProjectId,
   paths: ServerWorkspacePaths,
 ): T | null {
-  return (
-    projects.find(
-      (project) => project.id === projectId && isHomeChatContainerCandidate(project, paths),
-    ) ?? null
+  return findContainerCandidateById(projects, projectId, (project) =>
+    isHomeChatContainerCandidate(project, paths),
   );
 }
 
@@ -250,6 +254,17 @@ export async function ensureHomeChatProject(
     return null;
   }
 
+  // Never decide "the container doesn't exist" against an unhydrated store: a prewarm firing
+  // before the first shell snapshot (persisted paths make homeDir truthy immediately on reload)
+  // would otherwise dispatch a duplicate or misrooted project.create. Bound the wait so a stuck
+  // connection surfaces a user-visible error instead of hanging "new chat" forever.
+  const hydrated = await waitForProjectSnapshotHydration({
+    timeoutMs: PROJECT_SNAPSHOT_HYDRATION_TIMEOUT_MS,
+  });
+  if (!hydrated) {
+    return null;
+  }
+
   const { canonicalProjectId } = findCanonicalHomeProject(paths);
   if (canonicalProjectId) {
     scheduleHomeChatFixup(paths);
@@ -307,7 +322,16 @@ export function isHomeChatContainerProject(
   project: Pick<Project, "cwd" | "kind" | "name" | "remoteName"> | null | undefined,
   paths: ServerWorkspacePaths,
 ): boolean {
-  if (!project || !paths.homeDir) {
+  if (!project) {
+    return false;
+  }
+  // Before any server path resolves (first launch, cleared storage), trust the kind alone so
+  // chat-surface projects aren't mis-partitioned during boot — mirrors isStudioContainerProject.
+  // Once paths are known, the root checks below decide, so drifted rows stay excluded.
+  if (!paths.homeDir && !paths.chatWorkspaceRoot?.trim()) {
+    return project.kind === "chat";
+  }
+  if (!paths.homeDir) {
     return false;
   }
   return (

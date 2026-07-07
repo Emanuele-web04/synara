@@ -16,6 +16,7 @@ import {
   ThreadMarkers,
   ProjectScript,
   ProjectId,
+  ProjectKind,
   ProviderMentionReference,
   ProviderSkillReference,
   ThreadId,
@@ -171,6 +172,7 @@ const ProjectionThreadIdLookupRowSchema = Schema.Struct({
 const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  projectKind: ProjectKind.pipe(Schema.withDecodingDefault(() => "project")),
   workspaceRoot: Schema.String,
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
@@ -178,6 +180,7 @@ const ProjectionThreadCheckpointContextThreadRowSchema = Schema.Struct({
 const ProjectionFullThreadDiffContextRowSchema = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
+  projectKind: ProjectKind.pipe(Schema.withDecodingDefault(() => "project")),
   workspaceRoot: Schema.String,
   envMode: ThreadEnvironmentMode,
   worktreePath: Schema.NullOr(Schema.String),
@@ -1433,6 +1436,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           threads.thread_id AS "threadId",
           threads.project_id AS "projectId",
+          projects.kind AS "projectKind",
           projects.workspace_root AS "workspaceRoot",
           threads.env_mode AS "envMode",
           threads.worktree_path AS "worktreePath"
@@ -1477,6 +1481,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         SELECT
           threads.thread_id AS "threadId",
           threads.project_id AS "projectId",
+          projects.kind AS "projectKind",
           projects.workspace_root AS "workspaceRoot",
           threads.env_mode AS "envMode",
           threads.worktree_path AS "worktreePath",
@@ -2001,6 +2006,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return Option.some({
         threadId: threadRow.value.threadId,
         projectId: threadRow.value.projectId,
+        projectKind: threadRow.value.projectKind,
         workspaceRoot: threadRow.value.workspaceRoot,
         envMode: threadRow.value.envMode,
         worktreePath: threadRow.value.worktreePath,
@@ -2041,6 +2047,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       return Option.some({
         threadId: row.value.threadId,
         projectId: row.value.projectId,
+        projectKind: row.value.projectKind,
         workspaceRoot: row.value.workspaceRoot,
         envMode: row.value.envMode,
         worktreePath: row.value.worktreePath,

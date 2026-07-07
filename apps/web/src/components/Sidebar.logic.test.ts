@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildSettingsBackAvailableThreadIds,
   buildProjectThreadTree,
   createSidebarThreadHoverAnchorId,
   derivePinnedProjectIdsForSidebar,
@@ -26,6 +25,7 @@ import {
   getVisibleThreadsForProject,
   getProjectSortTimestamp,
   hasUnseenCompletion,
+  partitionSidebarThreadsByProjectIds,
   isLatestPinnedThreadMutation,
   isLoopbackHostname,
   isDuplicateProjectCreateError,
@@ -220,14 +220,9 @@ describe("resolveSidebarNewThreadEnvMode", () => {
 
 describe("resolveSettingsBackTarget", () => {
   it("keeps fresh draft chats available as settings back targets", () => {
-    const availableThreadIds = buildSettingsBackAvailableThreadIds({
-      sidebarThreadSummaryById: {
-        "thread-latest": {},
-      },
-      draftThreadsByThreadId: {
-        "thread-draft": {},
-      },
-    });
+    // Mirrors the sidebar's settings-back wiring: persisted thread summaries plus the
+    // segment's draft thread ids form the restorable set.
+    const availableThreadIds = new Set(["thread-latest", "thread-draft"]);
 
     expect(
       resolveSettingsBackTarget({
@@ -1485,6 +1480,27 @@ function makeSidebarThreadSummary(
     ...overrides,
   };
 }
+
+describe("partitionSidebarThreadsByProjectIds", () => {
+  it("splits Studio threads from the regular Threads surface by project id", () => {
+    const projectThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-project"),
+      projectId: ProjectId.makeUnsafe("project-app"),
+    });
+    const studioThread = makeSidebarThreadSummary({
+      id: ThreadId.makeUnsafe("thread-studio"),
+      projectId: ProjectId.makeUnsafe("project-studio"),
+    });
+
+    const partitioned = partitionSidebarThreadsByProjectIds(
+      [projectThread, studioThread],
+      new Set([ProjectId.makeUnsafe("project-studio")]),
+    );
+
+    expect(partitioned.nonStudioThreads.map((thread) => thread.id)).toEqual(["thread-project"]);
+    expect(partitioned.studioThreads.map((thread) => thread.id)).toEqual(["thread-studio"]);
+  });
+});
 
 describe("deriveSidebarProjectData", () => {
   it("keeps pinned threads in the total project thread count", () => {
