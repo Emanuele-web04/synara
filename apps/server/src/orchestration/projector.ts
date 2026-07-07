@@ -47,6 +47,7 @@ import {
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
   ThreadTurnStartRequestedPayload,
+  ThreadTurnQueuedPayload,
 } from "./Schemas.ts";
 import { resolveStableMessageTurnId } from "./messageTurnId.ts";
 
@@ -645,6 +646,34 @@ export function projectEvent(
         })),
       );
 
+    case "thread.turn-queued":
+      return decodeForEvent(ThreadTurnQueuedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          // Keyed by messageId: a re-queue of the same message replaces its
+          // entry rather than duplicating it. Cleared below when the matching
+          // `thread.turn-start-requested` is projected, so this field always
+          // reflects only turns that never actually dispatched — that is what
+          // makes `planQueuedTurnRecovery` idempotent across a restart.
+          const queuedTurns = [
+            ...(thread.queuedTurns ?? []).filter(
+              (queued) => queued.messageId !== payload.messageId,
+            ),
+            payload,
+          ];
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedTurns,
+              updatedAt: payload.createdAt,
+            }),
+          };
+        }),
+      );
+
     case "thread.turn-start-requested":
       return decodeForEvent(
         ThreadTurnStartRequestedPayload,
@@ -665,12 +694,17 @@ export function projectEvent(
               canAdoptFirstTurnProvider)
               ? { modelSelection: payload.modelSelection }
               : {};
+          // A dispatched turn is no longer queued.
+          const queuedTurns = (thread.queuedTurns ?? []).filter(
+            (queued) => queued.messageId !== payload.messageId,
+          );
           return {
             ...nextBase,
             threads: updateThread(nextBase.threads, payload.threadId, {
               ...modelSelectionPatch,
               runtimeMode: payload.runtimeMode,
               interactionMode: payload.interactionMode,
+              queuedTurns,
               updatedAt: payload.createdAt,
             }),
           };

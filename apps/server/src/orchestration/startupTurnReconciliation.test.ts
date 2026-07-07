@@ -1,7 +1,15 @@
-import { EventId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  EventId,
+  MessageId,
+  ThreadId,
+  TurnId,
+  type OrchestrationQueuedTurn,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
+  planQueuedTurnRecovery,
   planRestartTurnReconciliation,
   type ReconcilableThread,
 } from "./startupTurnReconciliation.ts";
@@ -331,5 +339,154 @@ describe("planRestartTurnReconciliation", () => {
     const second = planRestartTurnReconciliation({ threads, now: NOW });
     expect(first[0]?.commandId).toBe(second[0]?.commandId);
     expect(first[0]?.commandId).toBe(`restart-reconcile:stuck:${NOW}`);
+  });
+});
+
+const makeQueuedTurn = (
+  messageId: string,
+  overrides: Partial<OrchestrationQueuedTurn> = {},
+): OrchestrationQueuedTurn => ({
+  threadId: ThreadId.makeUnsafe("queued-thread"),
+  messageId: MessageId.makeUnsafe(messageId),
+  dispatchMode: "queue",
+  runtimeMode: "full-access",
+  interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+  createdAt: "2026-06-14T09:00:00.000Z",
+  ...overrides,
+});
+
+describe("planQueuedTurnRecovery", () => {
+  it("returns nothing for an empty thread set", () => {
+    expect(planQueuedTurnRecovery({ threads: [], now: NOW })).toEqual([]);
+  });
+
+  it("returns nothing when no thread has a queued turn (idle/active-only threads untouched)", () => {
+    const threads = [
+      makeThread("idle"),
+      makeThread("active", { latestTurn: { state: "running" } }),
+    ];
+
+    expect(planQueuedTurnRecovery({ threads, now: NOW })).toEqual([]);
+  });
+
+  it("emits a dispatch-queued command for one queued turn behind an active turn", () => {
+    const threads = [
+      makeThread("thread-1", {
+        latestTurn: { state: "running" },
+        queuedTurns: [makeQueuedTurn("queued-1", { threadId: ThreadId.makeUnsafe("thread-1") })],
+      }),
+    ];
+
+    const commands = planQueuedTurnRecovery({ threads, now: NOW });
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toEqual({
+      type: "thread.turn.dispatch-queued",
+      commandId: `restart-reconcile-queued-turn:thread-1:queued-1:${NOW}`,
+      threadId: "thread-1",
+      messageId: "queued-1",
+      dispatchMode: "queue",
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      createdAt: NOW,
+    });
+  });
+
+  it("is idempotent: a queued turn already cleared by the projector (already dispatched) yields no commands", () => {
+    // Once `thread.turn-start-requested` is projected for a queued turn's
+    // messageId, `ProjectionPipeline.ts`/`projector.ts` remove it from
+    // `queuedTurns` — so from the planner's point of view a turn that already
+    // ran is simply absent, exactly like this fixture.
+    const threads = [
+      makeThread("thread-1", {
+        latestTurn: { state: "completed" },
+        queuedTurns: [],
+      }),
+    ];
+
+    expect(planQueuedTurnRecovery({ threads, now: NOW })).toEqual([]);
+  });
+
+  it("recovers multiple queued turns on the same thread in original order", () => {
+    const threadId = ThreadId.makeUnsafe("thread-multi");
+    const threads = [
+      makeThread("thread-multi", {
+        queuedTurns: [
+          makeQueuedTurn("queued-1", { threadId }),
+          makeQueuedTurn("queued-2", { threadId }),
+          makeQueuedTurn("queued-3", { threadId }),
+        ],
+      }),
+    ];
+
+    const commands = planQueuedTurnRecovery({ threads, now: NOW });
+    expect(commands.map((command) => command.messageId)).toEqual([
+      "queued-1",
+      "queued-2",
+      "queued-3",
+    ]);
+    expect(commands.every((command) => command.type === "thread.turn.dispatch-queued")).toBe(true);
+  });
+
+  it("recovers queued turns across multiple threads, preserving per-thread order", () => {
+    const threadAId = ThreadId.makeUnsafe("thread-a");
+    const threadBId = ThreadId.makeUnsafe("thread-b");
+    const threads = [
+      makeThread("thread-a", {
+        queuedTurns: [makeQueuedTurn("a-1", { threadId: threadAId })],
+      }),
+      makeThread("thread-clean"),
+      makeThread("thread-b", {
+        queuedTurns: [
+          makeQueuedTurn("b-1", { threadId: threadBId }),
+          makeQueuedTurn("b-2", { threadId: threadBId }),
+        ],
+      }),
+    ];
+
+    const commands = planQueuedTurnRecovery({ threads, now: NOW });
+    expect(
+      commands.map((command) => ({ threadId: command.threadId, messageId: command.messageId })),
+    ).toEqual([
+      { threadId: "thread-a", messageId: "a-1" },
+      { threadId: "thread-b", messageId: "b-1" },
+      { threadId: "thread-b", messageId: "b-2" },
+    ]);
+  });
+
+  it("carries over optional fields (model selection, dispatch mode) from the queued payload", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const threads = [
+      makeThread("thread-1", {
+        queuedTurns: [
+          makeQueuedTurn("queued-1", {
+            threadId,
+            modelSelection: { provider: "codex", model: "gpt-5-codex" },
+            dispatchMode: "steer",
+            runtimeMode: "approval-required",
+          }),
+        ],
+      }),
+    ];
+
+    const commands = planQueuedTurnRecovery({ threads, now: NOW });
+    expect(commands[0]).toMatchObject({
+      messageId: "queued-1",
+      modelSelection: { provider: "codex", model: "gpt-5-codex" },
+      dispatchMode: "steer",
+      runtimeMode: "approval-required",
+    });
+  });
+
+  it("produces deterministic command ids for identical inputs", () => {
+    const threadId = ThreadId.makeUnsafe("thread-1");
+    const threads = [
+      makeThread("thread-1", {
+        queuedTurns: [makeQueuedTurn("queued-1", { threadId })],
+      }),
+    ];
+
+    const first = planQueuedTurnRecovery({ threads, now: NOW });
+    const second = planQueuedTurnRecovery({ threads, now: NOW });
+    expect(first[0]?.commandId).toBe(second[0]?.commandId);
   });
 });

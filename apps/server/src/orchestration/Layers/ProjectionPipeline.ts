@@ -642,6 +642,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
             deletedAt: null,
+            queuedTurns: [],
           });
           return;
 
@@ -885,6 +886,31 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           return;
         }
 
+        case "thread.turn-queued": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          // Append the queued turn (keyed by messageId; a re-queue of the same
+          // message replaces its entry rather than duplicating it) so a
+          // restart can recover it via `planQueuedTurnRecovery`. Cleared below
+          // when the matching `thread.turn-start-requested` is projected.
+          const queuedTurns = [
+            ...(existingRow.value.queuedTurns ?? []).filter(
+              (queued) => queued.messageId !== event.payload.messageId,
+            ),
+            event.payload,
+          ];
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            queuedTurns,
+            updatedAt: event.payload.createdAt,
+          });
+          return;
+        }
+
         case "thread.turn-start-requested": {
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
@@ -910,11 +936,19 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
               canAdoptFirstTurnProvider)
               ? { modelSelection: event.payload.modelSelection }
               : {};
+          // A dispatched turn is no longer queued — clear it here (rather than
+          // only where the reactor drains its in-memory queue) so restart
+          // recovery is idempotent even if the process dies between dispatch
+          // and drain.
+          const queuedTurns = (existingRow.value.queuedTurns ?? []).filter(
+            (queued) => queued.messageId !== event.payload.messageId,
+          );
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             ...modelSelectionPatch,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
+            queuedTurns,
             updatedAt: event.payload.createdAt,
           });
           return;

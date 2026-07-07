@@ -14,6 +14,7 @@ import {
 } from "../Services/ProjectionThreads.ts";
 import {
   ModelSelection,
+  OrchestrationQueuedTurn,
   OrchestrationThreadPullRequest,
   ThreadPinnedMessages,
   ThreadMarkers,
@@ -36,6 +37,10 @@ const ProjectionThreadDbRow = ProjectionThread.mapFields(
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
     modelSelection: Schema.fromJsonString(ModelSelection),
+    // The DB column is a nullable JSON array (absent on old rows, same shape as
+    // `thread_markers_json`); callers collapse `null` to `[]` at read time,
+    // matching `pinnedMessages`/`threadMarkers` above.
+    queuedTurns: Schema.NullOr(Schema.fromJsonString(Schema.Array(OrchestrationQueuedTurn))),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -81,7 +86,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at,
           updated_at,
           archived_at,
-          deleted_at
+          deleted_at,
+          queued_turns_json
         )
         VALUES (
           ${row.threadId},
@@ -117,7 +123,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${row.createdAt},
           ${row.updatedAt},
           ${row.archivedAt ?? null},
-          ${row.deletedAt}
+          ${row.deletedAt},
+          ${row.queuedTurns === null || row.queuedTurns.length === 0 ? null : JSON.stringify(row.queuedTurns)}
         )
         ON CONFLICT (thread_id)
         DO UPDATE SET
@@ -153,7 +160,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at = excluded.created_at,
           updated_at = excluded.updated_at,
           archived_at = excluded.archived_at,
-          deleted_at = excluded.deleted_at
+          deleted_at = excluded.deleted_at,
+          queued_turns_json = excluded.queued_turns_json
       `,
   });
 
@@ -196,7 +204,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          queued_turns_json AS "queuedTurns"
         FROM projection_threads
         WHERE thread_id = ${threadId}
       `,
@@ -241,7 +250,8 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           created_at AS "createdAt",
           updated_at AS "updatedAt",
           archived_at AS "archivedAt",
-          deleted_at AS "deletedAt"
+          deleted_at AS "deletedAt",
+          queued_turns_json AS "queuedTurns"
         FROM projection_threads
         WHERE project_id = ${projectId}
         ORDER BY created_at ASC, thread_id ASC

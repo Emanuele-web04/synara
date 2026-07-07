@@ -601,6 +601,38 @@ export const ThreadMarkers = Schema.Array(ThreadMarker).check(
 );
 export type ThreadMarkers = typeof ThreadMarkers.Type;
 
+// Declared here (rather than beside the other `thread.turn-*` event payloads
+// further down) so `OrchestrationThread.queuedTurns` below can reference it
+// without a forward reference.
+export const ThreadTurnStartRequestedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messageId: MessageId,
+  modelSelection: Schema.optional(ModelSelection),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  reviewTarget: Schema.optional(ProviderReviewTarget),
+  assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
+  dispatchMode: TurnDispatchMode.pipe(Schema.withDecodingDefault(() => DEFAULT_TURN_DISPATCH_MODE)),
+  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
+  ),
+  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
+  createdAt: IsoDateTime,
+});
+
+export const ThreadTurnQueuedPayload = ThreadTurnStartRequestedPayload;
+
+/**
+ * A still-queued turn projected from a persisted `thread.turn-queued` event.
+ * Cleared from the owning thread's `queuedTurns` when the matching
+ * `thread.turn-start-requested` event (same `messageId`) is projected, so the
+ * field always reflects only turns that never actually dispatched. This is
+ * what lets `planQueuedTurnRecovery` (startupTurnReconciliation.ts) recover
+ * queued-but-unstarted turns across a restart without double-dispatching.
+ */
+export const OrchestrationQueuedTurn = ThreadTurnQueuedPayload;
+export type OrchestrationQueuedTurn = typeof OrchestrationQueuedTurn.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -665,6 +697,11 @@ export const OrchestrationThread = Schema.Struct({
   activities: Schema.Array(OrchestrationThreadActivity),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
+  // Turns durably queued (`thread.turn-queued`) but not yet dispatched
+  // (`thread.turn-start-requested` for the same messageId). Optional (like
+  // `pinnedMessages`/`threadMarkers`/`notes` above): absent on old persisted
+  // rows/events with no queued-turn data; readers treat absence as `[]`.
+  queuedTurns: Schema.optional(Schema.Array(OrchestrationQueuedTurn)),
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
@@ -1594,24 +1631,6 @@ export const ThreadMessageSentPayload = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-
-export const ThreadTurnStartRequestedPayload = Schema.Struct({
-  threadId: ThreadId,
-  messageId: MessageId,
-  modelSelection: Schema.optional(ModelSelection),
-  providerOptions: Schema.optional(ProviderStartOptions),
-  reviewTarget: Schema.optional(ProviderReviewTarget),
-  assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
-  dispatchMode: TurnDispatchMode.pipe(Schema.withDecodingDefault(() => DEFAULT_TURN_DISPATCH_MODE)),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
-  ),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
-  createdAt: IsoDateTime,
-});
-
-export const ThreadTurnQueuedPayload = ThreadTurnStartRequestedPayload;
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,

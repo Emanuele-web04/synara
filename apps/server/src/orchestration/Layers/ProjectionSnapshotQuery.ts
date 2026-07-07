@@ -7,6 +7,7 @@ import {
   OrchestrationCheckpointFile,
   OrchestrationProjectShell,
   OrchestrationProposedPlanId,
+  OrchestrationQueuedTurn,
   MessageDispatchOrigin,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
@@ -100,12 +101,14 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     pinnedMessages: Schema.NullOr(Schema.fromJsonString(ThreadPinnedMessages)),
     threadMarkers: Schema.NullOr(Schema.fromJsonString(ThreadMarkers)),
     modelSelection: ModelSelectionJsonUnknown,
+    queuedTurns: Schema.NullOr(Schema.fromJsonString(Schema.Array(OrchestrationQueuedTurn))),
   }),
 );
 const {
   pinnedMessages: _projectionThreadPinnedMessagesField,
   threadMarkers: _projectionThreadMarkersField,
   notes: _projectionThreadNotesField,
+  queuedTurns: _projectionThreadQueuedTurnsField,
   ...ProjectionThreadShellFields
 } = ProjectionThread.fields;
 const ProjectionThreadShellDbRowSchema = Schema.Struct(ProjectionThreadShellFields).mapFields(
@@ -687,6 +690,7 @@ function toProjectedThread(input: {
     ...(threadRow.threadMarkers !== null ? { threadMarkers: threadRow.threadMarkers } : {}),
     ...(threadRow.notes !== null ? { notes: threadRow.notes } : {}),
     session: input.session,
+    queuedTurns: threadRow.queuedTurns ?? [],
   };
 }
 
@@ -768,6 +772,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          queued_turns_json AS "queuedTurns",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -1156,6 +1161,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          queued_turns_json AS "queuedTurns",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",
@@ -1203,6 +1209,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           pinned_messages_json AS "pinnedMessages",
           thread_markers_json AS "threadMarkers",
           notes,
+          queued_turns_json AS "queuedTurns",
           parent_thread_id AS "parentThreadId",
           subagent_agent_id AS "subagentAgentId",
           subagent_nickname AS "subagentNickname",

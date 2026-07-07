@@ -118,6 +118,9 @@ function threadDetailFromShell(shell: OrchestrationThreadShell): OrchestrationTh
     proposedPlans: [],
     activities: [],
     checkpoints: [],
+    // Not read on any of the cheap-shell code paths (see eventNeedsHeavyThreadDetail);
+    // matches the other heavy arrays above in being safely empty here.
+    queuedTurns: [],
   };
 }
 

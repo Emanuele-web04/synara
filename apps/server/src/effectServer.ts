@@ -22,7 +22,10 @@ import { OrchestrationEngineService } from "./orchestration/Services/Orchestrati
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnapshotQuery";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor";
-import { reconcileRestartStuckTurns } from "./orchestration/startupTurnReconciliation";
+import {
+  reconcileQueuedTurnsOnRestart,
+  reconcileRestartStuckTurns,
+} from "./orchestration/startupTurnReconciliation";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
@@ -140,6 +143,10 @@ export const createEffectServer = Effect.fn(function* () {
   // died, so they can never complete on their own) before clients can observe
   // the stale "Working" state.
   yield* reconcileRestartStuckTurns;
+  // Recover turns that were durably queued but never dispatched before the
+  // previous process exited — the in-memory queue that would have drained
+  // them is rebuilt empty on every restart.
+  yield* reconcileQueuedTurnsOnRestart;
   yield* runtimeStartup.markCommandReady;
 
   yield* lifecycleEvents.publish({

@@ -10,6 +10,7 @@ import {
   IsoDateTime,
   ModelSelection,
   NonNegativeInt,
+  OrchestrationQueuedTurn,
   OrchestrationThreadPullRequest,
   ThreadNotes,
   ThreadPinnedMessages,
@@ -64,6 +65,9 @@ export const ProjectionThread = Schema.Struct({
     Schema.withDecodingDefault(() => null),
   ),
   deletedAt: Schema.NullOr(IsoDateTime),
+  // Turns durably queued but not yet dispatched (see `OrchestrationQueuedTurn`
+  // in `@t3tools/contracts`). Old rows with no queued-turn data decode as [].
+  queuedTurns: Schema.NullOr(Schema.Array(OrchestrationQueuedTurn)),
 });
 export type ProjectionThread = typeof ProjectionThread.Type;
 
