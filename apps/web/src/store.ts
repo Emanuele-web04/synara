@@ -3024,6 +3024,8 @@ function mergeStreamingMessage(
 
 function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEvent): Thread {
   const payload = event.payload;
+  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
+  const existingMessage = existingIndex >= 0 ? thread.messages[existingIndex] : undefined;
   const incomingMessage = normalizeChatMessage(
     {
       id: payload.messageId,
@@ -3040,13 +3042,11 @@ function applyThreadMessageSentEvent(thread: Thread, event: ThreadMessageSentEve
       createdAt: payload.createdAt,
       updatedAt: payload.updatedAt,
     },
-    thread.messages.find((message) => message.id === payload.messageId),
+    existingMessage,
   );
-  const existingIndex = thread.messages.findIndex((message) => message.id === payload.messageId);
   let messages = thread.messages;
 
   if (existingIndex >= 0) {
-    const existingMessage = thread.messages[existingIndex];
     if (!existingMessage) {
       return thread;
     }
