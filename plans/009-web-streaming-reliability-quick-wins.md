@@ -114,12 +114,34 @@ transport.subscribe(ORCHESTRATION_WS_CHANNELS.domainEvent, (message) => {
 });
 ```
 
-The same silent-catch pattern also exists for connection-state listeners in
-`apps/web/src/wsTransport.ts:321-326`.
+The same silent-catch pattern also exists in `apps/web/src/wsTransport.ts` in
+**two** places — both must be fixed:
+
+1. Connection-state listeners (`wsTransport.ts:321-326`), comment
+   `// Listener errors must not break reconnect or RPC state transitions.`
+2. **Push-stream fan-out** (`wsTransport.ts:363-368`) — the hotter one — where
+   `emit`/`startStream` dispatches each push message to channel listeners:
+
+```ts
+for (const listener of listeners) {
+  try {
+    listener(message);
+  } catch {
+    // Listener errors must not break transport streams.
+  }
+}
+```
+
+This second catch is at the transport layer, *before* events reach the
+`wsNativeApi` fan-out and the store, so a throw here drops the event even more
+silently. Note its comment text differs (`// Listener errors must not break
+transport streams.`), so a grep for the `Swallow listener errors` string will NOT
+find it — the verification must grep for the actual silent-catch shape, not that
+one comment.
 
 `grep -rn "Swallow listener errors" apps/web/src/wsNativeApi.ts` → 17 matches;
-`grep -rn "Swallow listener errors\|swallow" apps/web/src/wsTransport.ts` →
-confirm the wsTransport occurrence(s) before editing.
+in `wsTransport.ts`, locate BOTH `catch {` blocks (around lines 321 and 363)
+before editing — do not rely on the `Swallow listener errors` text there.
 
 ## Commands you will need
 
@@ -138,7 +160,7 @@ Repo rule (`AGENTS.md`): use `bun run test`, never `bun test`.
 - `apps/web/src/components/chat/DockTerminalPane.tsx`
 - `apps/web/src/components/chat/GitPanel.tsx`
 - `apps/web/src/wsNativeApi.ts`
-- `apps/web/src/wsTransport.ts` (the connection-state swallow only)
+- `apps/web/src/wsTransport.ts` (BOTH swallowed catches: the connection-state one at ~321 and the push-stream fan-out one at ~363)
 - `apps/web/src/storeSelectors.test.ts` (extend if adding a selector case)
 
 **Out of scope** (do NOT touch):
@@ -217,15 +239,21 @@ channel label per site (e.g. `"serverWelcome"`, `"serverConfigUpdated"`,
 `"orchestration.threadEvent"`, etc. — derive the label from the surrounding
 `transport.subscribe(<CHANNEL>, …)` or function name so logs are diagnosable).
 
-Do the same for the connection-state swallow in
-`apps/web/src/wsTransport.ts:321-326`, using a label like `"transport-state"`.
+Do the same for **both** swallowed catches in `apps/web/src/wsTransport.ts`:
+- the connection-state one (~line 321), label `"transport-state"`;
+- the push-stream fan-out one (~line 363, inside the channel-listener loop),
+  label `"transport-stream"` (or the channel if available at that point).
 
 Do NOT change the loop structure — the `for … of` continues to the next listener;
 you are only replacing the empty catch body.
 
-**Verify**: `grep -rn "Swallow listener errors" apps/web/src/wsNativeApi.ts
-apps/web/src/wsTransport.ts` → **0 matches**. `cd apps/web && bun run typecheck`
-→ exit 0.
+**Verify**: neither `wsTransport.ts` catch remains empty — grep for the actual
+shape, not the old comment text:
+`grep -rn "Swallow listener errors" apps/web/src/wsNativeApi.ts` → **0 matches**;
+`grep -n "catch {$\|catch {}" apps/web/src/wsTransport.ts` → **0 matches** (every
+`catch` now binds `error` and logs); and confirm two `reportListenerError`/
+`console.error` calls exist in `wsTransport.ts` (one per catch).
+`cd apps/web && bun run typecheck` → exit 0.
 
 ### Step 4: Run tests
 
@@ -254,6 +282,7 @@ ALL must hold:
 
 - [ ] `cd apps/web && bun run typecheck` exits 0.
 - [ ] `grep -rn "Swallow listener errors" apps/web/src/` → 0 matches.
+- [ ] `grep -n "catch {$\|catch {}" apps/web/src/wsTransport.ts` → 0 matches (both the connection-state AND the push-stream fan-out catch now bind `error` and log).
 - [ ] `grep -n "createThreadSelector" apps/web/src/components/chat/DockTerminalPane.tsx apps/web/src/components/chat/GitPanel.tsx` → 0 matches (both now use the workspace metadata selector).
 - [ ] `bun run test` exits 0.
 - [ ] `bun run fmt` and `bun run lint` pass (final validation pass).

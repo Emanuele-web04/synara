@@ -1,4 +1,16 @@
-# Plan 008: Make per-delta streaming store updates O(1) instead of O(thread history)
+# Plan 008: Cut per-delta streaming store work and preserve reference identity
+
+> **Accuracy note (added after PR review):** an earlier version of this plan
+> claimed an "O(1) per delta" update. That claim is **wrong** and has been
+> removed. The writer still builds the id list with `nextThread.messages.map(...)`
+> and the incremental `byId` loop still visits every message, so per-delta cost
+> stays **O(thread history)** — capped at 2,000. What this plan actually buys:
+> (a) removing the redundant second full-array scan, (b) removing the
+> `Object.fromEntries` intermediate-array allocation, and (c) **preserving object
+> reference identity for unchanged messages**, which is the real win — it stops
+> downstream memoized selectors/components from re-deriving on every token.
+> A genuinely O(1) update is possible but out of scope here (see "Truly-O(1)
+> follow-up" at the end); do not mark the perf work "complete" on an O(1) basis.
 
 > **Executor instructions**: Follow this plan step by step. Run every
 > verification command and confirm the expected result before moving to the
@@ -330,3 +342,20 @@ Stop and report back (do not improvise) if:
 - Reviewer should scrutinize: object-identity preservation for unchanged messages
   (case 5) — losing it would cause downstream memoized components to re-render
   even after this change.
+
+## Truly-O(1) follow-up (deferred — do not claim O(1) until this lands)
+
+This plan reduces constant factors and preserves reference identity, but per-delta
+cost is still O(thread history) because it rebuilds the whole id array and iterates
+every message to rebuild `byId`. A genuinely O(1) per-delta update would require:
+
+- Retaining the previous `messageIdsByThreadId[threadId]` array and, for an
+  in-place delta (existing id, unchanged length/order), reusing it verbatim
+  (append one id for the new-message case; no rebuild for the update case).
+- Patching the previous `byId` record for only the single changed id
+  (`{ ...prevById, [changedId]: merged }`) instead of iterating all messages.
+
+That needs the reducer to thread the changed-id (and whether it was an append vs
+update vs cap-eviction) down to `writeThreadState`, which is a larger change to the
+state-writer contract. Scope it as its own plan. Until then, describe this work as
+"reduced per-delta work + reference-stable," never "O(1)."

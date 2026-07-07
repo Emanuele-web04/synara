@@ -187,16 +187,57 @@ projected and cannot be queried at boot. Phase 2:
    encodes).
 2. **Teach `projector.ts` to handle `thread.turn-queued`** (add a `case` beside
    the existing `case "thread.turn-start-requested"` at line 648): append the
-   queued turn to the new field. It must be **cleared** when that turn is actually
-   dispatched/started (find where a queued turn transitions to started — the
-   `thread.turn-start-requested`/turn-start projection — and remove the matching
-   entry there) so the field reflects only still-queued turns. This clear-on-start
-   is what makes recovery idempotent.
-3. **Add a pure planner `planQueuedTurnRecovery({ threads, now })`** alongside
-   `planRestartTurnReconciliation` in `startupTurnReconciliation.ts`, emitting the
-   normal dispatch/enqueue command(s) for each thread whose projected queued-turns
-   field is non-empty at boot. Run it at the same boot stage. Unit-test it in
-   isolation with fixtures, exactly like `startupTurnReconciliation.test.ts`.
+   queued turn to the new field. It must be **cleared** when the turn is
+   withdrawn or actually starts — see the two corrections below for exactly which
+   events clear it.
+3. **Rehydrate the queue and drain one-at-a-time (NOT fire-all).** See the
+   "Correction A" box below — recovery must re-populate the reactor's in-memory
+   queue and let the normal single-dispatch gate drain it, rather than emitting a
+   dispatch command per queued turn.
+
+> **Correction A (added after PR review — serialization) — comment #4.**
+> An earlier draft had `planQueuedTurnRecovery` emit a dispatch/enqueue command
+> for **every** queued turn at boot. That is wrong: the reactor promotes queued
+> turns strictly one at a time via `dequeueQueuedTurnStart`
+> (`ProviderCommandReactor.ts:1531`), only starting the next after the current
+> provider turn settles. Firing N dispatch commands at boot bypasses that gate and
+> can promote several messages concurrently before the first turn opens its
+> provider thread. Instead, recovery must **rehydrate** the in-memory
+> `queuedTurnStartsByThread` map from the projected `queuedTurns` (in original
+> order, honoring the steer/queue ordering `enqueueQueuedTurnStart` encodes at
+> `ProviderCommandReactor.ts:452-456`) and then kick the normal drain so only the
+> head dispatches; the rest wait behind it exactly as they would have pre-restart.
+> Make the serialization guarantee testable: a restart with 3 queued turns behind
+> a killed active turn must result in exactly one provider-turn start, not three.
+> If the reactor has no public entry point to rehydrate + drain, add a minimal one
+> rather than fanning out dispatch commands.
+
+> **Correction B (added after PR review — do not clear on the request event) —
+> comment #6.** Clearing the `queuedTurns` entry when `thread.turn-start-requested`
+> is *projected* is premature. `turn-start-requested` is a request; the reactor
+> still has to run `processTurnStartRequested` to actually open the provider turn.
+> If the server crashes AFTER that event is appended but BEFORE the provider turn
+> starts, then on restart: the in-memory queue is empty (rebuilt), no session is
+> "running" so `planRestartTurnReconciliation` won't catch it, and if
+> `queuedTurns` was already cleared the message vanishes with nothing to recover
+> it. Therefore clear the durable `queuedTurns` entry only on a durable event that
+> **proves the turn actually started** (the turn-running/turn-started marker — find
+> where the projection sets `session.activeTurnId`/marks the latest turn
+> `running`), NOT on `thread.turn-start-requested`. Equivalently: a turn that is
+> "requested but not yet running" must remain in `queuedTurns` so recovery
+> re-drives it. Keep the withdrawal clears (revert / rollback / edit-resend) as
+> already specified. Add a test for the crash-between-request-and-start window:
+> a thread with `turn-start-requested` projected but no running turn still has its
+> entry in `queuedTurns` and is recovered.
+
+4. **Add the recovery entry point** (replacing the old "pure planner emits
+   commands" step per Correction A): at the same boot stage as
+   `planRestartTurnReconciliation` (after projection bootstrap, before accepting
+   client commands), read each thread's projected `queuedTurns` and rehydrate +
+   drain-head through the reactor. Keep the decision logic (which threads/turns to
+   rehydrate, in what order) in a pure, unit-tested function with fixtures, exactly
+   like `startupTurnReconciliation.test.ts`; the impure part is only the
+   rehydrate+kick call into the reactor.
 
 General requirements regardless of option:
 

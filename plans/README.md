@@ -22,15 +22,20 @@ Recommended execution order: **006 → 007 → 008 → 009 → 010**. They are i
 land first. 009 is the cheapest/lowest-risk and is a good warm-up for a weaker
 executor. 010 is investigate-first (design note + approval gate before code).
 
+Status legend: TODO | IN PROGRESS | DONE | BLOCKED | REJECTED. Rows are **not DONE**
+until their implementation branch is merged to `main`; the branch/commit refs below
+are unmerged work in progress, so anyone reading this table should treat the
+underlying security/reliability/perf work as still outstanding until merge.
+
 | Plan | Title                                                               | Priority | Effort | Risk | Depends on | Status                                                                                                                                 |
 | ---- | ------------------------------------------------------------------- | -------- | ------ | ---- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| 006  | Refuse unauthenticated remote binds; stop unset-token bypass        | P1       | M      | MED  | —          | DONE (branch `advisor/006-enforce-auth-remote-binds`, commit `34c205b60`; diff verified + 15/15 focused tests; run full `bun run test` before merge) |
-| 007  | Stop concurrent Codex session starts from killing a live session    | P1       | M      | HIGH | —          | DONE (branch `advisor/007-codex-session-race-exec`; focused + full apps/server suite 1595 passed + typecheck verified) |
-| 008  | Make per-delta streaming store updates O(1) not O(history)          | P1       | M      | MED  | —          | DONE (branch `advisor/008-streaming-store-hot-path`, commit `32885c4e1`; messages + activities/plans/turnDiff slices incremental; 10 streaming tests + full apps/web suite 2362 + typecheck verified) |
-| 009  | Narrow preview-pane subscriptions; make swallowed WS errors visible | P2       | S      | LOW  | —          | DONE (worktree branch `advisor/009-web-streaming-quick-wins`, commit `3b778c8db`; verified 8 tests + typecheck; run full `bun run test` before merge) |
-| 010  | Recover queued-but-unstarted turns across a server restart          | P2       | M      | MED  | —          | DONE (branch `advisor/010-recover-queued-turns`, commit `44a7b4efb`; Phase 2 + review-fix for revert/rollback/edit-resend clear via shared helper; 66 focused + full apps/server 1603 + typecheck verified) |
+| 006  | Refuse unauthenticated remote binds; stop unset-token bypass        | P1       | M      | MED  | —          | IN PROGRESS (impl on unmerged branch `advisor/006-enforce-auth-remote-binds`; PR-review finding OPEN: undefined host binds `::` remotely but is treated non-remote — see Step 1/4/5) |
+| 007  | Stop concurrent Codex session starts from killing a live session    | P1       | M      | HIGH | —          | IN PROGRESS (impl on unmerged branch `advisor/007-codex-session-race-exec`; PR-review finding OPEN: race re-check may return a not-yet-ready replacement session) |
+| 008  | Reduce per-delta streaming store work and preserve reference identity | P1     | M      | MED  | —          | IN PROGRESS (impl on unmerged branch `advisor/008-streaming-store-hot-path`; PR-review finding: per-delta cost is O(history), not O(1) — claim corrected) |
+| 009  | Narrow preview-pane subscriptions; make swallowed WS errors visible | P2       | S      | LOW  | —          | IN PROGRESS (impl on unmerged branch `advisor/009-web-streaming-quick-wins`; PR-review finding OPEN: second swallowed catch in `wsTransport.startStream` not yet logged) |
+| 010  | Recover queued-but-unstarted turns across a server restart          | P2       | M      | MED  | —          | IN PROGRESS (impl on unmerged branch `advisor/010-recover-queued-turns`; PR-review findings OPEN: recovery must drain one-at-a-time; clear-on-`turn-start-requested` drops the turn on a crash before dispatch) |
 
-Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale).
+Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale). A row only becomes DONE when its branch merges to `main`.
 
 ## Dependency notes
 

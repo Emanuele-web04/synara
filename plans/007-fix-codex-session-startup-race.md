@@ -203,7 +203,7 @@ if (currentOwner && currentOwner !== context) {
   // A concurrent start won the slot while we were initializing. Tear down only
   // our own context and hand back the winner's session instead of clobbering it.
   this.disposeContextResources(context);
-  return { ...currentOwner.session };
+  return await this.awaitSessionReady(threadId, currentOwner);
 }
 ```
 
@@ -211,6 +211,28 @@ Place this **after** all `await this.sendRequest(...)` calls complete and
 **before** you emit `session/ready` / return, so a late finisher never overwrites
 a newer session. If `context` no longer owns the slot, do not emit
 `session/ready` for it.
+
+**CRITICAL (added after PR review) — do NOT return a not-yet-ready winner.**
+`startSession`'s contract is that its returned session has completed its
+initialize/thread-start chain (its resolve corresponds to `session/ready`). The
+race winner `currentOwner` may still be mid-initialization (status
+`connecting`/`starting`, no `resumeCursor` yet). Returning `{ ...currentOwner.session }`
+verbatim, as an earlier draft did, hands the caller a **half-open, unusable
+session** — a follow-up turn dispatched against it fails because the provider
+thread has not actually opened. You must instead wait for the winner to reach a
+terminal readiness state before returning it. Implement `awaitSessionReady(threadId,
+ownerContext)` to resolve with `{ ...ownerContext.session }` once that context's
+session status is `ready` (and it still owns the slot), or reject/propagate if the
+winner ends in `error`/is torn down. Reuse whatever readiness signal the manager
+already exposes — the winner emits `session/ready` via `emitLifecycleEvent`, and
+`updateSession` sets `status: "ready"`; await that transition (e.g. a per-context
+readiness promise/deferred resolved when the winner sets `status: "ready"`, or a
+short polling wait on `this.sessions.get(threadId)?.session.status`). If no
+readiness primitive exists yet, add a minimal one on `CodexSessionContext` (e.g. a
+`ready: Promise<void>` resolved where the winner currently emits `session/ready`)
+and have both the winner's own success path and `awaitSessionReady` use it. STOP
+and report if you cannot locate a clean readiness signal rather than returning a
+`connecting` session.
 
 **Verify**: `cd apps/server && bun run typecheck` → exit 0.
 

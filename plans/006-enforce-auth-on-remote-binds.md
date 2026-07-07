@@ -197,13 +197,23 @@ In `apps/server/src/startupAccess.ts`, add:
  * A non-loopback bind is remotely reachable and must not run without an auth
  * mechanism. Loopback binds may run without a token (desktop/local browser use
  * the session-auth path, not the legacy query token).
+ *
+ * IMPORTANT: an UNSET host counts as remotely reachable. When `config.host` is
+ * undefined, `effectServer.ts` passes only `{ port }` to the Node server
+ * (see `apps/server/src/effectServer.ts:96-97`), and Node binds the
+ * *unspecified* address (`::` / `0.0.0.0`) — i.e. all interfaces. So an omitted
+ * host is remote, NOT loopback. `isLoopbackHost(undefined)` returns `true`, so
+ * we must special-case undefined here rather than delegate to it.
  */
 export const isRemoteReachableHost = (host: string | undefined): boolean =>
-  isWildcardHost(host) || !isLoopbackHost(host);
+  host === undefined || isWildcardHost(host) || !isLoopbackHost(host);
 ```
 
 (If an equivalent expression already exists inline elsewhere, still add this
-named export so both the guard and any future callers share one definition.)
+named export so both the guard and any future callers share one definition.
+Note `isLoopbackHost(undefined) === true` by design — that helper serves the
+auth-policy descriptor; do NOT reuse it directly for the bind-reachability
+decision, which must treat undefined as remote to match the actual Node bind.)
 
 **Verify**: `cd apps/server && bun run typecheck` → exit 0.
 
@@ -324,9 +334,10 @@ existing server test (model it after `apps/server/src/config.test.ts` for
 imports/`describe`/`it` style and the vitest runner). Cover:
 
 - `isRemoteReachableHost("0.0.0.0")` → `true`; `isRemoteReachableHost("::")` → `true`.
-- `isRemoteReachableHost("127.0.0.1")` / `"localhost"` / `"::1"` / `undefined` → `false`.
+- `isRemoteReachableHost("127.0.0.1")` / `"localhost"` / `"::1"` → `false`.
+- **`isRemoteReachableHost(undefined)` → `true`** (an omitted host binds `::`, all interfaces — this is the security-critical case; DO NOT assert `false` here).
 - `isRemoteReachableHost("192.168.1.42")` → `true`.
-- A pure test of the guard predicate: assert that `(remoteReachable && !authToken && mode !== "desktop")` is `true` for a `0.0.0.0` + no-token + `web` combo and `false` for `localhost` + no-token, `0.0.0.0` + token, and `0.0.0.0` + no-token + `desktop`. If the guard predicate is inlined in `main.ts`, extract it into a small exported pure function `requiresAuthTokenForBind({ host, authToken, mode })` in `startupAccess.ts` and test that instead (preferred — keeps the decision unit-testable).
+- A pure test of the guard predicate: assert that `(remoteReachable && !authToken && mode !== "desktop")` is `true` for BOTH a `0.0.0.0` + no-token + `web` combo AND an **undefined-host + no-token + `web`** combo (the default web start), and `false` for `localhost` + no-token, `0.0.0.0` + token, and `undefined`/`0.0.0.0` + no-token + `desktop`. If the guard predicate is inlined in `main.ts`, extract it into a small exported pure function `requiresAuthTokenForBind({ host, authToken, mode })` in `startupAccess.ts` and test that instead (preferred — keeps the decision unit-testable).
 
 If `http.test.ts` already has a harness that constructs requests against these
 routes, add two cases there: (a) unset token + no session cookie on
