@@ -771,6 +771,123 @@ describe("startSession", () => {
   });
 });
 
+// The manager spawns a real Codex app-server child process inside
+// startSession/forkThread's await chain, so the existing test harness has no
+// way to deterministically interleave two concurrent starts for the same
+// threadId (that would require a new process-spawning fake, which is out of
+// scope here). Per the plan's fallback, these tests instead exercise the
+// identity-guarded teardown helpers (`disposeIfCurrent` /
+// `disposeContextResources`) directly: they simulate the race by installing a
+// context in the sessions map and then invoking the teardown helper with a
+// *different* stale context, mirroring exactly what startSession/forkThread's
+// catch block and race-winner re-check do.
+describe("session start/fork race identity guards", () => {
+  function createFakeSessionContext(threadId: string) {
+    return {
+      session: {
+        provider: "codex",
+        status: "ready",
+        threadId: asThreadId(threadId),
+        runtimeMode: "full-access",
+        model: "gpt-5.3-codex",
+        resumeCursor: { threadId },
+        createdAt: "2026-02-10T00:00:00.000Z",
+        updatedAt: "2026-02-10T00:00:00.000Z",
+      },
+      account: {
+        type: "unknown",
+        planType: null,
+        sparkEnabled: true,
+      },
+      child: { kill: vi.fn(), killed: false },
+      output: { close: vi.fn() },
+      pending: new Map(),
+      pendingApprovals: new Map(),
+      pendingUserInputs: new Map(),
+      collabReceiverTurns: new Map(),
+      collabReceiverParents: new Map(),
+      reviewTurnIds: new Set<string>(),
+      nextRequestId: 1,
+      stopping: false,
+    };
+  }
+
+  function accessManagerInternals(manager: CodexAppServerManager) {
+    return manager as unknown as {
+      sessions: Map<ThreadId, ReturnType<typeof createFakeSessionContext>>;
+      disposeIfCurrent: (
+        threadId: ThreadId,
+        context: ReturnType<typeof createFakeSessionContext>,
+      ) => void;
+    };
+  }
+
+  it("a losing call's cleanup does not kill a newer, healthy session for the same thread", () => {
+    const manager = new CodexAppServerManager();
+    const updateSession = vi
+      .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+      .mockImplementation(() => {});
+    const emitLifecycleEvent = vi
+      .spyOn(
+        manager as unknown as { emitLifecycleEvent: (...args: unknown[]) => void },
+        "emitLifecycleEvent",
+      )
+      .mockImplementation(() => {});
+
+    const threadId = asThreadId("thread-race-1");
+    const loserContext = createFakeSessionContext("thread-race-1");
+    const winnerContext = createFakeSessionContext("thread-race-1");
+
+    const internals = accessManagerInternals(manager);
+    // Simulate: call B already won the slot while call A (loser) was still
+    // awaiting its own initialization chain.
+    internals.sessions.set(threadId, winnerContext);
+
+    // Call A's error-path cleanup (or race-winner re-check) now runs against
+    // its own stale `loserContext`, not the current map owner.
+    internals.disposeIfCurrent(threadId, loserContext);
+
+    expect(internals.sessions.get(threadId)).toBe(winnerContext);
+    expect(winnerContext.child.kill).not.toHaveBeenCalled();
+    expect(winnerContext.output.close).not.toHaveBeenCalled();
+    expect(loserContext.child.kill).toHaveBeenCalledTimes(1);
+    expect(loserContext.output.close).toHaveBeenCalledTimes(1);
+    expect(loserContext.stopping).toBe(true);
+
+    updateSession.mockRestore();
+    emitLifecycleEvent.mockRestore();
+  });
+
+  it("cleans up and removes the session when the context still owns its slot", () => {
+    const manager = new CodexAppServerManager();
+    const updateSession = vi
+      .spyOn(manager as unknown as { updateSession: (...args: unknown[]) => void }, "updateSession")
+      .mockImplementation(() => {});
+    const emitLifecycleEvent = vi
+      .spyOn(
+        manager as unknown as { emitLifecycleEvent: (...args: unknown[]) => void },
+        "emitLifecycleEvent",
+      )
+      .mockImplementation(() => {});
+
+    const threadId = asThreadId("thread-race-2");
+    const context = createFakeSessionContext("thread-race-2");
+
+    const internals = accessManagerInternals(manager);
+    internals.sessions.set(threadId, context);
+
+    internals.disposeIfCurrent(threadId, context);
+
+    expect(internals.sessions.has(threadId)).toBe(false);
+    expect(context.child.kill).toHaveBeenCalledTimes(1);
+    expect(context.output.close).toHaveBeenCalledTimes(1);
+    expect(context.stopping).toBe(true);
+
+    updateSession.mockRestore();
+    emitLifecycleEvent.mockRestore();
+  });
+});
+
 describe("sendTurn", () => {
   it("sends text and image user input items to turn/start", async () => {
     const { manager, context, requireSession, sendRequest, updateSession } =
