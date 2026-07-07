@@ -39,6 +39,17 @@ function setupSnapshot(statuses: [WorktreeSetupStepStatus, WorktreeSetupStepStat
   } satisfies WorktreeSetupSnapshot;
 }
 
+function setupActionSnapshot() {
+  return {
+    steps: [
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ],
+  } satisfies WorktreeSetupSnapshot;
+}
+
 function WorktreeSetupTimeline() {
   const [worktreeSetup, setWorktreeSetup] = useState<WorktreeSetupSnapshot | null>(() =>
     setupSnapshot(["active", "pending"]),
@@ -79,6 +90,34 @@ function WorktreeSetupTimeline() {
           workspaceRoot={undefined}
         />
       </div>
+    </div>
+  );
+}
+
+function SetupActionTimeline() {
+  return (
+    <div style={{ height: 420 }}>
+      <MessagesTimeline
+        hasMessages
+        isWorking
+        activeTurnInProgress={false}
+        activeTurnStartedAt={null}
+        worktreeSetup={setupActionSnapshot()}
+        timelineEntries={[userEntry("user-message", "Start in a worktree.")]}
+        turnDiffSummaryByAssistantMessageId={new Map()}
+        nowIso="2026-03-17T19:12:30.000Z"
+        expandedWorkGroups={{}}
+        onToggleWorkGroup={() => {}}
+        onOpenTurnDiff={() => {}}
+        revertTurnCountByUserMessageId={new Map()}
+        onRevertUserMessage={() => {}}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => {}}
+        markdownCwd={undefined}
+        resolvedTheme="dark"
+        timestampFormat="locale"
+        workspaceRoot={undefined}
+      />
     </div>
   );
 }
@@ -153,6 +192,18 @@ describe("MessagesTimeline worktree setup card", () => {
       await expect.poll(() => setupRow()?.textContent).toContain("Creating branch and worktree");
       expect(setupRow()?.textContent).toContain("failed");
       expect(document.body.textContent).not.toContain("Send a message to start the conversation.");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("renders the project setup action as its own active worktree step", async () => {
+    const screen = await render(<SetupActionTimeline />);
+
+    try {
+      await expect.poll(() => setupRow()?.textContent).toContain("Running setup action: Setup");
+      expect(setupRow()?.textContent).toContain("Starting session");
+      expect(workingRow()).toBeNull();
     } finally {
       await screen.unmount();
     }

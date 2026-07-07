@@ -656,16 +656,46 @@ export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
   { id: "start-session", label: "Starting session" },
 ];
 
+export interface WorktreeSetupSnapshotOptions {
+  setupScriptName?: string | null;
+}
+
+export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
+  worktreeSetupStepId?: WorktreeSetupStepId;
+}
+
+function worktreeSetupStepDefinitions(
+  activeStepId: WorktreeSetupStepId,
+  options?: WorktreeSetupSnapshotOptions,
+): ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> {
+  const setupScriptName = options?.setupScriptName?.trim();
+  const includeSetupStep = activeStepId === "run-setup-action" || Boolean(setupScriptName);
+  if (!includeSetupStep) {
+    return WORKTREE_SETUP_STEP_DEFINITIONS;
+  }
+  return [
+    { id: "create-worktree", label: "Creating branch and worktree" },
+    { id: "prepare-thread", label: "Linking thread workspace" },
+    {
+      id: "run-setup-action",
+      label: setupScriptName ? `Running setup action: ${setupScriptName}` : "Running setup action",
+    },
+    { id: "start-session", label: "Starting session" },
+  ];
+}
+
 // How long a failed setup step stays visible before the row is dismissed, so
 // the error state can paint instead of being batched away with the reset.
 export const WORKTREE_SETUP_ERROR_HOLD_MS = 1200;
 
 export function createWorktreeSetupSnapshot(
   activeStepId: WorktreeSetupStepId,
+  options?: WorktreeSetupSnapshotOptions,
 ): WorktreeSetupSnapshot {
-  const activeIndex = WORKTREE_SETUP_STEP_DEFINITIONS.findIndex((step) => step.id === activeStepId);
+  const stepDefinitions = worktreeSetupStepDefinitions(activeStepId, options);
+  const activeIndex = stepDefinitions.findIndex((step) => step.id === activeStepId);
   return {
-    steps: WORKTREE_SETUP_STEP_DEFINITIONS.map((step, index) => ({
+    steps: stepDefinitions.map((step, index) => ({
       ...step,
       status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
     })),
@@ -708,14 +738,14 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { worktreeSetupStepId?: WorktreeSetupStepId },
+  options?: WorktreeSetupDispatchOptions,
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
   return {
     startedAt: new Date().toISOString(),
     worktreeSetup: options?.worktreeSetupStepId
-      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId)
+      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId, options)
       : null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
@@ -731,7 +761,7 @@ export function createLocalDispatchSnapshot(
 export function resolveNextLocalDispatchSnapshot(input: {
   current: LocalDispatchSnapshot | null;
   activeThread: Thread | undefined;
-  options?: { worktreeSetupStepId?: WorktreeSetupStepId };
+  options?: WorktreeSetupDispatchOptions;
 }): LocalDispatchSnapshot {
   const worktreeSetupStepId = input.options?.worktreeSetupStepId;
   if (!input.current || worktreeSetupHasError(input.current.worktreeSetup)) {
@@ -747,7 +777,10 @@ export function resolveNextLocalDispatchSnapshot(input: {
   );
   return alreadyActive
     ? input.current
-    : { ...input.current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
+    : {
+        ...input.current,
+        worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId, input.options),
+      };
 }
 
 export function hasServerAcknowledgedLocalDispatch(input: {
