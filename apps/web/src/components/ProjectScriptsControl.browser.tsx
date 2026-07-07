@@ -27,7 +27,7 @@ async function mountProjectScriptsControl(props?: {
     <ProjectScriptsControl
       scripts={props?.scripts ?? []}
       keybindings={EMPTY_KEYBINDINGS}
-      preferredScriptId={props?.preferredScriptId}
+      preferredScriptId={props?.preferredScriptId ?? null}
       onRunScript={onRunScript}
       onAddScript={onAddScript}
       onUpdateScript={onUpdateScript}

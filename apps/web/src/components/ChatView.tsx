@@ -286,6 +286,8 @@ import {
   projectScriptRuntimeEnv,
   projectScriptIdFromCommand,
   setupProjectScript,
+  type ProjectScriptRunOptions,
+  type ProjectScriptRunResult,
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
@@ -4349,15 +4351,8 @@ export default function ChatView({
   const runProjectScript = useCallback(
     async (
       script: ProjectScript,
-      options?: {
-        cwd?: string;
-        env?: Record<string, string>;
-        worktreePath?: string | null;
-        preferNewTerminal?: boolean;
-        rememberAsLastInvoked?: boolean;
-        throwOnError?: boolean;
-      },
-    ) => {
+      options?: ProjectScriptRunOptions,
+    ): Promise<ProjectScriptRunResult | null> => {
       const api = readNativeApi();
       if (!api || !activeThreadId || !activeProject || !activeThread) return null;
       if (options?.rememberAsLastInvoked !== false) {
