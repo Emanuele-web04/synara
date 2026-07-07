@@ -87,4 +87,32 @@ describe("ProjectScriptsControl", () => {
     await expect.poll(() => document.body.textContent).toContain("Setup (setup)");
     await expect.poll(() => document.body.textContent).toContain("Add action");
   });
+
+  it("keeps the edit dialog delete action legible", async () => {
+    const setupScript: ProjectScript = {
+      id: "setup",
+      name: "Setup",
+      command: "bun install",
+      icon: "configure",
+      runOnWorktreeCreate: true,
+    };
+    await using _ = await mountProjectScriptsControl({
+      scripts: [setupScript],
+      preferredScriptId: "setup",
+    });
+
+    await page.getByLabelText("Script actions").click();
+    await expect
+      .poll(() => document.querySelector<HTMLButtonElement>('button[aria-label="Edit Setup"]'))
+      .not.toBeNull();
+    document.querySelector<HTMLButtonElement>('button[aria-label="Edit Setup"]')?.click();
+
+    await expect.poll(() => document.body.textContent).toContain("Edit Action");
+    const deleteButton = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Delete",
+    );
+
+    expect(deleteButton?.className).toContain("text-destructive");
+    expect(deleteButton?.className).not.toContain("text-destructive-foreground");
+  });
 });
