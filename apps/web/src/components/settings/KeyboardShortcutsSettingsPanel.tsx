@@ -114,7 +114,9 @@ export function KeyboardShortcutsSettingsPanel() {
                 <div className="min-w-0 space-y-0.5">
                   <div className={cn(SETTINGS_CARD_ROW_TITLE_CLASS_NAME, "truncate")}>
                     {entry.labelKey
-                      ? t(entry.labelKey, entry.interpolation)
+                      ? (entry.interpolation
+                        ? t(entry.labelKey, entry.interpolation)
+                        : t(entry.labelKey))
                       : entry.label}
                   </div>
                   <div className={cn(SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME, "truncate")}>

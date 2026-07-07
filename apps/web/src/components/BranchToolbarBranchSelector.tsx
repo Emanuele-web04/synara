@@ -964,7 +964,7 @@ export function BranchToolbarBranchSelector({
                 <Input
                   autoFocus
                   id="branch-create-name"
-                  placeholder="feature/my-change"
+                  placeholder="feature/我的修改"
                   value={createBranchName}
                   onChange={(event) => setCreateBranchName(event.target.value)}
                 />

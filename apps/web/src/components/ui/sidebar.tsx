@@ -379,6 +379,7 @@ function Sidebar({
 
 function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<typeof Button>) {
   const { toggleSidebar } = useSidebar();
+  const { t } = useTranslation();
 
   return (
     <Button
@@ -394,7 +395,7 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
       {...props}
     >
       <CentralIcon name="sidebar-hidden-left-wide" />
-      <span className="sr-only">Toggle Sidebar</span>
+      <span className="sr-only">{t("shortcuts.sections.toggleSidebar")}</span>
     </Button>
   );
 }

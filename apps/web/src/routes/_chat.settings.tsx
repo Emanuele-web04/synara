@@ -1590,7 +1590,7 @@ function SettingsRouteView() {
       <SettingsRow
         title={title}
         description={description}
-        anchorId={anchorId}
+        {...(anchorId && { anchorId })}
         resetAction={
           isChanged ? (
             <SettingResetButton

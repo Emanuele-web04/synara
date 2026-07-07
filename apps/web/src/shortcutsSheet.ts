@@ -23,6 +23,7 @@ export interface ShortcutSheetEntry {
   shortcutLabel: string;
   labelKey?: string;
   descriptionKey?: string;
+  interpolation?: Record<string, string | number>;
 }
 
 export interface ShortcutSheetSection {
@@ -283,7 +284,7 @@ function definitionToEntry(
     description: definition.description,
     labelKey: definition.labelKey,
     descriptionKey: definition.descriptionKey,
-    interpolation: definition.interpolation,
+    ...(definition.interpolation && { interpolation: definition.interpolation }),
     shortcutLabel,
   };
 }

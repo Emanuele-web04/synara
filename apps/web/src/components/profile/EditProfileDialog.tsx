@@ -230,7 +230,7 @@ export function EditProfileDialog({
                   onChange={(event) =>
                     setDraftHandle(event.target.value.replace(/^@+/, "").replace(/\s+/g, ""))
                   }
-                  placeholder="username"
+                  placeholder={t("profile.edit.username")}
                 />
               </InputGroup>
             </Field>

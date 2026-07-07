@@ -150,7 +150,9 @@ function ShortcutSection({
           >
             <span className="min-w-0 truncate text-sm text-foreground">
               {entry.labelKey
-                ? t(entry.labelKey, entry.interpolation)
+                ? (entry.interpolation
+                  ? t(entry.labelKey, entry.interpolation)
+                  : t(entry.labelKey))
                 : entry.label}
             </span>
             <ShortcutKbd shortcutLabel={entry.shortcutLabel} groupClassName="shrink-0" />

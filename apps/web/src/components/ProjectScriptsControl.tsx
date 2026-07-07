@@ -374,12 +374,12 @@ export default function ProjectScriptsControl({
         <ChatHeaderButton
           className={cn("gap-1.5 px-2.5", hideInlineLabel && "px-2")}
           onClick={openAddDialog}
-          aria-label="Add action"
-          title="Add action"
+          aria-label={t("project.scripts.addAction")}
+          title={t("project.scripts.addAction")}
         >
           <PlusIcon className="size-3.5" />
           <span className={cn("font-normal", hideInlineLabel ? "sr-only" : "hidden sm:inline")}>
-            Add action
+            {t("project.scripts.addAction")}
           </span>
         </ChatHeaderButton>
       ) : null}
@@ -457,7 +457,7 @@ export default function ProjectScriptsControl({
                   <Input
                     id="script-name"
                     autoFocus
-                    placeholder="Test"
+                    placeholder="测试"
                     value={name}
                     onChange={(event) => setName(event.target.value)}
                   />
