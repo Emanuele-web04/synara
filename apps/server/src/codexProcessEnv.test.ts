@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { linkOrCopyCodexOverlayEntry } from "./codexProcessEnv";
+import { linkOrCopyCodexOverlayEntry, prioritizeCodexOverlayEntries } from "./codexProcessEnv";
 
 describe("linkOrCopyCodexOverlayEntry", () => {
   it("copies auth.json when symlink creation is unavailable", () => {
@@ -46,5 +46,15 @@ describe("linkOrCopyCodexOverlayEntry", () => {
         { symlink, copyFile: vi.fn() },
       ),
     ).toThrow("symlinks unavailable");
+  });
+});
+
+describe("prioritizeCodexOverlayEntries", () => {
+  it("prepares auth.json before entries whose symlinks may fail first", () => {
+    expect(prioritizeCodexOverlayEntries(["sessions", "auth.json", "config.toml"])).toEqual([
+      "auth.json",
+      "sessions",
+      "config.toml",
+    ]);
   });
 });

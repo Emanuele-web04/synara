@@ -128,6 +128,21 @@ export function linkOrCopyCodexOverlayEntry(
   }
 }
 
+export function prioritizeCodexOverlayEntries(entries: readonly string[]): string[] {
+  const sharedStateEntries: string[] = [];
+  const otherEntries: string[] = [];
+
+  for (const entry of entries) {
+    if (CODEX_OVERLAY_SHARED_STATE_FILES.has(entry)) {
+      sharedStateEntries.push(entry);
+    } else {
+      otherEntries.push(entry);
+    }
+  }
+
+  return [...sharedStateEntries, ...otherEntries];
+}
+
 function ensureCodexOverlaySymlink(input: {
   readonly entryName: string;
   readonly sourcePath: string;
@@ -175,7 +190,9 @@ function prepareDpCodeCodexHomeOverlay(input: {
   mkdirSync(overlayHomePath, { recursive: true });
 
   try {
-    for (const entry of readdirSync(sourceHomePath)) {
+    // Auth must get a best-effort link/copy before optional entries whose
+    // symlinks may fail on restricted Windows installs.
+    for (const entry of prioritizeCodexOverlayEntries(readdirSync(sourceHomePath))) {
       if (entry === "config.toml") {
         continue;
       }
