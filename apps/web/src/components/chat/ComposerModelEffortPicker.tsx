@@ -14,6 +14,7 @@ import {
   type ThreadId,
 } from "@t3tools/contracts";
 import { memo, useCallback, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ChevronDownIcon, FastModeIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -88,6 +89,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
   props: ComposerModelEffortPickerProps,
 ) {
   const { onOpenChange, open } = props;
+  const { t } = useTranslation();
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
   const isMenuOpen = open ?? uncontrolledOpen;
 
@@ -139,11 +141,13 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
     ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
     : null;
   const triggerStatusLabel = ultrathinkPromptControlled
-    ? "Ultrathink"
+    ? t("chat.modelEffort.ultrathink")
     : effortLabel
       ? effortLabel
       : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
+        ? thinkingEnabled
+          ? t("chat.modelEffort.thinkingOn")
+          : t("chat.modelEffort.thinkingOff")
         : null;
   const showsFastBadge = supportsFastModeControl && fastModeEnabled;
 
@@ -195,7 +199,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
         "min-w-0 shrink-0 justify-start gap-1.5 whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0",
         COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME,
       )}
-      aria-label="Change model and reasoning"
+      aria-label={t("chat.modelEffort.changeModelAndReasoning")}
       {...(hiddenTriggerTitle.length > 0 ? { title: hiddenTriggerTitle } : {})}
     />
   );
@@ -252,7 +256,7 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change model</span>
+                <span>{t("chat.modelEffort.changeModel")}</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"
@@ -324,9 +328,11 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 )}
               />
               <span className="truncate">
-                Speed
+                {t("chat.modelEffort.speed")}
                 {fastModeEnabled ? (
-                  <span className="ms-1.5 text-muted-foreground/65">Fast</span>
+                  <span className="ms-1.5 text-muted-foreground/65">
+                    {t("chat.modelEffort.fast")}
+                  </span>
                 ) : null}
               </span>
             </MenuSubTrigger>
@@ -335,8 +341,8 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
                 value={fastModeEnabled ? "on" : "off"}
                 onValueChange={handleFastModeChange}
               >
-                <MenuRadioItem value="off">Default</MenuRadioItem>
-                <MenuRadioItem value="on">Fast</MenuRadioItem>
+                <MenuRadioItem value="off">{t("chat.modelEffort.default")}</MenuRadioItem>
+                <MenuRadioItem value="on">{t("chat.modelEffort.fast")}</MenuRadioItem>
               </MenuRadioGroup>
             </ComposerPickerMenuSubPopup>
           </MenuSub>

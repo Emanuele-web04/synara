@@ -4,6 +4,7 @@
 // Exports: ThreadErrorBanner
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { Alert, AlertAction, AlertDescription } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import { CircleAlertIcon, XIcon } from "~/lib/icons";
@@ -16,6 +17,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error: string | null;
   onDismiss?: () => void;
 }) {
+  const { t } = useTranslation();
   if (!error) return null;
   return (
     <ChatColumnBannerFrame>
@@ -27,7 +29,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
         {onDismiss && (
           <AlertAction>
             <IconButton
-              label="Dismiss error"
+              label={t("chat.threadError.dismissError")}
               className="size-6 text-destructive/60 hover:text-destructive sm:size-6"
               onClick={onDismiss}
             >

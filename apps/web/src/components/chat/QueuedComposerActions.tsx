@@ -5,6 +5,7 @@
 // Layer: Chat composer UI primitive
 // Exports: QueuedComposerActions
 
+import { useTranslation } from "react-i18next";
 import { EllipsisIcon, SteerIcon, Trash2 } from "~/lib/icons";
 
 import type { QueuedComposerTurn } from "../../composerDraftStore";
@@ -27,16 +28,17 @@ function QueuedComposerActions({
   onRemove,
   onEdit,
 }: QueuedComposerActionsProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex shrink-0 items-center gap-0">
       <Button variant="subtle" size="chip" onClick={() => void onSteer(queuedTurn)}>
         <SteerIcon />
-        <span>Steer</span>
+        <span>{t("chat.queuedActions.steer")}</span>
       </Button>
       <IconButton
         variant="ghost"
         size="icon-chip"
-        label="Delete queued follow-up"
+        label={t("chat.queuedActions.deleteQueued")}
         onClick={() => onRemove(queuedTurn.id)}
       >
         <Trash2 />
@@ -47,7 +49,7 @@ function QueuedComposerActions({
             <Button
               variant="ghost"
               size="icon-chip"
-              aria-label="Queued follow-up actions"
+              aria-label={t("chat.queuedActions.queuedActions")}
               className="[&_svg]:mx-0"
             />
           }
@@ -55,8 +57,12 @@ function QueuedComposerActions({
           <EllipsisIcon />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="top" sideOffset={6}>
-          <MenuItem onClick={() => onEdit(queuedTurn)}>Edit queued prompt</MenuItem>
-          <MenuItem onClick={() => onRemove(queuedTurn.id)}>Delete queued prompt</MenuItem>
+          <MenuItem onClick={() => onEdit(queuedTurn)}>
+            {t("chat.queuedActions.editQueuedPrompt")}
+          </MenuItem>
+          <MenuItem onClick={() => onRemove(queuedTurn.id)}>
+            {t("chat.queuedActions.deleteQueuedPrompt")}
+          </MenuItem>
         </ComposerPickerMenuPopup>
       </Menu>
     </div>

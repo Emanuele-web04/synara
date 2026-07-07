@@ -5,6 +5,7 @@
 import type { ProviderKind } from "@t3tools/contracts";
 import { providerUsageLabel } from "@t3tools/shared/providerUsage";
 import { memo, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ExternalLinkIcon, TriangleAlertIcon } from "~/lib/icons";
 import type { OpenUsageUsageLine } from "~/lib/openUsageRateLimits";
@@ -33,6 +34,7 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
   showLearnMore?: boolean | undefined;
   className?: string | undefined;
 }) {
+  const { t } = useTranslation();
   const visibleRows = useMemo(
     () => deriveProviderUsageDisplayRows(props.rateLimits),
     [props.rateLimits],
@@ -67,13 +69,11 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
         />
       ) : visibleRows.length === 0 && props.isLoading ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
-          Scanning local usage data for the selected provider.
+          {t("providerUsage.scanningData")}
         </p>
       ) : visibleRows.length === 0 ? (
         <p className="text-[length:var(--app-font-size-chat-meta,10px)] leading-relaxed text-muted-foreground">
-          {props.provider
-            ? "No local usage data was found yet for the selected provider."
-            : "No local usage data was found yet."}
+          {props.provider ? t("providerUsage.noDataForProvider") : t("providerUsage.noData")}
         </p>
       ) : null}
       {props.showLearnMore === true && learnMoreHref ? (
@@ -83,7 +83,7 @@ export const ProviderUsagePanelContent = memo(function ProviderUsagePanelContent
           rel="noopener noreferrer"
           className="flex items-center gap-1 pt-0.5 text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground transition-colors hover:text-foreground"
         >
-          Learn more
+          {t("common.learnMore")}
           <ExternalLinkIcon className="size-3" />
         </a>
       ) : null}

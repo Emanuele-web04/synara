@@ -3,18 +3,20 @@
 // Layer: Chat attachment presentation
 // Depends on: shared byte formatting, chat attachment types, and compact chip styles.
 
+import i18n from "i18next";
 import { formatBytes } from "@t3tools/shared/formatBytes";
 
 import { basenameOfPath } from "~/file-icons";
 import { FileIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "react-i18next";
 import { type ChatFileAttachment } from "../../types";
 import { COMPOSER_ATTACHMENT_CHIP_CLASS_NAME } from "../composerInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AttachmentCard } from "./AttachmentCard";
 import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 import {
-  DRAFT_ATTACHMENT_WARNING_DESCRIPTION,
+  DRAFT_ATTACHMENT_WARNING_DESCRIPTION_KEY,
   DraftAttachmentWarningIcon,
 } from "./DraftAttachmentWarning";
 import { FileEntryIcon } from "./FileEntryIcon";
@@ -93,11 +95,11 @@ function fileAttachmentTypeLabel(file: ChatFileAttachment): string {
     }
   }
 
-  return "FILE";
+  return i18n.t("fileAttachment.fallback");
 }
 
 function fileAttachmentDetail(file: ChatFileAttachment): string {
-  const mimeType = file.mimeType.trim() || "Unknown type";
+  const mimeType = file.mimeType.trim() || i18n.t("fileAttachment.unknownType");
   return `${mimeType} - ${formatBytes(file.sizeBytes)}`;
 }
 
@@ -112,6 +114,7 @@ function FileAttachmentPillTrigger({
   className?: string | undefined;
   nonPersisted: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <span
       className={cn(
@@ -131,7 +134,7 @@ function FileAttachmentPillTrigger({
         <AttachmentRemoveButton
           size="sm"
           placement="center-right"
-          label={`Remove ${file.name}`}
+          label={t("fileAttachment.remove", { name: file.name })}
           onRemove={() => onRemove(file.id)}
         />
       ) : null}
@@ -146,6 +149,7 @@ export function FileAttachmentChip({
   nonPersisted = false,
   variant = "pill",
 }: FileAttachmentChipProps) {
+  const { t } = useTranslation();
   const detail = fileAttachmentDetail(file);
   const typeLabel = fileAttachmentTypeLabel(file);
   const trigger =
@@ -171,7 +175,7 @@ export function FileAttachmentChip({
           </>
         }
         onRemove={onRemove ? () => onRemove(file.id) : undefined}
-        removeLabel={`Remove ${file.name}`}
+        removeLabel={t("fileAttachment.remove", { name: file.name })}
       />
     ) : (
       <FileAttachmentPillTrigger
@@ -191,7 +195,7 @@ export function FileAttachmentChip({
           <p className="text-[0.6875rem] text-muted-foreground">{detail}</p>
           {nonPersisted ? (
             <p className="text-[0.6875rem] text-amber-600">
-              {DRAFT_ATTACHMENT_WARNING_DESCRIPTION}
+              {t(DRAFT_ATTACHMENT_WARNING_DESCRIPTION_KEY)}
             </p>
           ) : null}
         </div>

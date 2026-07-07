@@ -1,5 +1,6 @@
 import { ProviderInteractionMode, RuntimeMode } from "@t3tools/contracts";
 import { memo, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { EllipsisIcon, ListTodoIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { ComposerPickerMenuPopup } from "./ComposerPickerMenuPopup";
@@ -24,6 +25,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
   onTogglePlanSidebar: () => void;
   onToggleRuntimeMode: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <Menu>
       <MenuTrigger
@@ -32,7 +34,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             size="sm"
             variant="chrome"
             className="shrink-0 px-2"
-            aria-label="More composer controls"
+            aria-label={t("chat.composerControls.moreControls")}
           />
         }
       >
@@ -46,7 +48,7 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
           </>
         ) : null}
         <MenuGroup>
-          <MenuGroupLabel>Mode</MenuGroupLabel>
+          <MenuGroupLabel>{t("chat.composerControls.mode")}</MenuGroupLabel>
           <MenuRadioGroup
             value={props.interactionMode}
             onValueChange={(value) => {
@@ -54,8 +56,8 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
               props.onToggleInteractionMode();
             }}
           >
-            <MenuRadioItem value="default">Build</MenuRadioItem>
-            <MenuRadioItem value="plan">Plan</MenuRadioItem>
+            <MenuRadioItem value="default">{t("chat.composerControls.build")}</MenuRadioItem>
+            <MenuRadioItem value="plan">{t("chat.composerControls.plan")}</MenuRadioItem>
           </MenuRadioGroup>
         </MenuGroup>
         {props.activePlan ? (
@@ -63,7 +65,9 @@ export const CompactComposerControlsMenu = memo(function CompactComposerControls
             <MenuDivider />
             <MenuItem onClick={props.onTogglePlanSidebar}>
               <ListTodoIcon className="size-4 shrink-0" />
-              {props.planSidebarOpen ? "Hide plan sidebar" : "Show plan sidebar"}
+              {props.planSidebarOpen
+                ? t("chat.composerControls.hidePlanSidebar")
+                : t("chat.composerControls.showPlanSidebar")}
             </MenuItem>
           </>
         ) : null}

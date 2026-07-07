@@ -61,6 +61,7 @@ import {
 } from "./chat/workspaceExplorer";
 import { ProjectMenuPicker, type ProjectMenuPickerOption } from "./ProjectMenuPicker";
 import { WorkspaceFilePreview } from "./WorkspaceFilePreview";
+import { useTranslation } from "react-i18next";
 
 type EditorCenterMode = "file" | "diff";
 type EditorActivityBarItem = EditorCenterMode | "search";
@@ -223,8 +224,9 @@ function DiffFileRow(props: {
 const DIFF_FILE_SKELETON_ROW_WIDTHS = ["w-10/12", "w-7/12", "w-9/12", "w-6/12", "w-8/12"];
 
 function DiffFilesLoadingRows() {
+  const { t } = useTranslation();
   return (
-    <div className="space-y-1 px-1 py-1" role="status" aria-label="Loading changed files...">
+    <div className="space-y-1 px-1 py-1" role="status" aria-label={t("editor.loadingChangedFiles")}>
       {DIFF_FILE_SKELETON_ROW_WIDTHS.map((width) => (
         <div key={width} className="flex h-8 items-center gap-1.5 px-2">
           <Skeleton className="size-3.5 shrink-0 rounded-sm" />
@@ -246,6 +248,7 @@ function DiffFilesSidebar(props: {
   onAskWhyInChat: ((reference: ChatFileReference) => void) | undefined;
 }) {
   const { resolvedTheme } = useTheme();
+  const { t } = useTranslation();
   const { onAskWhyInChat, onReferenceInChat } = props;
   const handleListKeyDown = useExplorerListNavigation();
   const totals = useMemo(() => summarizeFileDiffStats(props.files), [props.files]);
@@ -268,7 +271,7 @@ function DiffFilesSidebar(props: {
       <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border/65 px-3">
         <DiffIcon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 flex-1 truncate text-[12px] font-medium text-foreground/86">
-          Changed files
+          {t("editor.changedFiles")}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {props.files.length > 0 ? (
@@ -302,7 +305,7 @@ function DiffFilesSidebar(props: {
           <DiffFilesLoadingRows />
         ) : props.files.length === 0 ? (
           <PanelStateMessage density="compact" fill="flex">
-            <p>No files in this diff.</p>
+            <p>{t("editor.noFilesInDiff")}</p>
           </PanelStateMessage>
         ) : (
           props.files.map((fileDiff) => {
@@ -330,30 +333,31 @@ function EditorActivityBar(props: {
   sidebarVisible: boolean;
   onSelectItem: (item: EditorActivityBarItem) => void;
 }) {
+  const { t } = useTranslation();
   const filesActive = props.sidebarVisible && !props.searchActive && props.centerMode === "file";
   const diffActive = props.sidebarVisible && !props.searchActive && props.centerMode === "diff";
   const searchActive = props.sidebarVisible && props.searchActive;
   return (
     <nav
       className="flex w-12 shrink-0 flex-col items-center border-r border-border/65 bg-[var(--color-background-surface)]"
-      aria-label="Editor activity bar"
+      aria-label={t("editor.editorActivityBar")}
     >
       <ExplorerActivityBarButton
-        label={filesActive ? "Hide files sidebar" : "Files"}
+        label={filesActive ? t("editor.hideFilesSidebar") : t("editor.files")}
         active={filesActive}
         onClick={() => props.onSelectItem("file")}
       >
         <FoldersIcon className="size-5" />
       </ExplorerActivityBarButton>
       <ExplorerActivityBarButton
-        label={diffActive ? "Hide diff sidebar" : "Diff"}
+        label={diffActive ? t("editor.hideDiffSidebar") : t("editor.diff")}
         active={diffActive}
         onClick={() => props.onSelectItem("diff")}
       >
         <ChangesIcon className="size-5" />
       </ExplorerActivityBarButton>
       <ExplorerActivityBarButton
-        label={searchActive ? "Hide search sidebar" : "Search files"}
+        label={searchActive ? t("editor.hideSearchSidebar") : t("editor.searchFiles")}
         active={searchActive}
         onClick={() => props.onSelectItem("search")}
       >
@@ -364,6 +368,7 @@ function EditorActivityBar(props: {
 }
 
 export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
+  const { t } = useTranslation();
   // The editor header sits flush against the window's left edge whenever the
   // global sidebar is collapsed, so it has to clear the macOS traffic lights the
   // same way every other chat-surface header does.
@@ -546,10 +551,10 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
         >
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="truncate text-[13px] font-medium text-foreground">
-              {props.projectName ?? "Workspace"}
+              {props.projectName ?? t("editor.workspaceLabel")}
             </span>
             <span className="hidden truncate text-[11px] text-muted-foreground/70 sm:inline">
-              {props.workspaceRoot ?? "No workspace"}
+              {props.workspaceRoot ?? t("editor.noWorkspace")}
             </span>
           </div>
           {props.onSelectProject && (props.projectOptions?.length ?? 0) > 0 ? (
@@ -561,8 +566,8 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
                 <ChatHeaderIconButton
                   type="button"
                   tone="plain"
-                  label="Switch project"
-                  title="Switch project"
+                  label={t("editor.switchProject")}
+                  title={t("editor.switchProject")}
                   className="size-6"
                 >
                   <ChevronDownIcon className="size-3.5" />
@@ -575,23 +580,25 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           type="button"
           tone="outline"
           aria-pressed={chatPaneVisible}
-          title={chatPaneVisible ? "Hide chat panel" : "Show chat panel"}
+          title={chatPaneVisible ? t("editor.hideChatPanel") : t("editor.showChatPanel")}
           className="gap-1.5"
           onClick={toggleChatPaneVisible}
         >
           <PanelRightCloseIcon className="size-3.5" />
-          <span className="sr-only">{chatPaneVisible ? "Hide chat panel" : "Show chat panel"}</span>
+          <span className="sr-only">
+            {chatPaneVisible ? t("editor.hideChatPanel") : t("editor.showChatPanel")}
+          </span>
         </ChatHeaderButton>
         <ChatHeaderButton
           type="button"
           tone="outline"
           aria-pressed={true}
-          title="Switch to chat view"
+          title={t("editor.switchToChatView")}
           className="w-[5.5rem] gap-1.5"
           onClick={props.onExitEditorView}
         >
           <ChatBubbleIcon className="size-3.5" />
-          <span className="truncate font-normal">Chat</span>
+          <span className="truncate font-normal">{t("editor.chatLabel")}</span>
         </ChatHeaderButton>
       </div>
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
@@ -652,13 +659,13 @@ export function EditorWorkspaceView(props: EditorWorkspaceViewProps) {
           </main>
           <div
             role="separator"
-            aria-label="Resize chat panel"
+            aria-label={t("editor.resizeChatPanel")}
             aria-orientation="vertical"
             aria-valuemin={EDITOR_CHAT_PANE_MIN_WIDTH}
             aria-valuemax={EDITOR_CHAT_PANE_MAX_WIDTH}
             aria-valuenow={chatPaneWidth}
             tabIndex={0}
-            title="Drag to resize chat panel"
+            title={t("editor.dragToResizeChatPanel")}
             className={cn(
               "group relative z-10 w-0 shrink-0 cursor-col-resize outline-none",
               chatPaneVisible ? "hidden lg:block" : "hidden",

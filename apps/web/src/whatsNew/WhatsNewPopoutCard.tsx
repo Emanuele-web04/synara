@@ -6,6 +6,7 @@
 // Layer: overlay — rendered once from the root route next to the dialog.
 
 import { type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -38,7 +39,9 @@ export function WhatsNewPopoutCard({
   onDismiss,
   className,
 }: WhatsNewPopoutCardProps) {
-  const heroAlt = entry.heroImageAlt ?? `What's new in v${currentVersion}`;
+  const { t } = useTranslation();
+  const heroAlt =
+    entry.heroImageAlt ?? t("whatsNew.whatsNewInVersion", { version: currentVersion });
   const primaryFeatureTitle = entry.features[0]?.title;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -68,7 +71,7 @@ export function WhatsNewPopoutCard({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`Open What's new in v${currentVersion}`}
+        aria-label={t("whatsNew.openWhatsNewInVersion", { version: currentVersion })}
         onClick={onOpen}
         onKeyDown={onKeyDown}
         className={cn(
@@ -83,7 +86,7 @@ export function WhatsNewPopoutCard({
             the card's onOpen handler. */}
         <button
           type="button"
-          aria-label="Dismiss What's new"
+          aria-label={t("whatsNew.dismissWhatsNew")}
           onClick={(event) => {
             event.stopPropagation();
             onDismiss();
@@ -126,12 +129,14 @@ export function WhatsNewPopoutCard({
         </div>
 
         <div className="flex flex-col gap-0.5 px-3 pb-3 pt-2">
-          <p className="text-[11px] font-medium text-primary">New · v{currentVersion}</p>
+          <p className="text-[11px] font-medium text-primary">
+            {t("whatsNew.newVersion", { version: currentVersion })}
+          </p>
           <p className="truncate text-sm font-semibold text-foreground">
-            {primaryFeatureTitle ?? `What's new in v${currentVersion}`}
+            {primaryFeatureTitle ?? t("whatsNew.whatsNewInVersion", { version: currentVersion })}
           </p>
           <p className="text-xs text-muted-foreground">
-            Find out what&rsquo;s new <span aria-hidden="true">→</span>
+            {t("whatsNew.findOutWhatsNew")} <span aria-hidden="true">→</span>
           </p>
         </div>
       </div>

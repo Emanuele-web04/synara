@@ -859,7 +859,7 @@ describe("resolveThreadStatusPill", () => {
           hasActionableProposedPlan: true,
           latestTurn: makeLatestTurn(),
           dismissedStatusKey:
-            "Plan Ready:2026-03-09T10:05:00.000Z:turn-1:2026-03-09T10:05:00.000Z:2026-03-09T10:00:00.000Z",
+            "planReady:2026-03-09T10:05:00.000Z:turn-1:2026-03-09T10:05:00.000Z:2026-03-09T10:00:00.000Z",
           session: {
             ...baseThread.session,
             status: "ready",
@@ -912,18 +912,21 @@ describe("resolveProjectStatusIndicator", () => {
     expect(
       resolveProjectStatusIndicator([
         {
+          statusId: "completed",
           label: "Completed",
           colorClass: "text-emerald-600",
           dotClass: "bg-emerald-500",
           pulse: false,
         },
         {
+          statusId: "pendingApproval",
           label: "Pending Approval",
           colorClass: "text-amber-600",
           dotClass: "bg-amber-500",
           pulse: false,
         },
         {
+          statusId: "working",
           label: "Working",
           colorClass: "text-sky-600",
           dotClass: "bg-sky-500",
@@ -937,12 +940,14 @@ describe("resolveProjectStatusIndicator", () => {
     expect(
       resolveProjectStatusIndicator([
         {
+          statusId: "completed",
           label: "Completed",
           colorClass: "text-emerald-600",
           dotClass: "bg-emerald-500",
           pulse: false,
         },
         {
+          statusId: "planReady",
           label: "Plan Ready",
           colorClass: "text-violet-600",
           dotClass: "bg-violet-500",

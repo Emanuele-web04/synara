@@ -4,6 +4,7 @@
 // Exports: KanbanTaskExtrasMenu
 
 import type { ProviderInteractionMode } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";
 import { Button } from "~/components/ui/button";
@@ -37,6 +38,7 @@ export function KanbanTaskExtrasMenu({
   envMode,
   onEnvModeChange,
 }: KanbanTaskExtrasMenuProps) {
+  const { t } = useTranslation();
   return (
     <Menu>
       <MenuTrigger
@@ -45,7 +47,7 @@ export function KanbanTaskExtrasMenu({
             size="icon-sm"
             variant="chrome"
             className="shrink-0 rounded-md"
-            aria-label="Task options"
+            aria-label={t("kanban.taskOptions")}
           />
         }
       >
@@ -61,7 +63,7 @@ export function KanbanTaskExtrasMenu({
         >
           <span className="inline-flex items-center gap-2">
             <ListTodoIcon className="size-4 shrink-0" />
-            Plan mode
+            {t("kanban.planMode")}
           </span>
         </MenuCheckboxItem>
         <MenuSeparator />
@@ -76,13 +78,13 @@ export function KanbanTaskExtrasMenu({
           <MenuRadioItem value="local">
             <span className="inline-flex items-center gap-2">
               <CentralIcon name="macbook-air" className="size-4 shrink-0" />
-              Local
+              {t("kanban.local")}
             </span>
           </MenuRadioItem>
           <MenuRadioItem value="worktree">
             <span className="inline-flex items-center gap-2">
               <WorktreeIcon className="size-4 shrink-0" aria-hidden />
-              Worktree
+              {t("kanban.worktree")}
             </span>
           </MenuRadioItem>
         </MenuRadioGroup>

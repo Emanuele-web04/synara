@@ -22,6 +22,7 @@ import {
 } from "react";
 import { type TimestampFormat } from "../../appSettings";
 import { type TurnDiffSummary, type WorktreeSetupSnapshot } from "../../types";
+import { useTranslation } from "react-i18next";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { DISCLOSURE_CONTENT_MOTION_CLASS } from "~/lib/disclosureMotion";
@@ -144,6 +145,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
   workspaceRoot,
   worktreeSetup,
 }: ChatTranscriptPaneProps) {
+  const { t } = useTranslation();
   const scrollButtonFrameStyle: CSSProperties | undefined = contentInsetRightPx
     ? { paddingRight: contentInsetRightPx }
     : undefined;
@@ -269,7 +271,7 @@ export const ChatTranscriptPane = memo(function ChatTranscriptPane({
               type="button"
               onClick={onScrollToBottom}
               data-scroll-anchor-ignore
-              aria-label="Scroll to bottom"
+              aria-label={t("chat.transcript.scrollToBottom")}
               aria-hidden={!scrollButtonVisible}
               tabIndex={scrollButtonVisible ? 0 : -1}
               className={cn(

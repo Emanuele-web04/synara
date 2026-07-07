@@ -2,6 +2,7 @@
 // Purpose: Render the branded startup face while the app is still booting a route or session.
 // Layer: Shared app loading presentation
 
+import { useTranslation } from "react-i18next";
 import { SynaraLogo } from "~/components/SynaraLogo";
 
 export function SplashScreen({
@@ -11,6 +12,7 @@ export function SplashScreen({
   errorMessage?: string | null;
   onRetry?: (() => void) | null;
 }) {
+  const { t } = useTranslation();
   const showRetry = Boolean(errorMessage && onRetry);
 
   return (
@@ -27,7 +29,7 @@ export function SplashScreen({
                 className="rounded-md border border-border/70 px-3 py-1.5 text-sm text-foreground/85 transition-colors hover:bg-[var(--sidebar-accent)]"
                 onClick={onRetry ?? undefined}
               >
-                Retry
+                {t("common.retry")}
               </button>
             ) : null}
           </div>

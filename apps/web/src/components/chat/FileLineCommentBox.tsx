@@ -6,6 +6,7 @@
 // Layer: Chat file-preview interaction UI
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 
 import { FILE_COMMENT_TEXT_MAX_CHARS, normalizeFileCommentText } from "~/lib/fileComments";
 import { SynaraLogo } from "../SynaraLogo";
@@ -23,6 +24,7 @@ interface FileLineCommentBoxProps {
 
 export function FileLineCommentBox(props: FileLineCommentBoxProps) {
   const { onCancel, onSubmit } = props;
+  const { t } = useTranslation();
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -76,23 +78,25 @@ export function FileLineCommentBox(props: FileLineCommentBoxProps) {
           <span className="editor-file-viewer__comment-badge">
             <SynaraLogo className="size-3 text-[var(--color-text-foreground-secondary)]" />
           </span>
-          Local comment
+          {t("chat.fileLineComment.localComment")}
         </span>
-        <span className="text-[12px] text-muted-foreground">Comment on {props.lineLabel}</span>
+        <span className="text-[12px] text-muted-foreground">
+          {t("chat.fileLineComment.commentOn", { lineLabel: props.lineLabel })}
+        </span>
       </div>
       <textarea
         ref={textareaRef}
         value={value}
         onChange={(event) => setValue(event.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Request change"
+        placeholder={t("chat.fileLineComment.requestChange")}
         rows={2}
         maxLength={FILE_COMMENT_TEXT_MAX_CHARS}
         className="editor-file-viewer__comment-input"
       />
       <div className="flex items-center justify-end gap-1">
         <Button type="button" variant="ghost" size="sm" onClick={onCancel}>
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button
           type="button"
@@ -102,7 +106,7 @@ export function FileLineCommentBox(props: FileLineCommentBoxProps) {
           disabled={!canSubmit}
           onClick={submit}
         >
-          Comment
+          {t("chat.fileLineComment.comment")}
         </Button>
       </div>
     </div>

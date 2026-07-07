@@ -8,6 +8,7 @@
 // Layer: Chat right-dock UI primitives
 
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { cn } from "~/lib/utils";
 import { XIcon } from "~/lib/icons";
@@ -23,6 +24,7 @@ export function DockPaneHeader(props: {
   onClose?: (() => void) | undefined;
   closeLabel?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <header className={cn(CHAT_SURFACE_HEADER_ROW_CLASS_NAME, "gap-1 px-4")}>
       <span className="text-[13px] font-medium tracking-[-0.01em] text-foreground">
@@ -34,7 +36,7 @@ export function DockPaneHeader(props: {
           <IconButton
             size="icon-xs"
             variant="chrome"
-            label={props.closeLabel ?? "Close panel"}
+            label={props.closeLabel ?? t("common.closePanel")}
             className={DOCK_HEADER_ICON_BUTTON_CLASS}
             onClick={props.onClose}
           >

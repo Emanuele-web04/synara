@@ -7,8 +7,8 @@
 // newest-first (see `sortEntriesByVersionDesc`).
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 
-import { pluralize } from "@t3tools/shared/text";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "~/components/ui/collapsible";
 import { DisclosureChevron } from "~/components/ui/DisclosureChevron";
 import { cn } from "~/lib/utils";
@@ -33,10 +33,11 @@ export function ChangelogAccordion({
   defaultExpandedVersion = null,
   className,
 }: ChangelogAccordionProps) {
+  const { t } = useTranslation();
   if (entries.length === 0) {
     return (
       <p className={cn("text-xs text-muted-foreground", className)}>
-        No release notes yet — check back after the next update.
+        {t("whatsNew.noReleaseNotes")}
       </p>
     );
   }
@@ -65,9 +66,10 @@ function ChangelogAccordionRow({
   readonly isLast: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const { t } = useTranslation();
 
   const featureCount = entry.features.length;
-  const featureLabel = `${featureCount} ${pluralize(featureCount, "update")}`;
+  const featureLabel = t("whatsNew.update", { count: featureCount });
 
   return (
     <li className={cn(!isLast && "border-b border-border/40")}>
@@ -76,7 +78,9 @@ function ChangelogAccordionRow({
           <DisclosureChevron open={open} />
           <span className="flex flex-1 items-baseline gap-2">
             <span className="text-xs text-muted-foreground">{entry.date}</span>
-            <span className="text-sm font-semibold text-foreground">Version {entry.version}</span>
+            <span className="text-sm font-semibold text-foreground">
+              {t("whatsNew.version", { version: entry.version })}
+            </span>
             <span className="text-xs text-muted-foreground/70">({featureLabel})</span>
           </span>
         </CollapsibleTrigger>

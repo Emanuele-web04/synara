@@ -6,6 +6,7 @@
 
 import type { ProjectId } from "@t3tools/contracts";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "~/components/ui/button";
 import { ChevronRightIcon, PlusIcon } from "~/lib/icons";
@@ -35,6 +36,7 @@ const OverviewProjectColumn = memo(function OverviewProjectColumn({
   onNewTask: (projectId: ProjectId) => void;
   nowMs?: number;
 }) {
+  const { t } = useTranslation();
   const cards = flattenProjectBoardForOverview(projectBoard);
   const visibleCards =
     cards.length > OVERVIEW_RENDER_CAP ? cards.slice(0, OVERVIEW_RENDER_CAP) : cards;
@@ -61,8 +63,8 @@ const OverviewProjectColumn = memo(function OverviewProjectColumn({
           size="icon-xs"
           variant="ghost"
           className="shrink-0 text-muted-foreground/70 hover:text-foreground"
-          aria-label={`New task in ${projectBoard.projectName}`}
-          title={`New task in ${projectBoard.projectName}`}
+          aria-label={t("kanban.overview.newTaskIn", { projectName: projectBoard.projectName })}
+          title={t("kanban.overview.newTaskIn", { projectName: projectBoard.projectName })}
           onClick={() => onNewTask(projectBoard.projectId)}
         >
           <PlusIcon className="size-3.5" />
@@ -86,7 +88,7 @@ const OverviewProjectColumn = memo(function OverviewProjectColumn({
               onClick={() => onOpenProject(projectBoard.projectId)}
               className="w-full rounded-lg px-3 py-1.5 text-center text-xs text-muted-foreground/80 transition-colors hover:bg-muted/40 hover:text-foreground"
             >
-              Show {hiddenCount} more
+              {t("kanban.overview.showNMore", { count: hiddenCount })}
             </button>
           </li>
         ) : null}
@@ -110,6 +112,7 @@ export function KanbanOverview({
   onNewTask: (projectId: ProjectId) => void;
   nowMs?: number;
 }) {
+  const { t } = useTranslation();
   // Projects without any cards are pure noise on the overview; their boards stay
   // reachable through /kanban/$projectId if linked directly.
   const visibleProjects = board.projects.filter((projectBoard) => projectBoard.totalCount > 0);
@@ -118,9 +121,11 @@ export function KanbanOverview({
     return (
       <div className="flex h-full items-center justify-center px-6">
         <div className="max-w-sm text-center">
-          <div className="text-sm font-medium text-foreground/85">Nothing on the board yet</div>
+          <div className="text-sm font-medium text-foreground/85">
+            {t("kanban.overview.nothingOnBoard")}
+          </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Drafted prompts, running turns, and completed chats will show up here automatically.
+            {t("kanban.overview.emptyDescription")}
           </div>
         </div>
       </div>

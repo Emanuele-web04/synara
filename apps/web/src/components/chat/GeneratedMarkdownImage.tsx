@@ -9,6 +9,7 @@
 //        (`chat-generated-image__*`) rather than shadcn Button.
 
 import { type MouseEvent, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 
 import { DownloadIcon, Loader2Icon, Maximize2 } from "~/lib/icons";
 
@@ -28,13 +29,15 @@ export interface GeneratedMarkdownImageProps {
 
 export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
   const { src, alt, cwd, onImageExpand } = props;
+  const { t } = useTranslation();
   const { previewUrl, downloadUrl, fileName, downloadName, status, imgProps } =
     useLocalImagePreview({ src, cwd });
-  const accessibleName = alt?.trim() || "Generated image";
+  const accessibleName = alt?.trim() || t("chat.generatedImage.generatedImage");
   const downloadImage = useLocalImageDownloadClick({
     downloadUrl,
     downloadName,
-    errorTitle: "Could not download generated image",
+    errorTitle: t("chat.generatedImage.couldNotDownload"),
+    t,
   });
 
   const expandImage = useCallback(
@@ -61,7 +64,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
         downloadUrl={downloadUrl}
         downloadName={downloadName}
         className="local-image-error--prose"
-        downloadAriaLabel="Download generated image"
+        downloadAriaLabel={t("chat.generatedImage.downloadImage")}
         onDownloadClick={downloadImage}
       />
     );
@@ -73,7 +76,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
         type="button"
         className="chat-generated-image__frame"
         onClick={expandImage}
-        aria-label="Expand generated image"
+        aria-label={t("chat.generatedImage.expandImage")}
       >
         {status === "loading" ? (
           <span className="chat-generated-image__skeleton" aria-hidden="true">
@@ -84,7 +87,7 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
         <span className="chat-generated-image__overlay" aria-hidden="true">
           <span className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--expand">
             <Maximize2 className="size-3.5" />
-            <span>Expand</span>
+            <span>{t("chat.generatedImage.expand")}</span>
           </span>
         </span>
       </button>
@@ -94,11 +97,11 @@ export function GeneratedMarkdownImage(props: GeneratedMarkdownImageProps) {
         onClick={downloadImage}
         onMouseDown={stopPropagation}
         className="chat-generated-image__overlay-pill chat-generated-image__overlay-pill--download"
-        aria-label="Download generated image"
-        title="Download"
+        aria-label={t("chat.generatedImage.downloadImage")}
+        title={t("chat.generatedImage.download")}
       >
         <DownloadIcon className="size-3.5" aria-hidden="true" />
-        <span>Download</span>
+        <span>{t("chat.generatedImage.download")}</span>
       </a>
     </span>
   );

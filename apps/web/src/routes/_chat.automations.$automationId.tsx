@@ -13,6 +13,7 @@ import {
 } from "@t3tools/shared/model";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -118,50 +119,71 @@ function formatRunTimestamp(value: string | null): string {
 
 // Presentation for the Status pill: maps the shared lifecycle state to a label and dot color.
 // The state decision lives in ~/lib/automationStatus so this pill and the list never drift.
-function automationStatusDisplay(definition: AutomationDefinition): {
+function automationStatusDisplay(
+  definition: AutomationDefinition,
+  t: (key: string) => string,
+): {
   readonly label: string;
   readonly dotClassName: string;
 } {
   switch (automationLifecycleState(definition)) {
     case "active":
-      return { label: "Active", dotClassName: "bg-emerald-500" };
+      return { label: t("automations.detail.active"), dotClassName: "bg-emerald-500" };
     case "paused":
-      return { label: "Paused", dotClassName: "bg-amber-500" };
+      return { label: t("automations.detail.paused"), dotClassName: "bg-amber-500" };
     case "scheduled":
-      return { label: "Scheduled", dotClassName: "bg-sky-500" };
+      return { label: t("automations.detail.scheduled"), dotClassName: "bg-sky-500" };
     case "done":
-      return { label: "Done", dotClassName: "bg-muted-foreground" };
+      return { label: t("automations.detail.done"), dotClassName: "bg-muted-foreground" };
   }
 }
 
 type SelectOption = { readonly value: string; readonly label: string };
 
-const WORKTREE_OPTIONS: readonly SelectOption[] = [
-  { value: "auto", label: "Auto" },
-  { value: "local", label: "Local" },
-  { value: "worktree", label: "Worktree" },
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TranslationFn = (key: string, options?: any) => string;
+
+const WORKTREE_OPTION_VALUES = ["auto", "local", "worktree"] as const;
+const WORKTREE_OPTION_KEYS: Record<(typeof WORKTREE_OPTION_VALUES)[number], string> = {
+  auto: "automations.worktreeMode.auto",
+  local: "automations.worktreeMode.local",
+  worktree: "automations.worktreeMode.worktree",
+};
+
+function worktreeOptions(t: TranslationFn): readonly SelectOption[] {
+  return WORKTREE_OPTION_VALUES.map((value) => ({
+    value,
+    label: t(WORKTREE_OPTION_KEYS[value]),
+  }));
+}
+
+const INTERVAL_PRESETS: readonly { readonly value: string; readonly labelKey: string }[] = [
+  { value: "900", labelKey: "automations.interval.preset15Min" },
+  { value: "1800", labelKey: "automations.interval.preset30Min" },
+  { value: "3600", labelKey: "automations.interval.preset1Hour" },
+  { value: "7200", labelKey: "automations.interval.preset2Hours" },
+  { value: "21600", labelKey: "automations.interval.preset6Hours" },
+  { value: "43200", labelKey: "automations.interval.preset12Hours" },
+  { value: "86400", labelKey: "automations.interval.preset24Hours" },
 ];
 
-const INTERVAL_PRESETS: readonly SelectOption[] = [
-  { value: "900", label: "Every 15 min" },
-  { value: "1800", label: "Every 30 min" },
-  { value: "3600", label: "Every hour" },
-  { value: "7200", label: "Every 2 hours" },
-  { value: "21600", label: "Every 6 hours" },
-  { value: "43200", label: "Every 12 hours" },
-  { value: "86400", label: "Every 24 hours" },
-];
-
-function intervalOptions(current: number): readonly SelectOption[] {
-  if (INTERVAL_PRESETS.some((option) => option.value === String(current))) {
-    return INTERVAL_PRESETS;
+function intervalOptions(current: number, t: TranslationFn): readonly SelectOption[] {
+  const presets = INTERVAL_PRESETS.map((option) => ({
+    value: option.value,
+    label: t(option.labelKey),
+  }));
+  if (presets.some((option) => option.value === String(current))) {
+    return presets;
   }
   const label =
-    current >= 60 && current % 60 === 0 ? `Every ${current / 60} min` : `Every ${current} sec`;
-  return [{ value: String(current), label }, ...INTERVAL_PRESETS];
+    current >= 60 && current % 60 === 0
+      ? t("automations.interval.everyNMinutes", { count: current / 60 })
+      : t("automations.interval.everyNSeconds", { count: current });
+  return [{ value: String(current), label }, ...presets];
 }
 
 function AutomationDetailView() {
+  const { t } = useTranslation();
   const { automationId } = Route.useParams();
   const navigate = useNavigate();
   const { settings } = useAppSettings();
@@ -219,7 +241,9 @@ function AutomationDetailView() {
               className={cn("flex items-center gap-2 sm:gap-3", CHAT_SURFACE_HEADER_HEIGHT_CLASS)}
             >
               <SidebarHeaderNavigationControls />
-              <h1 className="truncate font-heading text-sm font-medium">Automations</h1>
+              <h1 className="truncate font-heading text-sm font-medium">
+                {t("environment.automations.label")}
+              </h1>
             </div>
           </header>
           <main className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
@@ -245,7 +269,7 @@ function AutomationDetailView() {
     : null;
   const lastRun = lastFinishedRun(runs);
   const schedule = definition.schedule;
-  const status = automationStatusDisplay(definition);
+  const status = automationStatusDisplay(definition, t);
   const stopWhen = stopWhenFromCompletionPolicy(definition.completionPolicy ?? { type: "none" });
 
   const patch = (input: Omit<AutomationUpdateInput, "id">) =>
@@ -433,8 +457,16 @@ function AutomationDetailView() {
                     type="button"
                     size="icon-sm"
                     variant="ghost"
-                    aria-label={definition.enabled ? "Pause" : "Resume"}
-                    title={definition.enabled ? "Pause" : "Resume"}
+                    aria-label={
+                      definition.enabled
+                        ? t("automations.detail.pause")
+                        : t("automations.detail.resume")
+                    }
+                    title={
+                      definition.enabled
+                        ? t("automations.detail.pause")
+                        : t("automations.detail.resume")
+                    }
                     onClick={togglePause}
                   >
                     <CentralIcon name={definition.enabled ? "pause" : "play"} className="size-4" />
@@ -444,8 +476,8 @@ function AutomationDetailView() {
                   type="button"
                   size="icon-sm"
                   variant="ghost"
-                  aria-label="Delete"
-                  title="Delete"
+                  aria-label={t("automations.detail.delete")}
+                  title={t("automations.detail.delete")}
                   onClick={() => void deleteDefinition()}
                 >
                   <CentralIcon name="trash-can-simple" className="size-4" />
@@ -464,13 +496,13 @@ function AutomationDetailView() {
                   }
                   title={
                     approvalGaps.runBlockingWarnings.length > 0
-                      ? "Approve the automation first"
+                      ? t("automations.detail.approveFirst")
                       : undefined
                   }
                   onClick={() => runNowMutation.mutate(definition)}
                 >
                   <CentralIcon name="play" className="size-4" />
-                  Run now
+                  {t("automations.detail.runNow")}
                 </Button>
               </div>
             </div>
@@ -486,14 +518,14 @@ function AutomationDetailView() {
                 onApprove={() => void approveAutomationRisks().catch(() => undefined)}
                 onApproveAndRun={() => void handleApproveAndRunNow()}
               />
-              <DetailGroup title="Status">
-                <DetailRow label="Status">
+              <DetailGroup title={t("automations.detail.status")}>
+                <DetailRow label={t("automations.detail.status")}>
                   <StatusValue>
                     <span className={cn("size-1.5 rounded-full", status.dotClassName)} />
                     {status.label}
                   </StatusValue>
                 </DetailRow>
-                <DetailRow label="Next run">
+                <DetailRow label={t("automations.detail.nextRun")}>
                   {definition.enabled && definition.nextRunAt ? (
                     <StatusValue tone="muted">
                       {formatRunTimestamp(definition.nextRunAt)}
@@ -502,7 +534,7 @@ function AutomationDetailView() {
                     "—"
                   )}
                 </DetailRow>
-                <DetailRow label="Last ran">
+                <DetailRow label={t("automations.detail.lastRan")}>
                   {lastRun ? (
                     <StatusValue tone="muted">
                       {formatRunTimestamp(lastRun.finishedAt ?? lastRun.startedAt)}
@@ -513,25 +545,27 @@ function AutomationDetailView() {
                 </DetailRow>
               </DetailGroup>
 
-              <DetailGroup title="Details">
+              <DetailGroup title={t("automations.detail.details")}>
                 {definition.mode === "heartbeat" ? (
-                  <DetailRow label="Runs in">Thread</DetailRow>
+                  <DetailRow label={t("automations.detail.runsIn")}>
+                    {t("automations.detail.thread")}
+                  </DetailRow>
                 ) : (
                   <EditRow
                     label={
                       <>
-                        Runs in
+                        {t("automations.detail.runsIn")}
                         <CentralIcon
                           name="info-simple"
                           className="size-3 text-muted-foreground/60"
-                          aria-label="Where the automation runs: a worktree, a local checkout, or auto"
+                          aria-label={t("automations.detail.runsInTooltip")}
                         />
                       </>
                     }
                   >
                     <InlineSelect
                       value={definition.worktreeMode}
-                      options={WORKTREE_OPTIONS}
+                      options={worktreeOptions(t)}
                       onChange={(value) => {
                         if (
                           (value === "local" || value === "auto") &&
@@ -546,9 +580,11 @@ function AutomationDetailView() {
                   </EditRow>
                 )}
                 {definition.mode === "heartbeat" ? (
-                  <DetailRow label="Project">{project?.name ?? "Unknown project"}</DetailRow>
+                  <DetailRow label={t("automations.detail.project")}>
+                    {project?.name ?? t("automations.list.unknownProject")}
+                  </DetailRow>
                 ) : (
-                  <EditRow label="Project">
+                  <EditRow label={t("automations.detail.project")}>
                     <InlineSelect
                       value={definition.projectId}
                       options={projects.map((entry) => ({ value: entry.id, label: entry.name }))}
@@ -559,7 +595,7 @@ function AutomationDetailView() {
                   </EditRow>
                 )}
                 {definition.sourceThreadId ? (
-                  <DetailRow label="Created from">
+                  <DetailRow label={t("automations.detail.createdFrom")}>
                     {sourceThread ? (
                       <button
                         type="button"
@@ -574,14 +610,17 @@ function AutomationDetailView() {
                         {resolveThreadPickerTitle(sourceThread.title)}
                       </button>
                     ) : (
-                      "Thread unavailable"
+                      t("automations.detail.threadUnavailable")
                     )}
                   </DetailRow>
                 ) : null}
-                <EditRow label="Repeats">
+                <EditRow label={t("automations.detail.repeats")}>
                   <InlineSelect
                     value={scheduleKindFromSchedule(schedule)}
-                    options={SCHEDULE_KIND_OPTIONS}
+                    options={SCHEDULE_KIND_OPTIONS.map((option) => ({
+                      value: option.value,
+                      label: t(option.labelKey),
+                    }))}
                     onChange={(value) =>
                       patch({
                         schedule: scheduleFromKind(
@@ -593,10 +632,10 @@ function AutomationDetailView() {
                   />
                 </EditRow>
                 {schedule.type === "interval" && schedule.everySeconds !== 3600 ? (
-                  <EditRow label="Every">
+                  <EditRow label={t("automations.schedule.every")}>
                     <InlineSelect
                       value={String(schedule.everySeconds)}
-                      options={intervalOptions(schedule.everySeconds)}
+                      options={intervalOptions(schedule.everySeconds, t)}
                       onChange={(value) =>
                         patch({
                           schedule: { type: "interval", everySeconds: Number.parseInt(value, 10) },
@@ -606,7 +645,7 @@ function AutomationDetailView() {
                   </EditRow>
                 ) : null}
                 {schedule.type === "once" ? (
-                  <EditRow label="Run at">
+                  <EditRow label={t("automations.schedule.runAt")}>
                     <input
                       type="datetime-local"
                       value={datetimeLocalFromIso(schedule.runAt)}
@@ -625,7 +664,7 @@ function AutomationDetailView() {
                   </EditRow>
                 ) : null}
                 {schedule.type === "cron" ? (
-                  <EditRow label="Cron">
+                  <EditRow label={t("automations.schedule.cron")}>
                     <InlineCommitTextInput
                       value={schedule.expression}
                       onCommit={(value) =>
@@ -642,7 +681,7 @@ function AutomationDetailView() {
                   </EditRow>
                 ) : null}
                 {schedule.type === "daily" || schedule.type === "weekdays" ? (
-                  <EditRow label="Time">
+                  <EditRow label={t("automations.schedule.time")}>
                     <InlineTime
                       value={schedule.timeOfDay}
                       onChange={(value) =>
@@ -653,12 +692,12 @@ function AutomationDetailView() {
                 ) : null}
                 {schedule.type === "weekly" ? (
                   <>
-                    <EditRow label="Day">
+                    <EditRow label={t("automations.schedule.day")}>
                       <InlineSelect
                         value={String(schedule.dayOfWeek)}
                         options={[0, 1, 2, 3, 4, 5, 6].map((day) => ({
                           value: String(day),
-                          label: weekdayLabel(day),
+                          label: weekdayLabel(day, t),
                         }))}
                         onChange={(value) =>
                           patch({
@@ -667,7 +706,7 @@ function AutomationDetailView() {
                         }
                       />
                     </EditRow>
-                    <EditRow label="Time">
+                    <EditRow label={t("automations.schedule.time")}>
                       <InlineTime
                         value={schedule.timeOfDay}
                         onChange={(value) =>
@@ -686,14 +725,14 @@ function AutomationDetailView() {
                   schedule.type === "weekly" ||
                   schedule.type === "cron") &&
                 schedule.timezone ? (
-                  <EditRow label="Timezone">
+                  <EditRow label={t("automations.schedule.timezone")}>
                     <InlineCommitTextInput
                       value={schedule.timezone}
                       onCommit={(value) => patch({ schedule: { ...schedule, timezone: value } })}
                     />
                   </EditRow>
                 ) : null}
-                <EditRow label="Model">
+                <EditRow label={t("automations.detail.model")}>
                   <AutomationModelPicker
                     value={definition.modelSelection}
                     projectCwd={project?.cwd ?? null}
@@ -704,14 +743,16 @@ function AutomationDetailView() {
                   modelSelection={definition.modelSelection}
                   onChange={applyModelSelection}
                 />
-                <DetailRow label="Mode">
-                  {definition.mode === "heartbeat" ? "Heartbeat" : "Standalone"}
+                <DetailRow label={t("automations.mode.label")}>
+                  {definition.mode === "heartbeat"
+                    ? t("automations.mode.heartbeat")
+                    : t("automations.mode.standalone")}
                 </DetailRow>
                 {definition.mode === "heartbeat" ? (
-                  <EditRow label="Stop when">
+                  <EditRow label={t("automations.detail.stopWhen")}>
                     <InlineCommitTextInput
                       value={stopWhen}
-                      placeholder="Never"
+                      placeholder={t("automations.detail.never")}
                       onCommit={(value) =>
                         patch({
                           completionPolicy: completionPolicyFromStopWhen(value),
@@ -720,27 +761,36 @@ function AutomationDetailView() {
                     />
                   </EditRow>
                 ) : null}
-                <EditRow label="Max iterations">
+                <EditRow label={t("automations.form.maxIterations")}>
                   <InlineSelect
                     value={definition.maxIterations == null ? "" : String(definition.maxIterations)}
-                    options={maxIterationOptions(definition.maxIterations)}
+                    options={maxIterationOptions(definition.maxIterations, t).map((option) => ({
+                      value: option.value,
+                      label: option.labelKey
+                        ? t(option.labelKey)
+                        : t("automations.maxIterations.run", {
+                            count: Number(option.value),
+                          }),
+                    }))}
                     onChange={(value) =>
                       patch({ maxIterations: value === "" ? null : Number.parseInt(value, 10) })
                     }
                   />
                 </EditRow>
                 {definition.mode === "heartbeat" ? (
-                  <DetailRow label="Thread">
+                  <DetailRow label={t("automations.detail.thread")}>
                     {targetThread
                       ? resolveThreadPickerTitle(targetThread.title)
-                      : "Thread unavailable"}
+                      : t("automations.detail.threadUnavailable")}
                   </DetailRow>
                 ) : null}
               </DetailGroup>
 
-              <DetailGroup title="Previous runs">
+              <DetailGroup title={t("automations.detail.previousRuns")}>
                 {runs.length === 0 ? (
-                  <div className="px-1.5 py-1 text-xs text-muted-foreground">No runs yet.</div>
+                  <div className="px-1.5 py-1 text-xs text-muted-foreground">
+                    {t("automations.detail.noRunsYet")}
+                  </div>
                 ) : (
                   <div className="flex flex-col gap-0.5">
                     {runs.map((run) => (
@@ -890,13 +940,14 @@ function InlineToggle({
   readonly value: boolean;
   readonly onChange: (value: boolean) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       onClick={() => onChange(!value)}
       className={cn(INLINE_CONTROL_CLASS, "min-w-[3rem]")}
     >
-      {value ? "On" : "Off"}
+      {value ? t("common.on") : t("common.off")}
     </button>
   );
 }
@@ -1040,6 +1091,7 @@ function RunRow({
   readonly onMarkRead: (unread: boolean) => void;
   readonly onArchive: (archived: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const active = canCancelAutomationRun(run);
   const archived = run.result?.archivedAt !== null && run.result?.archivedAt !== undefined;
   const triageActionable = run.result !== null || isTriageRun(run);
@@ -1077,8 +1129,8 @@ function RunRow({
     >
       <RunStatusIndicator status={run.status} />
       <div className="min-w-0 flex-1 truncate">
-        <span className="text-foreground/90">{runStatusLabel(run.status)}</span>
-        <span className="text-muted-foreground"> · {runResultSummary(run)}</span>
+        <span className="text-foreground/90">{runStatusLabel(run.status, t)}</span>
+        <span className="text-muted-foreground"> · {runResultSummary(run, t)}</span>
       </div>
       {triageActionable ? (
         <div className="flex shrink-0 items-center gap-1.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
@@ -1090,7 +1142,7 @@ function RunRow({
             }}
             className="text-muted-foreground transition-colors hover:text-foreground"
           >
-            {unread ? "Read" : "Unread"}
+            {unread ? t("automations.detail.read") : t("automations.detail.unread")}
           </button>
           <button
             type="button"
@@ -1101,11 +1153,11 @@ function RunRow({
             title={
               run.permissionSnapshot.worktreeMode === "local"
                 ? undefined
-                : "Archiving does not remove generated worktrees or branches."
+                : t("automations.detail.archiveTooltip")
             }
             className="text-muted-foreground transition-colors hover:text-foreground"
           >
-            {archived ? "Unarchive" : "Archive"}
+            {archived ? t("automations.detail.unarchive") : t("automations.detail.archive")}
           </button>
         </div>
       ) : null}
@@ -1114,7 +1166,7 @@ function RunRow({
           type="button"
           size="icon-chip"
           variant="ghost"
-          aria-label="Cancel run"
+          aria-label={t("automations.detail.cancelRun")}
           onClick={(event) => {
             event.stopPropagation();
             onCancel();
@@ -1124,7 +1176,7 @@ function RunRow({
         </Button>
       ) : null}
       <span className="shrink-0 tabular-nums text-muted-foreground">
-        {formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
+        {formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor, t)}
       </span>
     </div>
   );

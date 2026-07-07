@@ -5,6 +5,7 @@
 // Exports: KanbanTaskProjectPicker
 
 import type { ProjectId } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import { ProjectMenuPicker } from "~/components/ProjectMenuPicker";
 import { Button } from "~/components/ui/button";
@@ -26,6 +27,7 @@ export function KanbanTaskProjectPicker({
   selectedProjectId,
   onProjectIdChange,
 }: KanbanTaskProjectPickerProps) {
+  const { t } = useTranslation();
   const selectedProjectOption =
     projectOptions.find((option) => option.id === selectedProjectId) ?? null;
 
@@ -39,14 +41,16 @@ export function KanbanTaskProjectPicker({
           size="xs"
           variant="chrome-outline"
           disabled={projectOptions.length === 0}
-          aria-label="Choose the project for this task"
+          aria-label={t("kanban.chooseProject")}
           // Override the xs size variant's sm:10px so the project name matches
           // the 12px "New task" title instead of reading smaller.
           className="max-w-56 gap-1.5 font-medium text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] sm:text-[length:var(--app-font-size-ui,12px)]"
         />
       }
     >
-      <span className="min-w-0 truncate">{selectedProjectOption?.name ?? "No project"}</span>
+      <span className="min-w-0 truncate">
+        {selectedProjectOption?.name ?? t("kanban.noProject")}
+      </span>
       <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-60" />
     </ProjectMenuPicker>
   );

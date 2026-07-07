@@ -5,6 +5,7 @@
 // Layer: Chat composer/transcript presentation
 
 import { type ButtonHTMLAttributes, type ReactNode, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ChevronRightIcon, FileIcon } from "~/lib/icons";
 import { formatPastedTextCountLabel, pastedTextTitle } from "~/lib/composerPastedText";
@@ -42,6 +43,7 @@ function PastedTextCardShell({
   onRemove?: () => void;
   className?: string;
 }) {
+  const { t } = useTranslation();
   return (
     <AttachmentCard
       size="sm"
@@ -50,7 +52,7 @@ function PastedTextCardShell({
       title={pastedTextTitle(text)}
       subtitle={action}
       onRemove={onRemove}
-      removeLabel={`Remove pasted text (${formatPastedTextCountLabel(metrics)})`}
+      removeLabel={t("pastedText.removePastedText", { count: formatPastedTextCountLabel(metrics) })}
     />
   );
 }
@@ -70,6 +72,7 @@ export function ComposerPastedTextCard({
   onShowInTextField,
   onRemove,
 }: ComposerPastedTextCardProps) {
+  const { t } = useTranslation();
   return (
     <PastedTextCardShell
       text={text}
@@ -80,7 +83,7 @@ export function ComposerPastedTextCard({
           onMouseDown={(event) => event.preventDefault()}
           onClick={onShowInTextField}
         >
-          Show in text field
+          {t("pastedText.showInTextField")}
           <ChevronRightIcon className="size-2.5" />
         </PastedTextCardAction>
       }
@@ -97,6 +100,7 @@ interface UserMessagePastedTextCardProps {
 // in place (read-only) instead of editing.
 export function UserMessagePastedTextCard({ text, metrics }: UserMessagePastedTextCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const { t } = useTranslation();
 
   return (
     <div className="flex flex-col items-start gap-1">
@@ -108,7 +112,7 @@ export function UserMessagePastedTextCard({ text, metrics }: UserMessagePastedTe
             aria-expanded={expanded}
             onClick={() => setExpanded((value) => !value)}
           >
-            {expanded ? "Hide text" : "Show text"}
+            {expanded ? t("pastedText.hideText") : t("pastedText.showText")}
             <span className="opacity-65">· {formatPastedTextCountLabel(metrics)}</span>
           </PastedTextCardAction>
         }

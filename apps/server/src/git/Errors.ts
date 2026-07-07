@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { t } from "../i18n";
+
 /**
  * GitCommandError - Git command execution failed.
  */
@@ -11,7 +13,12 @@ export class GitCommandError extends Schema.TaggedErrorClass<GitCommandError>()(
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {
-    return `Git command failed in ${this.operation}: ${this.command} (${this.cwd}) - ${this.detail}`;
+    return t("errors.git.commandFailed", {
+      operation: this.operation,
+      command: this.command,
+      cwd: this.cwd,
+      detail: this.detail,
+    });
   }
 }
 
@@ -28,7 +35,10 @@ export class GitCheckoutDirtyWorktreeError extends Schema.TaggedErrorClass<GitCh
 ) {
   override get message(): string {
     const fileList = this.conflictingFiles.map((file) => `  - ${file}`).join("\n");
-    return `Uncommitted changes block checkout to ${this.branch}:\n${fileList}`;
+    return t("errors.git.checkoutDirtyWorktree", {
+      branch: this.branch,
+      fileList,
+    });
   }
 }
 
@@ -41,7 +51,10 @@ export class GitHubCliError extends Schema.TaggedErrorClass<GitHubCliError>()("G
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {
-    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+    return t("errors.git.githubCliFailed", {
+      operation: this.operation,
+      detail: this.detail,
+    });
   }
 }
 
@@ -57,7 +70,10 @@ export class TextGenerationError extends Schema.TaggedErrorClass<TextGenerationE
   },
 ) {
   override get message(): string {
-    return `Text generation failed in ${this.operation}: ${this.detail}`;
+    return t("errors.git.textGenerationFailed", {
+      operation: this.operation,
+      detail: this.detail,
+    });
   }
 }
 
@@ -70,7 +86,10 @@ export class GitManagerError extends Schema.TaggedErrorClass<GitManagerError>()(
   cause: Schema.optional(Schema.Defect),
 }) {
   override get message(): string {
-    return `Git manager failed in ${this.operation}: ${this.detail}`;
+    return t("errors.git.managerFailed", {
+      operation: this.operation,
+      detail: this.detail,
+    });
   }
 }
 

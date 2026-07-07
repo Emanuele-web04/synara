@@ -120,11 +120,11 @@ function sourceSortKey(source: SettingsSkillSource): string {
   return `${originRank(source.origin).toString().padStart(2, "0")}\u0000${source.skill.path}`;
 }
 
-function sectionTitle(section: string): string {
+function sectionTitle(section: string, t: (key: string, options?: any) => string): string {
   if (section === SHARED_SKILLS_SECTION) {
-    return "Shared skills";
+    return t("settings.skills.sharedSkills");
   }
-  return `From ${skillOriginInfo(section).label}`;
+  return t("settings.skills.fromOrigin", { origin: skillOriginInfo(section).label });
 }
 
 function sectionRank(section: string): number {
@@ -185,6 +185,7 @@ export function buildSettingsSkillGroups(
 
 export function buildSettingsSkillSections(
   skills: ReadonlyArray<ProviderSkillDescriptor>,
+  t: (key: string, options?: any) => string,
 ): SettingsSkillSection[] {
   const sections = new Map<string, SettingsSkillGroup[]>();
   for (const group of buildSettingsSkillGroups(skills)) {
@@ -194,7 +195,7 @@ export function buildSettingsSkillSections(
   return [...sections.entries()]
     .map(([key, groups]) => ({
       key,
-      title: sectionTitle(key),
+      title: sectionTitle(key, t),
       groups,
     }))
     .sort((left, right) => sectionRank(left.key) - sectionRank(right.key));

@@ -6,6 +6,7 @@
 // Layer: Environment panel section
 
 import type { EditorId, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { LayoutSidebarIcon } from "~/lib/icons";
@@ -33,6 +34,7 @@ export function EnvironmentEditorSection({
   /** Open the in-app editor workspace view; omitted on surfaces that can't host it. */
   onOpenEditorView?: () => void;
 }) {
+  const { t } = useTranslation();
   const {
     options,
     preferredEditor,
@@ -56,11 +58,11 @@ export function EnvironmentEditorSection({
   const ActiveIcon = activeOption?.Icon;
 
   return (
-    <EnvironmentLabeledSection label="Editor">
+    <EnvironmentLabeledSection label={t("environment.editor")}>
       {onOpenEditorView ? (
         <EnvironmentRow
           icon={<LayoutSidebarIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />}
-          label="Editor view"
+          label={t("environment.editorView")}
           onClick={onOpenEditorView}
         />
       ) : null}
@@ -76,7 +78,11 @@ export function EnvironmentEditorSection({
                   <ActiveIcon aria-hidden className={ENVIRONMENT_ROW_ICON_CLASS_NAME} />
                 ) : null
               }
-              label={activeOption ? `Open in ${activeOption.label}` : "Open in editor"}
+              label={
+                activeOption
+                  ? t("environment.openInEditor", { editor: activeOption.label })
+                  : t("environment.openInEditorDefault")
+              }
               trailing={<EnvironmentRowChevron />}
             />
           </MenuTrigger>

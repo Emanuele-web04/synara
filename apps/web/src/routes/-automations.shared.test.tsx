@@ -181,7 +181,14 @@ describe("automation shared route helpers", () => {
   });
 
   it("uses human labels for resultless and unknown-result runs", () => {
-    expect(runResultSummary(runWith({ result: null, status: "waiting-for-approval" }))).toBe(
+    const t = (key: string) =>
+      key === "automations.runStatus.waitingForApproval"
+        ? "Waiting for approval"
+        : key === "automations.triageOutcome.completedOpenThread"
+          ? "Completed; open the thread for the reply"
+          : key;
+
+    expect(runResultSummary(runWith({ result: null, status: "waiting-for-approval" }), t)).toBe(
       "Waiting for approval",
     );
     expect(
@@ -190,6 +197,7 @@ describe("automation shared route helpers", () => {
           result: { ...baseRun.result!, summary: null, outcome: "unknown" },
           status: "succeeded",
         }),
+        t,
       ),
     ).toBe("Completed; open the thread for the reply");
   });
@@ -230,9 +238,15 @@ describe("automation shared route helpers", () => {
 
   it("labels non-minute interval cadences without rounding", () => {
     const schedule = { type: "interval", everySeconds: 90 } as const;
+    const t = (key: string, options?: Record<string, unknown>) =>
+      key === "automations.interval.everyNSeconds"
+        ? `Every ${options?.count} sec`
+        : key === "automations.interval.everyNMinutes"
+          ? `Every ${options?.count} min`
+          : key;
 
-    expect(formatSchedule(schedule)).toBe("Every 90 sec");
-    expect(formatCadence(schedule)).toBe("Every 90s");
+    expect(formatSchedule(schedule, t)).toBe("Every 90 sec");
+    expect(formatCadence(schedule, t)).toBe("Every 90 sec");
   });
 
   it("requires a hard iteration cap for sub-minute interval forms", () => {
@@ -245,18 +259,32 @@ describe("automation shared route helpers", () => {
       prompt: "Say hi.",
     };
     const cappedForm = { ...form, maxIterations: "10" };
+    const t = (key: string, options?: Record<string, unknown>) =>
+      key === "automations.fastIntervalWarning"
+        ? `Intervals under one minute need max iterations set to ${options?.limit} runs or fewer.`
+        : key;
 
-    expect(automationFastIntervalLimitMessage(form)).toBe(
+    expect(automationFastIntervalLimitMessage(form, t)).toBe(
       "Intervals under one minute need max iterations set to 10 runs or fewer.",
     );
     expect(isFormSubmittable(form)).toBe(false);
-    expect(automationFastIntervalLimitMessage(cappedForm)).toBeNull();
+    expect(automationFastIntervalLimitMessage(cappedForm, t)).toBeNull();
     expect(isFormSubmittable(cappedForm)).toBe(true);
   });
 
   it("keeps custom max-iteration caps visible in picker options", () => {
-    expect(maxIterationOptions("3")[0]).toEqual({ value: "3", label: "3 runs" });
-    expect(maxIterationOptions(10)[0]).toEqual({ value: "", label: "Unlimited" });
+    const t = (key: string, options?: Record<string, unknown>) =>
+      key === "automations.maxIterations.run"
+        ? `${options?.count} runs`
+        : key === "automations.maxIterations.unlimited"
+          ? "Unlimited"
+          : key;
+
+    expect(maxIterationOptions("3", t)[0]).toEqual({ value: "3", labelKey: "" });
+    expect(maxIterationOptions(10, t)[0]).toEqual({
+      value: "",
+      labelKey: "automations.maxIterations.unlimited",
+    });
   });
 
   it("refreshes the default model when the current model came from the old project", () => {

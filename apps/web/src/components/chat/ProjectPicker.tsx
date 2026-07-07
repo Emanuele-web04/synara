@@ -4,6 +4,7 @@
 // Layer: Chat / empty-state entrypoint
 
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type ProjectDirectoryEntry, type ProjectId } from "@t3tools/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
@@ -81,6 +82,7 @@ export const ProjectPicker = memo(function ProjectPicker({
   onResetToHome,
   triggerClassName,
 }: ProjectPickerProps) {
+  const { t } = useTranslation();
   const projects = useStore((state) => state.projects);
   const sidebarThreads = useStore(useMemo(() => createSidebarDisplayThreadsSelector(), []));
   const homeDir = useWorkspaceStore((state) => state.homeDir);
@@ -232,7 +234,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       ) : null}
     </span>
   ) : (
-    "Work in a project"
+    t("chat.projectPicker.workInProject")
   );
 
   const handleOpenChange = useCallback((nextOpen: boolean) => {
@@ -255,7 +257,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     }
     const api = readNativeApi();
     if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
+      setErrorMessage(t("chat.projectPicker.connecting"));
       return;
     }
 
@@ -280,7 +282,9 @@ export const ProjectPicker = memo(function ProjectPicker({
         );
       })
       .catch((error) => {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
+        setErrorMessage(
+          error instanceof Error ? error.message : t("chat.projectPicker.unableToLoadFolders"),
+        );
       })
       .finally(() => {
         setIsLoadingDirectories(false);
@@ -302,10 +306,16 @@ export const ProjectPicker = memo(function ProjectPicker({
             setOpen(false);
           })
           .catch((error) => {
-            setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+            setErrorMessage(
+              error instanceof Error
+                ? error.message
+                : t("chat.projectPicker.unableToSelectProject"),
+            );
           });
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to select project.");
+        setErrorMessage(
+          error instanceof Error ? error.message : t("chat.projectPicker.unableToSelectProject"),
+        );
       }
     },
     [isProjectSelectionMode, onSelectProject, onSelectWorkspaceRoot],
@@ -315,7 +325,7 @@ export const ProjectPicker = memo(function ProjectPicker({
     if (isPicking) return;
     const api = readNativeApi();
     if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
+      setErrorMessage(t("chat.projectPicker.connecting"));
       return;
     }
 
@@ -336,7 +346,9 @@ export const ProjectPicker = memo(function ProjectPicker({
       setOpen(false);
     } catch (error) {
       setIsPicking(false);
-      setErrorMessage(error instanceof Error ? error.message : "Unable to open the folder picker.");
+      setErrorMessage(
+        error instanceof Error ? error.message : t("chat.projectPicker.unableToOpenFolderPicker"),
+      );
     }
   }, [isPicking, onCreateProjectFromPath, onSelectWorkspaceRoot]);
 
@@ -347,18 +359,24 @@ export const ProjectPicker = memo(function ProjectPicker({
           setOpen(false);
         })
         .catch((error) => {
-          setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+          setErrorMessage(
+            error instanceof Error ? error.message : t("chat.projectPicker.unableToUpdateProject"),
+          );
         });
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update project.");
+      setErrorMessage(
+        error instanceof Error ? error.message : t("chat.projectPicker.unableToUpdateProject"),
+      );
     }
   }, [onResetToHome]);
 
   const shouldShowResetToHome = showResetToHome || isProjectSelectionMode;
-  const addProjectLabel = isProjectSelectionMode ? "New project" : "Add new project";
+  const addProjectLabel = isProjectSelectionMode
+    ? t("chat.projectPicker.newProject")
+    : t("chat.projectPicker.addNewProject");
   const loadingAddProjectLabel = isProjectSelectionMode
-    ? "Adding project..."
-    : "Opening folder picker...";
+    ? t("chat.projectPicker.addingProject")
+    : t("chat.projectPicker.openingFolderPicker");
 
   const renderActiveFolderOption = (folder: ActiveFolderOption, index: number) => {
     const selected = isProjectSelectionMode
@@ -418,7 +436,7 @@ export const ProjectPicker = memo(function ProjectPicker({
       />
       <ComboboxPopup align={align} side={side} className="p-0">
         <PickerPanelShell
-          searchPlaceholder="Search projects"
+          searchPlaceholder={t("chat.projectPicker.searchProjects")}
           query={query}
           onQueryChange={setQuery}
           footer={
@@ -441,7 +459,7 @@ export const ProjectPicker = memo(function ProjectPicker({
                   onClick={handleResetToHome}
                 >
                   <XIcon className="size-3.5 shrink-0 text-muted-foreground/70" />
-                  <span className="truncate">Don&apos;t work in a project</span>
+                  <span className="truncate">{t("chat.projectPicker.dontWorkInProject")}</span>
                 </button>
               ) : null}
               {errorMessage ? (
@@ -452,10 +470,10 @@ export const ProjectPicker = memo(function ProjectPicker({
         >
           <ComboboxEmpty>
             {isLoadingDirectories
-              ? "Loading folders…"
+              ? t("chat.projectPicker.loadingFolders")
               : activeFolderOptions.length === 0 && macFolderOptions.length === 0
-                ? "No folders found"
-                : "No matches"}
+                ? t("chat.projectPicker.noFolders")
+                : t("chat.projectPicker.noMatches")}
           </ComboboxEmpty>
           <ComboboxList className="max-h-64">
             {isProjectSelectionMode && filteredActiveFolderOptions.length > 0
@@ -465,7 +483,7 @@ export const ProjectPicker = memo(function ProjectPicker({
               : null}
             {!isProjectSelectionMode && filteredActiveFolderOptions.length > 0 ? (
               <ComboboxGroup>
-                <ComboboxGroupLabel>Active folders</ComboboxGroupLabel>
+                <ComboboxGroupLabel>{t("chat.projectPicker.activeFolders")}</ComboboxGroupLabel>
                 {filteredActiveFolderOptions.map((folder, index) =>
                   renderActiveFolderOption(folder, index),
                 )}
@@ -476,7 +494,7 @@ export const ProjectPicker = memo(function ProjectPicker({
             ) : null}
             {filteredMacFolderOptions.length > 0 ? (
               <ComboboxGroup>
-                <ComboboxGroupLabel>Folders on this Mac</ComboboxGroupLabel>
+                <ComboboxGroupLabel>{t("chat.projectPicker.foldersOnThisMac")}</ComboboxGroupLabel>
                 {filteredMacFolderOptions.map(({ absolutePath, entry }, index) => (
                   <ComboboxItem
                     hideIndicator={absolutePath !== selectedWorkspaceRoot}

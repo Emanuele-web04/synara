@@ -55,8 +55,10 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "i18next": "^26.3.4",
     "oxfmt": "^0.40.0",
     "oxlint": "^1.55.0",
+    "react-i18next": "^17.0.8",
     "turbo": "^2.3.3",
     "vitest": "catalog:"
   },

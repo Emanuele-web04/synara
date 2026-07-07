@@ -5,6 +5,7 @@
 
 import { PROVIDER_DISPLAY_NAMES, type ServerProviderStatus } from "@t3tools/contracts";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { IconButton } from "../ui/icon-button";
 import {
@@ -26,12 +27,13 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
     return null;
   }
 
+  const { t } = useTranslation();
   const providerLabel = PROVIDER_DISPLAY_NAMES[status.provider] ?? status.provider;
   const defaultMessage =
     status.status === "error"
-      ? `${providerLabel} provider is unavailable.`
-      : `${providerLabel} provider has limited availability.`;
-  const title = `${providerLabel} provider status`;
+      ? t("chat.providerHealthBanner.unavailable", { providerLabel })
+      : t("chat.providerHealthBanner.limitedAvailability", { providerLabel });
+  const title = t("chat.providerHealthBanner.statusTitle", { providerLabel });
   const Icon = status.status === "error" ? CircleAlertIcon : TriangleAlertIcon;
 
   return (
@@ -52,8 +54,8 @@ export const ProviderHealthBanner = memo(function ProviderHealthBanner({
           <AlertAction className="absolute top-2 right-2">
             <IconButton
               className="size-6 rounded-full text-[var(--notification-fg)]/65 hover:bg-[var(--notification-fg)]/10 hover:text-[var(--notification-fg)] focus-visible:ring-[var(--notification-fg)]/35 sm:size-6"
-              label="Dismiss provider status"
-              title="Dismiss provider status"
+              label={t("chat.providerHealthBanner.dismissLabel")}
+              title={t("chat.providerHealthBanner.dismissLabel")}
               onClick={onDismiss}
             >
               <XIcon className="size-3.5" />

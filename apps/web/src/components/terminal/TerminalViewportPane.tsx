@@ -8,6 +8,7 @@
 // same rationale.
 
 import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
@@ -117,6 +118,7 @@ export default function TerminalViewportPane({
   onTogglePanel,
   isPanelOpen,
 }: TerminalViewportPaneProps) {
+  const { t } = useTranslation();
   const renderNode = (node: ThreadTerminalLayoutNode): ReactNode => {
     if (node.type === "terminal") {
       const activePaneTerminalId = node.terminalIds.includes(node.activeTerminalId)
@@ -145,8 +147,11 @@ export default function TerminalViewportPane({
               {node.terminalIds.map((terminalId) => {
                 const visualIdentity = terminalVisualIdentityById.get(terminalId);
                 const isActiveTab = terminalId === activePaneTerminalId;
-                const tabTitle = visualIdentity?.title ?? "Terminal";
-                const closeTabLabel = `Close ${visualIdentity?.title ?? "terminal"}`;
+                const tabTitle =
+                  visualIdentity?.title ?? t("terminal.viewportPane.defaultTerminal");
+                const closeTabLabel = t("terminal.viewportPane.closeTerminal", {
+                  name: visualIdentity?.title ?? t("terminal.viewportPane.terminal"),
+                });
 
                 return (
                   <SurfaceTabChip
@@ -179,7 +184,7 @@ export default function TerminalViewportPane({
 
               {onNewTerminalTab ? (
                 <PaneActionButton
-                  label="New terminal tab"
+                  label={t("terminal.viewportPane.newTerminalTab")}
                   onClick={() => onNewTerminalTab(activePaneTerminalId)}
                 >
                   <Plus className="size-3.5" />
@@ -190,7 +195,7 @@ export default function TerminalViewportPane({
             <div className="flex shrink-0 items-center gap-0.5">
               {canMoveActiveTerminalToGroup ? (
                 <PaneActionButton
-                  label="Move to its own terminal tab"
+                  label={t("terminal.viewportPane.moveToOwnTab")}
                   onClick={moveActiveTerminalToGroup}
                 >
                   <TerminalSquareIcon className="size-3.5" />
@@ -198,7 +203,7 @@ export default function TerminalViewportPane({
               ) : null}
               {onSplitTerminalRight ? (
                 <PaneActionButton
-                  label="Split right"
+                  label={t("terminal.viewportPane.splitRight")}
                   onClick={() => onSplitTerminalRight(activePaneTerminalId)}
                 >
                   <SquareSplitHorizontal className="size-3.5" />
@@ -206,7 +211,7 @@ export default function TerminalViewportPane({
               ) : null}
               {onSplitTerminalDown ? (
                 <PaneActionButton
-                  label="Split down"
+                  label={t("terminal.viewportPane.splitDown")}
                   onClick={() => onSplitTerminalDown(activePaneTerminalId)}
                 >
                   <SquareSplitVertical className="size-3.5" />
@@ -216,8 +221,8 @@ export default function TerminalViewportPane({
                 <PaneActionButton
                   label={
                     presentationMode === "workspace"
-                      ? "Collapse terminal into chat drawer"
-                      : "Expand terminal into workspace"
+                      ? t("terminal.viewportPane.collapseIntoDrawer")
+                      : t("terminal.viewportPane.expandIntoWorkspace")
                   }
                   onClick={onTogglePresentationMode}
                 >
@@ -230,7 +235,11 @@ export default function TerminalViewportPane({
               ) : null}
               {onTogglePanel ? (
                 <PaneActionButton
-                  label={isPanelOpen ? "Collapse side panel" : "Open side panel"}
+                  label={
+                    isPanelOpen
+                      ? t("terminal.viewportPane.collapseSidePanel")
+                      : t("terminal.viewportPane.openSidePanel")
+                  }
                   onClick={onTogglePanel}
                 >
                   <PanelRightCloseIcon />
@@ -238,7 +247,7 @@ export default function TerminalViewportPane({
               ) : null}
               {onCloseTerminal ? (
                 <PaneActionButton
-                  label="Close active terminal tab"
+                  label={t("terminal.viewportPane.closeActiveTab")}
                   onClick={() => onCloseTerminal(activePaneTerminalId)}
                 >
                   <Trash2 className="size-3.5" />

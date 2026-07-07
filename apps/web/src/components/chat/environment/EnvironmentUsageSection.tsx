@@ -2,6 +2,7 @@
 // Purpose: "Usage" section of the Environment panel — same menu as the header chip.
 
 import type { ProviderKind } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import {
   ProviderUsageMenuPopup,
@@ -19,6 +20,7 @@ import {
 } from "./EnvironmentRow";
 
 export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }) {
+  const { t } = useTranslation();
   const model = useProviderUsageMenuModel(provider);
 
   if (!model) {
@@ -26,7 +28,7 @@ export function EnvironmentUsageSection({ provider }: { provider: ProviderKind }
   }
 
   return (
-    <EnvironmentLabeledSection label="Usage">
+    <EnvironmentLabeledSection label={t("environment.usage")}>
       <ProviderUsageMenuPopup provider={provider} model={model} align="start">
         <MenuTrigger
           render={

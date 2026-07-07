@@ -60,6 +60,7 @@ import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem";
 import { shouldRejectUntrustedRequestOrigin } from "./trustedOrigins";
 import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackpressure";
+import { normalizeLocale, runWithLocale, type SupportedLocale } from "./i18n";
 
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
@@ -570,8 +571,20 @@ export const makeWsRpcLayer = () =>
         event.aggregateId === threadId &&
         isThreadDetailEvent(event);
 
+      let connectionLocale: SupportedLocale = "en";
+
       const rpcEffect = <A, E, R>(effect: Effect.Effect<A, E, R>, fallbackMessage: string) =>
-        effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage)));
+        Effect.gen(function* () {
+          const services = yield* Effect.services<R>();
+          const locale = connectionLocale;
+          return yield* Effect.promise(() =>
+            runWithLocale(locale, () =>
+              Effect.runPromiseWith(services)(
+                effect.pipe(Effect.mapError((cause) => toWsRpcError(cause, fallbackMessage))),
+              ),
+            ),
+          );
+        });
 
       return WsRpcGroup.of({
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
@@ -1035,6 +1048,11 @@ export const makeWsRpcLayer = () =>
               ),
             "Failed to update keybinding",
           ),
+        [WS_METHODS.serverSetLocale]: (input) =>
+          Effect.sync(() => {
+            connectionLocale = normalizeLocale(input.locale);
+            return { locale: connectionLocale };
+          }),
         [WS_METHODS.subscribeServerLifecycle]: () =>
           Stream.concat(
             Stream.fromEffect(

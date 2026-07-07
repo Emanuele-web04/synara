@@ -5,6 +5,7 @@ import { XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import { Button } from "~/components/ui/button";
 import { ScrollArea } from "~/components/ui/scroll-area";
+import { useTranslation } from "react-i18next";
 
 const Sheet = SheetPrimitive.Root;
 
@@ -71,6 +72,7 @@ function SheetPopup({
   side?: "right" | "left" | "top" | "bottom";
   variant?: "default" | "inset";
 }) {
+  const { t } = useTranslation();
   return (
     <SheetPortal keepMounted={keepMounted}>
       <SheetBackdrop />
@@ -96,7 +98,7 @@ function SheetPopup({
           {children}
           {showCloseButton && (
             <SheetPrimitive.Close
-              aria-label="Close"
+              aria-label={t("common.close")}
               className="absolute end-2 top-2"
               render={<Button size="icon" variant="ghost" />}
             >

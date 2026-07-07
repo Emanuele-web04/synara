@@ -56,15 +56,18 @@ export type ScheduleKind =
 
 export type IntervalUnit = "seconds" | "minutes";
 
-export const SCHEDULE_KIND_OPTIONS: readonly { value: ScheduleKind; label: string }[] = [
-  { value: "manual", label: "Manual" },
-  { value: "once", label: "Once" },
-  { value: "hourly", label: "Hourly" },
-  { value: "daily", label: "Daily" },
-  { value: "weekdays", label: "Weekdays" },
-  { value: "weekly", label: "Weekly" },
-  { value: "custom", label: "Custom" },
-  { value: "cron", label: "Cron" },
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export type TranslationFn = (key: string, options?: any) => string;
+
+export const SCHEDULE_KIND_OPTIONS: readonly { value: ScheduleKind; labelKey: string }[] = [
+  { value: "manual", labelKey: "automations.schedule.manual" },
+  { value: "once", labelKey: "automations.schedule.once" },
+  { value: "hourly", labelKey: "automations.schedule.hourly" },
+  { value: "daily", labelKey: "automations.schedule.daily" },
+  { value: "weekdays", labelKey: "automations.schedule.weekdays" },
+  { value: "weekly", labelKey: "automations.schedule.weekly" },
+  { value: "custom", labelKey: "automations.schedule.custom" },
+  { value: "cron", labelKey: "automations.schedule.cron" },
 ];
 
 export type AutomationFormState = {
@@ -207,8 +210,8 @@ export function updateWeeklyScheduleTime(
   return { ...schedule, timeOfDay };
 }
 
-export function formatDateTime(value: string | null): string {
-  if (!value) return "Not scheduled";
+export function formatDateTime(value: string | null, t: TranslationFn): string {
+  if (!value) return t("automations.schedule.notScheduled");
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
   return `${new Intl.DateTimeFormat(undefined, {
@@ -232,33 +235,48 @@ function timezoneSuffix(schedule: AutomationSchedule): string {
   return " UTC";
 }
 
-function formatIntervalSchedule(seconds: number): string {
-  return seconds % 60 === 0 ? `Every ${seconds / 60} min` : `Every ${seconds} sec`;
+function formatIntervalSchedule(seconds: number, t: TranslationFn): string {
+  return seconds % 60 === 0
+    ? t("automations.interval.everyNMinutes", { count: seconds / 60 })
+    : t("automations.interval.everyNSeconds", { count: seconds });
 }
 
-function formatIntervalCadence(seconds: number): string {
-  if (seconds === 3600) return "Hourly";
-  if (seconds % 3600 === 0) return `Every ${seconds / 3600}h`;
-  if (seconds % 60 === 0) return `Every ${seconds / 60}m`;
-  return `Every ${seconds}s`;
+function formatIntervalCadence(seconds: number, t: TranslationFn): string {
+  if (seconds === 3600) return t("automations.schedule.hourly");
+  if (seconds % 3600 === 0) return t("automations.interval.everyNHours", { count: seconds / 3600 });
+  if (seconds % 60 === 0) return t("automations.interval.everyNMinutes", { count: seconds / 60 });
+  return t("automations.interval.everyNSeconds", { count: seconds });
 }
 
-export function formatSchedule(schedule: AutomationSchedule): string {
+export function formatSchedule(schedule: AutomationSchedule, t: TranslationFn): string {
   switch (schedule.type) {
     case "manual":
-      return "Manual";
+      return t("automations.schedule.manual");
     case "once":
-      return `Once ${formatDateTime(schedule.runAt)}`;
+      return t("automations.schedule.onceWithDate", { date: formatDateTime(schedule.runAt, t) });
     case "interval":
-      return formatIntervalSchedule(schedule.everySeconds);
+      return formatIntervalSchedule(schedule.everySeconds, t);
     case "daily":
-      return `Daily ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("automations.schedule.dailyWithTime", {
+        timeOfDay: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "weekdays":
-      return `Weekdays ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("automations.schedule.weekdaysWithTime", {
+        timeOfDay: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "weekly":
-      return `Weekly ${weekdayLabel(schedule.dayOfWeek)} ${schedule.timeOfDay}${timezoneSuffix(schedule)}`;
+      return t("automations.schedule.weeklyWithDayTime", {
+        day: weekdayLabel(schedule.dayOfWeek, t),
+        timeOfDay: schedule.timeOfDay,
+        timezone: timezoneSuffix(schedule),
+      });
     case "cron":
-      return `Cron ${schedule.expression} ${schedule.timezone}`;
+      return t("automations.schedule.cronWithExpression", {
+        expression: schedule.expression,
+        timezone: schedule.timezone,
+      });
   }
 }
 
@@ -270,27 +288,39 @@ export function formatClockTime(timeOfDay: string): string {
   return `${hour}:${minutes ?? "00"}`;
 }
 
-export function formatCadence(schedule: AutomationSchedule): string {
+export function formatCadence(schedule: AutomationSchedule, t: TranslationFn): string {
   switch (schedule.type) {
     case "manual":
-      return "Manual";
+      return t("automations.schedule.manual");
     case "once":
-      return formatDateTime(schedule.runAt);
+      return formatDateTime(schedule.runAt, t);
     case "interval":
-      return formatIntervalCadence(schedule.everySeconds);
+      return formatIntervalCadence(schedule.everySeconds, t);
     case "daily":
-      return `Daily at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("automations.schedule.dailyAt", { time: formatClockTime(schedule.timeOfDay) });
     case "weekdays":
-      return `Weekdays at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("automations.schedule.weekdaysAt", { time: formatClockTime(schedule.timeOfDay) });
     case "weekly":
-      return `${weekdayLabel(schedule.dayOfWeek)} at ${formatClockTime(schedule.timeOfDay)}`;
+      return t("automations.schedule.weeklyAt", {
+        day: weekdayLabel(schedule.dayOfWeek, t),
+        time: formatClockTime(schedule.timeOfDay),
+      });
     case "cron":
-      return `Cron ${schedule.expression}`;
+      return t("automations.schedule.cronShort", { expression: schedule.expression });
   }
 }
 
-export function weekdayLabel(value: number): string {
-  return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][value] ?? "Sun";
+export function weekdayLabel(value: number, t: TranslationFn): string {
+  const keys = [
+    "common.weekdays.short.sun",
+    "common.weekdays.short.mon",
+    "common.weekdays.short.tue",
+    "common.weekdays.short.wed",
+    "common.weekdays.short.thu",
+    "common.weekdays.short.fri",
+    "common.weekdays.short.sat",
+  ];
+  return t(keys[value] ?? keys[0]!);
 }
 
 // --- Thread automation lookups ---------------------------------------------
@@ -462,17 +492,24 @@ function maxIterationsFromForm(form: Pick<AutomationFormState, "maxIterations">)
   return parsed > 0 ? parsed : null;
 }
 
-export function automationFastIntervalLimitMessage(form: AutomationFormState): string | null {
+function hasFastIntervalLimitViolation(form: AutomationFormState): boolean {
   const schedule = scheduleFromForm(form);
   const maxIterations = maxIterationsFromForm(form);
-  if (
+  return (
     schedule.type === "interval" &&
     schedule.everySeconds < DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS &&
     (maxIterations === null || maxIterations > DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS)
-  ) {
-    return `Intervals under one minute need max iterations set to ${DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS} runs or fewer.`;
-  }
-  return null;
+  );
+}
+
+export function automationFastIntervalLimitMessage(
+  form: AutomationFormState,
+  t: TranslationFn,
+): string | null {
+  if (!hasFastIntervalLimitViolation(form)) return null;
+  return t("automations.fastIntervalWarning", {
+    limit: DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
+  });
 }
 
 export function projectModelSelection(
@@ -603,7 +640,7 @@ export function acknowledgedRiskIdsForFormWarnings(
 export function isFormSubmittable(form: AutomationFormState): boolean {
   if (!form.name.trim() || !form.prompt.trim() || !form.projectId) return false;
   if (form.mode === "heartbeat" && !form.targetThreadId) return false;
-  if (automationFastIntervalLimitMessage(form)) return false;
+  if (hasFastIntervalLimitViolation(form)) return false;
   if (
     form.scheduleKind === "custom" &&
     (!form.intervalAmount.trim() || Number.parseInt(form.intervalAmount, 10) <= 0)

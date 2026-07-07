@@ -10,6 +10,7 @@
 // Depends on: pure magnification math in messageTrail.logic.ts (unit-tested).
 
 import { type MessageId } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 import {
   useCallback,
   useEffect,
@@ -81,6 +82,7 @@ const TOOLTIP_ESTIMATED_H_PX = 56;
 const TOOLTIP_OFFSET_X_PX = 8;
 
 export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps) {
+  const { t } = useTranslation();
   const rootRef = useRef<HTMLElement | null>(null);
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const trackRef = useRef<HTMLDivElement | null>(null);
@@ -550,7 +552,7 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
   return (
     <nav
       ref={rootRef}
-      aria-label="Message navigation"
+      aria-label={t("chat.messageTrail.messageNavigation")}
       aria-hidden={!visible}
       onKeyDown={handleKeyDown}
       onBlur={handleRailBlur}
@@ -585,7 +587,10 @@ export function MessageTrail({ items, activeStore, onSelect }: MessageTrailProps
               }}
               type="button"
               tabIndex={visible && index === tabStop ? 0 : -1}
-              aria-label={`Message ${item.ordinal}: ${item.preview.slice(0, 60)}`}
+              aria-label={t("chat.messageTrail.messageLabel", {
+                ordinal: item.ordinal,
+                preview: item.preview.slice(0, 60),
+              })}
               aria-describedby={tooltipId}
               aria-current={index === anchorIndex ? "location" : undefined}
               onFocus={() => handleTickFocus(index)}

@@ -4,8 +4,8 @@
 // Depends on: agentActivity.logic and ChatMarkdown
 
 import { ThreadId } from "@t3tools/contracts";
-import { pluralize } from "@t3tools/shared/text";
 import { memo, useMemo, type CSSProperties, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { BotIcon, ChevronLeftIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -56,6 +56,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
   onOpenThread,
   timestampFormat,
 }: AgentActivityDetailViewProps) {
+  const { t } = useTranslation();
   const chatTypographyStyle = useMemo(
     () => getChatTranscriptTextStyle(chatFontSizePx),
     [chatFontSizePx],
@@ -95,7 +96,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
           onClick={onBack}
         >
           <ChevronLeftIcon className="size-3.5" />
-          <span>Back</span>
+          <span>{t("chat.agentActivity.back")}</span>
         </button>
 
         <div className="mt-3 border-b border-border/55 pb-4">
@@ -109,7 +110,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
                   {detail.title}
                 </h2>
                 <span className="rounded-full border border-border/45 px-2 py-0.5 text-[10px] font-medium text-muted-foreground/56">
-                  {`${detail.entries.length} ${pluralize(detail.entries.length, "update")}`}
+                  {t("chat.agentActivity.updates", { count: detail.entries.length })}
                 </span>
               </div>
               {detail.summary ? (
@@ -122,7 +123,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         </div>
 
         {prompt ? (
-          <AgentActivitySection title="Prompt">
+          <AgentActivitySection title={t("chat.agentActivity.promptSection")}>
             <ChatMarkdown
               text={prompt}
               cwd={markdownCwd}
@@ -134,7 +135,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         ) : null}
 
         {result ? (
-          <AgentActivitySection title="Result">
+          <AgentActivitySection title={t("chat.agentActivity.resultSection")}>
             <ChatMarkdown
               text={result}
               cwd={markdownCwd}
@@ -146,7 +147,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
         ) : null}
 
         {subagents.length > 0 ? (
-          <AgentActivitySection title="Agents">
+          <AgentActivitySection title={t("chat.agentActivity.agentsSection")}>
             <div className="space-y-2">
               {subagents.map((subagent) => (
                 <SubagentDetailRow
@@ -160,7 +161,7 @@ export const AgentActivityDetailView = memo(function AgentActivityDetailView({
           </AgentActivitySection>
         ) : null}
 
-        <AgentActivitySection title="Activity">
+        <AgentActivitySection title={t("chat.agentActivity.activitySection")}>
           <div className="divide-y divide-border/45">
             {detail.entries.map((entry) => (
               <AgentActivityEventRow
@@ -231,6 +232,7 @@ function SubagentDetailRow(props: {
   textStyle: CSSProperties;
   onOpenThread?: (threadId: ThreadId) => void;
 }) {
+  const { t } = useTranslation();
   const presentation = resolveSubagentPresentation({
     nickname: props.subagent.nickname,
     role: props.subagent.role,
@@ -282,7 +284,7 @@ function SubagentDetailRow(props: {
           )
         }
       >
-        Open
+        {t("chat.agentActivity.open")}
       </button>
     </div>
   );

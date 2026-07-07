@@ -5,6 +5,7 @@
 // Layer: web profile feature.
 
 import { type CSSProperties, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { ProfileHeatmapCell } from "@t3tools/contracts";
 import { cn } from "~/lib/utils";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -32,19 +33,19 @@ export const CARD_HEATMAP_INTENSITY_CLASSES: readonly string[] = [
   "bg-[var(--info)]",
 ];
 
-const MONTH_LABELS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
+const MONTH_LABEL_KEYS = [
+  "common.months.short.jan",
+  "common.months.short.feb",
+  "common.months.short.mar",
+  "common.months.short.apr",
+  "common.months.short.may",
+  "common.months.short.jun",
+  "common.months.short.jul",
+  "common.months.short.aug",
+  "common.months.short.sep",
+  "common.months.short.oct",
+  "common.months.short.nov",
+  "common.months.short.dec",
 ];
 
 interface ActivityHeatmapProps {
@@ -75,13 +76,21 @@ interface ActivityHeatmapProps {
   readonly className?: string;
 }
 
-function heatmapTooltipText(cell: ProfileHeatmapCell, unit: string): string {
+function heatmapTooltipText(
+  t: (key: string, options?: any) => string,
+  cell: ProfileHeatmapCell,
+  unit: string,
+): string {
   const date = formatShortDate(cell.day) ?? cell.day;
   if (cell.count <= 0) {
-    return `No ${unit} on ${date}`;
+    return t("settings.profile.heatmap.noUnitOnDate", { unit, date });
   }
   const noun = cell.count === 1 && unit.endsWith("s") ? unit.slice(0, -1) : unit;
-  return `${formatCompact(cell.count)} ${noun} on ${date}`;
+  return t("settings.profile.heatmap.countUnitOnDate", {
+    count: formatCompact(cell.count),
+    unit: noun,
+    date,
+  });
 }
 
 type Slot =
@@ -108,6 +117,7 @@ export function ActivityHeatmap({
   tooltipUnit = "prompts",
   className,
 }: ActivityHeatmapProps) {
+  const { t } = useTranslation();
   const columns = useMemo<Column[]>(() => {
     if (cells.length === 0) {
       return [];
@@ -148,9 +158,10 @@ export function ActivityHeatmap({
         return null;
       }
       previousMonth = monthIndex;
-      return MONTH_LABELS[monthIndex] ?? null;
+      const monthKey = MONTH_LABEL_KEYS[monthIndex];
+      return monthKey ? t(monthKey) : null;
     });
-  }, [columns]);
+  }, [columns, t]);
 
   const columnCount = columns.length;
   const responsiveFill = fill && maxCellSize != null;
@@ -244,7 +255,7 @@ export function ActivityHeatmap({
                     render={<div className={cellClassName} style={cellStyle} />}
                   />
                   <TooltipPopup side="top" sideOffset={6}>
-                    {heatmapTooltipText(slot.cell, tooltipUnit)}
+                    {heatmapTooltipText(t, slot.cell, tooltipUnit)}
                   </TooltipPopup>
                 </Tooltip>
               );

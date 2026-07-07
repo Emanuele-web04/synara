@@ -11,6 +11,7 @@ import { cn } from "~/lib/utils";
 import type { WorkLogToolDetails, WorkLogToolOutputDetails } from "../../lib/toolCallDetails";
 import type { WorkLogEntry } from "../../session-logic";
 import ChatMarkdown from "../ChatMarkdown";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogDescription,
@@ -33,6 +34,7 @@ interface ToolCallDetailsDialogProps {
 }
 
 export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDetailsDialogProps) {
+  const { t } = useTranslation();
   const details = entry?.toolDetails;
   // Mirror the transcript row's icon mapping (workEntryIcon): file-change edits use
   // the central pencil, commands use the terminal — so the dialog header matches
@@ -48,12 +50,12 @@ export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDet
             </span>
             <div className="min-w-0 flex-1">
               <DialogTitle className="truncate text-base">
-                {details?.title ?? "Tool call"}
+                {details?.title ?? t("toolCallDetails.title")}
               </DialogTitle>
               <DialogDescription>
                 {details?.kind === "file-change"
-                  ? "Edit payload captured for this tool call."
-                  : "Command payload captured for this tool call."}
+                  ? t("toolCallDetails.editPayload")
+                  : t("toolCallDetails.commandPayload")}
               </DialogDescription>
             </div>
           </div>
@@ -70,10 +72,11 @@ export function ToolCallDetailsDialog({ entry, open, onOpenChange }: ToolCallDet
 }
 
 export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetails | undefined }) {
+  const { t } = useTranslation();
   if (!details) {
     return (
       <div className="rounded-lg border border-border/45 bg-background/60 px-3 py-2 text-sm text-muted-foreground">
-        No detailed payload was available for this tool call.
+        {t("toolCallDetails.noPayload")}
       </div>
     );
   }
@@ -90,7 +93,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
       ) : null}
 
       {details.files?.length ? (
-        <ToolDetailSection title="Files">
+        <ToolDetailSection title={t("toolCallDetails.filesSection")}>
           <div className="flex flex-wrap gap-1.5">
             {details.files.map((file) => (
               <span
@@ -106,13 +109,13 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
       ) : null}
 
       {details.diff ? (
-        <ToolDetailSection title="Diff">
+        <ToolDetailSection title={t("toolCallDetails.diffSection")}>
           <DiffCodeBlock>{details.diff}</DiffCodeBlock>
         </ToolDetailSection>
       ) : null}
 
       {details.edits?.length ? (
-        <ToolDetailSection title="Edits">
+        <ToolDetailSection title={t("toolCallDetails.editsSection")}>
           <div className="space-y-3">
             {details.edits.map((edit, index) => (
               <div
@@ -126,12 +129,12 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
                 ) : null}
                 <div className="grid gap-0 md:grid-cols-2">
                   {edit.oldText !== undefined ? (
-                    <TextChangeBlock title="Before" tone="remove">
+                    <TextChangeBlock title={t("toolCallDetails.before")} tone="remove">
                       {edit.oldText}
                     </TextChangeBlock>
                   ) : null}
                   {edit.newText !== undefined ? (
-                    <TextChangeBlock title="After" tone="add">
+                    <TextChangeBlock title={t("toolCallDetails.after")} tone="add">
                       {edit.newText}
                     </TextChangeBlock>
                   ) : null}
@@ -143,7 +146,7 @@ export function ToolCallDetailsContent({ details }: { details: WorkLogToolDetail
       ) : null}
 
       {details.content ? (
-        <ToolDetailSection title="Written Content">
+        <ToolDetailSection title={t("toolCallDetails.writtenContent")}>
           <MarkdownToolCodeBlock language="text">{details.content}</MarkdownToolCodeBlock>
         </ToolDetailSection>
       ) : null}
@@ -173,6 +176,7 @@ function ToolDetailSection(props: { title: string; children: ReactNode }) {
 }
 
 function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
+  const { t } = useTranslation();
   if (output.exitCode === undefined && !output.truncated) {
     return null;
   }
@@ -180,12 +184,12 @@ function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
     <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/68">
       {output.exitCode !== undefined ? (
         <span className="rounded-full border border-border/45 px-2 py-0.5">
-          Exit code {output.exitCode}
+          {t("toolCallDetails.exitCode", { code: output.exitCode })}
         </span>
       ) : null}
       {output.truncated ? (
         <span className="rounded-full border border-amber-500/30 bg-amber-500/8 px-2 py-0.5 text-amber-200/90">
-          Truncated
+          {t("toolCallDetails.truncated")}
         </span>
       ) : null}
     </div>
@@ -193,19 +197,20 @@ function ToolOutputMetadata({ output }: { output: WorkLogToolOutputDetails }) {
 }
 
 function ToolOutputSection({ output }: { output: WorkLogToolOutputDetails }) {
+  const { t } = useTranslation();
   return (
-    <ToolDetailSection title="Output">
+    <ToolDetailSection title={t("toolCallDetails.outputSection")}>
       <div className="space-y-3">
         {output.output ? (
           <MarkdownToolCodeBlock language="text">{output.output}</MarkdownToolCodeBlock>
         ) : null}
         {output.stdout ? (
-          <LabeledCodeBlock title="Stdout" tone="output">
+          <LabeledCodeBlock title={t("toolCallDetails.stdout")} tone="output">
             {output.stdout}
           </LabeledCodeBlock>
         ) : null}
         {output.stderr ? (
-          <LabeledCodeBlock title="Stderr" tone="error">
+          <LabeledCodeBlock title={t("toolCallDetails.stderr")} tone="error">
             {output.stderr}
           </LabeledCodeBlock>
         ) : null}

@@ -4,11 +4,12 @@
 // Depends on: composer draft image metadata, shared chip styles, and expanded image preview helpers.
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { AttachmentRemoveButton } from "./AttachmentRemoveButton";
 import {
-  DRAFT_ATTACHMENT_WARNING_DESCRIPTION,
+  DRAFT_ATTACHMENT_WARNING_DESCRIPTION_KEY,
   DraftAttachmentWarningIcon,
 } from "./DraftAttachmentWarning";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
@@ -28,12 +29,13 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
   onExpandImage,
   onRemoveImage,
 }: ComposerImageAttachmentChipProps) {
+  const { t } = useTranslation();
   return (
     <div className="group relative shrink-0">
       <button
         type="button"
         className="block size-16 overflow-hidden rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] transition-colors hover:border-[color:var(--color-border)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`Preview ${image.name}`}
+        aria-label={t("imageAttachment.preview", { name: image.name })}
         title={image.name}
         onClick={() => {
           const preview = buildExpandedImagePreview(images, image.id);
@@ -45,7 +47,7 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
           <img src={image.previewUrl} alt={image.name} className="size-full object-cover" />
         ) : (
           <span className="flex size-full items-center justify-center text-[10px] font-medium text-muted-foreground/70">
-            IMG
+            {t("imageAttachment.fallback")}
           </span>
         )}
       </button>
@@ -58,14 +60,14 @@ export const ComposerImageAttachmentChip = memo(function ComposerImageAttachment
             }
           />
           <TooltipPopup side="top" className="max-w-64 whitespace-normal leading-tight">
-            {DRAFT_ATTACHMENT_WARNING_DESCRIPTION}
+            {t(DRAFT_ATTACHMENT_WARNING_DESCRIPTION_KEY)}
           </TooltipPopup>
         </Tooltip>
       )}
 
       <AttachmentRemoveButton
         size="md"
-        label={`Remove ${image.name}`}
+        label={t("imageAttachment.remove", { name: image.name })}
         onRemove={() => onRemoveImage(image.id)}
       />
     </div>

@@ -5,6 +5,7 @@
 
 import { ThreadId } from "@t3tools/contracts";
 import { useNavigate, useParams } from "@tanstack/react-router";
+import i18n from "i18next";
 import { useEffect, useMemo, useRef } from "react";
 import { toastManager } from "../components/ui/toast";
 import { resolveVisibleToastThreadIds } from "../components/ui/toastRouteVisibility";
@@ -132,7 +133,7 @@ function showThreadToast(
       dismissAfterVisibleMs: 8000,
     },
     actionProps: {
-      children: "Open",
+      children: i18n.t("notification.open"),
       onClick: () => focusThread(threadId, navigate),
     },
   });
@@ -314,18 +315,18 @@ export function buildNotificationSettingsSupportText(
   permissionState: BrowserNotificationPermissionState,
 ): string {
   if (isElectron) {
-    return "Desktop app notifications use your operating system notification center.";
+    return i18n.t("notification.desktopNotificationsUseOs");
   }
   switch (permissionState) {
     case "granted":
-      return "Browser notifications are enabled for this app.";
+      return i18n.t("notification.browserNotificationsEnabled");
     case "denied":
-      return "Browser notifications are blocked. Re-enable them in your browser site settings.";
+      return i18n.t("notification.browserNotificationsBlocked");
     case "insecure":
-      return "Browser notifications need a secure context. Localhost works; plain HTTP does not.";
+      return i18n.t("notification.browserNotificationsInsecure");
     case "unsupported":
-      return "This browser does not support desktop notifications.";
+      return i18n.t("notification.browserNotificationsUnsupported");
     case "default":
-      return "Allow browser notifications to get alerts when chats or terminal agents finish or need input in the background.";
+      return i18n.t("notification.browserNotificationsDefault");
   }
 }

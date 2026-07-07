@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { DesktopWindowState } from "@t3tools/contracts";
 
@@ -43,6 +44,7 @@ function CaptionGlyph({ glyph }: { glyph: string }) {
 }
 
 export function DesktopWindowControls({ className }: { className?: string }) {
+  const { t } = useTranslation();
   const [windowState, setWindowState] = useState<DesktopWindowState>(DEFAULT_WINDOW_STATE);
   const platform = typeof navigator === "undefined" ? "" : navigator.platform;
   const isWindowsDesktop = isWindowsPlatform(platform);
@@ -73,8 +75,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
     <div className={cn("flex h-[46px] items-stretch [-webkit-app-region:no-drag]", className)}>
       <button
         type="button"
-        aria-label="Minimize"
-        title="Minimize"
+        aria-label={t("app.minimize")}
+        title={t("app.minimize")}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
           void controls.minimize();
@@ -84,8 +86,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
       </button>
       <button
         type="button"
-        aria-label={isMaximized ? "Restore" : "Maximize"}
-        title={isMaximized ? "Restore" : "Maximize"}
+        aria-label={isMaximized ? t("app.restore") : t("app.maximize")}
+        title={isMaximized ? t("app.restore") : t("app.maximize")}
         className={CAPTION_BUTTON_CLASS}
         onClick={() => {
           void controls.toggleMaximize().then(setWindowState);
@@ -95,8 +97,8 @@ export function DesktopWindowControls({ className }: { className?: string }) {
       </button>
       <button
         type="button"
-        aria-label="Close"
-        title="Close"
+        aria-label={t("app.close")}
+        title={t("app.close")}
         className={cn(CAPTION_BUTTON_CLASS, CLOSE_BUTTON_CLASS)}
         onClick={() => {
           void controls.close();

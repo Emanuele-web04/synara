@@ -6,6 +6,7 @@
 //          reserves transcript/composer inset; when the dock is open it overlays only.
 // Layer: Chat header control
 
+import { useTranslation } from "react-i18next";
 import { WindowIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -25,6 +26,7 @@ const TOGGLE_CLASS_NAME = cn(
 );
 
 export function EnvironmentToggle({ environment }: { environment: EnvironmentToggleState }) {
+  const { t } = useTranslation();
   return (
     <Tooltip>
       <TooltipTrigger
@@ -33,7 +35,7 @@ export function EnvironmentToggle({ environment }: { environment: EnvironmentTog
             className={TOGGLE_CLASS_NAME}
             pressed={environment.open}
             onPressedChange={environment.onOpenChange}
-            aria-label="Toggle environment panel"
+            aria-label={t("environment.togglePanel")}
             variant="default"
             size="xs"
           >
@@ -41,7 +43,7 @@ export function EnvironmentToggle({ environment }: { environment: EnvironmentTog
           </Toggle>
         }
       />
-      <TooltipPopup side="bottom">Environment</TooltipPopup>
+      <TooltipPopup side="bottom">{t("environment.title")}</TooltipPopup>
     </Tooltip>
   );
 }

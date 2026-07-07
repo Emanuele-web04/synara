@@ -9,6 +9,7 @@
 
 import { type ApprovalRequestId, type ProviderApprovalDecision } from "@t3tools/contracts";
 import { type KeyboardEvent, memo, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { type PendingApproval } from "../../session-logic";
 import { cn } from "~/lib/utils";
 import { ComposerChoiceRow, type ComposerChoiceTone } from "./ComposerChoiceRow";
@@ -37,38 +38,46 @@ type ApprovalAction = {
 };
 
 // Order is the card-local shortcut order (1-4): recommended action first, stop-everything last.
-const APPROVAL_ACTIONS: ReadonlyArray<ApprovalAction> = [
-  {
-    decision: "accept",
-    label: "Approve once",
-    description: "Allow just this request",
-    tone: "primary",
-  },
-  {
-    decision: "acceptForSession",
-    label: "Always allow this session",
-    description: "Don't ask again this session",
-    tone: "neutral",
-  },
-  {
-    decision: "decline",
-    label: "Decline",
-    description: "Reject and let the agent continue",
-    tone: "destructive",
-  },
-  {
-    decision: "cancel",
-    label: "Cancel turn",
-    description: "Stop the current turn",
-    tone: "neutral",
-  },
-];
+function getApprovalActions(
+  t: ReturnType<typeof useTranslation>["t"],
+): ReadonlyArray<ApprovalAction> {
+  return [
+    {
+      decision: "accept",
+      label: t("chat.approvalActions.approveOnce"),
+      description: t("chat.approvalActions.approveOnceDesc"),
+      tone: "primary",
+    },
+    {
+      decision: "acceptForSession",
+      label: t("chat.approvalActions.alwaysAllow"),
+      description: t("chat.approvalActions.alwaysAllowDesc"),
+      tone: "neutral",
+    },
+    {
+      decision: "decline",
+      label: t("chat.approvalActions.decline"),
+      description: t("chat.approvalActions.declineDesc"),
+      tone: "destructive",
+    },
+    {
+      decision: "cancel",
+      label: t("chat.approvalActions.cancelTurn"),
+      description: t("chat.approvalActions.cancelTurnDesc"),
+      tone: "neutral",
+    },
+  ];
+}
 
-const KIND_PROMPT: Record<PendingApproval["requestKind"], string> = {
-  command: "Approve this command?",
-  "file-read": "Approve reading this file?",
-  "file-change": "Approve this file change?",
-};
+function getKindPrompt(
+  t: ReturnType<typeof useTranslation>["t"],
+): Record<PendingApproval["requestKind"], string> {
+  return {
+    command: t("chat.approvalActions.promptCommand"),
+    "file-read": t("chat.approvalActions.promptFileRead"),
+    "file-change": t("chat.approvalActions.promptFileChange"),
+  };
+}
 
 export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprovalPanel({
   approval,
@@ -76,8 +85,11 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
   isResponding,
   onRespond,
 }: ComposerPendingApprovalPanelProps) {
+  const { t } = useTranslation();
   const parsed = useMemo(() => parseApprovalDetail(approval.detail), [approval.detail]);
   const requestId = approval.requestId;
+  const approvalActions = useMemo(() => getApprovalActions(t), [t]);
+  const kindPrompt = useMemo(() => getKindPrompt(t), [t]);
 
   // Digit shortcuts bubble from focused controls inside this card only; a bare
   // number key elsewhere in the app must never approve a tool request.
@@ -92,8 +104,8 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       return;
     }
     const digit = Number.parseInt(event.key, 10);
-    if (Number.isNaN(digit) || digit < 1 || digit > APPROVAL_ACTIONS.length) return;
-    const action = APPROVAL_ACTIONS[digit - 1];
+    if (Number.isNaN(digit) || digit < 1 || digit > approvalActions.length) return;
+    const action = approvalActions[digit - 1];
     if (!action) return;
     event.preventDefault();
     void onRespond(requestId, action.decision);
@@ -106,7 +118,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
     >
       <div className="flex items-start justify-between gap-3">
         <p className="min-w-0 text-[13px] font-medium leading-snug text-foreground/90">
-          {KIND_PROMPT[approval.requestKind]}
+          {kindPrompt[approval.requestKind]}
           {parsed.tool ? (
             <span className="ml-1.5 text-[11px] font-normal text-muted-foreground/50">
               {parsed.tool}
@@ -121,7 +133,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
       </div>
       <ApprovalDetail parsed={parsed} />
       <div className="mt-2.5 space-y-0.5">
-        {APPROVAL_ACTIONS.map((action, index) => (
+        {approvalActions.map((action, index) => (
           <ComposerChoiceRow
             key={action.decision}
             shortcut={index + 1}
@@ -138,6 +150,7 @@ export const ComposerPendingApprovalPanel = memo(function ComposerPendingApprova
 });
 
 function ApprovalDetail({ parsed }: { parsed: ParsedApproval }) {
+  const { t } = useTranslation();
   if (parsed.fileName) {
     return (
       <div className="mt-2">
@@ -172,7 +185,9 @@ function ApprovalDetail({ parsed }: { parsed: ParsedApproval }) {
   }
 
   return (
-    <p className="mt-2 text-[12px] text-muted-foreground/65">Review the request to continue.</p>
+    <p className="mt-2 text-[12px] text-muted-foreground/65">
+      {t("chat.approvalActions.reviewRequest")}
+    </p>
   );
 }
 

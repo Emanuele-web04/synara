@@ -21,6 +21,7 @@ import { resolveActivePane } from "~/rightDockStore.logic";
 import { Button } from "../ui/button";
 import { IconButton } from "../ui/icon-button";
 import { Menu, MenuItem, MenuTrigger } from "../ui/menu";
+import { useTranslation } from "react-i18next";
 import {
   Sidebar,
   SIDEBAR_OFFCANVAS_MOTION_CLASS,
@@ -69,6 +70,7 @@ function RightDockTab(props: {
   onSelect: () => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <SurfaceTabChip
       active={props.active}
@@ -76,7 +78,7 @@ function RightDockTab(props: {
       label={props.label}
       labelClassName="max-w-[10rem]"
       icon={resolveRightDockPaneIcon(props.pane)}
-      closeLabel={`Close ${props.label}`}
+      closeLabel={t("rightDock.closePanel", { label: props.label })}
       onSelect={props.onSelect}
       onClose={props.onClose}
     />
@@ -104,6 +106,7 @@ function useKeepMountedPaneIds(
 }
 
 export function RightDock(props: RightDockProps) {
+  const { t } = useTranslation();
   const activePane = resolveActivePane(props.state);
   const activePaneRuntimeMode = props.activePaneRuntimeMode ?? "live";
   // The dock is the right-most surface when open, so its header sits under the
@@ -215,8 +218,8 @@ export function RightDock(props: RightDockProps) {
                   <Button
                     variant="chrome"
                     size="icon-xs"
-                    aria-label="Add panel"
-                    title="Add panel"
+                    aria-label={t("rightDock.addPanel")}
+                    title={t("rightDock.addPanel")}
                     className={DOCK_HEADER_ICON_BUTTON_CLASS}
                   />
                 }
@@ -238,8 +241,8 @@ export function RightDock(props: RightDockProps) {
             <IconButton
               variant="chrome"
               size="icon-xs"
-              label="Collapse panel"
-              tooltip="Collapse panel"
+              label={t("rightDock.collapsePanel")}
+              tooltip={t("rightDock.collapsePanel")}
               tooltipSide="bottom"
               className={DOCK_HEADER_ICON_BUTTON_CLASS}
               onClick={props.onCollapse}

@@ -16,6 +16,7 @@ import { type ThreadId } from "@t3tools/contracts";
 import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
 import { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type TerminalContextSelection } from "~/lib/terminalContext";
 import { readNativeApi } from "~/nativeApi";
 import {
@@ -588,25 +589,27 @@ export default function ThreadTerminalDrawer({
     previousRuntimeKeysRef.current = nextRuntimeKeySet;
   }, [normalizedTerminalIds, threadId]);
 
+  const { t } = useTranslation();
+
   const splitTerminalActionLabel = hasReachedSplitLimit
-    ? `Split Terminal (max ${MAX_TERMINALS_PER_GROUP} per group)`
+    ? t("terminal.splitRightMax", { count: MAX_TERMINALS_PER_GROUP })
     : splitShortcutLabel
-      ? `Split Right (${splitShortcutLabel})`
-      : "Split Right";
+      ? t("terminal.splitRightWithShortcut", { shortcut: splitShortcutLabel })
+      : t("viewportPane.splitRight");
   const splitTerminalDownActionLabel = hasReachedSplitLimit
-    ? `Split Down (max ${MAX_TERMINALS_PER_GROUP} per group)`
+    ? t("terminal.splitDownMax", { count: MAX_TERMINALS_PER_GROUP })
     : splitDownShortcutLabel
-      ? `Split Down (${splitDownShortcutLabel})`
-      : "Split Down";
+      ? t("terminal.splitDownWithShortcut", { shortcut: splitDownShortcutLabel })
+      : t("viewportPane.splitDown");
   const newTerminalActionLabel = newShortcutLabel
-    ? `New Terminal (${newShortcutLabel})`
-    : "New Terminal";
+    ? t("terminal.newTerminalWithShortcut", { shortcut: newShortcutLabel })
+    : t("chat.header.newTerminal");
   const resolvedCloseShortcutLabel = isWorkspaceMode
     ? (workspaceCloseShortcutLabel ?? closeShortcutLabel)
     : closeShortcutLabel;
   const closeTerminalActionLabel = resolvedCloseShortcutLabel
-    ? `Close Terminal (${resolvedCloseShortcutLabel})`
-    : "Close Terminal";
+    ? t("terminal.closeTerminalWithShortcut", { shortcut: resolvedCloseShortcutLabel })
+    : t("chat.header.closeTerminal");
   const onSplitTerminalAction = useCallback(() => {
     if (hasReachedSplitLimit) return;
     onSplitTerminal();

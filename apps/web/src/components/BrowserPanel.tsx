@@ -7,6 +7,7 @@
 // regions are intentional — list-row and tab semantics, not shadcn Buttons.
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useStore } from "zustand";
 import {
@@ -183,14 +184,14 @@ function closeButtonClassName(isActive: boolean) {
   );
 }
 
-function formatBrowserActionError(error: unknown): string | null {
+function formatBrowserActionError(error: unknown, t: (key: string) => string): string | null {
   if (!(error instanceof Error)) {
-    return "Couldn't complete that browser action.";
+    return t("browser.panel.couldNotCompleteAction");
   }
   if (/ERR_ABORTED|\(-3\)/i.test(error.message)) {
     return null;
   }
-  return "Couldn't complete that browser action.";
+  return t("browser.panel.couldNotCompleteAction");
 }
 
 function ignoreBrowserBoundsSyncError(): void {
@@ -344,6 +345,7 @@ function isBrowserPerfLoggingEnabled(): boolean {
 
 // Keeps a restored browser pane visually occupied while the live webview hydrates.
 function BrowserRuntimePreview(props: { title: string; detail: string }) {
+  const { t } = useTranslation();
   return (
     <div
       className="absolute inset-0 flex items-center justify-center bg-background/35 p-6"
@@ -367,7 +369,9 @@ function BrowserRuntimePreview(props: { title: string; detail: string }) {
           </div>
         </div>
         <div className="mt-4 min-w-0 text-center">
-          <p className="text-xs font-medium text-foreground">Restoring browser</p>
+          <p className="text-xs font-medium text-foreground">
+            {t("browser.panel.restoringBrowser")}
+          </p>
           <p className="mt-1 truncate text-[11px] text-muted-foreground" title={props.detail}>
             {props.title}
           </p>
@@ -432,13 +436,14 @@ function BrowserLocalServersHome({
   onRefresh: () => void;
   servers: readonly ServerLocalServerProcess[];
 }) {
+  const { t } = useTranslation();
   const hasServers = servers.length > 0;
 
   return (
     <div className="absolute inset-0 z-20 flex flex-col overflow-hidden bg-[#0d0d0d] text-white">
       <div className="mx-auto flex h-full w-full max-w-[52rem] flex-col px-8 py-9">
         <div className="flex shrink-0 items-center justify-between">
-          <p className="text-[15px] font-medium text-white/35">Local</p>
+          <p className="text-[15px] font-medium text-white/35">{t("browser.panel.local")}</p>
           <Button
             type="button"
             variant="ghost"
@@ -446,8 +451,8 @@ function BrowserLocalServersHome({
             className="size-8 text-white/35 hover:bg-white/[0.06] hover:text-white/70"
             disabled={loading}
             onClick={onRefresh}
-            aria-label="Refresh local servers"
-            title="Refresh local servers"
+            aria-label={t("browser.panel.refreshLocalServers")}
+            title={t("browser.panel.refreshLocalServers")}
           >
             <RefreshCwIcon className={cn("size-4", loading && "animate-spin")} />
           </Button>
@@ -458,14 +463,22 @@ function BrowserLocalServersHome({
             {loading ? (
               <>
                 <RefreshCwIcon className="mb-4 size-12 animate-spin text-white/20" />
-                <p className="text-base font-semibold text-white">Scanning local servers</p>
-                <p className="mt-2 text-sm text-white/35">Checking localhost ports</p>
+                <p className="text-base font-semibold text-white">
+                  {t("browser.panel.scanningLocalServers")}
+                </p>
+                <p className="mt-2 text-sm text-white/35">
+                  {t("browser.panel.checkingLocalhostPorts")}
+                </p>
               </>
             ) : (
               <>
                 <GlobeIcon className="mb-4 size-16 stroke-[1.5] text-white/30" />
-                <p className="text-base font-semibold text-white">No local servers</p>
-                <p className="mt-2 text-sm text-white/35">Try another browser URL</p>
+                <p className="text-base font-semibold text-white">
+                  {t("browser.panel.noLocalServers")}
+                </p>
+                <p className="mt-2 text-sm text-white/35">
+                  {t("browser.panel.tryAnotherBrowserUrl")}
+                </p>
               </>
             )}
           </div>
@@ -509,6 +522,7 @@ export function BrowserPanel({
   runtimeMode = "live",
   onRequestLive,
 }: BrowserPanelProps) {
+  const { t } = useTranslation();
   const api = readNativeApi();
   const isLiveRuntime = runtimeMode === "live";
   const threadBrowserState = useStore(useBrowserStateStore, selectThreadBrowserState(threadId));
@@ -602,7 +616,7 @@ export function BrowserPanel({
       setLocalError(null);
       return result;
     } catch (error) {
-      setLocalError(formatBrowserActionError(error));
+      setLocalError(formatBrowserActionError(error, t));
       return null;
     }
   }, []);
@@ -1118,7 +1132,7 @@ export function BrowserPanel({
       composerDraftImageCount + composerDraftFileCount + composerDraftAssistantSelectionCount;
     if (attachmentCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
       setLocalError(
-        `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} references per message.`,
+        t("browser.panel.maxAttachmentsExceeded", { count: PROVIDER_SEND_TURN_MAX_ATTACHMENTS }),
       );
       return;
     }
@@ -1131,7 +1145,10 @@ export function BrowserPanel({
       }
       if (screenshot.sizeBytes > PROVIDER_SEND_TURN_MAX_IMAGE_BYTES) {
         setLocalError(
-          `'${screenshotAttachmentName(screenshot)}' exceeds the ${IMAGE_SIZE_LIMIT_LABEL} attachment limit.`,
+          t("browser.panel.screenshotTooLarge", {
+            name: screenshotAttachmentName(screenshot),
+            limit: IMAGE_SIZE_LIMIT_LABEL,
+          }),
         );
         return;
       }
@@ -1175,14 +1192,14 @@ export function BrowserPanel({
             anchor,
           },
           timeout: 1_200,
-          title: "Browser screenshot copied",
+          title: t("browser.panel.browserScreenshotCopied"),
         });
         return;
       }
 
       toastManager.add({
         type: "success",
-        title: "Browser screenshot copied",
+        title: t("browser.panel.browserScreenshotCopied"),
       });
     });
   }, [activeTab, api, ensureLiveRuntime, runBrowserAction, threadId]);
@@ -1307,7 +1324,7 @@ export function BrowserPanel({
             }}
           >
             <ArrowLeftIcon className="size-3.5" />
-            <span className="sr-only">Go back</span>
+            <span className="sr-only">{t("browser.panel.goBack")}</span>
           </Button>
           <Button
             type="button"
@@ -1328,7 +1345,7 @@ export function BrowserPanel({
             }}
           >
             <ArrowRightIcon className="size-3.5" />
-            <span className="sr-only">Go forward</span>
+            <span className="sr-only">{t("browser.panel.goForward")}</span>
           </Button>
           <Button
             type="button"
@@ -1353,7 +1370,7 @@ export function BrowserPanel({
             ) : (
               <RefreshCwIcon className="size-3.5" />
             )}
-            <span className="sr-only">Reload</span>
+            <span className="sr-only">{t("browser.panel.reload")}</span>
           </Button>
         </div>
         <form
@@ -1388,7 +1405,7 @@ export function BrowserPanel({
               isAddressEditingRef.current = false;
               setIsAddressFocused(false);
             }}
-            placeholder="Search or enter a URL"
+            placeholder={t("browser.panel.searchOrEnterUrl")}
             className={cn(
               "font-mono min-w-0 [-webkit-app-region:no-drag]",
               BROWSER_CHROME_CONTROL_CLASS_NAME,
@@ -1438,12 +1455,12 @@ export function BrowserPanel({
           size="icon-sm"
           className="size-7"
           disabled={!activeTab}
-          aria-label="Copy screenshot"
-          title="Copy screenshot"
+          aria-label={t("browser.panel.copyScreenshot")}
+          title={t("browser.panel.copyScreenshot")}
           onClick={onCopyScreenshotToClipboard}
         >
           <CameraIcon className="size-3.5" />
-          <span className="sr-only">Copy screenshot</span>
+          <span className="sr-only">{t("browser.panel.copyScreenshot")}</span>
         </Button>
         <Button
           type="button"
@@ -1451,12 +1468,12 @@ export function BrowserPanel({
           size="icon-sm"
           className="size-7"
           disabled={!activeTab}
-          aria-label="Copy link"
-          title="Copy link"
+          aria-label={t("browser.panel.copyLink")}
+          title={t("browser.panel.copyLink")}
           onClick={copyActiveTabLink}
         >
           <LinkIcon className="size-3.5" />
-          <span className="sr-only">Copy link</span>
+          <span className="sr-only">{t("browser.panel.copyLink")}</span>
         </Button>
         <Menu modal={false}>
           <MenuTrigger
@@ -1466,7 +1483,7 @@ export function BrowserPanel({
                 variant="ghost"
                 size="icon-sm"
                 className="size-7"
-                aria-label="Browser actions"
+                aria-label={t("browser.panel.browserActions")}
               />
             }
           >
@@ -1479,7 +1496,7 @@ export function BrowserPanel({
           >
             <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onCreateTab}>
               <BrowserActionMenuIcon icon={PlusIcon} />
-              <span>New tab</span>
+              <span>{t("browser.panel.newTab")}</span>
             </MenuItem>
             <MenuItem
               className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -1487,7 +1504,7 @@ export function BrowserPanel({
               onClick={onCaptureScreenshot}
             >
               <BrowserActionMenuIcon icon={CameraIcon} />
-              <span>Capture screenshot</span>
+              <span>{t("browser.panel.captureScreenshot")}</span>
             </MenuItem>
             <MenuItem
               className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME}
@@ -1499,12 +1516,12 @@ export function BrowserPanel({
               }}
             >
               <BrowserActionMenuIcon icon={ExternalLinkIcon} />
-              <span>Open externally</span>
+              <span>{t("browser.panel.openExternally")}</span>
             </MenuItem>
             <MenuSeparator />
             <MenuItem className={BROWSER_ACTION_MENU_ITEM_CLASS_NAME} onClick={onClosePanel}>
               <BrowserActionMenuIcon icon={XIcon} />
-              <span>Close browser panel</span>
+              <span>{t("browser.panel.closeBrowserPanel")}</span>
             </MenuItem>
           </ComposerPickerMenuPopup>
         </Menu>
@@ -1515,7 +1532,7 @@ export function BrowserPanel({
   if (!api && isLiveRuntime) {
     return (
       <DiffPanelShell mode={mode} header={header}>
-        <DiffPanelLoadingState label="Browser is unavailable." />
+        <DiffPanelLoadingState label={t("browser.panel.browserUnavailable")} />
       </DiffPanelShell>
     );
   }
@@ -1570,7 +1587,7 @@ export function BrowserPanel({
                       });
                     }}
                   >
-                    {tab.title || "Untitled"}
+                    {tab.title || t("browser.panel.untitled")}
                   </button>
                   <Button
                     type="button"
@@ -1583,7 +1600,7 @@ export function BrowserPanel({
                     }}
                   >
                     <XIcon className="size-3" />
-                    <span className="sr-only">Close tab</span>
+                    <span className="sr-only">{t("browser.panel.closeTab")}</span>
                   </Button>
                 </div>
               );
@@ -1606,12 +1623,16 @@ export function BrowserPanel({
         <div className="relative min-h-0 flex-1 bg-transparent">
           {!isLiveRuntime ? (
             <BrowserRuntimePreview
-              title={activeTab?.title || "Browser is sleeping"}
-              detail={activeTab?.lastCommittedUrl ?? activeTab?.url ?? "Restoring cached browser"}
+              title={activeTab?.title || t("browser.panel.browserIsSleeping")}
+              detail={
+                activeTab?.lastCommittedUrl ??
+                activeTab?.url ??
+                t("browser.panel.restoringCachedBrowser")
+              }
             />
           ) : !workspaceReady ? (
             <div className="absolute inset-0 z-10">
-              <DiffPanelLoadingState label="Starting browser..." />
+              <DiffPanelLoadingState label={t("browser.panel.startingBrowser")} />
             </div>
           ) : null}
           {isLiveRuntime ? (

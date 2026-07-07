@@ -28,6 +28,8 @@ import {
   type ReactElement,
   type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   deriveTimelineEntries,
   formatClockElapsed,
@@ -219,10 +221,10 @@ const AgentTaskIcon: LucideIcon = (props) => <BotIcon {...props} />;
 // which the timelineHeight estimator also uses — keep presentation-only concerns here.
 const USER_TURN_MARKER_PRESENTATION: Record<
   UserTurnMarkerKind,
-  { readonly Icon: LucideIcon; readonly label: string }
+  { readonly Icon: LucideIcon; readonly labelKey: string }
 > = {
-  automation: { Icon: ClockIcon, label: "Sent via Automation" },
-  steer: { Icon: SteerIcon, label: "Steering conversation" },
+  automation: { Icon: ClockIcon, labelKey: "messages.timeline.sentViaAutomation" },
+  steer: { Icon: SteerIcon, labelKey: "messages.timeline.steeringConversation" },
 };
 
 function UserDispatchModeChip({
@@ -234,12 +236,13 @@ function UserDispatchModeChip({
   dispatchOrigin: TimelineMessage["dispatchOrigin"];
   hasLeadingMedia: boolean;
 }) {
+  const { t } = useTranslation();
   const markerKind = resolveUserTurnMarker({ dispatchMode, dispatchOrigin });
   if (!markerKind) {
     return null;
   }
 
-  const { Icon, label } = USER_TURN_MARKER_PRESENTATION[markerKind];
+  const { Icon, labelKey } = USER_TURN_MARKER_PRESENTATION[markerKind];
   return (
     <div
       className={cn(
@@ -248,7 +251,7 @@ function UserDispatchModeChip({
       )}
     >
       <Icon className="size-3 shrink-0 text-muted-foreground/75" />
-      <span>{label}</span>
+      <span>{t(labelKey)}</span>
     </div>
   );
 }
@@ -319,12 +322,13 @@ function WorktreeSetupStepGlyph({ status }: { status: WorktreeSetupStep["status"
 // git-branch header and a connected stepper. Hugs its content so it reads as a
 // status chip rather than a full-width block.
 function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> }) {
+  const { t } = useTranslation();
   return (
     <div className="w-fit max-w-full rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3.5 py-3 font-system-ui shadow-xs">
       <div className="flex items-center gap-2">
         <WorktreeIcon className="size-3.5 shrink-0 text-[var(--color-text-foreground-tertiary)]" />
         <span className="shimmer text-[13px] font-medium text-[var(--color-text-foreground-secondary)]">
-          Preparing worktree...
+          {t("messages.timeline.preparingWorktree")}
         </span>
       </div>
       <ol className="mt-2 flex flex-col">
@@ -357,7 +361,7 @@ function WorktreeSetupCard({ steps }: { steps: ReadonlyArray<WorktreeSetupStep> 
                 )}
               >
                 {step.label}
-                {step.status === "error" ? " — failed" : ""}
+                {step.status === "error" ? ` ${t("messages.timeline.failed")}` : ""}
               </span>
             </li>
           );
@@ -482,6 +486,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   bottomContentInsetPx,
   contentInsetRightPx,
 }: MessagesTimelineProps) {
+  const { t } = useTranslation();
   const normalizedChatFontSizePx = normalizeChatFontSizePx(chatFontSizePx);
   // Inset rows from the right (overriding the gutter's right padding) without moving the
   // scroll viewport, so the scrollbar stays pinned to the far right while content clears
@@ -998,7 +1003,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     style={{ fontSize: `${appTypographyScale.uiSmPx}px` }}
                     onClick={() => handleToggleWorkGroup(groupId)}
                   >
-                    {isExpanded ? "Show less" : `Show ${hiddenCount} more`}
+                    {isExpanded
+                      ? t("messages.timeline.showLess")
+                      : t("messages.timeline.showMoreCount", { count: hiddenCount })}
                   </button>
                 </div>
               )}
@@ -1179,7 +1186,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           }));
                         }}
                       >
-                        {userMessageExpanded ? "Show less" : "Show more"}
+                        {userMessageExpanded
+                          ? t("messages.timeline.showLess")
+                          : t("messages.timeline.showMore")}
                       </button>
                     )}
                   </div>
@@ -1201,8 +1210,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                       {showEditUserMessage && (
                         <MessageActionButton
-                          label="Edit message"
-                          tooltip="Edit and resend"
+                          label={t("messages.timeline.editMessage")}
+                          tooltip={t("messages.timeline.editAndResend")}
                           disabled={isRevertingCheckpoint}
                           className={cn(
                             MESSAGE_HOVER_REVEAL_CLASS_NAME,
@@ -1215,8 +1224,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       )}
                       {canRevertAgentWork ? (
                         <MessageActionButton
-                          label="Revert to this message"
-                          tooltip="Revert to this message"
+                          label={t("messages.timeline.revertToThisMessage")}
+                          tooltip={t("messages.timeline.revertToThisMessage")}
                           disabled={isRevertingCheckpoint || isWorking}
                           className={cn(
                             MESSAGE_HOVER_REVEAL_CLASS_NAME,
@@ -1238,7 +1247,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
-          const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const messageText =
+            row.message.text || (row.message.streaming ? "" : t("messages.timeline.emptyResponse"));
           const messageMarkers =
             threadMarkersByMessageId.get(row.message.id) ?? EMPTY_MESSAGE_MARKERS;
           const buildWorkDisplay = (workEntries: WorkLogEntry[], workGroupId: string | null) => {
@@ -1379,8 +1389,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           onClick={() => handleToggleWorkGroup(display.toolGroupId!)}
                         >
                           {display.toolExpanded
-                            ? "Show less"
-                            : `+${display.hiddenToolCount} more tool calls`}
+                            ? t("messages.timeline.showLess")
+                            : t("messages.timeline.moreToolCalls", {
+                                count: display.hiddenToolCount,
+                              })}
                         </button>
                       </div>
                     )}
@@ -1477,8 +1489,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     >
                       <span>
                         {row.collapsedWorkElapsed
-                          ? `Worked for ${row.collapsedWorkElapsed}`
-                          : "Details"}
+                          ? t("messages.timeline.workedFor", { elapsed: row.collapsedWorkElapsed })
+                          : t("messages.timeline.details")}
                       </span>
                       <DisclosureChevron
                         open={isCollapsedWorkExpanded}
@@ -1530,6 +1542,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                           deletions={file.deletions}
                           fontSizePx={normalizedChatFontSizePx}
                           compact={false}
+                          t={t}
                         />
                       </button>
                     ))}
@@ -1546,8 +1559,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                       // unpinned message only reveals it on hover, like the other footer actions.
                       // Same Central pin glyph in both states — persistence signals the pinned state.
                       <MessageActionButton
-                        label={pinActionLabel("message", messagePinned)}
-                        tooltip={messagePinned ? "Unpin from panel" : "Pin to panel"}
+                        label={pinActionLabel("message", messagePinned, t)}
+                        tooltip={
+                          messagePinned
+                            ? t("messages.timeline.unpinFromPanel")
+                            : t("messages.timeline.pinToPanel")
+                        }
                         aria-pressed={messagePinned}
                         className={
                           messagePinned
@@ -1597,10 +1614,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     (sum, file) => sum + (file.deletions ?? 0),
                     0,
                   );
-                  const editedFilesLabel = `Edited ${checkpointFiles.length} ${pluralize(
-                    checkpointFiles.length,
-                    "file",
-                  )}`;
+                  const editedFilesLabel = t("messages.timeline.editedFiles", {
+                    count: checkpointFiles.length,
+                  });
                   const firstCheckpointFiles = checkpointFiles.slice(0, MAX_VISIBLE_CHANGED_FILES);
                   const overflowCheckpointFiles = checkpointFiles.slice(MAX_VISIBLE_CHANGED_FILES);
                   const renderCheckpointFileRow = (
@@ -1681,7 +1697,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                               style={{ fontSize: chatTypographyStyle.fontSize }}
                               onClick={() => onRevertUserMessage(correspondingUserMessageId)}
                             >
-                              Undo
+                              {t("messages.timeline.undo")}
                               <Undo2Icon className="size-3" />
                             </button>
                           )}
@@ -1695,8 +1711,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             aria-expanded={fileChangesExpanded}
                             aria-label={
                               fileChangesExpanded
-                                ? "Collapse changed files list"
-                                : "Expand changed files list"
+                                ? t("messages.timeline.collapseChangedFilesList")
+                                : t("messages.timeline.expandChangedFilesList")
                             }
                             onClick={(event) => {
                               event.preventDefault();
@@ -1735,11 +1751,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                             <DisclosureChevron open={fileListExpanded} />
                             <span>
                               {fileListExpanded
-                                ? "Show less"
-                                : `Show ${overflowCheckpointFiles.length} more ${pluralize(
-                                    overflowCheckpointFiles.length,
-                                    "file",
-                                  )}`}
+                                ? t("messages.timeline.showLess")
+                                : t("messages.timeline.showMoreFiles", {
+                                    count: overflowCheckpointFiles.length,
+                                  })}
                             </span>
                           </button>
                         ) : null}
@@ -1772,7 +1787,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             className="-ml-0.5 pb-2 text-muted-foreground/70"
             style={{ fontSize: chatTypographyStyle.fontSize }}
           >
-            Working for{" "}
+            {t("messages.timeline.workingFor")}{" "}
             {nowIso ? (
               (formatWorkingTimer(row.createdAt, nowIso) ?? "0s")
             ) : (
@@ -1788,7 +1803,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           className="shimmer pt-0.5 text-muted-foreground/70 font-system-ui"
           style={{ fontSize: `${appTypographyScale.chatPx}px` }}
         >
-          Thinking
+          {t("messages.timeline.thinking")}
         </div>
       )}
 
@@ -1812,7 +1827,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return (
       <div className="flex h-full items-center justify-center">
         <p className="text-sm text-muted-foreground/30">
-          Send a message to start the conversation.
+          {t("messages.timeline.sendMessageToStart")}
         </p>
       </div>
     );
@@ -2252,11 +2267,12 @@ const UserImageAttachmentThumbnail = memo(function UserImageAttachmentThumbnail(
   onTimelineImageLoad: () => void;
   resolvedTheme: "light" | "dark";
 }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       className="flex size-15 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border/70 bg-background/82 text-left shadow-[0_1px_0_rgba(255,255,255,0.2)_inset] transition-colors hover:bg-background/94"
-      aria-label={`Preview ${props.image.name}`}
+      aria-label={t("accessibility.previewImage", { name: props.image.name })}
       title={props.image.name}
       onClick={() => {
         const preview = buildExpandedImagePreview(props.userImages, props.image.id);
@@ -2351,6 +2367,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
   onCancel: () => void;
   onSubmit: (value: string) => void;
 }) {
+  const { t } = useTranslation();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [draft, setDraft] = useState(props.initialValue);
   const canSubmit = draft.trim().length > 0 && !props.disabled;
@@ -2406,7 +2423,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
         value={draft}
         disabled={props.disabled}
         rows={1}
-        aria-label="Edit message"
+        aria-label={t("accessibility.editMessage")}
         className="max-h-60 min-h-0 w-full resize-none overflow-y-auto border-0 bg-transparent p-0 font-system-ui text-foreground outline-none placeholder:text-muted-foreground/45 disabled:opacity-70"
         style={props.chatTypographyStyle}
         onChange={(event) => setDraft(event.target.value)}
@@ -2422,7 +2439,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
           disabled={props.disabled}
           onClick={props.onCancel}
         >
-          Cancel
+          {t("messages.timeline.cancel")}
         </Button>
         <Button
           type="submit"
@@ -2431,7 +2448,7 @@ const UserMessageEditForm = memo(function UserMessageEditForm(props: {
           style={props.chatTypographyStyle}
           disabled={!canSubmit}
         >
-          Send
+          {t("messages.timeline.send")}
         </Button>
       </div>
     </form>
@@ -2654,6 +2671,7 @@ function workEntryPreview(
     | "subagents"
     | "subagentAction"
   >,
+  t: TFunction,
 ): string | null {
   const isFileRelated =
     workEntry.requestKind === "file-read" ||
@@ -2671,7 +2689,7 @@ function workEntryPreview(
   if (workEntry.changedFiles && workEntry.changedFiles.length > 0) {
     const names = workEntry.changedFiles.map((p) => basename(p));
     if (names.length === 1) return names[0]!;
-    return `${names.length} files`;
+    return `${names.length} ${t("messages.timeline.files")}`;
   }
 
   if (workEntry.itemType === "collab_agent_tool_call" && (workEntry.subagents?.length ?? 0) > 0) {
@@ -2682,7 +2700,9 @@ function workEntryPreview(
       const presentation = subagentPrimaryLabel(subagent);
       return presentation.nickname ?? presentation.primaryLabel ?? basename(subagent.threadId);
     });
-    return labels.length === 1 ? labels[0]! : `${labels.length} subagents`;
+    return labels.length === 1
+      ? labels[0]!
+      : `${labels.length} ${t("messages.timeline.subagents")}`;
   }
 
   if (workEntry.itemType === "collab_agent_tool_call") {
@@ -2872,10 +2892,10 @@ function subagentStatusClasses(
   }
 }
 
-function subagentCardSummary(workEntry: TimelineWorkEntry): string {
+function subagentCardSummary(workEntry: TimelineWorkEntry, t: TFunction): string {
   return (
     workEntry.subagentAction?.summaryText ??
-    workEntryPreview(workEntry) ??
+    workEntryPreview(workEntry, t) ??
     toolWorkEntryHeading(workEntry)
   );
 }
@@ -2888,16 +2908,16 @@ function subagentCardMeta(workEntry: TimelineWorkEntry): string | null {
   return modelLabel ?? workEntry.subagentAction?.prompt ?? null;
 }
 
-function commandTooltipContent(command: string, displayText: string) {
+function commandTooltipContent(command: string, displayText: string, t: TFunction) {
   return (
     <div className="max-w-96 whitespace-pre-wrap leading-tight">
       <div className="space-y-2">
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Summary</div>
+          <div className="text-muted-foreground/70">{t("messages.timeline.summary")}</div>
           <div>{displayText}</div>
         </div>
         <div className="space-y-0.5">
-          <div className="text-muted-foreground/70">Raw call</div>
+          <div className="text-muted-foreground/70">{t("messages.timeline.rawCall")}</div>
           <code className="block whitespace-pre-wrap break-words font-chat-code text-[11px] text-foreground/92">
             {command}
           </code>
@@ -2914,9 +2934,10 @@ function toolRowTooltipContent(
   rawCommand: string | null | undefined,
   displayText: string,
   fallback: string | undefined,
+  t: TFunction,
 ): ReactNode {
   if (rawCommand) {
-    return commandTooltipContent(rawCommand, displayText);
+    return commandTooltipContent(rawCommand, displayText, t);
   }
   return fallback ? <span className="whitespace-pre-wrap">{fallback}</span> : null;
 }
@@ -2969,6 +2990,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     onOpenThread,
     onOpenAutomation,
   } = props;
+  const { t } = useTranslation();
   const compact = density === "compact";
   const EntryIcon = workEntryIcon(workEntry);
   // Web-fetch tool calls surface the target site (favicon + URL) instead of the raw
@@ -2988,7 +3010,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
         ? "mcp"
         : undefined;
   const heading = toolWorkEntryHeading(workEntry);
-  const preview = workEntryPreview(workEntry);
+  const preview = workEntryPreview(workEntry, t);
   const displayText = webFetchUrl
     ? describeLinkChip(webFetchUrl).label
     : combineWorkEntryDisplayText(heading, preview);
@@ -3009,7 +3031,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
     0,
     (workEntry.subagents?.length ?? 0) - visibleSubagents.length,
   );
-  const subagentSummary = subagentCardSummary(workEntry);
+  const subagentSummary = subagentCardSummary(workEntry, t);
   const subagentMeta = subagentCardMeta(workEntry);
   const canOpenAgentActivity = Boolean(onOpenAgentActivity) && isAgentActivityWorkEntry(workEntry);
   const openAgentActivity = canOpenAgentActivity
@@ -3095,6 +3117,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 deletions={changedFileStat?.deletions}
                 fontSizePx={rowFontSizePx}
                 compact={compact}
+                t={t}
               />
             );
             if (canOpenToolDetails && workEntry.toolDetails) {
@@ -3225,7 +3248,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                           style={{ fontSize: `${Math.max(10, rowFontSizePx - 2)}px` }}
                           title={subagent.latestUpdate}
                         >
-                          <span className="shrink-0 text-muted-foreground/30">Latest</span>
+                          <span className="shrink-0 text-muted-foreground/30">
+                            {t("messages.timeline.latest")}
+                          </span>
                           <span className="truncate">{subagent.latestUpdate}</span>
                         </div>
                       ) : null}
@@ -3260,7 +3285,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                           )
                         }
                       >
-                        Open thread
+                        {t("messages.timeline.openThread")}
                       </button>
                     </div>
                   </div>
@@ -3268,7 +3293,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               })}
               {hiddenSubagentCount > 0 ? (
                 <div className="pl-4 text-[10px] text-muted-foreground/46">
-                  +{hiddenSubagentCount} more
+                  {t("messages.timeline.moreCount", { count: hiddenSubagentCount })}
                 </div>
               ) : null}
             </div>
@@ -3343,7 +3368,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
               <ToolDetailsDisclosure
                 details={workEntry.toolDetails}
                 compact={compact}
-                tooltip={toolRowTooltipContent(rawCommand, displayText, displayText)}
+                tooltip={toolRowTooltipContent(rawCommand, displayText, displayText, t)}
               >
                 {rowContentChildren}
               </ToolDetailsDisclosure>
@@ -3360,6 +3385,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 rawCommand,
                 displayText,
                 canOpenReadFile ? (readFilePath ?? hoverText) : hoverText,
+                t,
               )}
             >
               {rowContentChildren}
@@ -3383,6 +3409,7 @@ function EditedFileRowContent(props: {
   deletions: number | undefined;
   fontSizePx: number;
   compact: boolean;
+  t: TFunction;
 }) {
   const { filePath, additions, deletions, fontSizePx, compact } = props;
   const hasStat = (additions ?? 0) + (deletions ?? 0) > 0;
@@ -3402,7 +3429,7 @@ function EditedFileRowContent(props: {
         className={cn("font-system-ui shrink-0", WORK_ROW_MUTED_HOVER_TONE["file-row"])}
         style={{ fontSize: `${fontSizePx}px` }}
       >
-        Edited
+        {props.t("messages.timeline.edited")}
       </span>
       <span
         className={cn(

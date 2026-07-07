@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "~/components/ui/button";
 import { cn } from "~/lib/utils";
@@ -37,18 +38,19 @@ export function TimePicker({
   readonly onChange: (value: string) => void;
   readonly className?: string;
 }) {
+  const { t } = useTranslation();
   const { hour, minute } = parseTime(value);
   return (
     <div className={cn("flex h-44 items-stretch gap-1", className)} data-slot="time-picker">
       <TimeColumn
-        ariaLabel="Hour"
+        ariaLabel={t("accessibility.hour")}
         selected={hour}
         values={HOURS}
         onSelect={(next) => onChange(`${pad(next)}:${pad(minute)}`)}
       />
       <div className="w-px shrink-0 self-stretch bg-border" />
       <TimeColumn
-        ariaLabel="Minute"
+        ariaLabel={t("accessibility.minute")}
         selected={minute}
         values={MINUTES}
         onSelect={(next) => onChange(`${pad(hour)}:${pad(next)}`)}

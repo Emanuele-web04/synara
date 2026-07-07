@@ -4,6 +4,7 @@
 // Exports: ChatMarkdown
 
 import { CheckIcon, CopyIcon, TextWrapIcon } from "~/lib/icons";
+import { useTranslation } from "react-i18next";
 import type { ThreadMarker } from "@t3tools/contracts";
 import "katex/dist/katex.min.css";
 import React, {
@@ -784,6 +785,7 @@ function MarkdownCodeBlock({
   fence: CodeFenceInfo;
   children: ReactNode;
 }) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
   const [wrap, setWrap] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -821,8 +823,8 @@ function MarkdownCodeBlock({
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={toggleWrap}
-            title={wrap ? "Disable soft wrap" : "Enable soft wrap"}
-            label={wrap ? "Disable soft wrap" : "Enable soft wrap"}
+            title={wrap ? t("chat.codeBlock.disableSoftWrap") : t("chat.codeBlock.enableSoftWrap")}
+            label={wrap ? t("chat.codeBlock.disableSoftWrap") : t("chat.codeBlock.enableSoftWrap")}
             aria-pressed={wrap}
             data-active={wrap ? "true" : "false"}
             size="icon-xs"
@@ -833,8 +835,8 @@ function MarkdownCodeBlock({
           <IconButton
             className="chat-markdown-codeblock__action"
             onClick={handleCopy}
-            title={copied ? "Copied" : "Copy code"}
-            label={copied ? "Copied" : "Copy code"}
+            title={copied ? t("chat.codeBlock.copied") : t("chat.codeBlock.copyCode")}
+            label={copied ? t("chat.codeBlock.copied") : t("chat.codeBlock.copyCode")}
             size="icon-xs"
             variant="ghost"
           >

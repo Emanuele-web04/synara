@@ -4,6 +4,7 @@
 // Depends on: server local-server React Query helpers and the shared Environment row skin.
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ServerLocalServerProcess } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -25,9 +26,9 @@ import {
   EnvironmentRowChevron,
 } from "./EnvironmentRow";
 
-function describeServerCount(count: number): string {
-  if (count === 0) return "No servers running";
-  return `${count} server${count === 1 ? "" : "s"} running`;
+function describeServerCount(count: number, t: ReturnType<typeof useTranslation>["t"]): string {
+  if (count === 0) return t("environment.localServers.noServers");
+  return t("environment.localServers.countRunning", { count });
 }
 
 /** Compact, non-closing icon action used for the menu's Refresh affordance. */
@@ -38,13 +39,14 @@ function LocalServersRefreshButton({
   refreshing: boolean;
   onRefresh: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <MenuItem
       closeOnClick={false}
       disabled={refreshing}
       onClick={onRefresh}
-      aria-label="Refresh local servers"
-      title="Refresh"
+      aria-label={t("environment.localServers.refreshLocalServers")}
+      title={t("environment.localServers.refresh")}
       className="inline-flex size-5 items-center justify-center rounded-md p-0 text-muted-foreground/60 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-[var(--color-text-foreground)] data-highlighted:bg-[var(--color-background-button-secondary-hover)] data-highlighted:text-[var(--color-text-foreground)]"
     >
       <RefreshCwIcon className={cn("size-3", refreshing && "animate-spin")} />
@@ -67,10 +69,11 @@ function LocalServerRow({
   stopping: boolean;
   onStop: (server: ServerLocalServerProcess) => void;
 }) {
+  const { t } = useTranslation();
   const stoppable = server.isStoppable && !stopping;
   const primaryLabel = localServerPrimaryLabel(server);
   const stopHint = server.isStoppable
-    ? `Stop ${primaryLabel}`
+    ? t("environment.localServers.stopServer", { name: primaryLabel })
     : (server.stopDisabledReason ?? server.args ?? server.displayName);
 
   return (
@@ -127,6 +130,7 @@ function LocalServersPlaceholder({
 }
 
 export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const localServersQuery = useQuery(serverLocalServersQueryOptions(enabled));
   const stopLocalServerMutation = useMutation(
@@ -161,14 +165,16 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
       <MenuTrigger render={<button type="button" className={ENVIRONMENT_ROW_CLASS_NAME} />}>
         <EnvironmentRowBody
           icon={<GlobeIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
-          label="Local Servers"
+          label={t("environment.localServers.label")}
           trailing={trailing}
         />
       </MenuTrigger>
       <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
         <div className="flex items-center justify-between gap-2 pb-0.5 pl-2 pr-3 pt-px">
           <span className="truncate text-[length:var(--app-font-size-ui-xs,10px)] font-normal text-muted-foreground/50">
-            {localServersQuery.isLoading ? "Scanning ports…" : describeServerCount(serverCount)}
+            {localServersQuery.isLoading
+              ? t("environment.localServers.scanningPorts")
+              : describeServerCount(serverCount, t)}
           </span>
           <LocalServersRefreshButton
             refreshing={localServersQuery.isFetching}
@@ -179,23 +185,23 @@ export function EnvironmentLocalServersSection({ enabled }: { enabled: boolean }
         {localServersQuery.isLoading ? (
           <LocalServersPlaceholder
             icon={<RefreshCwIcon className="size-4 animate-spin" />}
-            title="Scanning local ports"
+            title={t("environment.localServers.scanningLocalPorts")}
           />
         ) : localServersQuery.isError ? (
           <LocalServersPlaceholder
             icon={<GlobeIcon className="size-4" />}
-            title="Couldn't scan local ports"
+            title={t("environment.localServers.couldNotScan")}
             subtitle={
               localServersQuery.error instanceof Error
                 ? localServersQuery.error.message
-                : "The scan failed. Try refreshing."
+                : t("environment.localServers.scanFailed")
             }
           />
         ) : serverCount === 0 ? (
           <LocalServersPlaceholder
             icon={<GlobeIcon className="size-4" />}
-            title="No servers running"
-            subtitle="Local dev servers will appear here."
+            title={t("environment.localServers.noServers")}
+            subtitle={t("environment.localServers.willAppear")}
           />
         ) : (
           <div className="flex flex-col gap-0.5">

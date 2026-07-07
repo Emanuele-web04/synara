@@ -5,6 +5,7 @@
 // Layer: web profile feature.
 
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { SiReddit, SiX } from "react-icons/si";
 import { FaLinkedinIn } from "react-icons/fa6";
 import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
@@ -51,6 +52,7 @@ export function ShareDialog({
   const [busy, setBusy] = useState<ShareTarget | "copy" | "save" | null>(null);
   const [previewWidth, setPreviewWidth] = useState(PREVIEW_WIDTH);
   const [status, setStatus] = useState<string | null>(null);
+  const { t } = useTranslation();
 
   useEffect(() => {
     if (!open) {
@@ -98,11 +100,11 @@ export function ShareDialog({
     setStatus(null);
     try {
       const copyResult = await copyCardToClipboard();
-      setStatus(copyStatusMessage(copyResult));
+      setStatus(copyStatusMessage(copyResult, t));
     } finally {
       setBusy(null);
     }
-  }, [copyCardToClipboard]);
+  }, [copyCardToClipboard, t]);
 
   const handleShare = useCallback(
     async (target: ShareTarget) => {
@@ -111,12 +113,12 @@ export function ShareDialog({
       try {
         const copyResult = await copyCardToClipboard();
         openExternalUrl(shareIntentUrl(target));
-        setStatus(shareStatusMessage(copyResult));
+        setStatus(shareStatusMessage(copyResult, t));
       } finally {
         setBusy(null);
       }
     },
-    [copyCardToClipboard],
+    [copyCardToClipboard, t],
   );
 
   const handleSave = useCallback(async () => {
@@ -130,14 +132,14 @@ export function ShareDialog({
       const blob = await renderNodeToPngBlob(node, CARD_EXPORT_SIZE);
       if (blob) {
         downloadBlob(blob, `synara-stats-${stats.timezone.today}.png`);
-        setStatus("Saved PNG to your downloads.");
+        setStatus(t("profile.share.savedPng"));
       } else {
-        setStatus("Could not render the image.");
+        setStatus(t("profile.share.renderFailed"));
       }
     } finally {
       setBusy(null);
     }
-  }, [stats.timezone.today]);
+  }, [stats.timezone.today, t]);
 
   const previewScale = previewWidth / SHARE_CARD_WIDTH;
   const actionsDisabled = busy !== null;
@@ -145,7 +147,7 @@ export function ShareDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPopup surface="solid" className="sm:max-w-[560px]">
-        <DialogTitle className="text-center text-xl">Share your activity</DialogTitle>
+        <DialogTitle className="text-center text-xl">{t("profile.share.title")}</DialogTitle>
         <div className="mt-5 flex flex-col items-center gap-7 px-2 pb-3">
           <div
             ref={previewRef}
@@ -173,8 +175,8 @@ export function ShareDialog({
 
           <div className="flex flex-wrap items-start justify-center gap-x-6 gap-y-4">
             <ShareButton
-              label="Copy"
-              ariaLabel="Copy stat card"
+              label={t("profile.share.copy")}
+              ariaLabel={t("profile.share.copyStatCard")}
               busy={busy === "copy"}
               disabled={actionsDisabled}
               onClick={() => void handleCopy()}
@@ -206,8 +208,8 @@ export function ShareDialog({
               <SiReddit className="size-5" />
             </ShareButton>
             <ShareButton
-              label="Save"
-              ariaLabel="Save stat card"
+              label={t("profile.share.save")}
+              ariaLabel={t("profile.share.saveStatCard")}
               busy={busy === "save"}
               disabled={actionsDisabled}
               onClick={() => void handleSave()}
@@ -225,25 +227,25 @@ export function ShareDialog({
   );
 }
 
-function copyStatusMessage(result: CopyResult): string {
+function copyStatusMessage(result: CopyResult, t: (key: string) => string): string {
   switch (result) {
     case "copied":
-      return "Copied image to clipboard.";
+      return t("profile.share.shareImageCopied");
     case "render-failed":
-      return "Could not render the image.";
+      return t("profile.share.renderFailed");
     case "clipboard-unavailable":
-      return "Image copy unavailable. Use Save instead.";
+      return t("profile.share.copyUnavailable");
   }
 }
 
-function shareStatusMessage(result: CopyResult): string {
+function shareStatusMessage(result: CopyResult, t: (key: string) => string): string {
   switch (result) {
     case "copied":
-      return "Image copied to clipboard — paste it into your post.";
+      return t("profile.share.shareImageCopied");
     case "render-failed":
-      return "Composer opened. Use Save to attach the image.";
+      return t("profile.share.composerOpenedRenderFailed");
     case "clipboard-unavailable":
-      return "Composer opened. Image copy unavailable; use Save to attach.";
+      return t("profile.share.composerOpenedCopyUnavailable");
   }
 }
 
@@ -257,13 +259,14 @@ interface ShareButtonProps {
 }
 
 function ShareButton({ label, ariaLabel, busy, disabled, onClick, children }: ShareButtonProps) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-center gap-2">
       <button
         type="button"
         onClick={onClick}
         disabled={disabled}
-        aria-label={ariaLabel ?? `Share to ${label}`}
+        aria-label={ariaLabel ?? t("profile.share.shareTo", { label })}
         className={cn(
           "flex size-14 items-center justify-center rounded-full bg-foreground text-background transition-opacity",
           disabled ? (busy ? "opacity-70" : "opacity-35") : "hover:opacity-90",

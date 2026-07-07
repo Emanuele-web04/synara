@@ -17,6 +17,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import { useCallback, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   getProviderStartOptions,
@@ -61,6 +62,7 @@ export function KanbanProjectBoardView({
   nowMs?: number;
 }) {
   const { settings } = useAppSettings();
+  const { t } = useTranslation();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
   const providerOptionsForDispatch = useMemo(() => getProviderStartOptions(settings), [settings]);
   const providerStatuses = useProviderStatusesForLocalConfig();
@@ -120,7 +122,7 @@ export function KanbanProjectBoardView({
       if (result.kind === "dispatched") {
         toastManager.add({
           type: "success",
-          title: "Draft sent",
+          title: t("kanban.toast.draftSent"),
           description: card.title,
         });
         return;
@@ -128,13 +130,13 @@ export function KanbanProjectBoardView({
       if (result.kind === "open-thread") {
         const description =
           result.reason === "empty"
-            ? "Nothing to send yet — write the prompt in the composer."
+            ? t("kanban.toast.nothingToSend")
             : result.reason === "worktree-pending"
-              ? "Open the chat to create the worktree with the normal send flow."
-              : "Open the chat to continue this task.";
+              ? t("kanban.toast.openWorktreeChat")
+              : t("kanban.toast.openChatToContinue");
         toastManager.add({
           type: "info",
-          title: "Finish this draft in the chat",
+          title: t("kanban.toast.finishDraftInChat"),
           description,
         });
         onOpenCard(card);
@@ -143,14 +145,14 @@ export function KanbanProjectBoardView({
       if (result.kind === "unavailable") {
         toastManager.add({
           type: "error",
-          title: "Not connected",
-          description: "Reconnect to the server before sending drafts.",
+          title: t("kanban.toast.notConnected"),
+          description: t("kanban.toast.reconnectToSend"),
         });
         return;
       }
       toastManager.add({
         type: "error",
-        title: "Could not send draft",
+        title: t("kanban.toast.couldNotSendDraft"),
         description: result.message,
       });
     },
@@ -227,8 +229,8 @@ export function KanbanProjectBoardView({
       if (targetColumn === "done") {
         toastManager.add({
           type: "info",
-          title: "Done is derived automatically",
-          description: "Cards move here when their runs complete.",
+          title: t("kanban.toast.doneDerived"),
+          description: t("kanban.toast.doneDerivedDescription"),
         });
       }
     },

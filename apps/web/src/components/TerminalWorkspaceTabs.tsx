@@ -8,6 +8,7 @@
 // active tab, z-index stacking) doesn't fit the Button taxonomy.
 
 import { cn } from "~/lib/utils";
+import { useTranslation } from "react-i18next";
 
 import TerminalActivityIndicator from "./terminal/TerminalActivityIndicator";
 import { type ThreadTerminalWorkspaceLayout, type ThreadTerminalWorkspaceTab } from "../types";
@@ -29,6 +30,7 @@ export default function TerminalWorkspaceTabs({
   workspaceLayout,
   onSelectTab,
 }: TerminalWorkspaceTabsProps) {
+  const { t } = useTranslation();
   // Terminal-only workspaces already expose the per-terminal tab strip below,
   // so the chat/terminal switcher would only duplicate chrome and reintroduce chat.
   if (terminalCount <= 1 || workspaceLayout === "terminal-only") {
@@ -53,7 +55,7 @@ export default function TerminalWorkspaceTabs({
             onSelectTab("terminal");
           }}
         >
-          <span className="font-mono tracking-wide">Terminal</span>
+          <span className="font-mono tracking-wide">{t("workspace.terminalTabs.terminal")}</span>
           <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">
             {terminalCount}
           </span>
@@ -73,7 +75,7 @@ export default function TerminalWorkspaceTabs({
             onSelectTab("chat");
           }}
         >
-          <span className="font-mono tracking-wide">Chat</span>
+          <span className="font-mono tracking-wide">{t("workspace.terminalTabs.chat")}</span>
           {isWorking ? (
             <span className="ml-1.5 inline-flex size-1.5 rounded-full bg-emerald-500/80" />
           ) : null}

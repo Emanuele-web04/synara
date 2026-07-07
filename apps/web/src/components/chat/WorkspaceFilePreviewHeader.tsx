@@ -12,6 +12,7 @@
 
 import { isWorkspaceRelativePathSafe, joinWorkspaceRelativePath } from "@t3tools/shared/path";
 import { Fragment, memo, useCallback, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 import { basenameOfPath } from "~/file-icons";
 import type { ChatFileReference } from "~/lib/chatReferences";
@@ -37,28 +38,30 @@ interface WorkspaceFilePreviewHeaderProps {
   truncated?: boolean;
 }
 
-// Source (raw file, where selecting text yields a precise line/column chat
-// reference) vs. Preview (rendered markdown, read-only — browse + task lists).
-// Ordered Source-first so the interactive mode reads as the primary surface.
-const MARKDOWN_VIEW_SEGMENTS = [
-  {
-    rendered: false,
-    label: "Source",
-    title: "Source view — select text to reference exact lines in chat",
-    Icon: FileIcon,
-  },
-  {
-    rendered: true,
-    label: "Preview",
-    title: "Rendered preview — browse and toggle task lists",
-    Icon: EyeIcon,
-  },
-] as const;
-
 export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHeader(
   props: WorkspaceFilePreviewHeaderProps,
 ) {
+  const { t } = useTranslation();
   const { filePath, workspaceRoot } = props;
+
+  const markdownViewSegments = useMemo(
+    () =>
+      [
+        {
+          rendered: false,
+          label: t("chat.workspaceFilePreviewHeader.source"),
+          title: t("chat.workspaceFilePreviewHeader.sourceTitle"),
+          Icon: FileIcon,
+        },
+        {
+          rendered: true,
+          label: t("chat.workspaceFilePreviewHeader.preview"),
+          title: t("chat.workspaceFilePreviewHeader.previewTitle"),
+          Icon: EyeIcon,
+        },
+      ] as const,
+    [t],
+  );
 
   // Out-of-workspace previews (e.g. a session's scratch directory under the
   // OS temp dir) arrive as absolute paths; everything in-workspace is relative.
@@ -106,7 +109,7 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
       )}
     >
       <nav
-        aria-label="File path"
+        aria-label={t("chat.workspaceFilePreviewHeader.filePath")}
         className="flex min-w-0 flex-1 items-center text-[12px] leading-none"
       >
         {/* Dir prefix shrinks far faster than the filename (shrink-[9999]), so under
@@ -132,7 +135,7 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
 
       {props.truncated ? (
         <span className="hidden shrink-0 text-[10px] text-muted-foreground/70 @sm/header-actions:inline">
-          Shown partially
+          {t("chat.workspaceFilePreviewHeader.shownPartially")}
         </span>
       ) : null}
 
@@ -140,10 +143,10 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
         {props.isMarkdown ? (
           <div
             role="radiogroup"
-            aria-label="Markdown view"
+            aria-label={t("chat.workspaceFilePreviewHeader.markdownView")}
             className="flex h-7 shrink-0 items-center rounded-lg bg-[var(--color-background-elevated-secondary)] p-0.5"
           >
-            {MARKDOWN_VIEW_SEGMENTS.map((segment) => {
+            {markdownViewSegments.map((segment) => {
               const selected = segment.rendered === props.markdownPreviewEnabled;
               return (
                 <button
@@ -172,15 +175,26 @@ export const WorkspaceFilePreviewHeader = memo(function WorkspaceFilePreviewHead
 
         {hasChatActions ? (
           <Menu>
-            <MenuTrigger render={<ChatHeaderIconButton label="More actions" tone="plain" />}>
+            <MenuTrigger
+              render={
+                <ChatHeaderIconButton
+                  label={t("chat.workspaceFilePreviewHeader.moreActions")}
+                  tone="plain"
+                />
+              }
+            >
               <EllipsisIcon aria-hidden="true" className="size-3.5" />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="end" side="bottom" className="w-52 min-w-52">
               {onReferenceInChat ? (
-                <MenuItem onClick={referenceWholeFile}>Reference in chat</MenuItem>
+                <MenuItem onClick={referenceWholeFile}>
+                  {t("chat.workspaceFilePreviewHeader.referenceInChat")}
+                </MenuItem>
               ) : null}
               {onAskWhyInChat ? (
-                <MenuItem onClick={askWhyWholeFile}>Ask why this changed</MenuItem>
+                <MenuItem onClick={askWhyWholeFile}>
+                  {t("chat.workspaceFilePreviewHeader.askWhyChanged")}
+                </MenuItem>
               ) : null}
             </ComposerPickerMenuPopup>
           </Menu>

@@ -5,6 +5,7 @@
 // Layer: Chat transcript UI
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "~/components/ui/button";
 import { ClockIcon } from "~/lib/icons";
@@ -22,6 +23,7 @@ export const AutomationCreatedCard = memo(function AutomationCreatedCard({
   readonly metaFontSizePx?: number;
   readonly onOpen?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3 rounded-xl border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-primary)] px-3 py-2.5">
       <span className="flex size-11 shrink-0 items-center justify-center rounded-lg border border-[color:var(--color-border-light)] bg-[var(--color-background-elevated-secondary)] text-[var(--color-text-foreground)]">
@@ -46,7 +48,7 @@ export const AutomationCreatedCard = memo(function AutomationCreatedCard({
       </div>
       {onOpen ? (
         <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={onOpen}>
-          Open
+          {t("notification.open")}
         </Button>
       ) : null}
     </div>

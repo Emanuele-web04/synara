@@ -6,6 +6,7 @@
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { memo, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { SearchIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -79,6 +80,7 @@ export function DiffPanelFileJumpMenu(props: {
   resolvedTheme: "light" | "dark";
   onSelectFile: (filePath: string) => void;
 }) {
+  const { t } = useTranslation();
   const [fileSearchQuery, setFileSearchQuery] = useState("");
 
   const filteredFiles = useMemo(
@@ -100,8 +102,8 @@ export function DiffPanelFileJumpMenu(props: {
             variant="ghost"
             size="icon-xs"
             className="text-muted-foreground hover:text-foreground"
-            label="Jump to file"
-            title="Jump to file"
+            label={t("diff.jumpToFile")}
+            title={t("diff.jumpToFile")}
           >
             <SearchIcon className="size-3.5" />
           </IconButton>
@@ -114,7 +116,7 @@ export function DiffPanelFileJumpMenu(props: {
         className="w-[min(24rem,calc(100vw-2rem))] min-w-[18rem]"
       >
         <PickerPanelShell
-          searchPlaceholder="Jump to file"
+          searchPlaceholder={t("diff.jumpToFile")}
           query={fileSearchQuery}
           onQueryChange={setFileSearchQuery}
           stopSearchKeyPropagation
@@ -124,9 +126,13 @@ export function DiffPanelFileJumpMenu(props: {
           listMaxHeightClassName="max-h-64"
         >
           {props.renderableFiles.length === 0 ? (
-            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">No files in this diff.</p>
+            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">
+              {t("diff.noFilesInDiff")}
+            </p>
           ) : filteredFiles.length === 0 ? (
-            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">No matching files.</p>
+            <p className="px-2.5 py-3 text-[11px] text-muted-foreground">
+              {t("diff.noMatchingFiles")}
+            </p>
           ) : (
             filteredFiles.map((fileDiff) => {
               const filePath = resolveFileDiffPath(fileDiff);

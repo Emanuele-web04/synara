@@ -2,6 +2,8 @@
 // Purpose: Keeps local-only feature flag controls reusable without showing them in the product sidebar.
 // Exports: DebugFeatureFlagsMenu
 
+import i18n from "i18next";
+import { useTranslation } from "react-i18next";
 import { FlagIcon } from "~/lib/icons";
 import {
   FEATURE_FLAGS,
@@ -35,13 +37,13 @@ function triggerActionFailedToasts(values: Record<ToggleFeatureFlagId, boolean>)
 
   toastManager.add({
     type: "error",
-    title: "Action failed",
+    title: i18n.t("featureFlags.actionFailed"),
     description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/synara",
     data: toastData,
   });
   toastManager.add({
     type: "error",
-    title: "Action failed",
+    title: i18n.t("featureFlags.actionFailed"),
     description: "Error: Git command failed in /Users/ibrahime/Documents/Projects/synara",
     data: toastData,
   });
@@ -49,6 +51,7 @@ function triggerActionFailedToasts(values: Record<ToggleFeatureFlagId, boolean>)
 
 export function DebugFeatureFlagsMenu() {
   const values = useFeatureFlags();
+  const { t } = useTranslation();
 
   return (
     <Menu>
@@ -61,7 +64,7 @@ export function DebugFeatureFlagsMenu() {
         }
       >
         <FlagIcon className="size-[15px]" />
-        <span>Feature flags</span>
+        <span>{t("featureFlags.title")}</span>
       </MenuTrigger>
       <MenuPopup
         align="start"
@@ -69,7 +72,7 @@ export function DebugFeatureFlagsMenu() {
         className="min-w-72 rounded-lg border-[color:var(--color-border)] bg-[var(--color-background-elevated-primary-opaque)] shadow-lg"
       >
         <MenuGroup>
-          <MenuGroupLabel>Local feature flags</MenuGroupLabel>
+          <MenuGroupLabel>{t("featureFlags.localFlags")}</MenuGroupLabel>
           {FEATURE_FLAGS.map((flag) => {
             if (flag.kind === "action") {
               return (
@@ -110,7 +113,7 @@ export function DebugFeatureFlagsMenu() {
         </MenuGroup>
         <MenuSeparator />
         <div className="px-2 py-1.5 text-[length:var(--app-font-size-ui-xs,10px)] leading-4 text-muted-foreground/58">
-          Stored only in this browser profile.
+          {t("featureFlags.storedInBrowser")}
         </div>
       </MenuPopup>
     </Menu>

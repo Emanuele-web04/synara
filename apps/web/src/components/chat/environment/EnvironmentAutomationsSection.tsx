@@ -5,6 +5,7 @@
 // Depends on: automation shared formatters and Environment panel row primitives.
 
 import type { AutomationDefinition } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import { formatCadence } from "~/routes/-automations.shared";
 import { ClockIcon } from "~/lib/icons";
@@ -27,15 +28,19 @@ export function EnvironmentAutomationsSection({
   readonly automations: readonly EnvironmentAutomationPanelItem[];
   readonly onOpenAutomation: (definition: AutomationDefinition) => void;
 }) {
+  const { t } = useTranslation();
+
   if (automations.length === 0) {
     return null;
   }
 
   return (
     <div className="flex flex-col gap-0.5">
-      <EnvironmentSectionLabel>Automations</EnvironmentSectionLabel>
+      <EnvironmentSectionLabel>{t("environment.automations.label")}</EnvironmentSectionLabel>
       {automations.map(({ definition }) => {
-        const cadence = definition.enabled ? formatCadence(definition.schedule) : "Paused";
+        const cadence = definition.enabled
+          ? formatCadence(definition.schedule, t)
+          : t("environment.automations.paused");
         return (
           <EnvironmentRow
             key={definition.id}
@@ -54,8 +59,8 @@ export function EnvironmentAutomationsSection({
                 {cadence}
               </span>
             }
-            aria-label={`Edit automation ${definition.name}`}
-            title={`${definition.name} - ${cadence}`}
+            aria-label={t("environment.automations.editAutomation", { name: definition.name })}
+            title={t("environment.automations.automationTitle", { name: definition.name, cadence })}
             onClick={() => onOpenAutomation(definition)}
           />
         );

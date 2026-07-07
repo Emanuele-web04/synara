@@ -5,6 +5,7 @@
 // Exports: WorldCup2026View (default)
 
 import { type PointerEvent as ReactPointerEvent, useCallback, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { IoIosArrowRoundBack, IoIosArrowRoundForward } from "react-icons/io";
 
 import { SidebarHeaderNavigationControls } from "../SidebarHeaderNavigationControls";
@@ -49,6 +50,7 @@ function createInitialState(bounds: BallBounds): BallState {
 }
 
 export function WorldCup2026View() {
+  const { t } = useTranslation();
   const trafficLightGutter = useDesktopTopBarTrafficLightGutterClassName();
   const windowControlsGutter = useDesktopTopBarWindowControlsGutterClassName();
 
@@ -277,7 +279,7 @@ export function WorldCup2026View() {
           <div className="flex items-center gap-2">
             <SoccerBall className="size-5" />
             <span className="text-sm font-semibold tracking-tight text-foreground">
-              World Cup 2026
+              {t("app.worldCup2026")}
             </span>
           </div>
         </div>
@@ -311,7 +313,7 @@ export function WorldCup2026View() {
               ref={ballRef}
               role="button"
               tabIndex={0}
-              aria-label="Drag and throw the ball"
+              aria-label={t("accessibility.dragAndThrowBall")}
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={endDrag}
@@ -333,7 +335,7 @@ export function WorldCup2026View() {
                   variant="ghost"
                   size="icon-sm"
                   className="size-9 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                  aria-label="Spin counter-clockwise"
+                  aria-label={t("accessibility.spinCounterClockwise")}
                   onClick={() => applySpin(-1)}
                 >
                   <IoIosArrowRoundBack className="size-7" />
@@ -343,7 +345,7 @@ export function WorldCup2026View() {
                   variant="ghost"
                   size="icon-sm"
                   className="size-9 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                  aria-label="Reset ball to center"
+                  aria-label={t("accessibility.resetBallToCenter")}
                   onClick={resetBall}
                 >
                   <RotateCcwIcon className="size-4" />
@@ -353,7 +355,7 @@ export function WorldCup2026View() {
                   variant="ghost"
                   size="icon-sm"
                   className="size-9 rounded-full text-white/90 hover:bg-white/15 hover:text-white"
-                  aria-label="Spin clockwise"
+                  aria-label={t("accessibility.spinClockwise")}
                   onClick={() => applySpin(1)}
                 >
                   <IoIosArrowRoundForward className="size-7" />

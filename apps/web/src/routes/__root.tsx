@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
+import { useTranslation } from "react-i18next";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
@@ -145,6 +146,7 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
+  const { t } = useTranslation();
   useAppTypography();
   useAppDensity();
   usePreloadSettingsRoute();
@@ -175,7 +177,7 @@ function RootRouteView() {
         <div className="flex h-screen flex-col bg-background text-foreground">
           <div className="flex flex-1 items-center justify-center">
             <p className="text-sm text-muted-foreground">
-              Connecting to {APP_DISPLAY_NAME} server...
+              {t("common.connectingToServer", { appName: APP_DISPLAY_NAME })}
             </p>
           </div>
         </div>
@@ -230,6 +232,7 @@ function ProviderStatusRefreshCoordinator() {
 }
 
 function ProviderUpdateNotifications() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { settings } = useAppSettings();
@@ -283,11 +286,13 @@ function ProviderUpdateNotifications() {
         trackedToast?.toastId ??
         toastManager.add({
           type: "loading",
-          title: "Updating providers...",
+          title: t("common.updatingProviders"),
           description:
             providers.length === 1
-              ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
-              : `Updating ${providers.length} providers.`,
+              ? t("common.updatingProvider", {
+                  provider: PROVIDER_DISPLAY_NAMES[providers[0]!.provider],
+                })
+              : t("common.updatingMultipleProviders", { count: providers.length }),
           timeout: 0,
         });
       activeToastRef.current = { kind: "update", key: activeNotificationKey, toastId };
@@ -301,11 +306,13 @@ function ProviderUpdateNotifications() {
 
       toastManager.update(toastId, {
         type: "loading",
-        title: "Updating providers...",
+        title: t("common.updatingProviders"),
         description:
           providers.length === 1
-            ? `Updating ${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]}.`
-            : `Updating ${providers.length} providers.`,
+            ? t("common.updatingProvider", {
+                provider: PROVIDER_DISPLAY_NAMES[providers[0]!.provider],
+              })
+            : t("common.updatingMultipleProviders", { count: providers.length }),
         actionProps: undefined,
         data: { onClose: dismissProgressToast },
         timeout: 0,
@@ -325,18 +332,18 @@ function ProviderUpdateNotifications() {
             if (updateState?.status === "failed" || updateState?.status === "unchanged") {
               failures.push({
                 provider,
-                reason: updateState.message ?? "The update command did not complete successfully.",
+                reason: updateState.message ?? t("common.updateCommandFailed"),
               });
             } else if (refreshed?.versionAdvisory?.status === "behind_latest") {
               failures.push({
                 provider,
-                reason: "The provider still appears outdated after updating.",
+                reason: t("common.providerStillOutdated"),
               });
             }
           } catch (error) {
             failures.push({
               provider,
-              reason: error instanceof Error ? error.message : "The update request failed.",
+              reason: error instanceof Error ? error.message : t("common.updateRequestFailed"),
             });
           }
         }
@@ -345,9 +352,7 @@ function ProviderUpdateNotifications() {
           failures.push({
             provider,
             reason:
-              error instanceof Error
-                ? error.message
-                : "The provider update request could not start.",
+              error instanceof Error ? error.message : t("common.providerUpdateCouldNotStart"),
           });
         }
       } finally {
@@ -385,11 +390,15 @@ function ProviderUpdateNotifications() {
           type: "error",
           title:
             failures.length === providers.length
-              ? "Provider updates failed"
-              : "Some provider updates failed",
+              ? t("common.providerUpdatesFailed")
+              : t("common.someProviderUpdatesFailed"),
           description:
             manualCommands.length > 0
-              ? `${failureLines}\n\nCopy the command${manualCommands.length === 1 ? "" : "s"} below to update manually in a terminal.`
+              ? `${failureLines}\n\n${
+                  manualCommands.length === 1
+                    ? t("common.copyCommandToUpdateManually")
+                    : t("common.copyCommandsToUpdateManually")
+                }`
               : failureLines,
           data: {
             onClose: dismissProgressToast,
@@ -405,14 +414,16 @@ function ProviderUpdateNotifications() {
         type: "success",
         title:
           providers.length === 1
-            ? `${PROVIDER_DISPLAY_NAMES[providers[0]!.provider]} updated`
-            : `${providers.length} providers updated`,
-        description: "New sessions will use the refreshed provider tools.",
+            ? t("common.providerUpdated", {
+                provider: PROVIDER_DISPLAY_NAMES[providers[0]!.provider],
+              })
+            : t("common.multipleProvidersUpdated", { count: providers.length }),
+        description: t("common.refreshedProviderTools"),
         data: { onClose: dismissProgressToast },
         timeout: 6000,
       });
     },
-    [queryClient],
+    [queryClient, t],
   );
 
   useEffect(() => {
@@ -442,12 +453,15 @@ function ProviderUpdateNotifications() {
     const providerName = PROVIDER_DISPLAY_NAMES[firstProvider.provider];
     const title =
       outdatedProviders.length === 1
-        ? `${providerName} update available`
-        : `${outdatedProviders.length} provider updates available`;
+        ? t("common.providerUpdateAvailable", { provider: providerName })
+        : t("common.multipleProviderUpdatesAvailable", { count: outdatedProviders.length });
     const description =
       outdatedProviders.length === 1
-        ? `${providerName} has a newer version available.`
-        : `${providerName} and ${additionalCount} more provider${additionalCount === 1 ? "" : "s"} have newer versions available.`;
+        ? t("common.providerHasNewerVersion", { provider: providerName })
+        : t("common.providerAndMoreHaveNewerVersions", {
+            provider: providerName,
+            count: additionalCount,
+          });
 
     let toastId!: ProviderUpdateToastId;
     const closeTrackedPrompt = () => {
@@ -462,7 +476,7 @@ function ProviderUpdateNotifications() {
       description,
       timeout: 0,
       actionProps: {
-        children: "Review updates",
+        children: t("common.reviewUpdates"),
         onClick: () => {
           if (activeToastRef.current?.toastId === toastId) {
             toastManager.close(toastId);
@@ -477,7 +491,7 @@ function ProviderUpdateNotifications() {
       data: {
         onClose: closeTrackedPrompt,
         secondaryActionProps: {
-          children: "Update all",
+          children: t("common.updateAll"),
           onClick: () => {
             void updateAll(oneClickProviders);
           },
@@ -485,7 +499,15 @@ function ProviderUpdateNotifications() {
       },
     });
     activeToastRef.current = { kind: "prompt", key: notificationKey, toastId };
-  }, [isUpdatingAll, navigate, notificationKey, oneClickProviders, outdatedProviders, updateAll]);
+  }, [
+    isUpdatingAll,
+    navigate,
+    notificationKey,
+    oneClickProviders,
+    outdatedProviders,
+    updateAll,
+    t,
+  ]);
 
   return null;
 }
@@ -582,8 +604,9 @@ function GlobalWhatsNewSurface() {
 }
 
 function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
-  const message = errorMessage(error);
-  const details = errorDetails(error);
+  const { t } = useTranslation();
+  const message = errorMessage(error, t);
+  const details = errorDetails(error, t);
 
   return (
     <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background px-4 py-10 text-foreground sm:px-6">
@@ -594,12 +617,12 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
 
       <section className="relative w-full max-w-xl rounded-2xl border border-border/80 bg-card/90 p-6 shadow-2xl shadow-black/20 backdrop-blur-md sm:p-8">
         <p className="text-[11px] font-semibold text-muted-foreground">{APP_DISPLAY_NAME}</p>
-        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">Something went wrong.</h1>
+        <h1 className="mt-3 text-2xl font-semibold sm:text-3xl">{t("common.error")}</h1>
         <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{message}</p>
 
         <div className="mt-5 flex flex-wrap gap-2">
           <Button size="sm" className={dialogActionButtonClassName} onClick={() => reset()}>
-            Try again
+            {t("common.tryAgain")}
           </Button>
           <Button
             size="sm"
@@ -607,14 +630,14 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
             className={dialogActionButtonClassName}
             onClick={() => window.location.reload()}
           >
-            Reload app
+            {t("common.reloadApp")}
           </Button>
         </div>
 
         <details className="group mt-5 overflow-hidden rounded-lg border border-border/70 bg-background/55">
           <summary className="cursor-pointer list-none px-3 py-2 text-xs font-medium text-muted-foreground">
-            <span className="group-open:hidden">Show error details</span>
-            <span className="hidden group-open:inline">Hide error details</span>
+            <span className="group-open:hidden">{t("common.showErrorDetails")}</span>
+            <span className="hidden group-open:inline">{t("common.hideErrorDetails")}</span>
           </summary>
           <pre className="max-h-56 overflow-auto border-t border-border/70 bg-background/80 px-3 py-2 text-xs text-foreground/85">
             {details}
@@ -625,7 +648,7 @@ function RootRouteErrorView({ error, reset }: ErrorComponentProps) {
   );
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
     return error.message;
   }
@@ -634,10 +657,10 @@ function errorMessage(error: unknown): string {
     return error;
   }
 
-  return "An unexpected router error occurred.";
+  return t("common.unexpectedRouterError");
 }
 
-function errorDetails(error: unknown): string {
+function errorDetails(error: unknown, t: (key: string) => string): string {
   if (error instanceof Error) {
     return error.stack ?? error.message;
   }
@@ -649,7 +672,7 @@ function errorDetails(error: unknown): string {
   try {
     return JSON.stringify(error, null, 2);
   } catch {
-    return "No additional error details are available.";
+    return t("common.noErrorDetails");
   }
 }
 
@@ -772,6 +795,7 @@ function shouldPollThreadDetailCatchup(threadId: ThreadId): boolean {
 }
 
 function EventRouter() {
+  const { t } = useTranslation();
   const syncServerShellSnapshot = useStore((store) => store.syncServerShellSnapshot);
   const syncServerThreadDetailHotPath = useStore((store) => store.syncServerThreadDetailHotPath);
   const applyShellEvent = useStore((store) => store.applyShellEvent);
@@ -1299,26 +1323,26 @@ function EventRouter() {
 
       toastManager.add({
         type: "warning",
-        title: "Invalid keybindings configuration",
+        title: t("common.invalidKeybindingsConfig"),
         description: issue.message,
         actionProps: {
-          children: "Open keybindings.json",
+          children: t("common.openKeybindingsJson"),
           onClick: () => {
             void queryClient
               .ensureQueryData(serverConfigQueryOptions())
               .then((config) => {
                 const editor = resolveAndPersistPreferredEditor(config.availableEditors);
                 if (!editor) {
-                  throw new Error("No available editors found.");
+                  throw new Error(t("common.noAvailableEditors"));
                 }
                 return api.shell.openInEditor(config.keybindingsConfigPath, editor);
               })
               .catch((error) => {
                 toastManager.add({
                   type: "error",
-                  title: "Unable to open keybindings file",
+                  title: t("common.unableToOpenKeybindings"),
                   description:
-                    error instanceof Error ? error.message : "Unknown error opening file.",
+                    error instanceof Error ? error.message : t("common.unknownErrorOpeningFile"),
                 });
               });
           },

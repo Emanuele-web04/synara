@@ -23,6 +23,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
+import i18n from "~/i18n";
 import {
   closestCenter,
   DndContext,
@@ -232,15 +234,15 @@ const TIMESTAMP_FORMAT_LABELS = {
   "24-hour": "24-hour",
 } as const;
 
-const SIDEBAR_PROJECT_SORT_ORDER_LABELS = {
-  updated_at: "Recently active",
-  created_at: "Recently added",
-  manual: "Manual order",
+const SIDEBAR_PROJECT_SORT_ORDER_KEYS = {
+  updated_at: "settings.general.projectOrderRecentlyActive",
+  created_at: "settings.general.projectOrderRecentlyAdded",
+  manual: "settings.general.projectOrderManual",
 } as const;
 
-const SIDEBAR_THREAD_SORT_ORDER_LABELS = {
-  updated_at: "Recently active",
-  created_at: "Newest first",
+const SIDEBAR_THREAD_SORT_ORDER_KEYS = {
+  updated_at: "settings.general.threadOrderRecentlyActive",
+  created_at: "settings.general.threadOrderNewestFirst",
 } as const;
 
 type InstallBinarySettingsKey =
@@ -308,6 +310,7 @@ function SortableProviderVisibilityRow(props: {
   isHidden: boolean;
   onHiddenChange: (hidden: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const {
     attributes,
     listeners,
@@ -338,7 +341,7 @@ function SortableProviderVisibilityRow(props: {
             "inline-flex size-6 shrink-0 cursor-grab touch-none items-center justify-center text-muted-foreground transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground active:cursor-grabbing",
             SETTINGS_RADIUS_CLASS_NAME,
           )}
-          aria-label={`Reorder ${props.option.title}`}
+          aria-label={t("settings.providers.reorderProvider", { title: props.option.title })}
           {...attributes}
           {...listeners}
         >
@@ -349,7 +352,7 @@ function SortableProviderVisibilityRow(props: {
       <Switch
         checked={!props.isHidden}
         onCheckedChange={(checked) => props.onHiddenChange(!Boolean(checked))}
-        aria-label={`Show ${props.option.title} in the provider picker`}
+        aria-label={t("settings.providers.showProvider", { title: props.option.title })}
       />
     </div>
   );
@@ -524,11 +527,28 @@ function isProviderSelectOption(value: string): value is ProviderKind {
   return PROVIDER_SELECT_OPTIONS.includes(value as ProviderKind);
 }
 
-function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) {
+function ProviderDocsLinks({
+  docs,
+  t,
+}: {
+  docs: InstallProviderSettings["docs"];
+  t: (key: string, options?: any) => string;
+}) {
+  const docLabelKey = (label: string): string => {
+    const map: Record<string, string> = {
+      Install: "settings.providers.docInstall",
+      Update: "settings.providers.docUpdate",
+      Config: "settings.providers.docConfig",
+      Headless: "settings.providers.docHeadless",
+    };
+    return map[label] ?? label;
+  };
   return (
     <div className={cn(SETTINGS_INSET_LIST_CLASS_NAME, "px-3 py-2.5")}>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <span className="text-xs font-medium text-foreground">CLI docs</span>
+        <span className="text-xs font-medium text-foreground">
+          {t("settings.providers.cliDocs")}
+        </span>
         <div className="flex flex-wrap gap-2">
           {docs.map((doc) => (
             <a
@@ -541,7 +561,7 @@ function ProviderDocsLinks({ docs }: { docs: InstallProviderSettings["docs"] }) 
                 SETTINGS_RADIUS_CLASS_NAME,
               )}
             >
-              <span>{doc.label}</span>
+              <span>{t(docLabelKey(doc.label))}</span>
               <ExternalLinkIcon className="size-3" />
             </a>
           ))}
@@ -564,39 +584,52 @@ function formatProviderVersion(value: string | null | undefined): string | null 
   return trimmed.startsWith("v") ? trimmed : `v${trimmed}`;
 }
 
-function providerUpdateStatusLabel(provider: ServerProviderStatus): string | null {
+function providerUpdateStatusLabel(
+  provider: ServerProviderStatus,
+  t: (key: string, options?: any) => string,
+): string | null {
   const state = provider.updateState?.status;
   if (state === "queued") {
-    return "Update queued";
+    return t("settings.providerUpdates.queued");
   }
   if (state === "running") {
-    return "Updating";
+    return t("settings.providerUpdates.updating");
   }
   if (state === "succeeded") {
-    return "Updated";
+    return t("settings.providerUpdates.succeeded");
   }
   if (state === "failed") {
-    return "Update failed";
+    return t("settings.providerUpdates.failed");
   }
   if (state === "unchanged") {
-    return "Still outdated";
+    return t("settings.providerUpdates.unchanged");
   }
   const advisory = provider.versionAdvisory;
   if (advisory?.status === "behind_latest" && advisory.latestVersion) {
     const currentVersion = formatProviderVersion(advisory.currentVersion);
     const latestVersion = formatProviderVersion(advisory.latestVersion);
-    return currentVersion ? `${currentVersion} -> ${latestVersion}` : `Latest ${latestVersion}`;
+    return currentVersion
+      ? t("settings.providerUpdates.versionRange", {
+          current: currentVersion,
+          latest: latestVersion,
+        })
+      : t("settings.providerUpdates.latestOnly", { latest: latestVersion });
   }
   const currentVersion = formatProviderVersion(provider.version);
-  return currentVersion ? `Current ${currentVersion}` : null;
+  return currentVersion ? t("settings.providerUpdates.current", { version: currentVersion }) : null;
 }
 
-function providerUpdateFailureMessage(provider: ServerProviderStatus | undefined): string | null {
+function providerUpdateFailureMessage(
+  provider: ServerProviderStatus | undefined,
+  t: (key: string, options?: any) => string,
+): string | null {
   const state = provider?.updateState;
   if (!state || (state.status !== "failed" && state.status !== "unchanged")) {
     return null;
   }
-  return state.output?.trim() || state.message || "The provider update did not complete.";
+  return (
+    state.output?.trim() || state.message || t("settings.providerUpdates.updateDidNotComplete")
+  );
 }
 
 // Keys of AppSettings whose value is a plain boolean — the only ones that can be
@@ -626,6 +659,7 @@ function useSettingsTargetScroll(
 }
 
 function SettingsRouteView() {
+  const { t } = useTranslation();
   const routeSearch = useSearch({ strict: false }) as Record<string, unknown>;
   const activeSection = normalizeSettingsSection(routeSearch.section);
   const settingsTarget = typeof routeSearch.target === "string" ? routeSearch.target : null;
@@ -965,53 +999,80 @@ function SettingsRouteView() {
     settings.piBinaryPath !== defaults.piBinaryPath ||
     settings.piAgentDir !== defaults.piAgentDir;
   const changedSettingLabels = [
-    ...(theme !== "system" ? ["Theme"] : []),
-    ...(!isDefaultActiveTheme ? [`${resolvedTheme === "dark" ? "Dark" : "Light"} theme pack`] : []),
-    ...(settings.defaultProvider !== defaults.defaultProvider ? ["Default provider"] : []),
-    ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? ["New thread mode"] : []),
+    ...(theme !== "system" ? [t("settings.advanced.changed.theme")] : []),
+    ...(!isDefaultActiveTheme
+      ? [
+          t("settings.advanced.changed.themePack", {
+            variant:
+              resolvedTheme === "dark"
+                ? t("settings.advanced.changed.themePackDark")
+                : t("settings.advanced.changed.themePackLight"),
+          }),
+        ]
+      : []),
+    ...(settings.defaultProvider !== defaults.defaultProvider
+      ? [t("settings.advanced.changed.defaultProvider")]
+      : []),
+    ...(settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode
+      ? [t("settings.advanced.changed.newThreadMode")]
+      : []),
     ...(settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder
-      ? ["Project sort order"]
+      ? [t("settings.advanced.changed.projectSortOrder")]
       : []),
     ...(settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder
-      ? ["Thread sort order"]
+      ? [t("settings.advanced.changed.threadSortOrder")]
       : []),
-    ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
+    ...(settings.showChatsSection !== defaults.showChatsSection
+      ? [t("settings.advanced.changed.chatsSection")]
+      : []),
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
-      ? ["Workspace section"]
+      ? [t("settings.advanced.changed.workspaceSection")]
       : []),
-    ...(settings.uiDensity !== defaults.uiDensity ? ["UI density"] : []),
-    ...(settings.chatFontSizePx !== defaults.chatFontSizePx ? ["Base font size"] : []),
-    ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx ? ["Terminal font size"] : []),
-    ...(settings.terminalFontFamily !== defaults.terminalFontFamily ? ["Terminal font"] : []),
+    ...(settings.uiDensity !== defaults.uiDensity
+      ? [t("settings.advanced.changed.uiDensity")]
+      : []),
+    ...(settings.chatFontSizePx !== defaults.chatFontSizePx
+      ? [t("settings.advanced.changed.baseFontSize")]
+      : []),
+    ...(settings.terminalFontSizePx !== defaults.terminalFontSizePx
+      ? [t("settings.advanced.changed.terminalFontSize")]
+      : []),
+    ...(settings.terminalFontFamily !== defaults.terminalFontFamily
+      ? [t("settings.advanced.changed.terminalFont")]
+      : []),
     ...(shouldShowFontSmoothing &&
     settings.enableNativeFontSmoothing !== defaults.enableNativeFontSmoothing
-      ? ["Font smoothing"]
+      ? [t("settings.advanced.changed.fontSmoothing")]
       : []),
-    ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
+    ...(settings.timestampFormat !== defaults.timestampFormat
+      ? [t("settings.advanced.changed.timeFormat")]
+      : []),
     ...(settings.enableTaskCompletionToasts !== defaults.enableTaskCompletionToasts
-      ? ["Activity toasts"]
+      ? [t("settings.advanced.changed.activityToasts")]
       : []),
     ...(settings.enableSystemTaskCompletionNotifications !==
     defaults.enableSystemTaskCompletionNotifications
-      ? ["Desktop notifications"]
+      ? [t("settings.advanced.changed.desktopNotifications")]
       : []),
     ...(settings.enableAssistantStreaming !== defaults.enableAssistantStreaming
-      ? ["Assistant output"]
+      ? [t("settings.advanced.changed.assistantOutput")]
       : []),
     ...(settings.enableProviderUpdateChecks !== defaults.enableProviderUpdateChecks
-      ? ["Provider update checks"]
+      ? [t("settings.advanced.changed.providerUpdateChecks")]
       : []),
-    ...(settings.diffWordWrap !== defaults.diffWordWrap ? ["Diff line wrapping"] : []),
+    ...(settings.diffWordWrap !== defaults.diffWordWrap
+      ? [t("settings.advanced.changed.diffLineWrapping")]
+      : []),
     ...(settings.confirmThreadDelete !== defaults.confirmThreadDelete
-      ? ["Delete confirmation"]
+      ? [t("settings.advanced.changed.deleteConfirmation")]
       : []),
     ...(settings.confirmThreadArchive !== defaults.confirmThreadArchive
-      ? ["Archive confirmation"]
+      ? [t("settings.advanced.changed.archiveConfirmation")]
       : []),
     ...(settings.confirmTerminalTabClose !== defaults.confirmTerminalTabClose
-      ? ["Terminal close confirmation"]
+      ? [t("settings.advanced.changed.terminalCloseConfirmation")]
       : []),
-    ...(isGitTextGenerationModelDirty ? ["Git writing model"] : []),
+    ...(isGitTextGenerationModelDirty ? [t("settings.advanced.changed.gitWritingModel")] : []),
     ...(settings.customCodexModels.length > 0 ||
     settings.customClaudeModels.length > 0 ||
     settings.customCursorModels.length > 0 ||
@@ -1020,11 +1081,11 @@ function SettingsRouteView() {
     settings.customKiloModels.length > 0 ||
     settings.customOpenCodeModels.length > 0 ||
     settings.customPiModels.length > 0
-      ? ["Custom models"]
+      ? [t("settings.advanced.changed.customModels")]
       : []),
-    ...(isInstallSettingsDirty ? ["Provider installs"] : []),
-    ...(hiddenProviderCount > 0 ? ["Provider visibility"] : []),
-    ...(isProviderOrderDirty ? ["Provider order"] : []),
+    ...(isInstallSettingsDirty ? [t("settings.advanced.changed.providerInstalls")] : []),
+    ...(hiddenProviderCount > 0 ? [t("settings.advanced.changed.providerVisibility")] : []),
+    ...(isProviderOrderDirty ? [t("settings.advanced.changed.providerOrder")] : []),
   ];
 
   const openKeybindingsFile = useCallback(() => {
@@ -1034,7 +1095,7 @@ function SettingsRouteView() {
     const api = ensureNativeApi();
     const editor = resolveAndPersistPreferredEditor(availableEditors ?? []);
     if (!editor) {
-      setOpenKeybindingsError("No available editors found.");
+      setOpenKeybindingsError(t("settings.advanced.noEditorFound"));
       setIsOpeningKeybindings(false);
       return;
     }
@@ -1042,7 +1103,7 @@ function SettingsRouteView() {
       .openInEditor(keybindingsConfigPath, editor)
       .catch((error) => {
         setOpenKeybindingsError(
-          error instanceof Error ? error.message : "Unable to open keybindings file.",
+          error instanceof Error ? error.message : t("settings.advanced.unableToOpenKeybindings"),
         );
       })
       .finally(() => {
@@ -1062,28 +1123,28 @@ function SettingsRouteView() {
       if (!normalized) {
         setCustomModelErrorByProvider((existing) => ({
           ...existing,
-          [provider]: "Enter a model slug.",
+          [provider]: t("settings.models.enterModelSlug"),
         }));
         return;
       }
       if (getModelOptions(provider).some((option) => option.slug === normalized)) {
         setCustomModelErrorByProvider((existing) => ({
           ...existing,
-          [provider]: "That model is already built in.",
+          [provider]: t("settings.models.modelAlreadyBuiltIn"),
         }));
         return;
       }
       if (normalized.length > MAX_CUSTOM_MODEL_LENGTH) {
         setCustomModelErrorByProvider((existing) => ({
           ...existing,
-          [provider]: `Model slugs must be ${MAX_CUSTOM_MODEL_LENGTH} characters or less.`,
+          [provider]: t("settings.models.modelSlugTooLong", { max: MAX_CUSTOM_MODEL_LENGTH }),
         }));
         return;
       }
       if (customModels.includes(normalized)) {
         setCustomModelErrorByProvider((existing) => ({
           ...existing,
-          [provider]: "That custom model is already saved.",
+          [provider]: t("settings.models.modelAlreadySaved"),
         }));
         return;
       }
@@ -1145,14 +1206,16 @@ function SettingsRouteView() {
       try {
         const result = await ensureNativeApi().server.updateProvider({ provider });
         const refreshedProvider = result.providers.find((status) => status.provider === provider);
-        const failureMessage = providerUpdateFailureMessage(refreshedProvider);
+        const failureMessage = providerUpdateFailureMessage(refreshedProvider, t);
         if (failureMessage) {
           const manualCommand = refreshedProvider?.versionAdvisory?.updateCommand?.trim();
           toastManager.add({
             type: "error",
-            title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
+            title: t("settings.providerUpdates.couldNotUpdate", {
+              provider: PROVIDER_DISPLAY_NAMES[provider],
+            }),
             description: manualCommand
-              ? `${failureMessage}\n\nCopy the command below to update manually in a terminal.`
+              ? t("settings.providerUpdates.updateManualCommand")
               : failureMessage,
             ...(manualCommand ? { data: { copyText: manualCommand } } : {}),
           });
@@ -1160,14 +1223,21 @@ function SettingsRouteView() {
         }
         toastManager.add({
           type: "success",
-          title: `${PROVIDER_DISPLAY_NAMES[provider]} update finished`,
-          description: "New sessions will use the refreshed provider.",
+          title: t("settings.providerUpdates.updateFinished", {
+            provider: PROVIDER_DISPLAY_NAMES[provider],
+          }),
+          description: t("settings.providerUpdates.newSessionsUseRefreshed"),
         });
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: `Could not update ${PROVIDER_DISPLAY_NAMES[provider]}`,
-          description: error instanceof Error ? error.message : "The provider update failed.",
+          title: t("settings.providerUpdates.couldNotUpdate", {
+            provider: PROVIDER_DISPLAY_NAMES[provider],
+          }),
+          description:
+            error instanceof Error
+              ? error.message
+              : t("settings.providerUpdates.updateFailedGeneric"),
         });
       } finally {
         await queryClient
@@ -1188,9 +1258,12 @@ function SettingsRouteView() {
 
     const api = readNativeApi();
     const confirmed = await (api ?? ensureNativeApi()).dialogs.confirm(
-      ["Restore default settings?", `This will reset: ${changedSettingLabels.join(", ")}.`].join(
-        "\n",
-      ),
+      [
+        t("settings.advanced.restoreDefaults"),
+        t("settings.advanced.restoreDefaultsDescription", {
+          labels: changedSettingLabels.join(", "),
+        }),
+      ].join("\n"),
     );
     if (!confirmed) return;
 
@@ -1246,23 +1319,25 @@ function SettingsRouteView() {
     updateSettings({ enableSystemTaskCompletionNotifications: false });
     toastManager.add({
       type: permission === "denied" ? "warning" : "error",
-      title: "Desktop notifications unavailable",
+      title: t("settings.notifications.desktopUnavailable"),
       description: buildNotificationSettingsSupportText(permission),
     });
   }
 
   async function sendTestNotification() {
-    const title = "Activity notification";
-    const body = "Notification test for chats and terminal agents.";
+    const title = t("settings.notifications.testNotificationTitle");
+    const body = t("settings.notifications.testNotificationBody");
 
     if (window.desktopBridge) {
       const shown = await window.desktopBridge.notifications.show({ title, body, silent: false });
       toastManager.add({
         type: shown ? "success" : "warning",
-        title: shown ? "Test notification sent" : "Notifications unavailable",
+        title: shown
+          ? t("settings.notifications.testSent")
+          : t("settings.notifications.notificationsUnavailable"),
         description: shown
-          ? "Your operating system should show the notification."
-          : "Desktop notifications are not supported on this device.",
+          ? t("settings.notifications.testSentDesktopDescription")
+          : t("settings.notifications.desktopNotSupported"),
       });
       return;
     }
@@ -1272,7 +1347,7 @@ function SettingsRouteView() {
     if (permission !== "granted") {
       toastManager.add({
         type: permission === "denied" ? "warning" : "error",
-        title: "Desktop notifications unavailable",
+        title: t("settings.notifications.desktopUnavailable"),
         description: buildNotificationSettingsSupportText(permission),
       });
       return;
@@ -1284,8 +1359,8 @@ function SettingsRouteView() {
     });
     toastManager.add({
       type: "success",
-      title: "Test notification sent",
-      description: "Your browser should show the notification.",
+      title: t("settings.notifications.testSent"),
+      description: t("settings.notifications.testSentBrowserDescription"),
     });
   }
 
@@ -1297,11 +1372,9 @@ function SettingsRouteView() {
 
     const api = readNativeApi() ?? ensureNativeApi();
     const confirmed = await api.dialogs.confirm(
-      [
-        "Repair local state?",
-        "This rebuilds local project indexes and refreshes project snapshots.",
-        "It keeps existing chats in place, but it may take a moment.",
-      ].join("\n"),
+      [t("settings.advanced.repairState"), t("settings.advanced.repairStateDescription")].join(
+        "\n",
+      ),
     );
     if (!confirmed) {
       return;
@@ -1313,14 +1386,15 @@ function SettingsRouteView() {
       syncServerReadModel(snapshot);
       toastManager.add({
         type: "success",
-        title: "Local state repaired",
-        description: "Project indexes were rebuilt without clearing existing chats.",
+        title: t("settings.advanced.repairSucceeded"),
+        description: t("settings.advanced.repairSucceededDescription"),
       });
     } catch (error) {
       toastManager.add({
         type: "error",
-        title: "Repair failed",
-        description: error instanceof Error ? error.message : "Unable to repair local state.",
+        title: t("settings.advanced.repairFailed"),
+        description:
+          error instanceof Error ? error.message : t("settings.advanced.repairFailedGeneric"),
       });
     } finally {
       setIsRepairingLocalState(false);
@@ -1335,8 +1409,8 @@ function SettingsRouteView() {
       if (snapshot === null) {
         toastManager.add({
           type: "error",
-          title: "Could not verify linked conversations",
-          description: "Retry once the app reconnects to the server.",
+          title: t("settings.worktrees.couldNotVerifyConversations"),
+          description: t("settings.worktrees.retryOnReconnect"),
         });
         return;
       }
@@ -1358,18 +1432,22 @@ function SettingsRouteView() {
       const confirmed = await api.dialogs.confirm(
         linkedConversationCount > 0
           ? [
-              `Delete worktree "${displayName}"?`,
+              t("settings.worktrees.deleteWorktree", { name: displayName }),
               "",
-              `${linkedActiveThreadCount} active and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedConversationCount, "conversation is", "conversations are")} linked to this worktree.`,
+              t("settings.worktrees.linkedConversations", {
+                active: linkedActiveThreadCount,
+                archived: linkedArchivedThreadIds.length,
+              }),
               linkedArchivedThreadIds.length > 0
-                ? "Archived conversations will be deleted first."
-                : "Deleting it can break reopening those chats in the same workspace.",
+                ? t("settings.worktrees.archivedWillBeDeleted")
+                : t("settings.worktrees.mayBreakReopening"),
               "",
-              "Delete the worktree anyway?",
+              t("settings.worktrees.deleteAnyway"),
             ].join("\n")
-          : [`Delete worktree "${displayName}"?`, "This removes the Git worktree from disk."].join(
-              "\n",
-            ),
+          : [
+              t("settings.worktrees.deleteWorktree", { name: displayName }),
+              t("settings.worktrees.removesFromDisk"),
+            ].join("\n"),
       );
       if (!confirmed) {
         return;
@@ -1392,41 +1470,49 @@ function SettingsRouteView() {
         });
         toastManager.add({
           type: "success",
-          title: "Worktree deleted",
+          title: t("settings.worktrees.worktreeDeleted"),
           description:
             linkedArchivedThreadIds.length > 0
-              ? `${displayName} was removed and ${linkedArchivedThreadIds.length} archived ${pluralize(linkedArchivedThreadIds.length, "conversation")} were deleted.`
-              : `${displayName} was removed.`,
+              ? t("settings.worktrees.worktreeDeletedWithArchived", {
+                  name: displayName,
+                  count: linkedArchivedThreadIds.length,
+                })
+              : t("settings.worktrees.worktreeDeletedSimple", { name: displayName }),
         });
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not delete worktree",
-          description: error instanceof Error ? error.message : "Unable to delete the worktree.",
+          title: t("settings.worktrees.couldNotDeleteWorktree"),
+          description:
+            error instanceof Error ? error.message : t("settings.worktrees.deleteFailedGeneric"),
         });
       }
     },
     [queryClient, removeDeletedThreadFromClientState, removeWorktreeMutation],
   );
 
-  const unarchiveThread = useCallback(async (threadId: ThreadId) => {
-    const api = readNativeApi();
-    if (!api) return;
-    try {
-      await unarchiveThreadFromClient(api.orchestration, threadId);
-      toastManager.add({
-        type: "success",
-        title: "Thread restored",
-        description: "The thread has been moved back to the sidebar.",
-      });
-    } catch (error) {
-      toastManager.add({
-        type: "error",
-        title: "Could not restore thread",
-        description: error instanceof Error ? error.message : "Unable to restore the thread.",
-      });
-    }
-  }, []);
+  const unarchiveThread = useCallback(
+    async (threadId: ThreadId) => {
+      const api = readNativeApi();
+      if (!api) return;
+      try {
+        await unarchiveThreadFromClient(api.orchestration, threadId);
+        toastManager.add({
+          type: "success",
+          title: t("settings.archived.threadRestored"),
+          description: t("settings.archived.threadRestoredDescription"),
+        });
+      } catch (error) {
+        toastManager.add({
+          type: "error",
+          title: t("settings.archived.couldNotRestore"),
+          description:
+            error instanceof Error ? error.message : t("settings.archived.restoreFailedGeneric"),
+        });
+      }
+    },
+    [t],
+  );
 
   const deleteArchivedThread = useCallback(
     async (threadId: ThreadId, threadTitle: string) => {
@@ -1434,7 +1520,7 @@ function SettingsRouteView() {
       if (!api) return;
 
       const confirmed = await api.dialogs.confirm(
-        `Permanently delete "${threadTitle}"?\n\nThis will remove the thread and its conversation history forever.`,
+        t("settings.archived.deleteConfirmation", { title: threadTitle }),
       );
       if (!confirmed) return;
 
@@ -1446,18 +1532,19 @@ function SettingsRouteView() {
         });
         toastManager.add({
           type: "success",
-          title: "Thread deleted",
-          description: "The archived thread has been permanently removed.",
+          title: t("settings.archived.threadDeleted"),
+          description: t("settings.archived.threadDeletedDescription"),
         });
       } catch (error) {
         toastManager.add({
           type: "error",
-          title: "Could not delete thread",
-          description: error instanceof Error ? error.message : "Unable to delete the thread.",
+          title: t("settings.archived.couldNotDelete"),
+          description:
+            error instanceof Error ? error.message : t("settings.archived.deleteFailedGeneric"),
         });
       }
     },
-    [removeDeletedThreadFromClientState],
+    [removeDeletedThreadFromClientState, t],
   );
 
   const handleArchivedThreadContextMenu = useCallback(
@@ -1467,8 +1554,8 @@ function SettingsRouteView() {
 
       const clicked = await api.contextMenu.show(
         [
-          { id: "restore", label: "Restore" },
-          { id: "delete", label: "Delete", destructive: true },
+          { id: "restore", label: t("settings.archived.contextMenuRestore") },
+          { id: "delete", label: t("settings.archived.contextMenuDelete"), destructive: true },
         ],
         position,
       );
@@ -1495,13 +1582,15 @@ function SettingsRouteView() {
     description: string;
     resetLabel: string;
     ariaLabel: string;
+    anchorId?: string;
   }) => {
-    const { settingKey, title, description, resetLabel, ariaLabel } = config;
+    const { settingKey, title, description, resetLabel, ariaLabel, anchorId } = config;
     const isChanged = settings[settingKey] !== defaults[settingKey];
     return (
       <SettingsRow
         title={title}
         description={description}
+        {...(anchorId && { anchorId })}
         resetAction={
           isChanged ? (
             <SettingResetButton
@@ -1527,14 +1616,40 @@ function SettingsRouteView() {
 
   const renderGeneralPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Core defaults">
+      <SettingsSection title={t("settings.general.coreDefaults")}>
         <SettingsRow
-          title="Default provider"
-          description="Choose the provider used for new chats."
+          title={t("settings.general.language")}
+          description={t("settings.general.languageDescription")}
+          anchorId="setting-general-language"
+          control={
+            <SettingsSelectControl
+              value={settings.locale}
+              onValueChange={(value) => {
+                if (value !== "en" && value !== "zh-CN") return;
+                updateSettings({ locale: value });
+                i18n.changeLanguage(value);
+                void ensureNativeApi().server.setLocale({ locale: value });
+              }}
+              ariaLabel={t("settings.general.languageAria")}
+              valueContent={settings.locale === "zh-CN" ? "简体中文" : "English"}
+            >
+              <SelectItem key="en" value="en">
+                English
+              </SelectItem>
+              <SelectItem key="zh-CN" value="zh-CN">
+                简体中文
+              </SelectItem>
+            </SettingsSelectControl>
+          }
+        />
+        <SettingsRow
+          title={t("settings.general.defaultProvider")}
+          description={t("settings.general.defaultProviderDescription")}
+          anchorId="setting-general-default-provider"
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton
-                label="default provider"
+                label={t("settings.general.defaultProvider")}
                 onClick={() => updateSettings({ defaultProvider: defaults.defaultProvider })}
               />
             ) : null
@@ -1546,7 +1661,7 @@ function SettingsRouteView() {
                 if (!isProviderSelectOption(value)) return;
                 updateSettings({ defaultProvider: value });
               }}
-              ariaLabel="Default provider"
+              ariaLabel={t("settings.general.defaultProvider")}
               valueContent={
                 <ProviderOptionLabel
                   provider={settings.defaultProvider}
@@ -1567,12 +1682,13 @@ function SettingsRouteView() {
         />
 
         <SettingsRow
-          title="New threads"
-          description="Pick the default workspace mode for newly created draft threads."
+          title={t("settings.general.newThreads")}
+          description={t("settings.general.newThreadsDescription")}
+          anchorId="setting-general-new-threads"
           resetAction={
             settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
               <SettingResetButton
-                label="new threads"
+                label={t("settings.general.newThreads")}
                 onClick={() =>
                   updateSettings({
                     defaultThreadEnvMode: defaults.defaultThreadEnvMode,
@@ -1590,28 +1706,33 @@ function SettingsRouteView() {
                   defaultThreadEnvMode: value,
                 });
               }}
-              ariaLabel="Default thread mode"
-              valueContent={settings.defaultThreadEnvMode === "worktree" ? "New worktree" : "Local"}
+              ariaLabel={t("settings.general.defaultThreadMode")}
+              valueContent={
+                settings.defaultThreadEnvMode === "worktree"
+                  ? t("settings.general.newWorktree")
+                  : t("settings.general.local")
+              }
             >
               <SelectItem hideIndicator value="local">
-                Local
+                {t("settings.general.local")}
               </SelectItem>
               <SelectItem hideIndicator value="worktree">
-                New worktree
+                {t("settings.general.newWorktree")}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
       </SettingsSection>
 
-      <SettingsSection title="Sidebar organization">
+      <SettingsSection title={t("settings.general.sidebarOrganization")}>
         <SettingsRow
-          title="Project order"
-          description="Controls how projects are arranged in the main sidebar."
+          title={t("settings.general.projectOrder")}
+          description={t("settings.general.projectOrderDescription")}
+          anchorId="setting-general-project-order"
           resetAction={
             settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
               <SettingResetButton
-                label="project order"
+                label={t("settings.general.projectOrder")}
                 onClick={() =>
                   updateSettings({
                     sidebarProjectSortOrder: defaults.sidebarProjectSortOrder,
@@ -1629,29 +1750,30 @@ function SettingsRouteView() {
                 }
                 updateSettings({ sidebarProjectSortOrder: value });
               }}
-              ariaLabel="Project sort order"
-              valueContent={SIDEBAR_PROJECT_SORT_ORDER_LABELS[settings.sidebarProjectSortOrder]}
+              ariaLabel={t("settings.general.projectOrder")}
+              valueContent={t(SIDEBAR_PROJECT_SORT_ORDER_KEYS[settings.sidebarProjectSortOrder])}
             >
               <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.updated_at}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_KEYS.updated_at)}
               </SelectItem>
               <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.created_at}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_KEYS.created_at)}
               </SelectItem>
               <SelectItem hideIndicator value="manual">
-                {SIDEBAR_PROJECT_SORT_ORDER_LABELS.manual}
+                {t(SIDEBAR_PROJECT_SORT_ORDER_KEYS.manual)}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
 
         <SettingsRow
-          title="Thread order"
-          description="Controls how threads are arranged inside each project in the main sidebar."
+          title={t("settings.general.threadOrder")}
+          description={t("settings.general.threadOrderDescription")}
+          anchorId="setting-general-thread-order"
           resetAction={
             settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
               <SettingResetButton
-                label="thread order"
+                label={t("settings.general.threadOrder")}
                 onClick={() =>
                   updateSettings({
                     sidebarThreadSortOrder: defaults.sidebarThreadSortOrder,
@@ -1669,57 +1791,58 @@ function SettingsRouteView() {
                 }
                 updateSettings({ sidebarThreadSortOrder: value });
               }}
-              ariaLabel="Thread sort order"
-              valueContent={SIDEBAR_THREAD_SORT_ORDER_LABELS[settings.sidebarThreadSortOrder]}
+              ariaLabel={t("settings.general.threadOrder")}
+              valueContent={t(SIDEBAR_THREAD_SORT_ORDER_KEYS[settings.sidebarThreadSortOrder])}
             >
               <SelectItem hideIndicator value="updated_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.updated_at}
+                {t(SIDEBAR_THREAD_SORT_ORDER_KEYS.updated_at)}
               </SelectItem>
               <SelectItem hideIndicator value="created_at">
-                {SIDEBAR_THREAD_SORT_ORDER_LABELS.created_at}
+                {t(SIDEBAR_THREAD_SORT_ORDER_KEYS.created_at)}
               </SelectItem>
             </SettingsSelectControl>
           }
         />
       </SettingsSection>
 
-      <SettingsSection title="Sidebar sections">
+      <SettingsSection title={t("settings.general.sidebarSections")}>
         {renderBooleanSettingRow({
           settingKey: "showChatsSection",
-          title: "Chats",
-          description:
-            "Show the standalone Chats list in the sidebar footer (chats not tied to a project).",
-          resetLabel: "chats section",
-          ariaLabel: "Show the Chats section in the sidebar",
+          title: t("settings.general.chats"),
+          description: t("settings.general.chatsDescription"),
+          resetLabel: t("settings.general.chats"),
+          ariaLabel: t("settings.general.chatsAria"),
+          anchorId: "setting-general-chats",
         })}
 
         {renderBooleanSettingRow({
           settingKey: "showWorkspaceSection",
-          title: "Workspace",
-          description:
-            "Show the Workspace tab in the sidebar switcher. The Threads tab always stays visible.",
-          resetLabel: "workspace section",
-          ariaLabel: "Show the Workspace section in the sidebar",
+          title: t("settings.general.workspace"),
+          description: t("settings.general.workspaceDescription"),
+          resetLabel: t("settings.general.workspace"),
+          ariaLabel: t("settings.general.workspaceAria"),
+          anchorId: "setting-general-workspace",
         })}
       </SettingsSection>
 
       <div ref={environmentPanelRef} id={SETTINGS_TARGETS.environmentPanel}>
-        <SettingsSection title="Environment panel">
+        <SettingsSection title={t("settings.general.environmentPanel")}>
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentUsage",
-            title: "Usage",
-            description: "Show the provider usage row in the chat Environment panel.",
-            resetLabel: "usage section",
-            ariaLabel: "Show the Usage section in the Environment panel",
+            title: t("settings.general.usage"),
+            description: t("settings.general.usageDescription"),
+            resetLabel: t("settings.general.usage"),
+            ariaLabel: t("settings.general.usageAria"),
+            anchorId: "setting-general-usage",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentRepository",
-            title: "Repository",
-            description:
-              "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
-            resetLabel: "repository section",
-            ariaLabel: "Show the Repository section in the Environment panel",
+            title: t("settings.general.repository"),
+            description: t("settings.general.repositoryDescription"),
+            resetLabel: t("settings.general.repository"),
+            ariaLabel: t("settings.general.repositoryAria"),
+            anchorId: "setting-general-repository",
           })}
 
           {renderBooleanSettingRow({
@@ -1729,56 +1852,60 @@ function SettingsRouteView() {
               "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
             resetLabel: "pull request section",
             ariaLabel: "Show the Pull request section in the Environment panel",
+            anchorId: "setting-general-pull-request",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentEditor",
-            title: "Editor",
-            description:
-              "Show the Editor section (in-app editor view and Open in editor picker) in the chat Environment panel.",
-            resetLabel: "editor section",
-            ariaLabel: "Show the Editor section in the Environment panel",
+            title: t("settings.general.editor"),
+            description: t("settings.general.editorDescription"),
+            resetLabel: t("settings.general.editor"),
+            ariaLabel: t("settings.general.editorAria"),
+            anchorId: "setting-general-editor",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentRecap",
-            title: "Recap",
-            description: "Show the auto-generated chat recap in the Environment panel.",
-            resetLabel: "recap section",
-            ariaLabel: "Show the Recap section in the Environment panel",
+            title: t("settings.general.recap"),
+            description: t("settings.general.recapDescription"),
+            resetLabel: t("settings.general.recap"),
+            ariaLabel: t("settings.general.recapAria"),
+            anchorId: "setting-general-recap",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentPinned",
-            title: "Pinned messages",
-            description: "Show the pinned-messages checklist in the Environment panel.",
-            resetLabel: "pinned messages section",
-            ariaLabel: "Show the Pinned messages section in the Environment panel",
+            title: t("settings.general.pinnedMessages"),
+            description: t("settings.general.pinnedMessagesDescription"),
+            resetLabel: t("settings.general.pinnedMessages"),
+            ariaLabel: t("settings.general.pinnedMessagesAria"),
+            anchorId: "setting-general-pinned-messages",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentMarkers",
-            title: "Text markers",
-            description:
-              "Show highlighted and underlined transcript text in the Environment panel.",
-            resetLabel: "text markers section",
-            ariaLabel: "Show the Text markers section in the Environment panel",
+            title: t("settings.general.textMarkers"),
+            description: t("settings.general.textMarkersDescription"),
+            resetLabel: t("settings.general.textMarkers"),
+            ariaLabel: t("settings.general.textMarkersAria"),
+            anchorId: "setting-general-text-markers",
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentInstructions",
-            title: "Project instructions",
-            description: "Show project-level instructions in the Environment panel.",
-            resetLabel: "project instructions section",
-            ariaLabel: "Show the Project instructions section in the Environment panel",
+            title: t("settings.general.projectInstructions"),
+            description: t("settings.general.projectInstructionsDescription"),
+            resetLabel: t("settings.general.projectInstructions"),
+            ariaLabel: t("settings.general.projectInstructionsAria"),
           })}
 
           {renderBooleanSettingRow({
             settingKey: "showEnvironmentNotepad",
-            title: "Notepad",
-            description: "Show the per-thread notepad in the Environment panel.",
-            resetLabel: "notepad section",
-            ariaLabel: "Show the Notepad section in the Environment panel",
+            title: t("settings.general.notepad"),
+            description: t("settings.general.notepadDescription"),
+            resetLabel: t("settings.general.notepad"),
+            ariaLabel: t("settings.general.notepadAria"),
+            anchorId: "setting-general-notepad",
           })}
         </SettingsSection>
       </div>
@@ -1788,14 +1915,20 @@ function SettingsRouteView() {
   const renderAppearancePanel = () => (
     <div className="space-y-6">
       <section className={SETTINGS_PANEL_SECTION_CLASS_NAME}>
-        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>Theme and typography</h2>
+        <h2 className={SETTINGS_SECTION_LABEL_CLASS_NAME}>
+          {t("settings.appearance.themeAndTypography")}
+        </h2>
         <SettingsCard>
           <SettingsRow
-            title="Theme"
-            description="Choose how Synara looks across the app."
+            title={t("settings.appearance.theme")}
+            description={t("settings.appearance.themeDescription")}
+            anchorId="setting-appearance-theme"
             resetAction={
               theme !== "system" ? (
-                <SettingResetButton label="theme" onClick={() => setTheme("system")} />
+                <SettingResetButton
+                  label={t("settings.appearance.theme")}
+                  onClick={() => setTheme("system")}
+                />
               ) : null
             }
             control={
@@ -1805,8 +1938,14 @@ function SettingsRouteView() {
                   if (value !== "system" && value !== "light" && value !== "dark") return;
                   setTheme(value);
                 }}
-                ariaLabel="Theme preference"
-                options={THEME_OPTIONS}
+                ariaLabel={t("settings.appearance.themeAria")}
+                options={THEME_OPTIONS.map((opt) => ({
+                  ...opt,
+                  label: t(`settings.appearance.themeOptions.${opt.value}` as const),
+                  description: t(
+                    `settings.appearance.themeOptions.${opt.value}Description` as const,
+                  ),
+                }))}
               />
             }
           />
@@ -1828,12 +1967,13 @@ function SettingsRouteView() {
 
         <SettingsCard>
           <SettingsRow
-            title="UI density"
-            description="Control spacing in the sidebar, composer, chat gutters, and settings rows without changing font size."
+            title={t("settings.appearance.uiDensity")}
+            description={t("settings.appearance.uiDensityDescription")}
+            anchorId="setting-appearance-ui-density"
             resetAction={
               settings.uiDensity !== defaults.uiDensity ? (
                 <SettingResetButton
-                  label="UI density"
+                  label={t("settings.appearance.uiDensity")}
                   onClick={() =>
                     updateSettings({
                       uiDensity: DEFAULT_UI_DENSITY,
@@ -1851,19 +1991,26 @@ function SettingsRouteView() {
                   }
                   updateSettings({ uiDensity: value });
                 }}
-                ariaLabel="UI density"
-                options={UI_DENSITY_OPTIONS}
+                ariaLabel={t("settings.appearance.uiDensity")}
+                options={UI_DENSITY_OPTIONS.map((opt) => ({
+                  ...opt,
+                  label: t(`settings.appearance.densityOptions.${opt.value}` as const),
+                  description: t(
+                    `settings.appearance.densityOptions.${opt.value}Description` as const,
+                  ),
+                }))}
               />
             }
           />
 
           <SettingsRow
-            title="Base font size"
-            description="Adjust the app text base in pixels. Chat and UI typography scale proportionally from this value."
+            title={t("settings.appearance.baseFontSize")}
+            description={t("settings.appearance.baseFontSizeDescription")}
+            anchorId="setting-appearance-base-font-size"
             resetAction={
               settings.chatFontSizePx !== defaults.chatFontSizePx ? (
                 <SettingResetButton
-                  label="base font size"
+                  label={t("settings.appearance.baseFontSize")}
                   onClick={() =>
                     updateSettings({
                       chatFontSizePx: defaults.chatFontSizePx,
@@ -1891,20 +2038,21 @@ function SettingsRouteView() {
                       chatFontSizePx: normalizeChatFontSizePx(Number(nextValue)),
                     });
                   }}
-                  aria-label="Base font size in pixels"
+                  aria-label={t("settings.appearance.baseFontSizeAria")}
                 />
-                <span className="text-xs text-muted-foreground">px</span>
+                <span className="text-xs text-muted-foreground">{t("settings.appearance.px")}</span>
               </div>
             }
           />
 
           <SettingsRow
-            title="Terminal font size"
-            description="Adjust terminal text independently from the app and chat font size."
+            title={t("settings.appearance.terminalFontSize")}
+            description={t("settings.appearance.terminalFontSizeDescription")}
+            anchorId="setting-appearance-terminal-font-size"
             resetAction={
               settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
                 <SettingResetButton
-                  label="terminal font size"
+                  label={t("settings.appearance.terminalFontSize")}
                   onClick={() =>
                     updateSettings({
                       terminalFontSizePx: defaults.terminalFontSizePx,
@@ -1932,20 +2080,21 @@ function SettingsRouteView() {
                       terminalFontSizePx: normalizeTerminalFontSizePx(Number(nextValue)),
                     });
                   }}
-                  aria-label="Terminal font size in pixels"
+                  aria-label={t("settings.appearance.terminalFontSizeAria")}
                 />
-                <span className="text-xs text-muted-foreground">px</span>
+                <span className="text-xs text-muted-foreground">{t("settings.appearance.px")}</span>
               </div>
             }
           />
 
           <SettingsRow
-            title="Terminal font"
-            description="Type any monospace font installed on this device (e.g. Fira Code). Leave empty for the default. Fonts that aren't installed fall back to the system monospace."
+            title={t("settings.appearance.terminalFont")}
+            description={t("settings.appearance.terminalFontDescription")}
+            anchorId="setting-appearance-terminal-font"
             resetAction={
               settings.terminalFontFamily !== defaults.terminalFontFamily ? (
                 <SettingResetButton
-                  label="terminal font"
+                  label={t("settings.appearance.terminalFont")}
                   onClick={() =>
                     updateSettings({
                       terminalFontFamily: defaults.terminalFontFamily,
@@ -1974,9 +2123,9 @@ function SettingsRouteView() {
                     showClear={settings.terminalFontFamily.length > 0}
                     spellCheck={false}
                     autoComplete="off"
-                    placeholder="Default (JetBrains Mono)"
+                    placeholder={t("settings.appearance.terminalFontPlaceholder")}
                     className="w-full sm:w-56"
-                    aria-label="Terminal font family"
+                    aria-label={t("settings.appearance.terminalFont")}
                   />
                   <AutocompletePopup className="w-56 min-w-56 font-system-ui">
                     <AutocompleteList>
@@ -1995,7 +2144,9 @@ function SettingsRouteView() {
                           {suggestion}
                         </AutocompleteItem>
                       ))}
-                      <AutocompleteEmpty>No matching suggested fonts.</AutocompleteEmpty>
+                      <AutocompleteEmpty>
+                        {t("settings.appearance.terminalFontNoMatches")}
+                      </AutocompleteEmpty>
                     </AutocompleteList>
                   </AutocompletePopup>
                 </Autocomplete>
@@ -2006,23 +2157,25 @@ function SettingsRouteView() {
           {shouldShowFontSmoothing
             ? renderBooleanSettingRow({
                 settingKey: "enableNativeFontSmoothing",
-                title: "Font smoothing",
-                description: "Use macOS-style antialiasing for lighter, crisper text rendering.",
-                resetLabel: "font smoothing",
-                ariaLabel: "Enable font smoothing",
+                title: t("settings.appearance.fontSmoothing"),
+                description: t("settings.appearance.fontSmoothingDescription"),
+                resetLabel: t("settings.appearance.fontSmoothing"),
+                ariaLabel: t("settings.appearance.fontSmoothingAria"),
+                anchorId: "setting-appearance-font-smoothing",
               })
             : null}
         </SettingsCard>
       </section>
 
-      <SettingsSection title="Time and reading">
+      <SettingsSection title={t("settings.appearance.timeAndReading")}>
         <SettingsRow
-          title="Time format"
-          description="System default follows your browser or OS clock preference."
+          title={t("settings.appearance.timeFormat")}
+          description={t("settings.appearance.timeFormatDescription")}
+          anchorId="setting-appearance-time-format"
           resetAction={
             settings.timestampFormat !== defaults.timestampFormat ? (
               <SettingResetButton
-                label="time format"
+                label={t("settings.appearance.timeFormat")}
                 onClick={() =>
                   updateSettings({
                     timestampFormat: defaults.timestampFormat,
@@ -2042,18 +2195,18 @@ function SettingsRouteView() {
                   timestampFormat: value,
                 });
               }}
-              ariaLabel="Timestamp format"
+              ariaLabel={t("settings.appearance.timeFormat")}
               triggerClassName="w-full sm:w-40"
-              valueContent={TIMESTAMP_FORMAT_LABELS[settings.timestampFormat]}
+              valueContent={t(`settings.appearance.timestamp.${settings.timestampFormat}` as const)}
             >
               <SelectItem hideIndicator value="locale">
-                {TIMESTAMP_FORMAT_LABELS.locale}
+                {t("settings.appearance.timestamp.locale")}
               </SelectItem>
               <SelectItem hideIndicator value="12-hour">
-                {TIMESTAMP_FORMAT_LABELS["12-hour"]}
+                {t("settings.appearance.timestamp.12-hour")}
               </SelectItem>
               <SelectItem hideIndicator value="24-hour">
-                {TIMESTAMP_FORMAT_LABELS["24-hour"]}
+                {t("settings.appearance.timestamp.24-hour")}
               </SelectItem>
             </SettingsSelectControl>
           }
@@ -2064,25 +2217,26 @@ function SettingsRouteView() {
 
   const renderNotificationsPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Activity alerts">
+      <SettingsSection title={t("settings.notifications.activityAlerts")}>
         {renderBooleanSettingRow({
           settingKey: "enableTaskCompletionToasts",
-          title: "Activity toasts",
-          description:
-            "Show an in-app toast when a chat or managed terminal agent finishes or needs input.",
-          resetLabel: "activity toasts",
-          ariaLabel: "Activity toast notifications",
+          title: t("settings.notifications.activityToasts"),
+          description: t("settings.notifications.activityToastsDescription"),
+          resetLabel: t("settings.notifications.activityToasts"),
+          ariaLabel: t("settings.notifications.activityToastsAria"),
+          anchorId: "setting-notifications-activity-toasts",
         })}
 
         <SettingsRow
-          title="Desktop notifications"
-          description="Show an OS notification when a chat or managed terminal agent finishes or needs input while the app is in the background."
+          title={t("settings.notifications.desktopNotifications")}
+          description={t("settings.notifications.desktopNotificationsDescription")}
           status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+          anchorId="setting-notifications-desktop-notifications"
           resetAction={
             settings.enableSystemTaskCompletionNotifications !==
             defaults.enableSystemTaskCompletionNotifications ? (
               <SettingResetButton
-                label="desktop notifications"
+                label={t("settings.notifications.desktopNotifications")}
                 onClick={() =>
                   updateSettings({
                     enableSystemTaskCompletionNotifications:
@@ -2095,14 +2249,14 @@ function SettingsRouteView() {
           control={
             <div className="flex w-full items-center gap-2 sm:w-auto sm:justify-end">
               <Button size="xs" variant="outline" onClick={() => void sendTestNotification()}>
-                Test
+                {t("settings.notifications.test")}
               </Button>
               <Switch
                 checked={settings.enableSystemTaskCompletionNotifications}
                 onCheckedChange={(checked) => {
                   void setSystemNotificationsEnabled(Boolean(checked));
                 }}
-                aria-label="Desktop activity notifications"
+                aria-label={t("settings.notifications.desktopNotificationsAria")}
               />
             </div>
           }
@@ -2113,48 +2267,52 @@ function SettingsRouteView() {
 
   const renderBehaviorPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Runtime behavior">
+      <SettingsSection title={t("settings.behavior.runtimeBehavior")}>
         {renderBooleanSettingRow({
           settingKey: "enableAssistantStreaming",
-          title: "Assistant output",
-          description: "Show token-by-token output while a response is in progress.",
-          resetLabel: "assistant output",
-          ariaLabel: "Stream assistant messages",
+          title: t("settings.behavior.assistantOutput"),
+          description: t("settings.behavior.assistantOutputDescription"),
+          resetLabel: t("settings.behavior.assistantOutput"),
+          ariaLabel: t("settings.behavior.assistantOutputAria"),
+          anchorId: "setting-behavior-assistant-output",
         })}
 
         {renderBooleanSettingRow({
           settingKey: "diffWordWrap",
-          title: "Diff line wrapping",
-          description:
-            "Set the default wrap state when the diff panel opens. The in-panel wrap toggle only affects the current diff session.",
-          resetLabel: "diff line wrapping",
-          ariaLabel: "Wrap diff lines by default",
+          title: t("settings.behavior.diffLineWrapping"),
+          description: t("settings.behavior.diffLineWrappingDescription"),
+          resetLabel: t("settings.behavior.diffLineWrapping"),
+          ariaLabel: t("settings.behavior.diffLineWrappingAria"),
+          anchorId: "setting-behavior-diff-line-wrapping",
         })}
       </SettingsSection>
 
-      <SettingsSection title="Safety confirmations">
+      <SettingsSection title={t("settings.behavior.safetyConfirmations")}>
         {renderBooleanSettingRow({
           settingKey: "confirmThreadDelete",
-          title: "Delete confirmation",
-          description: "Ask before deleting a thread and its chat history.",
-          resetLabel: "delete confirmation",
-          ariaLabel: "Confirm thread deletion",
+          title: t("settings.behavior.deleteConfirmation"),
+          description: t("settings.behavior.deleteConfirmationDescription"),
+          resetLabel: t("settings.behavior.deleteConfirmation"),
+          ariaLabel: t("settings.behavior.deleteConfirmationAria"),
+          anchorId: "setting-behavior-delete-confirmation",
         })}
 
         {renderBooleanSettingRow({
           settingKey: "confirmThreadArchive",
-          title: "Archive confirmation",
-          description: "Ask before archiving a thread.",
-          resetLabel: "archive confirmation",
-          ariaLabel: "Confirm thread archive",
+          title: t("settings.behavior.archiveConfirmation"),
+          description: t("settings.behavior.archiveConfirmationDescription"),
+          resetLabel: t("settings.behavior.archiveConfirmation"),
+          ariaLabel: t("settings.behavior.archiveConfirmationAria"),
+          anchorId: "setting-behavior-archive-confirmation",
         })}
 
         {renderBooleanSettingRow({
           settingKey: "confirmTerminalTabClose",
-          title: "Terminal close confirmation",
-          description: "Ask before closing a terminal tab and clearing its history.",
-          resetLabel: "terminal close confirmation",
-          ariaLabel: "Confirm terminal tab close",
+          title: t("settings.behavior.terminalCloseConfirmation"),
+          description: t("settings.behavior.terminalCloseConfirmationDescription"),
+          resetLabel: t("settings.behavior.terminalCloseConfirmation"),
+          ariaLabel: t("settings.behavior.terminalCloseConfirmationAria"),
+          anchorId: "setting-behavior-terminal-close-confirmation",
         })}
       </SettingsSection>
     </div>
@@ -2166,7 +2324,7 @@ function SettingsRouteView() {
         <div
           className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
         >
-          Loading managed worktrees...
+          {t("settings.worktrees.loading")}
         </div>
       );
     }
@@ -2180,7 +2338,7 @@ function SettingsRouteView() {
         >
           {serverWorktreesQuery.error instanceof Error
             ? serverWorktreesQuery.error.message
-            : "Unable to load worktrees."}
+            : t("settings.worktrees.unableToLoad")}
         </div>
       );
     }
@@ -2189,7 +2347,7 @@ function SettingsRouteView() {
         <div
           className={cn(SETTINGS_EMPTY_STATE_CLASS_NAME, "px-4 py-6 text-sm text-muted-foreground")}
         >
-          No app-managed worktrees found yet.
+          {t("settings.worktrees.noWorktreesFound")}
         </div>
       );
     }
@@ -2212,7 +2370,9 @@ function SettingsRouteView() {
                   <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="space-y-0.5">
-                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>Worktree</div>
+                        <div className={SETTINGS_CARD_ROW_TITLE_CLASS_NAME}>
+                          {t("settings.worktrees.worktree")}
+                        </div>
                         <div
                           className={cn(
                             SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME,
@@ -2225,7 +2385,7 @@ function SettingsRouteView() {
 
                       <div className="space-y-1">
                         <div className="text-[11px] font-medium text-muted-foreground">
-                          Conversations
+                          {t("settings.worktrees.conversations")}
                         </div>
                         {worktree.linkedThreads.length > 0 ? (
                           <div className="space-y-1">
@@ -2243,7 +2403,7 @@ function SettingsRouteView() {
                           </div>
                         ) : (
                           <div className={SETTINGS_CARD_ROW_DESCRIPTION_CLASS_NAME}>
-                            No conversations linked to this worktree.
+                            {t("settings.worktrees.noConversations")}
                           </div>
                         )}
                       </div>
@@ -2261,7 +2421,7 @@ function SettingsRouteView() {
                           })
                         }
                       >
-                        Delete
+                        {t("settings.worktrees.delete")}
                       </Button>
                       {worktree.linkedThreads.length > 0 ? (
                         <p
@@ -2270,7 +2430,7 @@ function SettingsRouteView() {
                             "max-w-40 text-right",
                           )}
                         >
-                          Linked conversations exist. Deleting will ask for confirmation.
+                          {t("settings.worktrees.linkedConversationsExist")}
                         </p>
                       ) : null}
                     </div>
@@ -2322,9 +2482,11 @@ function SettingsRouteView() {
           <div className="mx-auto mb-3 flex size-11 items-center justify-center rounded-full border border-border/70 bg-background/70 text-muted-foreground">
             <ArchiveIcon className="size-5" />
           </div>
-          <div className="text-sm font-medium text-foreground">No archived threads</div>
+          <div className="text-sm font-medium text-foreground">
+            {t("settings.archived.noArchivedThreads")}
+          </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            Archived threads will appear here and can be restored to the sidebar.
+            {t("settings.archived.archivedThreadsHere")}
           </div>
         </div>
       );
@@ -2338,13 +2500,15 @@ function SettingsRouteView() {
         {archivedGroups.map(({ project, threads: projectThreads }) => (
           <SettingsSection
             key={project?.id ?? "unknown-project"}
-            title={project?.name ?? "Unknown project"}
+            title={project?.name ?? t("settings.archived.unknownProject")}
           >
             {projectThreads.map((thread) => (
               <SettingsListRow
                 key={thread.id}
                 title={thread.title}
-                description={`Archived ${formatRelativeTime(thread.archivedAt ?? thread.createdAt)}`}
+                description={t("settings.archived.archivedRelative", {
+                  time: formatRelativeTime(thread.archivedAt ?? thread.createdAt),
+                })}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   void handleArchivedThreadContextMenu(thread.id, thread.title, {
@@ -2359,14 +2523,14 @@ function SettingsRouteView() {
                       variant="outline"
                       onClick={() => void unarchiveThread(thread.id)}
                     >
-                      Restore
+                      {t("settings.archived.restore")}
                     </Button>
                     <Button
                       size="xs"
                       variant="destructive"
                       onClick={() => void deleteArchivedThread(thread.id, thread.title)}
                     >
-                      Delete
+                      {t("settings.archived.delete")}
                     </Button>
                   </>
                 }
@@ -2380,14 +2544,15 @@ function SettingsRouteView() {
 
   const renderModelsPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Generation defaults">
+      <SettingsSection title={t("settings.models.generationDefaults")}>
         <SettingsRow
-          title="Git writing model"
-          description="Used for generated commit messages, PR titles, and branch names."
+          title={t("settings.models.gitWritingModel")}
+          description={t("settings.models.gitWritingModelDescription")}
+          anchorId="setting-models-git-writing-model"
           resetAction={
             isGitTextGenerationModelDirty ? (
               <SettingResetButton
-                label="git writing model"
+                label={t("settings.models.gitWritingModel")}
                 onClick={() =>
                   updateSettings({
                     textGenerationProvider: defaults.textGenerationProvider,
@@ -2411,7 +2576,7 @@ function SettingsRouteView() {
                   textGenerationModel: model,
                 });
               }}
-              ariaLabel="Git text generation model"
+              ariaLabel={t("settings.models.gitWritingModel")}
               triggerClassName="w-full sm:w-52"
               valueContent={selectedGitTextGenerationModelLabel}
             >
@@ -2429,14 +2594,15 @@ function SettingsRouteView() {
         />
       </SettingsSection>
 
-      <SettingsSection title="Custom models">
+      <SettingsSection title={t("settings.models.customModels")}>
         <SettingsRow
-          title="Saved model slugs"
-          description="Add custom model slugs for supported providers."
+          title={t("settings.models.savedModelSlugs")}
+          description={t("settings.models.savedModelSlugsDescription")}
+          anchorId="setting-models-saved-model-slugs"
           resetAction={
             totalCustomModels > 0 ? (
               <SettingResetButton
-                label="custom models"
+                label={t("settings.models.customModels")}
                 onClick={() => {
                   updateSettings({
                     customCodexModels: defaults.customCodexModels,
@@ -2478,7 +2644,7 @@ function SettingsRouteView() {
                 <SelectTrigger
                   size="sm"
                   className="w-full sm:w-40"
-                  aria-label="Custom model provider"
+                  aria-label={t("settings.models.customModelProvider")}
                 >
                   <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
                 </SelectTrigger>
@@ -2526,7 +2692,7 @@ function SettingsRouteView() {
                 onClick={() => addCustomModel(selectedCustomModelProvider)}
               >
                 <PlusIcon className="size-3.5" />
-                Add
+                {t("settings.models.add")}
               </Button>
             </div>
 
@@ -2548,7 +2714,7 @@ function SettingsRouteView() {
                     <button
                       type="button"
                       className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-                      aria-label={`Remove ${row.slug}`}
+                      aria-label={t("settings.models.removeModel", { slug: row.slug })}
                       onClick={() => removeCustomModel(row.provider, row.slug)}
                     >
                       <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
@@ -2563,8 +2729,8 @@ function SettingsRouteView() {
                     onClick={() => setShowAllCustomModels((value) => !value)}
                   >
                     {showAllCustomModels
-                      ? "Show less"
-                      : `Show more (${savedCustomModelRows.length - 5})`}
+                      ? t("settings.models.showLess")
+                      : t("settings.models.showMore", { count: savedCustomModelRows.length - 5 })}
                   </button>
                 ) : null}
               </div>
@@ -2578,21 +2744,22 @@ function SettingsRouteView() {
   const renderProvidersPanel = () => (
     <div className="space-y-6">
       {renderProviderUpdatesSection()}
-      <SettingsSection title="Provider picker">
+      <SettingsSection title={t("settings.providers.providerPicker")}>
         <SettingsRow
-          title="Visible providers"
-          description="Drag providers into your preferred picker order and hide the ones you don't use. The provider you're currently using on a thread always stays visible."
+          title={t("settings.providers.visibleProviders")}
+          description={t("settings.providers.visibleProvidersDescription")}
+          anchorId="setting-providers-visible-providers"
           status={
             hiddenProviderCount > 0
-              ? `${hiddenProviderCount} ${pluralize(hiddenProviderCount, "provider")} hidden`
+              ? t("settings.providers.providersHidden", { count: hiddenProviderCount })
               : isProviderOrderDirty
-                ? "Custom order"
-                : "All providers visible"
+                ? t("settings.providers.customOrder")
+                : t("settings.providers.allProvidersVisible")
           }
           resetAction={
             hiddenProviderCount > 0 || isProviderOrderDirty ? (
               <SettingResetButton
-                label="provider picker"
+                label={t("settings.providers.providerPicker")}
                 onClick={() =>
                   updateSettings({
                     hiddenProviders: defaults.hiddenProviders,
@@ -2641,25 +2808,26 @@ function SettingsRouteView() {
 
   const renderProviderUpdatesSection = () => (
     <div ref={providerUpdatesRef} id={SETTINGS_TARGETS.providerUpdates}>
-      <SettingsSection title="Updates">
+      <SettingsSection title={t("settings.providerUpdates.updates")}>
         {renderBooleanSettingRow({
           settingKey: "enableProviderUpdateChecks",
-          title: "Automatic CLI update checks",
-          description:
-            "Check Codex, Claude, and other provider CLIs for newer versions in the background.",
-          resetLabel: "CLI update checks",
-          ariaLabel: "Automatic CLI update checks",
+          title: t("settings.providerUpdates.automaticCliUpdateChecks"),
+          description: t("settings.providerUpdates.automaticCliUpdateChecksDescription"),
+          resetLabel: t("settings.providerUpdates.automaticCliUpdateChecks"),
+          ariaLabel: t("settings.providerUpdates.automaticCliUpdateChecks"),
+          anchorId: "setting-providers-automatic-cli-update-checks",
         })}
 
         <SettingsRow
-          title="Provider updates"
-          description="Review installed provider tools that Synara can safely update."
+          title={t("settings.providerUpdates.providerUpdates")}
+          description={t("settings.providerUpdates.providerUpdatesDescription")}
+          anchorId="setting-providers-provider-updates"
           status={
             !settings.enableProviderUpdateChecks
-              ? "Automatic checks off"
+              ? t("settings.providerUpdates.automaticChecksOff")
               : outdatedProviderCount > 0
-                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-                : "No provider updates detected"
+                ? t("settings.providerUpdates.updatesAvailable", { count: outdatedProviderCount })
+                : t("settings.providerUpdates.noUpdatesDetected")
           }
         >
           {settings.enableProviderUpdateChecks && outdatedProviderStatuses.length > 0 ? (
@@ -2679,7 +2847,7 @@ function SettingsRouteView() {
                   updatingProviders.has(providerStatus.provider);
                 const canUpdateProvider =
                   updateAdvisory?.canUpdate === true && !isProviderUpdateActive;
-                const updateLabel = providerUpdateStatusLabel(providerStatus);
+                const updateLabel = providerUpdateStatusLabel(providerStatus, t);
 
                 return (
                   <SettingsListRow
@@ -2695,7 +2863,9 @@ function SettingsRouteView() {
                           disabled={!canUpdateProvider}
                           title={
                             updateAdvisory.updateCommand
-                              ? `Run ${updateAdvisory.updateCommand}`
+                              ? t("settings.providerUpdates.runCommand", {
+                                  command: updateAdvisory.updateCommand,
+                                })
                               : undefined
                           }
                           onClick={() => void runProviderUpdate(providerStatus.provider)}
@@ -2705,10 +2875,14 @@ function SettingsRouteView() {
                           ) : (
                             <DownloadIcon className="size-3.5" />
                           )}
-                          {isProviderUpdateActive ? "Updating" : "Update"}
+                          {isProviderUpdateActive
+                            ? t("settings.providerUpdates.updating")
+                            : t("settings.providerUpdates.update")}
                         </Button>
                       ) : (
-                        <span className="text-[11px] text-muted-foreground">Manual update</span>
+                        <span className="text-[11px] text-muted-foreground">
+                          {t("settings.providerUpdates.manualUpdate")}
+                        </span>
                       )
                     }
                   />
@@ -2723,21 +2897,22 @@ function SettingsRouteView() {
 
   const renderProviderInstallsSection = () => (
     <div ref={providerInstallsRef} id={SETTINGS_TARGETS.providerInstalls}>
-      <SettingsSection title="Provider tools">
+      <SettingsSection title={t("settings.providers.providerTools")}>
         <SettingsRow
-          title="Installed CLIs"
-          description="Review provider versions and update tools. Open a row only when you need binary overrides."
+          title={t("settings.providers.installedClis")}
+          description={t("settings.providers.installedClisDescription")}
+          anchorId="setting-providers-installed-clis"
           status={
             !settings.enableProviderUpdateChecks
-              ? "Automatic checks off"
+              ? t("settings.providers.automaticChecksOff")
               : outdatedProviderCount > 0
-                ? `${outdatedProviderCount} ${pluralize(outdatedProviderCount, "update")} available`
-                : "No provider updates detected"
+                ? t("settings.providers.updatesAvailable", { count: outdatedProviderCount })
+                : t("settings.providers.noUpdatesDetected")
           }
           resetAction={
             isInstallSettingsDirty ? (
               <SettingResetButton
-                label="provider tools"
+                label={t("settings.providers.providerTools")}
                 onClick={() => {
                   updateSettings({
                     claudeBinaryPath: defaults.claudeBinaryPath,
@@ -2833,11 +3008,11 @@ function SettingsRouteView() {
                 const providerUpdateLabel = providerStatus
                   ? !settings.enableProviderUpdateChecks
                     ? currentProviderVersion
-                      ? `Current ${currentProviderVersion}`
+                      ? t("settings.providers.currentVersion", { version: currentProviderVersion })
                       : null
                     : providerUpdateSuppressed
                       ? null
-                      : providerUpdateStatusLabel(providerStatus)
+                      : providerUpdateStatusLabel(providerStatus, t)
                   : null;
                 const updateAdvisory = providerStatus?.versionAdvisory;
                 const providerUpdateState = providerStatus?.updateState?.status;
@@ -2854,6 +3029,13 @@ function SettingsRouteView() {
                   showProviderUpdateStatus &&
                   updateAdvisory?.status === "behind_latest" &&
                   updateAdvisory.canUpdate;
+
+                const providerBinaryName =
+                  providerSettings.provider === "cursor"
+                    ? "cursor-agent"
+                    : providerSettings.provider === "claudeAgent"
+                      ? "claude"
+                      : providerSettings.provider;
 
                 return (
                   <Collapsible
@@ -2883,7 +3065,7 @@ function SettingsRouteView() {
                           </span>
                           {isDirty ? (
                             <span className="shrink-0 text-[11px] text-muted-foreground">
-                              Custom
+                              {t("settings.providers.custom")}
                             </span>
                           ) : null}
                           {providerUpdateLabel ? (
@@ -2913,7 +3095,9 @@ function SettingsRouteView() {
                             disabled={!canUpdateProvider}
                             title={
                               updateAdvisory.updateCommand
-                                ? `Run ${updateAdvisory.updateCommand}`
+                                ? t("settings.providers.runCommand", {
+                                    command: updateAdvisory.updateCommand,
+                                  })
                                 : undefined
                             }
                             onClick={(event) => {
@@ -2926,7 +3110,9 @@ function SettingsRouteView() {
                             ) : (
                               <DownloadIcon className="size-3.5" />
                             )}
-                            {isProviderUpdateActive ? "Updating" : "Update"}
+                            {isProviderUpdateActive
+                              ? t("settings.providers.updating")
+                              : t("settings.providers.update")}
                           </Button>
                         ) : null}
                       </div>
@@ -2934,19 +3120,19 @@ function SettingsRouteView() {
                       <CollapsibleContent>
                         <div className="border-t border-border/70 bg-muted/20 px-3 py-3">
                           <div className="space-y-3">
-                            <ProviderDocsLinks docs={providerSettings.docs} />
+                            <ProviderDocsLinks docs={providerSettings.docs} t={t} />
                             {showProviderUpdateStatus &&
                             updateAdvisory?.status === "behind_latest" ? (
                               <div className="text-xs text-muted-foreground">
                                 {updateAdvisory.canUpdate && updateAdvisory.updateCommand ? (
                                   <>
-                                    <span>Command: </span>
+                                    <span>{t("settings.providers.command")}: </span>
                                     <code className="font-mono">
                                       {updateAdvisory.updateCommand}
                                     </code>
                                   </>
                                 ) : (
-                                  "A newer version is available, but Synara could not identify a safe one-click update command for this installation."
+                                  t("settings.providers.newerVersionAvailable")
                                 )}
                               </div>
                             ) : null}
@@ -2956,7 +3142,9 @@ function SettingsRouteView() {
                               className="block"
                             >
                               <span className="block text-xs font-medium text-foreground">
-                                {providerSettings.title} binary path
+                                {t("settings.providers.binaryPath", {
+                                  title: providerSettings.title,
+                                })}
                               </span>
                               <DebouncedSettingTextInput
                                 id={`provider-install-${providerSettings.binaryPathKey}`}
@@ -2984,11 +3172,19 @@ function SettingsRouteView() {
                                                   : { codexBinaryPath: nextValue },
                                   )
                                 }
-                                placeholder={providerSettings.binaryPlaceholder}
+                                placeholder={t("settings.providers.binaryPath", {
+                                  title: providerSettings.title,
+                                })}
                                 spellCheck={false}
                               />
                               <span className="mt-1 block text-xs text-muted-foreground">
-                                {providerSettings.binaryDescription}
+                                {providerSettings.provider === "cursor"
+                                  ? t("settings.providers.leaveBlankBinaryPathCursor", {
+                                      binaryName: providerBinaryName,
+                                    })
+                                  : t("settings.providers.leaveBlankBinaryPath", {
+                                      binaryName: providerBinaryName,
+                                    })}
                               </span>
                             </label>
 
@@ -2998,7 +3194,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  CODEX_HOME path
+                                  {t("settings.providers.codexHomePath")}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.homePathKey}`}
@@ -3011,12 +3207,12 @@ function SettingsRouteView() {
                                       codexHomePath: nextValue,
                                     })
                                   }
-                                  placeholder={providerSettings.homePlaceholder}
+                                  placeholder="CODEX_HOME"
                                   spellCheck={false}
                                 />
                                 {providerSettings.homeDescription ? (
                                   <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.homeDescription}
+                                    {t("settings.providers.codexHomeDescription")}
                                   </span>
                                 ) : null}
                               </label>
@@ -3028,7 +3224,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  Pi agent directory
+                                  {t("settings.providers.piAgentDir")}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.agentDirKey}`}
@@ -3041,12 +3237,12 @@ function SettingsRouteView() {
                                       piAgentDir: nextValue,
                                     })
                                   }
-                                  placeholder={providerSettings.agentDirPlaceholder}
+                                  placeholder={t("settings.providers.piAgentDir")}
                                   spellCheck={false}
                                 />
                                 {providerSettings.agentDirDescription ? (
                                   <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.agentDirDescription}
+                                    {t("settings.providers.piAgentDirDescription")}
                                   </span>
                                 ) : null}
                               </label>
@@ -3058,7 +3254,7 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  Cursor API endpoint
+                                  {t("settings.providers.cursorApiEndpoint")}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.apiEndpointKey}`}
@@ -3076,7 +3272,9 @@ function SettingsRouteView() {
                                 />
                                 {providerSettings.apiEndpointDescription ? (
                                   <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.apiEndpointDescription}
+                                    {t("settings.providers.apiEndpointDescription", {
+                                      binaryName: providerBinaryName,
+                                    })}
                                   </span>
                                 ) : null}
                               </label>
@@ -3088,7 +3286,9 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server URL
+                                  {t("settings.providers.serverUrl", {
+                                    title: providerSettings.title,
+                                  })}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverUrlKey}`}
@@ -3112,7 +3312,9 @@ function SettingsRouteView() {
                                 />
                                 {providerSettings.serverUrlDescription ? (
                                   <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.serverUrlDescription}
+                                    {t("settings.providers.serverUrlDescription", {
+                                      title: providerSettings.title,
+                                    })}
                                   </span>
                                 ) : null}
                               </label>
@@ -3124,7 +3326,9 @@ function SettingsRouteView() {
                                 className="block"
                               >
                                 <span className="block text-xs font-medium text-foreground">
-                                  {providerSettings.title} server password
+                                  {t("settings.providers.serverPassword", {
+                                    title: providerSettings.title,
+                                  })}
                                 </span>
                                 <DebouncedSettingTextInput
                                   id={`provider-install-${providerSettings.serverPasswordKey}`}
@@ -3143,12 +3347,16 @@ function SettingsRouteView() {
                                         : { openCodeServerPassword: nextValue },
                                     )
                                   }
-                                  placeholder={providerSettings.serverPasswordPlaceholder}
+                                  placeholder={t("settings.providers.serverPassword", {
+                                    title: providerSettings.title,
+                                  })}
                                   spellCheck={false}
                                 />
                                 {providerSettings.serverPasswordDescription ? (
                                   <span className="mt-1 block text-xs text-muted-foreground">
-                                    {providerSettings.serverPasswordDescription}
+                                    {t("settings.providers.serverPasswordDescription", {
+                                      title: providerSettings.title,
+                                    })}
                                   </span>
                                 ) : null}
                               </label>
@@ -3161,11 +3369,11 @@ function SettingsRouteView() {
                               >
                                 <span className="min-w-0">
                                   <span className="block text-xs font-medium text-foreground">
-                                    OpenAI response WebSockets
+                                    {t("settings.providers.openaiResponseWebSockets")}
                                   </span>
                                   {providerSettings.experimentalWebSocketsDescription ? (
                                     <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.experimentalWebSocketsDescription}
+                                      {t("settings.providers.openaiResponseWebSocketsDescription")}
                                     </span>
                                   ) : null}
                                 </span>
@@ -3196,19 +3404,20 @@ function SettingsRouteView() {
 
   const renderAdvancedPanel = () => (
     <div className="space-y-6">
-      <SettingsSection title="Developer tools">
+      <SettingsSection title={t("settings.advanced.developerTools")}>
         <SettingsRow
-          title="Keybindings"
-          description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
+          title={t("settings.advanced.keybindings")}
+          description={t("settings.advanced.keybindingsDescription")}
+          anchorId="setting-advanced-keybindings"
           status={
             <>
               <span className="block break-all font-mono text-[11px] text-foreground">
-                {keybindingsConfigPath ?? "Resolving keybindings path..."}
+                {keybindingsConfigPath ?? t("settings.advanced.resolvingKeybindingsPath")}
               </span>
               {openKeybindingsError ? (
                 <span className="mt-1 block text-destructive">{openKeybindingsError}</span>
               ) : (
-                <span className="mt-1 block">Opens in your preferred editor.</span>
+                <span className="mt-1 block">{t("settings.advanced.opensInEditor")}</span>
               )}
             </>
           }
@@ -3219,18 +3428,21 @@ function SettingsRouteView() {
               disabled={!keybindingsConfigPath || isOpeningKeybindings}
               onClick={openKeybindingsFile}
             >
-              {isOpeningKeybindings ? "Opening..." : "Open file"}
+              {isOpeningKeybindings
+                ? t("settings.advanced.opening")
+                : t("settings.advanced.openFile")}
             </Button>
           }
         />
 
         <SettingsRow
-          title="Recovery tools"
-          description="Rebuild local project indexes without clearing existing chats when the local state gets out of sync."
+          title={t("settings.advanced.recoveryTools")}
+          description={t("settings.advanced.recoveryToolsDescription")}
+          anchorId="setting-advanced-recovery-tools"
           status={
             shouldOfferRecoveryTools
-              ? "Visible because projects exist but no chat history is currently available."
-              : "Shown automatically only when recovery actions are relevant."
+              ? t("settings.advanced.recoveryVisibleReason")
+              : t("settings.advanced.recoveryHiddenReason")
           }
           control={
             <Button
@@ -3239,7 +3451,9 @@ function SettingsRouteView() {
               disabled={!shouldOfferRecoveryTools || isRepairingLocalState}
               onClick={() => void repairLocalState()}
             >
-              {isRepairingLocalState ? "Repairing..." : "Repair state"}
+              {isRepairingLocalState
+                ? t("settings.advanced.repairing")
+                : t("settings.advanced.repairState")}
             </Button>
           }
         >
@@ -3250,7 +3464,9 @@ function SettingsRouteView() {
                 className="flex w-full items-center justify-between text-left"
                 onClick={() => setShowRecoveryTools((current) => !current)}
               >
-                <span className="text-xs font-medium text-muted-foreground">What this does</span>
+                <span className="text-xs font-medium text-muted-foreground">
+                  {t("settings.advanced.whatThisDoes")}
+                </span>
                 <ChevronDownIcon
                   className={cn(
                     "size-4 shrink-0 text-muted-foreground transition-transform",
@@ -3265,8 +3481,7 @@ function SettingsRouteView() {
                     SETTINGS_INSET_LIST_CLASS_NAME,
                   )}
                 >
-                  Rebuilds local project indexes and refreshes project snapshots. Existing chats
-                  stay in place.
+                  {t("settings.advanced.recoveryDetail")}
                 </div>
               ) : null}
             </div>
@@ -3274,18 +3489,20 @@ function SettingsRouteView() {
         </SettingsRow>
       </SettingsSection>
 
-      <SettingsSection title="About">
+      <SettingsSection title={t("settings.advanced.about")}>
         <SettingsRow
-          title="Version"
-          description="Current application version."
+          title={t("settings.advanced.version")}
+          description={t("settings.advanced.versionDescription")}
+          anchorId="setting-advanced-version"
           control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
         />
         <SettingsRow
-          title="Release history"
-          description="A running log of every update, newest first. Same notes the post-update dialog shows, kept here so you can revisit them any time."
+          title={t("settings.advanced.releaseHistory")}
+          description={t("settings.advanced.releaseHistoryDescription")}
+          anchorId="setting-advanced-release-history"
           control={
             <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
-              View release history
+              {t("settings.advanced.viewReleaseHistory")}
             </Button>
           }
         />
@@ -3369,10 +3586,10 @@ function SettingsRouteView() {
                 <div className="mb-8 flex items-start justify-between gap-4">
                   <div className="min-w-0">
                     <h1 className="text-xl font-medium tracking-tight text-foreground">
-                      {activeSectionItem.label}
+                      {t(activeSectionItem.labelKey)}
                     </h1>
                     <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
-                      {activeSectionItem.description}
+                      {t(activeSectionItem.descriptionKey)}
                     </p>
                   </div>
                   <Button
@@ -3383,7 +3600,7 @@ function SettingsRouteView() {
                     onClick={() => void restoreDefaults()}
                   >
                     <RotateCcwIcon className="size-3.5" />
-                    Restore defaults
+                    {t("settings.restoreDefaults")}
                   </Button>
                 </div>
 

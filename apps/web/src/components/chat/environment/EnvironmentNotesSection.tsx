@@ -3,6 +3,7 @@
 // Layer: Environment panel section
 
 import { THREAD_NOTES_MAX_CHARS, type ThreadId } from "@t3tools/contracts";
+import { useTranslation } from "react-i18next";
 
 import { Textarea } from "~/components/ui/textarea";
 
@@ -18,10 +19,11 @@ export function EnvironmentNotesSection({
   notes: string;
   onChange: (threadId: ThreadId, notes: string) => Promise<void>;
 }) {
+  const { t } = useTranslation();
   const autosave = useThreadNotesAutosave({ threadId, notes, onChange });
 
   return (
-    <EnvironmentCollapsibleSection label="Notepad">
+    <EnvironmentCollapsibleSection label={t("environment.notepad.label")}>
       <div className="px-2 pb-1">
         <Textarea
           // `unstyled` drops the default surface (filled background + focus ring/border tint),
@@ -35,7 +37,7 @@ export function EnvironmentNotesSection({
           onChange={autosave.onChange}
           onFocus={autosave.onFocus}
           onBlur={autosave.onBlur}
-          placeholder="Type here"
+          placeholder={t("environment.notepad.placeholder")}
           maxLength={THREAD_NOTES_MAX_CHARS}
         />
       </div>

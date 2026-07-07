@@ -6,6 +6,7 @@
 import type { ProjectDirectoryEntry, ProjectFileSystemEntry } from "@t3tools/contracts";
 import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ChevronDownIcon, ChevronRightIcon, FileIcon, FolderIcon } from "~/lib/icons";
 import { readNativeApi } from "~/nativeApi";
 import { cn } from "~/lib/utils";
@@ -33,14 +34,18 @@ function joinDirectoryPath(rootPath: string, relativePath: string): string {
 
 export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
   rootPath,
-  emptyLabel = "No folders found",
-  unavailableLabel = "Home directory unavailable.",
-  loadingLabel = "Loading folders…",
+  emptyLabel,
+  unavailableLabel,
+  loadingLabel,
   className,
   includeFiles = false,
   query = "",
   onSelectEntry,
 }: DirectoryTreeBrowserProps) {
+  const { t } = useTranslation();
+  const resolvedEmptyLabel = emptyLabel ?? t("directoryTreeBrowser.noFolders");
+  const resolvedUnavailableLabel = unavailableLabel ?? t("directoryTreeBrowser.homeUnavailable");
+  const resolvedLoadingLabel = loadingLabel ?? t("directoryTreeBrowser.loadingFolders");
   const [entriesByParent, setEntriesByParent] = useState<DirectoryEntriesByParent>({});
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(() => new Set());
@@ -71,7 +76,9 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
           [relativePath]: result.entries,
         }));
       } catch (error) {
-        setErrorMessage(error instanceof Error ? error.message : "Unable to load folders.");
+        setErrorMessage(
+          error instanceof Error ? error.message : t("directoryTreeBrowser.unableToLoad"),
+        );
       } finally {
         setLoadingPaths((current) => {
           const next = new Set(current);
@@ -141,7 +148,11 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
           >
             <button
               type="button"
-              aria-label={expanded ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
+              aria-label={
+                expanded
+                  ? t("directoryTreeBrowser.collapse", { name: entry.name })
+                  : t("directoryTreeBrowser.expand", { name: entry.name })
+              }
               className={cn(
                 "inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-button-secondary-hover)] hover:text-foreground",
                 (!isDirectory || !entry.hasChildren) && "opacity-35",
@@ -176,7 +187,9 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
               <span className="truncate text-foreground/95">{entry.name}</span>
             </button>
             {isDirectory && isLoadingChildren ? (
-              <span className="shrink-0 text-[11px] text-muted-foreground/45">Loading…</span>
+              <span className="shrink-0 text-[11px] text-muted-foreground/45">
+                {t("directoryTreeBrowser.loading")}
+              </span>
             ) : null}
           </div>,
           ...renderedChildren,
@@ -199,14 +212,18 @@ export const DirectoryTreeBrowser = memo(function DirectoryTreeBrowser({
     <div className={className} onMouseEnter={handleEnsureRootLoaded}>
       {!rootPath ? (
         <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">
-          {unavailableLabel}
+          {resolvedUnavailableLabel}
         </div>
       ) : loadingPaths.has("") && rootEntries.length === 0 ? (
-        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">{loadingLabel}</div>
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">
+          {resolvedLoadingLabel}
+        </div>
       ) : renderedTree.length > 0 ? (
         renderedTree
       ) : (
-        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">{emptyLabel}</div>
+        <div className="px-2 py-8 text-center text-sm text-muted-foreground/60">
+          {resolvedEmptyLabel}
+        </div>
       )}
       {errorMessage ? <div className="px-2 pt-2 text-xs text-red-400">{errorMessage}</div> : null}
     </div>

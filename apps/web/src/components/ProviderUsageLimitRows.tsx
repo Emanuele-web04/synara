@@ -8,6 +8,7 @@ import {
   type ProviderUsageDisplayRow,
 } from "~/lib/providerUsageDisplay";
 import { cn } from "~/lib/utils";
+import { useTranslation } from "react-i18next";
 
 import { UsageProgressTrack } from "./UsageProgressTrack";
 
@@ -67,6 +68,7 @@ function ProviderUsageTrack({
 }
 
 function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
+  const { t } = useTranslation();
   const trackProps = providerUsageProgressTrackProps(row);
 
   return (
@@ -75,7 +77,7 @@ function SettingsUsageLimitRow({ row }: { row: ProviderUsageDisplayRow }) {
         <span className="text-xs font-medium text-foreground">{row.label}</span>
         <span
           className={cn("size-1.5 shrink-0 rounded-full", trackProps.markerClassName)}
-          title={row.pace ? `Usage pace: ${row.pace.status}` : undefined}
+          title={row.pace ? t("providerUsage.usagePace", { status: row.pace.status }) : undefined}
           aria-hidden
         />
       </div>

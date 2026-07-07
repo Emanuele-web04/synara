@@ -3,6 +3,7 @@
 // Layer: Chat transcript interaction UI
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { MessageCircleIcon, PencilIcon, TextWrapIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 
@@ -49,13 +50,14 @@ function TranscriptSelectionToolbarButton({
 }
 
 export function TranscriptSelectionAction(props: TranscriptSelectionActionProps) {
+  const { t } = useTranslation();
   return (
     <div
       data-transcript-selection-action="true"
       className="pointer-events-none fixed z-50"
       style={{ left: props.left, top: props.top }}
       role="toolbar"
-      aria-label="Selection actions"
+      aria-label={t("chat.transcriptSelection.selectionActions")}
     >
       <div
         className={cn(
@@ -64,16 +66,25 @@ export function TranscriptSelectionAction(props: TranscriptSelectionActionProps)
         )}
       >
         {props.onHighlight ? (
-          <TranscriptSelectionToolbarButton label="Highlight" onClick={props.onHighlight}>
+          <TranscriptSelectionToolbarButton
+            label={t("chat.transcriptSelection.highlight")}
+            onClick={props.onHighlight}
+          >
             <PencilIcon className="size-3.5" />
           </TranscriptSelectionToolbarButton>
         ) : null}
         {props.onUnderline ? (
-          <TranscriptSelectionToolbarButton label="Underline" onClick={props.onUnderline}>
+          <TranscriptSelectionToolbarButton
+            label={t("chat.transcriptSelection.underline")}
+            onClick={props.onUnderline}
+          >
             <TextWrapIcon className="size-3.5" />
           </TranscriptSelectionToolbarButton>
         ) : null}
-        <TranscriptSelectionToolbarButton label="Add to chat" onClick={props.onAddToChat}>
+        <TranscriptSelectionToolbarButton
+          label={t("chat.transcriptSelection.addToChat")}
+          onClick={props.onAddToChat}
+        >
           <MessageCircleIcon className="size-3.5" />
         </TranscriptSelectionToolbarButton>
       </div>

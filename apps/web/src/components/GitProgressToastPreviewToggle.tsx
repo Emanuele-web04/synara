@@ -2,6 +2,7 @@
 // Purpose: Expose a sidebar switch for keeping the git progress toast pinned during styling work.
 // Exports: GitProgressToastPreviewToggle
 
+import { useTranslation } from "react-i18next";
 import { LoaderCircleIcon } from "~/lib/icons";
 
 import { setFeatureFlagEnabled, useFeatureFlags } from "../featureFlags";
@@ -9,6 +10,7 @@ import { SidebarMenuButton } from "./ui/sidebar";
 import { cn } from "~/lib/utils";
 
 export function GitProgressToastPreviewToggle() {
+  const { t } = useTranslation();
   const featureFlags = useFeatureFlags();
   const enabled = featureFlags["pin-git-progress-toast-preview"];
 
@@ -23,10 +25,10 @@ export function GitProgressToastPreviewToggle() {
       onClick={() => {
         setFeatureFlagEnabled("pin-git-progress-toast-preview", !enabled);
       }}
-      title="Keep a looping git progress toast visible for styling"
+      title={t("settings.gitToastPreviewDescription")}
     >
       <LoaderCircleIcon className={cn("size-[15px]", enabled && "animate-spin")} />
-      <span>{enabled ? "Git toast preview on" : "Git toast preview"}</span>
+      <span>{enabled ? t("settings.gitToastPreviewOn") : t("settings.gitToastPreview")}</span>
     </SidebarMenuButton>
   );
 }

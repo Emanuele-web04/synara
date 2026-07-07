@@ -16,6 +16,7 @@ import {
   ProviderAdapterSessionClosedError,
   type ProviderAdapterError,
 } from "../Errors.ts";
+import { t } from "../../i18n";
 
 export function mapAcpToAdapterError(
   provider: ProviderKind,
@@ -105,7 +106,7 @@ export function readAcpFailedToolDetail(toolCall: AcpToolCallLike): string | und
     return undefined;
   }
 
-  return toolCall.detail?.trim() || toolCall.title?.trim() || "Tool call failed.";
+  return toolCall.detail?.trim() || toolCall.title?.trim() || t("errors.toolCallFailed");
 }
 
 export function classifyAcpPromptTurnCompletion(input: {

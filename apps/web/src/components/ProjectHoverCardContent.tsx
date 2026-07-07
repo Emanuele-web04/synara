@@ -8,6 +8,7 @@
 //      pin and "Edit project" rows are real controls. Spacing/type mirror the
 //      app's menu rows (12px UI font, compact padding) so it reads as native.
 
+import { useTranslation } from "react-i18next";
 import { MessageCircleIcon, SettingsIcon } from "~/lib/icons";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { cn } from "~/lib/utils";
@@ -37,10 +38,6 @@ const ROW_CLASS_NAME = SIDEBAR_HOVER_CARD_ROW_CLASS_NAME;
 // the explicit text color here tints them directly.
 const ICON_CLASS_NAME = "size-3.5 shrink-0 text-muted-foreground";
 
-function formatChatCount(count: number): string {
-  return `${count} ${count === 1 ? "chat" : "chats"}`;
-}
-
 export function ProjectHoverCardContent({
   name,
   isPinned,
@@ -49,6 +46,7 @@ export function ProjectHoverCardContent({
   onTogglePin,
   onEditProject,
 }: ProjectHoverCardContentProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn("flex w-full flex-col gap-0", SIDEBAR_HOVER_CARD_CONTAINER_PADDING_CLASS_NAME)}
@@ -58,7 +56,7 @@ export function ProjectHoverCardContent({
         <span className="min-w-0 flex-1 truncate font-medium text-foreground">{name}</span>
         <button
           type="button"
-          aria-label={pinActionLabel(name, isPinned)}
+          aria-label={pinActionLabel(name, isPinned, t)}
           aria-pressed={isPinned}
           onClick={onTogglePin}
           className={cn(
@@ -71,7 +69,7 @@ export function ProjectHoverCardContent({
       </div>
       <div className={cn(ROW_CLASS_NAME, "text-foreground/80")}>
         <MessageCircleIcon className={ICON_CLASS_NAME} aria-hidden />
-        <span className="min-w-0 truncate">{formatChatCount(chatCount)}</span>
+        <span className="min-w-0 truncate">{t("project.chatCount", { count: chatCount })}</span>
       </div>
       <div className="-mx-0.5 my-0.5 h-px bg-[color:var(--color-border)]" aria-hidden />
       <div className={cn(ROW_CLASS_NAME, "text-foreground/80")}>
@@ -88,7 +86,7 @@ export function ProjectHoverCardContent({
         )}
       >
         <SettingsIcon className={ICON_CLASS_NAME} aria-hidden />
-        <span className="min-w-0 truncate">Edit project</span>
+        <span className="min-w-0 truncate">{t("project.editProject")}</span>
       </button>
     </div>
   );

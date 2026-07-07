@@ -7,6 +7,7 @@
 import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ComposerPickerMenuPopup } from "../ComposerPickerMenuPopup";
 import { Menu, MenuItem, MenuTrigger } from "../../ui/menu";
@@ -200,6 +201,7 @@ export function EnvironmentPullRequestSection({
   onOpenUrl: (url: string) => void;
   onClose: () => void;
 }) {
+  const { t } = useTranslation();
   // Shares the cached git status the git block already fetches — no extra RPC.
   const { data: gitStatus } = useQuery(gitStatusQueryOptions(gitCwd));
   const pr = gitStatus?.pr ?? null;
@@ -251,7 +253,7 @@ export function EnvironmentPullRequestSection({
   };
 
   return (
-    <EnvironmentLabeledSection label="Pull request">
+    <EnvironmentLabeledSection label={t("environment.pullRequest.label")}>
       <EnvironmentRow
         icon={<GitPullRequestIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
         label={<span className="truncate">{`#${displayPr.number} ${displayPr.title}`}</span>}
@@ -277,7 +279,11 @@ export function EnvironmentPullRequestSection({
               />
             )
           }
-          label={settledState === "merged" ? "Merged on GitHub" : "Closed on GitHub"}
+          label={
+            settledState === "merged"
+              ? t("environment.pullRequest.mergedOnGitHub")
+              : t("environment.pullRequest.closedOnGitHub")
+          }
           trailing={<ArrowUpRightIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
           onClick={() => {
             onOpenUrl(displayPr.url);
@@ -292,14 +298,14 @@ export function EnvironmentPullRequestSection({
               aria-hidden
             />
           }
-          label="Couldn't load PR data"
+          label={t("environment.pullRequest.couldNotLoadData")}
           trailing={
             <RefreshCwIcon
               className={cn("size-3 shrink-0", snapshotQuery.isFetching && "animate-spin")}
               aria-hidden
             />
           }
-          title="Retry loading checks and review comments"
+          title={t("environment.pullRequest.retryLoading")}
           onClick={() => void snapshotQuery.refetch()}
         />
       ) : (
@@ -321,13 +327,13 @@ export function EnvironmentPullRequestSection({
                     checksToneIcon(checksSummary.tone)
                   )
                 }
-                label={loading ? "Loading checks…" : checksSummary.label}
+                label={loading ? t("environment.pullRequest.loadingChecks") : checksSummary.label}
                 trailing={<EnvironmentRowChevron />}
               />
             </MenuTrigger>
             <ComposerPickerMenuPopup align="start" side="bottom" className="w-72 min-w-72">
               {checks.length === 0 ? (
-                <MenuPlaceholder text="No checks reported for this PR." />
+                <MenuPlaceholder text={t("environment.pullRequest.noChecksReported")} />
               ) : (
                 <div className="flex flex-col gap-0.5">
                   {withStableCheckKeys(checks).map(({ key, check }) => (
@@ -365,9 +371,9 @@ export function EnvironmentPullRequestSection({
                   icon={<ChatBubbleIcon className={ENVIRONMENT_ROW_ICON_CLASS_NAME} aria-hidden />}
                   label={
                     loading
-                      ? "Loading comments…"
+                      ? t("environment.pullRequest.loadingComments")
                       : commentsError
-                        ? "Comments unavailable"
+                        ? t("environment.pullRequest.commentsUnavailable")
                         : summarizePullRequestComments(comments.length, commentsTruncated)
                   }
                   trailing={<EnvironmentRowChevron />}
@@ -375,13 +381,17 @@ export function EnvironmentPullRequestSection({
               </MenuTrigger>
               <ComposerPickerMenuPopup align="start" side="bottom" className="w-80 min-w-80">
                 {commentsError ? (
-                  <MenuPlaceholder text={`Couldn't load review comments: ${commentsError}`} />
+                  <MenuPlaceholder
+                    text={t("environment.pullRequest.couldNotLoadComments", {
+                      error: commentsError,
+                    })}
+                  />
                 ) : comments.length === 0 ? (
                   <MenuPlaceholder
                     text={
                       commentsTruncated
-                        ? "Review comments may be hidden by the bounded preview. Open the PR on GitHub."
-                        : "No unresolved review comments."
+                        ? t("environment.pullRequest.commentsMayBeHidden")
+                        : t("environment.pullRequest.noUnresolvedComments")
                     }
                   />
                 ) : (
@@ -397,7 +407,7 @@ export function EnvironmentPullRequestSection({
                       />
                     ))}
                     {commentsTruncated ? (
-                      <MenuPlaceholder text="More review comments may be available on GitHub." />
+                      <MenuPlaceholder text={t("environment.pullRequest.moreCommentsAvailable")} />
                     ) : null}
                   </div>
                 )}
@@ -407,10 +417,10 @@ export function EnvironmentPullRequestSection({
               <button
                 type="button"
                 onClick={handleFixComments}
-                title="Ask the agent to address these review comments"
+                title={t("environment.pullRequest.askAgentToFix")}
                 className="shrink-0 cursor-pointer rounded-md px-2 py-1 text-[length:var(--app-font-size-ui,12px)] text-[var(--color-text-foreground)] transition-colors hover:bg-[var(--color-background-elevated-secondary)]"
               >
-                Fix
+                {t("environment.pullRequest.fix")}
               </button>
             ) : null}
           </div>

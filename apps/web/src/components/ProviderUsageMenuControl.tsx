@@ -3,6 +3,7 @@
 
 import { PROVIDER_DISPLAY_NAMES, type ProviderKind } from "@t3tools/contracts";
 import { useMemo, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { useAppSettings } from "~/appSettings";
 import { useProviderUsageSummary } from "~/hooks/useProviderUsageSummary";
@@ -33,6 +34,7 @@ export interface ProviderUsageMenuModel {
 }
 
 export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsageMenuModel | null {
+  const { t } = useTranslation();
   const { settings } = useAppSettings();
   const selectAllThreads = useMemo(() => createAllThreadsSelector(), []);
   const threads = useStore(selectAllThreads);
@@ -53,7 +55,7 @@ export function useProviderUsageMenuModel(provider: ProviderKind): ProviderUsage
   }
 
   return {
-    menuTitle: `${PROVIDER_DISPLAY_NAMES[provider]} usage`,
+    menuTitle: t("providerUsage.title", { provider: PROVIDER_DISPLAY_NAMES[provider] }),
     primaryRow,
     rateLimits: usageSummary.rateLimits,
     usageLines: usageSummary.usageLines,

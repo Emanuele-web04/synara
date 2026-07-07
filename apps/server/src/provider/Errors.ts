@@ -1,5 +1,7 @@
 import { Schema } from "effect";
 
+import { t } from "../i18n";
+
 import type { CheckpointServiceError } from "../checkpointing/Errors.ts";
 
 /**
@@ -15,7 +17,11 @@ export class ProviderAdapterValidationError extends Schema.TaggedErrorClass<Prov
   },
 ) {
   override get message(): string {
-    return `Provider adapter validation failed (${this.provider}) in ${this.operation}: ${this.issue}`;
+    return t("errors.providerAdapter.validationFailed", {
+      provider: this.provider,
+      operation: this.operation,
+      issue: this.issue,
+    });
   }
 }
 
@@ -31,7 +37,10 @@ export class ProviderAdapterSessionNotFoundError extends Schema.TaggedErrorClass
   },
 ) {
   override get message(): string {
-    return `Unknown ${this.provider} adapter thread: ${this.threadId}`;
+    return t("errors.providerAdapter.unknownThread", {
+      provider: this.provider,
+      threadId: this.threadId,
+    });
   }
 }
 
@@ -47,7 +56,10 @@ export class ProviderAdapterSessionClosedError extends Schema.TaggedErrorClass<P
   },
 ) {
   override get message(): string {
-    return `${this.provider} adapter thread is closed: ${this.threadId}`;
+    return t("errors.providerAdapter.threadClosed", {
+      provider: this.provider,
+      threadId: this.threadId,
+    });
   }
 }
 
@@ -64,7 +76,11 @@ export class ProviderAdapterRequestError extends Schema.TaggedErrorClass<Provide
   },
 ) {
   override get message(): string {
-    return `Provider adapter request failed (${this.provider}) for ${this.method}: ${this.detail}`;
+    return t("errors.providerAdapter.requestFailed", {
+      provider: this.provider,
+      method: this.method,
+      detail: this.detail,
+    });
   }
 }
 
@@ -81,7 +97,11 @@ export class ProviderAdapterProcessError extends Schema.TaggedErrorClass<Provide
   },
 ) {
   override get message(): string {
-    return `Provider adapter process error (${this.provider}) for thread ${this.threadId}: ${this.detail}`;
+    return t("errors.providerAdapter.processError", {
+      provider: this.provider,
+      threadId: this.threadId,
+      detail: this.detail,
+    });
   }
 }
 
@@ -97,7 +117,10 @@ export class ProviderValidationError extends Schema.TaggedErrorClass<ProviderVal
   },
 ) {
   override get message(): string {
-    return `Provider validation failed in ${this.operation}: ${this.issue}`;
+    return t("errors.provider.validationFailed", {
+      operation: this.operation,
+      issue: this.issue,
+    });
   }
 }
 
@@ -112,7 +135,9 @@ export class ProviderUnsupportedError extends Schema.TaggedErrorClass<ProviderUn
   },
 ) {
   override get message(): string {
-    return `Provider '${this.provider}' is not implemented`;
+    return t("errors.provider.notImplemented", {
+      provider: this.provider,
+    });
   }
 }
 
@@ -127,7 +152,9 @@ export class ProviderSessionNotFoundError extends Schema.TaggedErrorClass<Provid
   },
 ) {
   override get message(): string {
-    return `Unknown provider thread: ${this.threadId}`;
+    return t("errors.provider.unknownThread", {
+      threadId: this.threadId,
+    });
   }
 }
 
@@ -143,7 +170,10 @@ export class ProviderSessionDirectoryPersistenceError extends Schema.TaggedError
   },
 ) {
   override get message(): string {
-    return `Provider session directory persistence error in ${this.operation}: ${this.detail}`;
+    return t("errors.provider.sessionDirectoryPersistenceError", {
+      operation: this.operation,
+      detail: this.detail,
+    });
   }
 }
 

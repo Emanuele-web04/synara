@@ -5,6 +5,7 @@
 import { Plus, SettingsIcon } from "~/lib/icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "~/components/ui/button";
 import { RouteInsetSurface } from "./RouteInsetSurface";
@@ -35,6 +36,7 @@ import {
 import { randomTerminalId } from "./terminal/terminalSession";
 
 export default function WorkspaceView({ workspaceId }: { workspaceId: string }) {
+  const { t } = useTranslation();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
@@ -72,7 +74,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [draftTitle, setDraftTitle] = useState(workspace?.title ?? "Workspace");
+  const [draftTitle, setDraftTitle] = useState(workspace?.title ?? t("workspace.title"));
   const workspaceLayoutPresetId = workspace?.layoutPresetId ?? DEFAULT_WORKSPACE_LAYOUT_PRESET_ID;
 
   useEffect(() => {
@@ -339,7 +341,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
                     }
                     if (event.key === "Escape") {
                       event.preventDefault();
-                      setDraftTitle(workspace?.title ?? "Workspace");
+                      setDraftTitle(workspace?.title ?? t("workspace.title"));
                       setRenaming(false);
                     }
                   }}
@@ -348,10 +350,10 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
               ) : (
                 <h2
                   className="max-w-[clamp(16rem,50vw,40rem)] cursor-default truncate text-sm font-medium text-foreground"
-                  title="Double-click to rename"
+                  title={t("workspace.doubleClickToRename")}
                   onDoubleClick={() => setRenaming(true)}
                 >
-                  {workspace?.title ?? "Workspace"}
+                  {workspace?.title ?? t("workspace.title")}
                 </h2>
               )}
             </div>
@@ -363,13 +365,13 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
                 onClick={createWorkspaceTerminal}
               >
                 <Plus className="size-3" />
-                <span className="hidden sm:inline">Terminal</span>
+                <span className="hidden sm:inline">{t("workspace.newTerminal")}</span>
               </Button>
               <Button
                 size="icon-xs"
                 variant="outline"
                 onClick={() => setSettingsOpen(true)}
-                aria-label="Workspace settings"
+                aria-label={t("workspace.settings")}
               >
                 <SettingsIcon className="size-3" />
               </Button>
@@ -381,9 +383,11 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
           {!homeDir ? (
             <div className="flex h-full items-center justify-center px-6">
               <div className="max-w-sm text-center">
-                <div className="text-sm font-medium text-foreground/85">Loading workspace</div>
+                <div className="text-sm font-medium text-foreground/85">
+                  {t("workspace.loading")}
+                </div>
                 <div className="mt-1 text-sm text-muted-foreground">
-                  Waiting for the renderer to resolve your home directory.
+                  {t("workspace.waitingForHomeDir")}
                 </div>
               </div>
             </div>
@@ -398,15 +402,15 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
             <div className="flex h-full items-center justify-center px-6">
               <div className="max-w-sm rounded-3xl border border-border/70 bg-card/40 p-6 text-center shadow-sm">
                 <div className="text-base font-medium text-foreground/88">
-                  This workspace has no open terminals
+                  {t("workspace.noOpenTerminals")}
                 </div>
                 <div className="mt-2 text-sm leading-6 text-muted-foreground">
-                  Open a fresh terminal rooted in your home directory and start from there.
+                  {t("workspace.openTerminalHint")}
                 </div>
                 <div className="mt-5">
                   <Button onClick={() => restoreTerminalWorkspace()}>
                     <Plus className="size-4" />
-                    New terminal
+                    {t("workspace.newTerminalButton")}
                   </Button>
                 </div>
               </div>
@@ -419,7 +423,7 @@ export default function WorkspaceView({ workspaceId }: { workspaceId: string }) 
         onOpenChange={setSettingsOpen}
         selectedPresetId={workspaceLayoutPresetId}
         onSelectPreset={applyWorkspacePresetSelection}
-        workspaceTitle={workspace?.title ?? "Workspace"}
+        workspaceTitle={workspace?.title ?? t("workspace.title")}
       />
     </RouteInsetSurface>
   );

@@ -4,6 +4,7 @@
 // Depends on: Sidebar state plus AppNavigationButtons
 
 import { useNavigate } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import { FaFutbol } from "react-icons/fa";
 
 import { AppNavigationButtons } from "./AppNavigationButtons";
@@ -14,6 +15,7 @@ import { cn } from "~/lib/utils";
 
 /** Quick entry to the World Cup 2026 ball-physics playground, sat beside the route arrows. */
 function WorldCupButton() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   return (
     <Tooltip>
@@ -24,14 +26,14 @@ function WorldCupButton() {
             variant="ghost"
             size="icon-sm"
             className="size-7 shrink-0 rounded-lg text-muted-foreground/75 hover:text-foreground"
-            aria-label="World Cup 2026"
+            aria-label={t("app.worldCup2026")}
             onClick={() => void navigate({ to: "/worldcup" })}
           />
         }
       >
         <FaFutbol className="size-4" />
       </TooltipTrigger>
-      <TooltipPopup side="bottom">World Cup 2026</TooltipPopup>
+      <TooltipPopup side="bottom">{t("app.worldCup2026")}</TooltipPopup>
     </Tooltip>
   );
 }
@@ -48,11 +50,12 @@ function WorldCupButton() {
  * so it is passed in via `className`; the inner controls stay constant.
  */
 export function SidebarLeadingControls({ className }: { className?: string }) {
+  const { t } = useTranslation();
   return (
     <div className={cn("flex shrink-0 items-center gap-0.5", className)}>
       <SidebarTrigger
         className="size-7 shrink-0 text-muted-foreground/75 hover:text-foreground"
-        aria-label="Toggle thread sidebar"
+        aria-label={t("sidebar.toggleThreadSidebar")}
       />
       <AppNavigationButtons className="ms-0" />
       <WorldCupButton />

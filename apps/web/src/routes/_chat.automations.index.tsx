@@ -1,6 +1,7 @@
 import { type AutomationDefinition, type AutomationRun } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMemo, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import { getProviderStartOptions, useAppSettings } from "~/appSettings";
 import {
@@ -55,6 +56,9 @@ export const Route = createFileRoute("/_chat/automations/")({
   component: AutomationsRouteView,
 });
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TranslationFn = (key: string, options?: any) => string;
+
 type LiveAutomationRun = AutomationRun & {
   readonly status: "pending" | "claimed" | "running" | "waiting-for-approval";
 };
@@ -68,9 +72,9 @@ function isLiveRun(run: AutomationRun | null): run is LiveAutomationRun {
   );
 }
 
-function triageRunLabel(run: AutomationRun): string {
-  if (run.status === "succeeded" && run.result?.unread) return "New result";
-  return runStatusLabel(run.status);
+function triageRunLabel(run: AutomationRun, t: TranslationFn): string {
+  if (run.status === "succeeded" && run.result?.unread) return t("automations.list.newResult");
+  return runStatusLabel(run.status, t);
 }
 
 /**
@@ -95,6 +99,7 @@ function AutomationListRow({
   readonly trailing?: ReactNode;
   readonly onDelete?: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     // A div with role="button" (not a real <button>) so inline controls like the hover delete
     // can be nested buttons; the keydown guard lets those controls handle their own events
@@ -121,8 +126,8 @@ function AutomationListRow({
       {onDelete ? (
         <button
           type="button"
-          aria-label="Delete automation"
-          title="Delete"
+          aria-label={t("automations.list.deleteAriaLabel")}
+          title={t("automations.detail.delete")}
           onClick={(event) => {
             event.stopPropagation();
             onDelete();
@@ -138,16 +143,23 @@ function AutomationListRow({
 }
 
 /** Right-aligned meta for an automation row: live status, triage outcome, cadence, or "Paused". */
-function rowMeta(definition: AutomationDefinition, latestRun: AutomationRun | null): string {
-  if (isLiveRun(latestRun)) return runStatusLabel(latestRun.status);
-  if (latestRun && isTriageRun(latestRun)) return triageRunLabel(latestRun);
+function rowMeta(
+  definition: AutomationDefinition,
+  latestRun: AutomationRun | null,
+  t: TranslationFn,
+): string {
+  if (isLiveRun(latestRun)) return runStatusLabel(latestRun.status, t);
+  if (latestRun && isTriageRun(latestRun)) return triageRunLabel(latestRun, t);
   if (!definition.enabled) {
-    return automationLifecycleState(definition) === "done" ? "Done" : "Paused";
+    return automationLifecycleState(definition) === "done"
+      ? t("automations.list.done")
+      : t("automations.list.paused");
   }
-  return formatCadence(definition.schedule);
+  return formatCadence(definition.schedule, t);
 }
 
 function AutomationsRouteView() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { settings } = useAppSettings();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
@@ -235,7 +247,9 @@ function AutomationsRouteView() {
   };
 
   const deleteDefinition = async (definition: AutomationDefinition) => {
-    const confirmed = await ensureNativeApi().dialogs.confirm(`Delete "${definition.name}"?`);
+    const confirmed = await ensureNativeApi().dialogs.confirm(
+      t("automations.list.deleteConfirm", { name: definition.name }),
+    );
     if (!confirmed) return;
     deleteMutation.mutate(definition);
   };
@@ -247,14 +261,19 @@ function AutomationsRouteView() {
   const unreadTriageCount = unresolvedTriageRuns(data.runs).length;
 
   const projectName = (definition: AutomationDefinition) =>
-    projects.find((project) => project.id === definition.projectId)?.name ?? "Unknown project";
+    projects.find((project) => project.id === definition.projectId)?.name ??
+    t("automations.list.unknownProject");
 
   const sourceSuffix = (definition: AutomationDefinition) => {
     if (!definition.sourceThreadId || definition.sourceThreadId === definition.targetThreadId) {
       return "";
     }
     const sourceThread = threads.find((candidate) => candidate.id === definition.sourceThreadId);
-    return sourceThread ? ` · From ${resolveThreadPickerTitle(sourceThread.title)}` : "";
+    return sourceThread
+      ? t("automations.list.fromThreadSuffix", {
+          title: resolveThreadPickerTitle(sourceThread.title),
+        })
+      : "";
   };
 
   const subtitle = (definition: AutomationDefinition) => {
@@ -262,7 +281,7 @@ function AutomationsRouteView() {
     if (definition.mode === "heartbeat") {
       const thread = threads.find((candidate) => candidate.id === definition.targetThreadId);
       const target = thread ? resolveThreadPickerTitle(thread.title) : projectName(definition);
-      return `Heartbeat · ${target}${suffix}`;
+      return `${t("automations.list.heartbeatMeta", { target })}${suffix}`;
     }
     return `${projectName(definition)}${suffix}`;
   };
@@ -290,7 +309,7 @@ function AutomationsRouteView() {
         }
         title={definition.name}
         detail={subtitle(definition)}
-        meta={rowMeta(definition, latestRun)}
+        meta={rowMeta(definition, latestRun, t)}
         onDelete={() => void deleteDefinition(definition)}
       />
     );
@@ -306,8 +325,8 @@ function AutomationsRouteView() {
 
   const renderTriageRow = (run: AutomationRun) => {
     const definition = data.definitions.find((entry) => entry.id === run.automationId);
-    const summary = runResultSummary(run);
-    const target = definition ? subtitle(definition) : "Saved run";
+    const summary = runResultSummary(run, t);
+    const target = definition ? subtitle(definition) : t("automations.list.savedRun");
     return (
       <AutomationListRow
         key={run.id}
@@ -324,9 +343,9 @@ function AutomationsRouteView() {
               : undefined
         }
         leading={<RunStatusIndicator status={run.status} />}
-        title={definition?.name ?? "Automation run"}
+        title={definition?.name ?? t("automations.list.automationRun")}
         detail={summary || target}
-        meta={formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor)}
+        meta={formatRelativeTime(run.finishedAt ?? run.startedAt ?? run.scheduledFor, t)}
         trailing={
           <CentralIcon
             name="chevron-right-small"
@@ -341,7 +360,9 @@ function AutomationsRouteView() {
     allTriageRuns.length > 0 ? (
       <section className="flex flex-col gap-0.5">
         <div className="flex items-center justify-between gap-3 px-2 pb-1">
-          <h2 className="text-sm font-medium text-foreground">Needs review</h2>
+          <h2 className="text-sm font-medium text-foreground">
+            {t("automations.list.needsReview")}
+          </h2>
           <div className="flex items-center gap-0.5 rounded-md bg-[var(--color-background-elevated-secondary)] p-0.5 text-xs">
             {(["unread", "all"] as const).map((value) => (
               <button
@@ -355,13 +376,17 @@ function AutomationsRouteView() {
                     : "text-muted-foreground hover:text-foreground",
                 )}
               >
-                {value === "unread" ? `Unread ${unreadTriageCount}` : `All ${allTriageRuns.length}`}
+                {value === "unread"
+                  ? t("automations.list.unreadCount", { count: unreadTriageCount })
+                  : t("automations.list.allCount", { count: allTriageRuns.length })}
               </button>
             ))}
           </div>
         </div>
         {triageRuns.length === 0 ? (
-          <div className="px-2 py-4 text-xs text-muted-foreground">No unread runs.</div>
+          <div className="px-2 py-4 text-xs text-muted-foreground">
+            {t("automations.list.noUnreadRuns")}
+          </div>
         ) : (
           <div className="flex flex-col">{triageRuns.map(renderTriageRow)}</div>
         )}
@@ -393,8 +418,8 @@ function AutomationsRouteView() {
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                aria-label="Refresh"
-                title="Refresh"
+                aria-label={t("automations.list.refreshAriaLabel")}
+                title={t("automations.list.refreshAriaLabel")}
                 onClick={() => void refetch()}
               >
                 <CentralIcon name="arrow-rotate-clockwise" className="size-4" />
@@ -406,7 +431,7 @@ function AutomationsRouteView() {
                 disabled={projects.length === 0}
               >
                 <CentralIcon name="plus-small" className="size-4" />
-                New automation
+                {t("automations.list.newAutomation")}
               </Button>
             </div>
           </div>
@@ -415,24 +440,26 @@ function AutomationsRouteView() {
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-6 pb-12 pt-8">
             <h1 className="px-2 font-heading text-2xl font-semibold tracking-tight text-foreground">
-              Automations
+              {t("environment.automations.label")}
             </h1>
             {isLoading ? (
               <div className="py-16 text-center text-sm text-muted-foreground">
-                Loading automations...
+                {t("environment.automations.loading")}
               </div>
             ) : data.definitions.length === 0 ? (
               <div className="flex flex-col items-center gap-1 py-16 text-center">
-                <p className="text-sm font-medium text-foreground">No automations yet</p>
+                <p className="text-sm font-medium text-foreground">
+                  {t("environment.automations.empty.title")}
+                </p>
                 <p className="max-w-xs text-xs text-muted-foreground">
-                  Schedule a prompt to run on its own, or wake an existing thread on a loop.
+                  {t("environment.automations.empty.description")}
                 </p>
               </div>
             ) : (
               <div className="flex flex-col gap-6">
                 {renderTriage()}
-                {renderSection("Current", active)}
-                {renderSection("Paused", inactive)}
+                {renderSection(t("automations.list.currentSection"), active)}
+                {renderSection(t("automations.list.pausedSection"), inactive)}
               </div>
             )}
           </div>

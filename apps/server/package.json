@@ -34,6 +34,7 @@
     "@pierre/diffs": "^1.1.0-beta.16",
     "@xterm/headless": "^6.0.0",
     "effect": "catalog:",
+    "i18next": "^26.3.4",
     "node-pty": "^1.1.0",
     "open": "^10.1.0",
     "tree-kill": "^1.2.2",

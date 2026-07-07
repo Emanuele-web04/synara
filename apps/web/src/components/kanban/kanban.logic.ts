@@ -17,13 +17,15 @@ import type { Project, SidebarThreadSummary } from "../../types";
 
 export type KanbanColumnKey = "draft" | "inProgress" | "done";
 
-export const KANBAN_COLUMN_LABELS: Record<KanbanColumnKey, string> = {
-  draft: "Draft",
-  inProgress: "In Progress",
-  done: "Done",
-};
-
-export const KANBAN_FALLBACK_DRAFT_TITLE = "New thread";
+/**
+ * Internal sentinels used for identity comparison instead of display text.
+ * The display layer renders `t("kanban.fallbackDraftTitle")` /
+ * `t("kanban.attachedReferences")` when a card title matches these sentinels.
+ * Decoupling identity from display lets the kanban labels be translated without
+ * breaking equality checks in `forceOptimisticInProgressCard` etc.
+ */
+export const KANBAN_DRAFT_TITLE_SENTINEL = "__kanban_draft_fallback__";
+export const KANBAN_ATTACHED_REFERENCES_SENTINEL = "__kanban_attached_references__";
 
 /** Pending composer content for one thread, projected from the composer draft store. */
 export interface KanbanComposerDraftSnapshot {
@@ -324,7 +326,10 @@ function buildUnsentPromptCard(
   if (composerDraft.prompt.length === 0 && !composerDraft.hasAttachments) {
     return null;
   }
-  const titleSeed = composerDraft.prompt.length > 0 ? composerDraft.prompt : "Attached references";
+  const title =
+    composerDraft.prompt.length > 0
+      ? buildPromptThreadTitleFallback(composerDraft.prompt)
+      : KANBAN_ATTACHED_REFERENCES_SENTINEL;
   const threadProvider = isTerminal
     ? null
     : (thread.session?.provider ?? thread.modelSelection.provider);
@@ -333,7 +338,7 @@ function buildUnsentPromptCard(
     threadId: thread.id,
     projectId: thread.projectId,
     column: "draft",
-    title: buildPromptThreadTitleFallback(titleSeed),
+    title,
     provider: composerDraft.provider ?? threadProvider,
     isTerminal,
     branch: thread.branch,
@@ -365,8 +370,8 @@ function buildLocalDraftCard(
       composerDraft.prompt.length > 0
         ? buildPromptThreadTitleFallback(composerDraft.prompt)
         : composerDraft.hasAttachments
-          ? "Attached references"
-          : KANBAN_FALLBACK_DRAFT_TITLE,
+          ? KANBAN_ATTACHED_REFERENCES_SENTINEL
+          : KANBAN_DRAFT_TITLE_SENTINEL,
     provider: composerDraft.provider,
     isTerminal: false,
     branch: draftThread.branch,
@@ -396,7 +401,7 @@ function forceOptimisticInProgressCard(
     column: "inProgress",
     isOptimisticDispatch: true,
     title:
-      card.title === KANBAN_FALLBACK_DRAFT_TITLE && entry.title.length > 0
+      card.title === KANBAN_DRAFT_TITLE_SENTINEL && entry.title.length > 0
         ? entry.title
         : card.title,
     draftPrompt: "",

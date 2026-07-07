@@ -205,6 +205,7 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
+  locale: Schema.Literals(["en", "zh-CN"]).pipe(withDefaults(() => "en" as const)),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
   // The active/locked provider for a thread is always shown regardless, so users

@@ -6,8 +6,8 @@
 // Layer: Chat composer UI
 // Exports: ComposerLiveChangesHeader
 
-import { pluralize } from "@t3tools/shared/text";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ChangesIcon } from "~/lib/icons";
 import {
@@ -37,11 +37,14 @@ export const ComposerLiveChangesHeader = memo(function ComposerLiveChangesHeader
   onReview,
   attachedToPrevious = false,
 }: ComposerLiveChangesHeaderProps) {
+  const { t } = useTranslation();
   if (fileCount === 0) {
     return null;
   }
   const label =
-    fileCount === null ? "Files changed" : `${fileCount} ${pluralize(fileCount, "file")} changed`;
+    fileCount === null
+      ? t("chat.composer.filesChanged")
+      : t("chat.composer.nFilesChanged", { count: fileCount });
 
   return (
     <ComposerStackedPanel attachedToPrevious={attachedToPrevious}>

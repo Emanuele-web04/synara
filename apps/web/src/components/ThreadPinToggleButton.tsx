@@ -7,6 +7,7 @@
 //       override suppresses the pin hover affordance.
 
 import type React from "react";
+import { useTranslation } from "react-i18next";
 import { PinStatusIcon, pinActionLabel } from "~/lib/pin";
 import { cn } from "~/lib/utils";
 import { IconButton } from "./ui/icon-button";
@@ -25,7 +26,8 @@ export function ThreadPinToggleButton({
   toneClassName?: string;
   onToggle: (event: React.MouseEvent<HTMLButtonElement> | React.MouseEvent) => void;
 }) {
-  const label = pinActionLabel(targetLabel, pinned);
+  const { t } = useTranslation();
+  const label = pinActionLabel(targetLabel, pinned, t);
 
   return (
     <IconButton

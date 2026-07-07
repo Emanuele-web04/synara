@@ -4,8 +4,10 @@
 // Depends on: SettingsSidebarNav, the settings search index, and React server rendering.
 
 import { renderToStaticMarkup } from "react-dom/server";
+import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
 
+import i18n from "~/i18n";
 import { SettingsSidebarNav } from "./SettingsSidebarNav";
 import { settingRowAnchorId } from "../settingsNavigation";
 import {
@@ -61,10 +63,12 @@ describe("rankSettingsSearchEntries", () => {
 describe("SettingsSidebarNav", () => {
   it("renders the soft search input alongside the section list", () => {
     const markup = renderToStaticMarkup(
-      <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />,
+      <I18nextProvider i18n={i18n}>
+        <SettingsSidebarNav activeSection="general" onBack={vi.fn()} onSelectSection={vi.fn()} />
+      </I18nextProvider>,
     );
 
-    expect(markup).toContain('aria-label="Search settings"');
+    expect(markup).toContain('aria-label="Search settings..."');
     expect(markup).toContain('aria-label="Settings sections"');
     expect(markup).toContain("Back to app");
   });

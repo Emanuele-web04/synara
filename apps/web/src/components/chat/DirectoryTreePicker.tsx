@@ -5,6 +5,7 @@
 
 import type { ProjectDirectoryEntry, ProjectFileSystemEntry } from "@t3tools/contracts";
 import { memo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { FolderIcon } from "~/lib/icons";
 import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -21,10 +22,11 @@ interface DirectoryTreePickerProps {
 export const DirectoryTreePicker = memo(function DirectoryTreePicker({
   rootPath,
   triggerLabel,
-  emptyLabel = "No folders found",
+  emptyLabel,
   includeFiles = false,
   onSelectDirectory,
 }: DirectoryTreePickerProps) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
   return (
@@ -35,16 +37,22 @@ export const DirectoryTreePicker = memo(function DirectoryTreePicker({
       </PopoverTrigger>
       <PopoverPopup align="start" className="w-[min(32rem,calc(100vw-2rem))] p-0">
         <div className="border-b border-border/60 px-4 py-3">
-          <p className="text-sm font-medium text-foreground">Start a chat from a folder</p>
+          <p className="text-sm font-medium text-foreground">
+            {t("directoryTreePicker.startChatFromFolder")}
+          </p>
           <p className="mt-1 truncate text-xs text-muted-foreground/60">
-            {rootPath ?? "No home directory found"}
+            {rootPath ?? t("directoryTreePicker.noHomeDirectory")}
           </p>
         </div>
         <DirectoryTreeBrowser
           rootPath={rootPath}
-          emptyLabel={emptyLabel}
-          unavailableLabel="Home directory unavailable."
-          loadingLabel={includeFiles ? "Loading entries…" : "Loading folders…"}
+          {...(emptyLabel !== undefined ? { emptyLabel } : {})}
+          unavailableLabel={t("directoryTreePicker.homeUnavailable")}
+          loadingLabel={
+            includeFiles
+              ? t("directoryTreePicker.loadingEntries")
+              : t("directoryTreePicker.loadingFolders")
+          }
           className="max-h-[24rem] overflow-auto px-2 py-2"
           includeFiles={includeFiles}
           onSelectEntry={async (absolutePath, entry: ProjectFileSystemEntry) => {

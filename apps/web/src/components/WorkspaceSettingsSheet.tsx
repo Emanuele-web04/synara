@@ -2,7 +2,7 @@
 // Purpose: Render per-workspace terminal layout settings with visual preset previews.
 // Layer: Workspace UI controls
 
-import { pluralize } from "@t3tools/shared/text";
+import { useTranslation } from "react-i18next";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {
@@ -92,22 +92,25 @@ export default function WorkspaceSettingsSheet(props: {
   onSelectPreset: (presetId: WorkspaceLayoutPresetId) => void;
   workspaceTitle: string;
 }) {
+  const { t } = useTranslation();
   return (
     <Sheet open={props.open} onOpenChange={props.onOpenChange}>
       <SheetPopup side="right" className="w-[min(92vw,420px)] max-w-[420px]" keepMounted>
         <SheetHeader>
-          <SheetTitle>Workspace settings</SheetTitle>
+          <SheetTitle>{t("settings.workspaceSettings.title")}</SheetTitle>
           <SheetDescription>
-            Choose how terminals are arranged inside {props.workspaceTitle}.
+            {t("settings.workspaceSettings.description", { workspaceTitle: props.workspaceTitle })}
           </SheetDescription>
         </SheetHeader>
 
         <SheetPanel className="space-y-6">
           <section className="space-y-3">
             <div>
-              <div className="text-sm font-medium text-foreground">Layout preset</div>
+              <div className="text-sm font-medium text-foreground">
+                {t("settings.workspaceSettings.layoutPreset")}
+              </div>
               <div className="mt-1 text-sm text-muted-foreground">
-                Changes apply immediately to this workspace. Extra terminals stay available as tabs.
+                {t("settings.workspaceSettings.changesApply")}
               </div>
             </div>
 
@@ -139,7 +142,8 @@ export default function WorkspaceSettingsSheet(props: {
                     <div className="mt-3 flex items-center justify-between gap-2">
                       <div className="text-sm font-medium text-foreground">{preset.title}</div>
                       <div className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                        {preset.slotCount} {pluralize(preset.slotCount, "pane")}
+                        {preset.slotCount}{" "}
+                        {t("settings.workspaceSettings.pane", { count: preset.slotCount })}
                       </div>
                     </div>
                     <div className="mt-1 text-xs leading-5 text-muted-foreground">

@@ -12,6 +12,7 @@ import {
 import { HiOutlineHandRaised } from "react-icons/hi2";
 import { CentralIcon } from "~/lib/central-icons";
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { useAppSettings } from "~/appSettings";
 
 import { newCommandId, cn } from "../lib/utils";
@@ -137,6 +138,7 @@ export function RuntimeUsageControls({
   className,
   hideLabel = false,
 }: RuntimeUsageControlsProps) {
+  const { t } = useTranslation();
   return (
     <div
       className={cn(
@@ -158,8 +160,8 @@ export function RuntimeUsageControls({
                 )}
                 title={
                   runtimeMode === "full-access"
-                    ? "Full access — click to change permissions"
-                    : "Default permissions — click to change permissions"
+                    ? t("branchToolbar.fullAccessTooltip")
+                    : t("branchToolbar.defaultPermissionsTooltip")
                 }
               />
             }
@@ -171,7 +173,9 @@ export function RuntimeUsageControls({
                 <HiOutlineHandRaised className="size-3.5 shrink-0" />
               )}
               <span className={cn("truncate", hideLabel ? "sr-only" : "@max-[480px]:sr-only")}>
-                {runtimeMode === "full-access" ? "Full access" : "Default permissions"}
+                {runtimeMode === "full-access"
+                  ? t("branchToolbar.fullAccess")
+                  : t("branchToolbar.defaultPermissions")}
               </span>
               <ChevronDownIcon
                 className={cn(
@@ -201,13 +205,13 @@ export function RuntimeUsageControls({
               >
                 <span className="inline-flex items-center gap-2">
                   <CentralIcon name="shield-access" className="size-4 shrink-0" />
-                  Full access
+                  {t("branchToolbar.fullAccess")}
                 </span>
               </MenuRadioItem>
               <MenuRadioItem value="approval-required">
                 <span className="inline-flex items-center gap-2">
                   <HiOutlineHandRaised className="size-4 shrink-0" />
-                  Default permissions
+                  {t("branchToolbar.defaultPermissions")}
                 </span>
               </MenuRadioItem>
             </MenuRadioGroup>
@@ -232,6 +236,7 @@ export default function BranchToolbar({
   showBranchSelector = true,
 }: BranchToolbarProps) {
   const isPanel = variant === "panel";
+  const { t } = useTranslation();
   const setThreadWorkspaceAction = useStore((store) => store.setThreadWorkspace);
   const draftThread = useComposerDraftStore((store) => store.getDraftThread(threadId));
   const setDraftThreadContext = useComposerDraftStore((store) => store.setDraftThreadContext);
@@ -420,7 +425,7 @@ export default function BranchToolbar({
               className="w-60 min-w-60"
             >
               <MenuGroup>
-                <MenuGroupLabel>Continue in</MenuGroupLabel>
+                <MenuGroupLabel>{t("branchToolbar.continueIn")}</MenuGroupLabel>
                 {environmentPresentation.mode === "local" ? (
                   <ContinueInMenuItem
                     icon={<CentralIcon name="macbook-air" className={ENV_MENU_ICON_CLASS_NAME} />}
@@ -437,7 +442,7 @@ export default function BranchToolbar({
                 {canSwitchToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="New worktree"
+                    label={t("branchToolbar.newWorktree")}
                     onSelect={() => onEnvModeChange("worktree")}
                   />
                 ) : null}
@@ -451,7 +456,7 @@ export default function BranchToolbar({
                 {canHandoffToWorktree && onHandoffToWorktree ? (
                   <ContinueInMenuItem
                     icon={<WorktreeGlyph className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to new worktree"
+                    label={t("branchToolbar.handoffToNewWorktree")}
                     disabled={handoffBusy}
                     onSelect={() => onHandoffToWorktree()}
                   />
@@ -459,7 +464,7 @@ export default function BranchToolbar({
                 {canHandoffToLocal && onHandoffToLocal ? (
                   <ContinueInMenuItem
                     icon={<HandoffIcon className={ENV_MENU_ICON_CLASS_NAME} />}
-                    label="Hand off to local"
+                    label={t("branchToolbar.handoffToLocal")}
                     disabled={handoffBusy}
                     onSelect={() => onHandoffToLocal()}
                   />
@@ -471,7 +476,9 @@ export default function BranchToolbar({
               <Collapsible open={rateLimitsOpen} onOpenChange={setRateLimitsOpen}>
                 <MenuItem closeOnClick={false} onClick={() => setRateLimitsOpen((open) => !open)}>
                   <CentralIcon name="clock" className="size-3.5 text-muted-foreground" />
-                  <span className="min-w-0 flex-1 truncate">Rate limits remaining</span>
+                  <span className="min-w-0 flex-1 truncate">
+                    {t("branchToolbar.rateLimitsRemaining")}
+                  </span>
                   <ChevronRightIcon
                     className={cn(
                       "size-3.5 shrink-0 text-[var(--color-text-foreground-secondary)] transition-transform duration-150",

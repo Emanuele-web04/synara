@@ -1,4 +1,6 @@
 import { Schema } from "effect";
+
+import { t } from "../i18n";
 import type { ProjectionRepositoryError } from "../persistence/Errors.ts";
 import { GitCommandError } from "../git/Errors.ts";
 
@@ -15,7 +17,11 @@ export class CheckpointUnavailableError extends Schema.TaggedErrorClass<Checkpoi
   },
 ) {
   override get message(): string {
-    return `Checkpoint unavailable for thread ${this.threadId} turn ${this.turnCount}: ${this.detail}`;
+    return t("errors.checkpoint.unavailable", {
+      threadId: this.threadId,
+      turnCount: this.turnCount,
+      detail: this.detail,
+    });
   }
 }
 
@@ -31,7 +37,10 @@ export class CheckpointInvariantError extends Schema.TaggedErrorClass<Checkpoint
   },
 ) {
   override get message(): string {
-    return `Checkpoint invariant violation in ${this.operation}: ${this.detail}`;
+    return t("errors.checkpoint.invariantViolation", {
+      operation: this.operation,
+      detail: this.detail,
+    });
   }
 }
 

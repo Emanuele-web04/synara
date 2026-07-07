@@ -76,23 +76,32 @@ describe("buildSettingsSkillGroups", () => {
 
 describe("buildSettingsSkillSections", () => {
   it("places shared skill groups before provider-only sections", () => {
-    const sections = buildSettingsSkillSections([
-      skill({
-        name: "logic-consolidator",
-        path: "/Users/test/.codex/skills/logic-consolidator/SKILL.md",
-        scope: "codex",
-      }),
-      skill({
-        name: "logic-consolidator",
-        path: "/Users/test/.claude/skills/logic-consolidator/SKILL.md",
-        scope: "claude",
-      }),
-      skill({
-        name: "cursor-only",
-        path: "/Users/test/.cursor/skills/cursor-only/SKILL.md",
-        scope: "cursor",
-      }),
-    ]);
+    const mockT = (key: string, options?: any) => {
+      if (key === "settings.skills.sharedSkills") return "Shared skills";
+      if (key === "settings.skills.fromOrigin") return `From ${options?.origin}`;
+      return key;
+    };
+
+    const sections = buildSettingsSkillSections(
+      [
+        skill({
+          name: "logic-consolidator",
+          path: "/Users/test/.codex/skills/logic-consolidator/SKILL.md",
+          scope: "codex",
+        }),
+        skill({
+          name: "logic-consolidator",
+          path: "/Users/test/.claude/skills/logic-consolidator/SKILL.md",
+          scope: "claude",
+        }),
+        skill({
+          name: "cursor-only",
+          path: "/Users/test/.cursor/skills/cursor-only/SKILL.md",
+          scope: "cursor",
+        }),
+      ],
+      mockT,
+    );
 
     expect(sections.map((section) => section.title)).toEqual(["Shared skills", "From Cursor"]);
     expect(sections[0]?.groups.map((group) => group.key)).toEqual(["logic-consolidator"]);

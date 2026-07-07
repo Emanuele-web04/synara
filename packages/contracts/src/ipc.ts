@@ -114,6 +114,8 @@ import type {
   ServerStopLocalServerResult,
   ServerUpdateSettingsInput,
   ServerUpdateSettingsResult,
+  ServerSetLocaleInput,
+  ServerSetLocaleResult,
   ServerUpsertKeybindingInput,
   ServerUpsertKeybindingResult,
   ServerVoiceTranscriptionInput,
@@ -526,6 +528,7 @@ export interface NativeApi {
       input: ServerVoiceTranscriptionInput,
     ) => Promise<ServerVoiceTranscriptionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
+    setLocale: (input: ServerSetLocaleInput) => Promise<ServerSetLocaleResult>;
   };
   stats: {
     getProfileStats: (input: StatsGetProfileStatsInput) => Promise<StatsGetProfileStatsResult>;

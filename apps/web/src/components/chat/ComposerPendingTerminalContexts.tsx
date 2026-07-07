@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "~/lib/utils";
 import {
   type TerminalContextDraft,
@@ -18,10 +19,11 @@ interface ComposerPendingTerminalContextChipProps {
 export function ComposerPendingTerminalContextChip({
   context,
 }: ComposerPendingTerminalContextChipProps) {
+  const { t } = useTranslation();
   const label = formatTerminalContextLabel(context);
   const expired = isTerminalContextExpired(context);
   const tooltipText = expired
-    ? `Terminal context expired. Remove and re-add ${label} to include it in your message.`
+    ? t("composerPendingTerminalContexts.expired", { label })
     : context.text;
 
   return <TerminalContextInlineChip label={label} tooltipText={tooltipText} expired={expired} />;

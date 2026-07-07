@@ -15,6 +15,25 @@ import {
   shouldOfferCreateBranchPrompt,
   summarizeGitResult,
 } from "./GitActionsControl.logic";
+import type { TFunction } from "i18next";
+
+/** Minimal mock `t` that returns the English translation for git.dialog keys. */
+const mockT = ((key: string, params?: Record<string, string>) => {
+  const translations: Record<string, string> = {
+    "git.dialog.defaultBranchPushTitle": "Push to default branch?",
+    "git.dialog.defaultBranchPushDescription": `This action will push local commits on "${params?.branchLabel ?? ""}". You can continue on this branch or create a feature branch and run the same action there.`,
+    "git.dialog.defaultBranchPushContinueLabel": `Push to ${params?.branchLabel ?? ""}`,
+    "git.dialog.defaultBranchCommitPushTitle": "Commit & push to default branch?",
+    "git.dialog.defaultBranchCommitPushDescription": `This action will commit and push changes on "${params?.branchLabel ?? ""}". You can continue on this branch or create a feature branch and run the same action there.`,
+    "git.dialog.defaultBranchCommitPushContinueLabel": `Commit & push to ${params?.branchLabel ?? ""}`,
+    "git.dialog.defaultBranchPrTitle": "Create feature branch & PR?",
+    "git.dialog.defaultBranchPrDescription": `Pull requests can't be opened from "${params?.branchLabel ?? ""}" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
+    "git.dialog.defaultBranchCommitPrTitle": "Create feature branch, commit & PR?",
+    "git.dialog.defaultBranchCommitPrDescription": `Pull requests can't be opened from "${params?.branchLabel ?? ""}" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
+    "git.dialog.createFeatureBranchContinue": "Create feature branch & continue",
+  };
+  return translations[key] ?? key;
+}) as TFunction;
 
 function status(overrides: Partial<GitStatusResult> = {}): GitStatusResult {
   return {
@@ -1147,6 +1166,7 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
       action: "commit_push",
       branchName: "main",
       includesCommit: false,
+      t: mockT,
     });
 
     assert.deepEqual(copy, {
@@ -1162,6 +1182,7 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
       action: "commit_push_pr",
       branchName: "main",
       includesCommit: false,
+      t: mockT,
     });
 
     assert.deepEqual(copy, {
@@ -1176,6 +1197,7 @@ describe("resolveDefaultBranchActionDialogCopy", () => {
       action: "commit_push_pr",
       branchName: "main",
       includesCommit: true,
+      t: mockT,
     });
 
     assert.deepEqual(copy, {

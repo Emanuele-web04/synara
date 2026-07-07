@@ -1,4 +1,5 @@
 import { memo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -57,6 +58,7 @@ const PlanSidebar = memo(function PlanSidebar({
   timestampFormat,
   onClose,
 }: PlanSidebarProps) {
+  const { t } = useTranslation();
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
@@ -71,7 +73,7 @@ const PlanSidebar = memo(function PlanSidebar({
             variant="secondary"
             className="rounded-md bg-[color-mix(in_srgb,var(--color-accent-blue)_10%,transparent)] px-1.5 py-0 text-[10px] font-semibold text-[var(--color-accent-blue)]"
           >
-            Plan
+            {t("plan.badge")}
           </Badge>
           {activeTaskList ? (
             <span className="text-[11px] text-muted-foreground/60">
@@ -92,7 +94,7 @@ const PlanSidebar = memo(function PlanSidebar({
             size="icon-xs"
             variant="ghost"
             onClick={onClose}
-            aria-label="Close plan sidebar"
+            aria-label={t("plan.closeSidebar")}
             className="text-muted-foreground/50 hover:text-foreground/70"
           >
             <PanelRightCloseIcon className="size-3.5" />
@@ -113,7 +115,9 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Tasks */}
           {activeTaskList && activeTaskList.tasks.length > 0 ? (
             <div className="space-y-1">
-              <p className="mb-2 text-[10px] font-semibold text-muted-foreground/40">Steps</p>
+              <p className="mb-2 text-[10px] font-semibold text-muted-foreground/40">
+                {t("plan.steps")}
+              </p>
               {activeTaskList.tasks.map((task) => (
                 <div
                   key={`${task.status}:${task.task}`}
@@ -157,7 +161,7 @@ const PlanSidebar = memo(function PlanSidebar({
                   <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground/40 transition-transform" />
                 )}
                 <span className="text-[10px] font-semibold text-muted-foreground/40 group-hover:text-muted-foreground/60">
-                  {planTitle ?? "Full Plan"}
+                  {planTitle ?? t("plan.fullPlan")}
                 </span>
               </button>
               {proposedPlanExpanded ? (
@@ -175,10 +179,8 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Empty state */}
           {!activeTaskList && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
-              </p>
+              <p className="text-[13px] text-muted-foreground/40">{t("plan.noActivePlan")}</p>
+              <p className="mt-1 text-[11px] text-muted-foreground/30">{t("plan.willAppear")}</p>
             </div>
           ) : null}
         </div>

@@ -11,7 +11,9 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --passWithNoTests",
     "test:browser": "vitest run --config vitest.browser.config.ts",
-    "test:browser:install": "playwright install --with-deps chromium"
+    "test:browser:install": "playwright install --with-deps chromium",
+    "scan-i18n": "i18next-scanner --config i18next-scanner.config.cjs",
+    "i18n:check": "node --input-type=module -e \"import {readFileSync} from 'fs';const e=JSON.parse(readFileSync('./src/i18n/locales/en.json','utf8')),z=JSON.parse(readFileSync('./src/i18n/locales/zh-CN.json','utf8'));const f=(o,p='')=>Object.entries(o).flatMap(([k,v])=>typeof v==='string'?[p+k]:f(v,p+k+'.')),lookup=(obj,path)=>path.split('.').reduce((o,k)=>o&&o[k],obj),ek=new Set(f(e)),zk=new Set(f(z));let r=0;[...ek].filter(k=>!zk.has(k)).forEach(k=>{console.error('MISSING in zh-CN:',k);r++});[...zk].filter(k=>!ek.has(k)).forEach(k=>{console.error('EXTRA in zh-CN:',k);r++});const g=s=>{if(!s)return[];return[...s.matchAll(/\\\\{\\\\{(.+?)\\\\}\\\\}/g)].map(m=>m[1]).sort().join(',')};[...ek].filter(k=>ek.has(k)&&zk.has(k)).forEach(k=>{const ev=g(lookup(e,k)),zv=g(lookup(z,k));if(ev!==zv){console.error('INTERPOLATION MISMATCH:',k,'en={'+ev+'} zh-CN={'+zv+'}');r++}});console.log(r===0?'All keys match between en.json and zh-CN.json':r+' issue(s) found');process.exit(r>0?1:0)\""
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -72,6 +74,7 @@
     "@vitejs/plugin-react": "^6.0.0",
     "@vitest/browser-playwright": "^4.0.18",
     "babel-plugin-react-compiler": "^19.0.0-beta-e552027-20250112",
+    "i18next-scanner": "^4.6.0",
     "msw": "2.12.11",
     "playwright": "^1.58.2",
     "tailwindcss": "^4.0.0",

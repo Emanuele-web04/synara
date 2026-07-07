@@ -2,6 +2,7 @@ import type { GitResolvePullRequestResult } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   gitPreparePullRequestThreadMutationOptions,
@@ -41,6 +42,7 @@ export function PullRequestThreadDialog({
   onOpenChange,
   onPrepared,
 }: PullRequestThreadDialogProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const [reference, setReference] = useState(initialReference ?? "");
@@ -158,20 +160,20 @@ export function PullRequestThreadDialog({
   const validationMessage = !referenceDirty
     ? null
     : reference.trim().length === 0
-      ? "Paste a GitHub pull request URL or enter 123 / #123."
+      ? t("chat.prDialog.validation.empty")
       : parsedReference === null
-        ? "Use a GitHub pull request URL, 123, or #123."
+        ? t("chat.prDialog.validation.invalid")
         : null;
   const errorMessage =
     validationMessage ??
     (resolvedPullRequest === null && resolvePullRequestQuery.isError
       ? resolvePullRequestQuery.error instanceof Error
         ? resolvePullRequestQuery.error.message
-        : "Failed to resolve pull request."
+        : t("chat.prDialog.resolveFailed")
       : preparePullRequestThreadMutation.error instanceof Error
         ? preparePullRequestThreadMutation.error.message
         : preparePullRequestThreadMutation.error
-          ? "Failed to prepare pull request thread."
+          ? t("chat.prDialog.prepareFailed")
           : null);
 
   return (
@@ -185,18 +187,17 @@ export function PullRequestThreadDialog({
     >
       <DialogPopup className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>Checkout Pull Request</DialogTitle>
-          <DialogDescription>
-            Resolve a GitHub pull request, then create the draft thread in the main repo or in a
-            dedicated worktree.
-          </DialogDescription>
+          <DialogTitle>{t("chat.prDialog.title")}</DialogTitle>
+          <DialogDescription>{t("chat.prDialog.description")}</DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
           <label className="grid gap-1.5">
-            <span className="text-xs font-medium text-foreground">Pull request</span>
+            <span className="text-xs font-medium text-foreground">
+              {t("chat.prDialog.pullRequestLabel")}
+            </span>
             <Input
               ref={referenceInputRef}
-              placeholder="https://github.com/owner/repo/pull/42 or #42"
+              placeholder={t("chat.prDialog.placeholder")}
               value={reference}
               onChange={(event) => {
                 setReferenceDirty(true);
@@ -234,7 +235,7 @@ export function PullRequestThreadDialog({
           {isResolving ? (
             <div className="flex items-center gap-2 text-muted-foreground text-xs">
               <Spinner className="size-3.5" />
-              Resolving pull request...
+              {t("chat.prDialog.resolving")}
             </div>
           ) : null}
 
@@ -248,7 +249,7 @@ export function PullRequestThreadDialog({
             onClick={() => onOpenChange(false)}
             disabled={preparePullRequestThreadMutation.isPending}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button
             type="button"
@@ -264,7 +265,9 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "local" ? "Preparing local..." : "Local"}
+            {preparingMode === "local"
+              ? t("chat.prDialog.preparingLocal")
+              : t("chat.prDialog.local")}
           </Button>
           <Button
             type="button"
@@ -279,7 +282,9 @@ export function PullRequestThreadDialog({
               preparePullRequestThreadMutation.isPending
             }
           >
-            {preparingMode === "worktree" ? "Preparing worktree..." : "Worktree"}
+            {preparingMode === "worktree"
+              ? t("chat.prDialog.preparingWorktree")
+              : t("chat.prDialog.worktree")}
           </Button>
         </DialogFooter>
       </DialogPopup>

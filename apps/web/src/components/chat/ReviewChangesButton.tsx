@@ -6,6 +6,7 @@
 // Exports: ReviewChangesButton
 
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import type { CSSProperties } from "react";
 
 import { cn } from "~/lib/utils";
@@ -21,8 +22,9 @@ export const ReviewChangesButton = memo(function ReviewChangesButton({
   onClick,
   className,
   style,
-  label = "Review",
+  label,
 }: ReviewChangesButtonProps) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
@@ -33,7 +35,7 @@ export const ReviewChangesButton = memo(function ReviewChangesButton({
       style={style}
       onClick={onClick}
     >
-      {label}
+      {label ?? t("common.review")}
     </button>
   );
 });

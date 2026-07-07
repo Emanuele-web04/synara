@@ -5,6 +5,7 @@
 
 import type { FileDiffMetadata } from "@pierre/diffs/react";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "~/lib/utils";
 import type { RenderablePatch } from "~/lib/diffRendering";
 import { DiffPanelFileList, type DiffFileChatActions } from "./DiffPanelFileList";
@@ -33,6 +34,8 @@ export const DiffPanelPatchViewport = memo(
     viewKind: "repo" | "turn";
   }) {
     const viewportClassName = "flex h-full min-h-0 w-full flex-1 flex-col";
+
+    const { t } = useTranslation();
 
     if (props.error && !props.renderablePatch) {
       return (
@@ -64,7 +67,7 @@ export const DiffPanelPatchViewport = memo(
                 ? props.emptyLabel
                 : props.viewKind === "repo"
                   ? props.unavailableLabel
-                  : "No patch available for this selection."}
+                  : t("diff.noPatchAvailable")}
             </p>
           </PanelStateMessage>
         </div>

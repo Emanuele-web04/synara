@@ -5,6 +5,7 @@
 
 import { type ProviderInteractionMode } from "@t3tools/contracts";
 import { memo, useId, useRef, type ChangeEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { GoTasklist } from "react-icons/go";
 
 import { PaperclipIcon, PlusIcon } from "~/lib/icons";
@@ -30,6 +31,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
   onToggleFastMode: () => void;
   onSetPlanMode: (enabled: boolean) => void;
 }) {
+  const { t } = useTranslation();
   const inputId = useId();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -61,7 +63,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
               size="icon-sm"
               variant="chrome"
               className="shrink-0 rounded-md"
-              aria-label="Composer extras"
+              aria-label={t("chat.composerExtras.extras")}
             />
           }
         >
@@ -74,7 +76,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
             }}
           >
             <PaperclipIcon className="size-4 shrink-0" />
-            Add image
+            {t("chat.composerExtras.addImage")}
           </MenuItem>
 
           <MenuSeparator />
@@ -87,7 +89,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
           >
             <span className="inline-flex items-center gap-2">
               <GoTasklist className="size-4 shrink-0" />
-              Plan mode
+              {t("chat.composerExtras.planMode")}
             </span>
           </MenuCheckboxItem>
 
@@ -95,7 +97,7 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
             <>
               <MenuSeparator />
               <MenuSub>
-                <MenuSubTrigger>Fast</MenuSubTrigger>
+                <MenuSubTrigger>{t("chat.composerExtras.fast")}</MenuSubTrigger>
                 <ComposerPickerMenuSubPopup>
                   <MenuRadioGroup
                     value={props.fastModeEnabled ? "fast" : "normal"}
@@ -105,8 +107,8 @@ export const ComposerExtrasMenu = memo(function ComposerExtrasMenu(props: {
                       props.onToggleFastMode();
                     }}
                   >
-                    <MenuRadioItem value="normal">Default</MenuRadioItem>
-                    <MenuRadioItem value="fast">Fast</MenuRadioItem>
+                    <MenuRadioItem value="normal">{t("chat.composerExtras.default")}</MenuRadioItem>
+                    <MenuRadioItem value="fast">{t("chat.composerExtras.fast")}</MenuRadioItem>
                   </MenuRadioGroup>
                 </ComposerPickerMenuSubPopup>
               </MenuSub>

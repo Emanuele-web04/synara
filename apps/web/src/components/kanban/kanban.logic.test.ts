@@ -12,6 +12,7 @@ import {
   isKanbanDraftOnlyCard,
   kanbanDraftCardId,
   kanbanThreadCardId,
+  KANBAN_ATTACHED_REFERENCES_SENTINEL,
   orderDraftCards,
   reorderDraftCardIds,
   resolveDraftDropAction,
@@ -392,7 +393,7 @@ describe("buildKanbanBoard", () => {
     );
 
     const draftCard = board.projects[0]!.draft[0]!;
-    expect(draftCard.title).toBe("Attached references");
+    expect(draftCard.title).toBe(KANBAN_ATTACHED_REFERENCES_SENTINEL);
     expect(draftCard.draftHasAttachments).toBe(true);
     expect(draftCard.provider).toBe("cursor");
     expect(resolveDraftDropAction(draftCard)).toBe("dispatch");

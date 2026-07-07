@@ -5,6 +5,7 @@
 
 import type { Terminal } from "@xterm/xterm";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { IconButton } from "~/components/ui/icon-button";
 import { ArrowDownIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -14,6 +15,7 @@ interface TerminalScrollToBottomProps {
 }
 
 export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps) {
+  const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const visibilityRafRef = useRef<number | null>(null);
 
@@ -64,7 +66,7 @@ export function TerminalScrollToBottom({ terminal }: TerminalScrollToBottomProps
       <IconButton
         onClick={handleClick}
         className="size-7 rounded-full border-border bg-background text-muted-foreground shadow-sm hover:bg-muted hover:text-foreground sm:size-7"
-        label="Scroll to bottom"
+        label={t("terminal.scrollToBottom")}
         size="icon-xs"
         variant="outline"
       >

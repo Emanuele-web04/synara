@@ -123,6 +123,8 @@ import {
   ServerGenerateThreadRecapResult,
   ServerGetEnvironmentResult,
   ServerGetProviderUsageSnapshotInput,
+  ServerSetLocaleInput,
+  ServerSetLocaleResult,
   ServerGetProviderUsageSnapshotResult,
   ServerListProviderUsageInput,
   ServerListProviderUsageResult,
@@ -655,6 +657,12 @@ export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybi
   error: WsRpcError,
 });
 
+export const WsServerSetLocaleRpc = Rpc.make(WS_METHODS.serverSetLocale, {
+  payload: ServerSetLocaleInput,
+  success: ServerSetLocaleResult,
+  error: WsRpcError,
+});
+
 export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
   payload: Schema.Struct({}),
   success: ServerLifecycleStreamEvent,
@@ -874,6 +882,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,
   WsServerUpsertKeybindingRpc,
+  WsServerSetLocaleRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,
   WsSubscribeServerProviderStatusesRpc,

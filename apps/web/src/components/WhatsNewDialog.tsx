@@ -7,6 +7,7 @@
 // Layer: Chat shell overlay (mounted once from the root route).
 
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { ArrowLeftIcon, ArrowRightIcon } from "~/lib/icons";
 import { SynaraLogo } from "~/components/SynaraLogo";
@@ -49,6 +50,7 @@ export default function WhatsNewDialog({
   allEntries,
   currentVersion,
 }: WhatsNewDialogProps) {
+  const { t } = useTranslation();
   const [view, setView] = useState<View>("current");
 
   // Reset back to the primary view whenever the dialog re-opens so the next
@@ -105,11 +107,11 @@ export default function WhatsNewDialog({
               className="gap-1 text-muted-foreground"
               onClick={() => setView("changelog")}
             >
-              View changelog
+              {t("app.whatsNew.viewChangelog")}
               <ArrowRightIcon className="size-3" />
             </Button>
             <Button size="sm" onClick={() => onOpenChange(false)}>
-              Got it
+              {t("app.whatsNew.gotIt")}
             </Button>
           </DialogFooter>
         )}
@@ -125,11 +127,12 @@ function CurrentHeader({
   readonly entry: WhatsNewEntry;
   readonly currentVersion: string;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3">
       <SynaraLogo aria-hidden className="size-8 shrink-0 text-foreground" />
       <div className="flex min-w-0 flex-col">
-        <DialogTitle className="text-base">What&rsquo;s new?</DialogTitle>
+        <DialogTitle className="text-base">{t("app.whatsNew.title")}</DialogTitle>
         <DialogDescription className="text-xs">
           v{currentVersion}
           <span aria-hidden="true"> · </span>
@@ -141,15 +144,21 @@ function CurrentHeader({
 }
 
 function ChangelogHeader({ onBack }: { readonly onBack: () => void }) {
+  const { t } = useTranslation();
   return (
     <div className="flex items-center gap-3">
-      <Button size="icon-sm" variant="ghost" aria-label="Back to What's new" onClick={onBack}>
+      <Button
+        size="icon-sm"
+        variant="ghost"
+        aria-label={t("app.whatsNew.backToWhatsNew")}
+        onClick={onBack}
+      >
         <ArrowLeftIcon className="size-4" />
       </Button>
       <div className="flex min-w-0 flex-col">
-        <DialogTitle className="text-base">Complete changelog</DialogTitle>
+        <DialogTitle className="text-base">{t("app.whatsNew.completeChangelog")}</DialogTitle>
         <DialogDescription className="text-xs">
-          Every curated release, newest first.
+          {t("app.whatsNew.everyCuratedRelease")}
         </DialogDescription>
       </div>
     </div>

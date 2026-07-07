@@ -4,6 +4,7 @@ import type {
   GitStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@t3tools/shared/git";
+import type { TFunction } from "i18next";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -495,36 +496,37 @@ export function resolveDefaultBranchActionDialogCopy(input: {
   action: DefaultBranchConfirmableAction;
   branchName: string;
   includesCommit: boolean;
+  t: TFunction;
 }): DefaultBranchActionDialogCopy {
   const branchLabel = input.branchName;
-  const suffix = ` on "${branchLabel}". You can continue on this branch or create a feature branch and run the same action there.`;
+  const { t } = input;
 
   if (input.action === "push" || input.action === "commit_push") {
     if (input.includesCommit) {
       return {
-        title: "Commit & push to default branch?",
-        description: `This action will commit and push changes${suffix}`,
-        continueLabel: `Commit & push to ${branchLabel}`,
+        title: t("git.dialog.defaultBranchCommitPushTitle"),
+        description: t("git.dialog.defaultBranchCommitPushDescription", { branchLabel }),
+        continueLabel: t("git.dialog.defaultBranchCommitPushContinueLabel", { branchLabel }),
       };
     }
     return {
-      title: "Push to default branch?",
-      description: `This action will push local commits${suffix}`,
-      continueLabel: `Push to ${branchLabel}`,
+      title: t("git.dialog.defaultBranchPushTitle"),
+      description: t("git.dialog.defaultBranchPushDescription", { branchLabel }),
+      continueLabel: t("git.dialog.defaultBranchPushContinueLabel", { branchLabel }),
     };
   }
 
   if (input.includesCommit) {
     return {
-      title: "Create feature branch, commit & PR?",
-      description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch, commit your changes there, push it, and create the PR.`,
-      continueLabel: "Create feature branch & continue",
+      title: t("git.dialog.defaultBranchCommitPrTitle"),
+      description: t("git.dialog.defaultBranchCommitPrDescription", { branchLabel }),
+      continueLabel: t("git.dialog.createFeatureBranchContinue"),
     };
   }
   return {
-    title: "Create feature branch & PR?",
-    description: `Pull requests can't be opened from "${branchLabel}" into itself. This action will create a feature branch from your current commits, push it, and create the PR.`,
-    continueLabel: "Create feature branch & continue",
+    title: t("git.dialog.defaultBranchPrTitle"),
+    description: t("git.dialog.defaultBranchPrDescription", { branchLabel }),
+    continueLabel: t("git.dialog.createFeatureBranchContinue"),
   };
 }
 

@@ -3,8 +3,8 @@
 // Layer: Chat composer UI
 // Exports: ActiveTaskListCard
 
-import { pluralize } from "@t3tools/shared/text";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import {
   PiArrowsInSimple,
   PiArrowsOutSimple,
@@ -55,6 +55,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
   onCompactChange,
   onOpenSidebar,
 }: ActiveTaskListCardProps) {
+  const { t } = useTranslation();
   const totalCount = activeTaskList.tasks.length;
   const completedCount = activeTaskList.tasks.filter((task) => task.status === "completed").length;
   const hasInProgressTask = activeTaskList.tasks.some((task) => task.status === "inProgress");
@@ -70,7 +71,10 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
             <PiSlidersHorizontal className={COMPOSER_STACKED_PANEL_ICON_CLASS_NAME} />
           )}
           <ComposerStackedPanelRowLabel tone="meta">
-            {completedCount} out of {totalCount} tasks completed
+            {t("chat.activeTaskList.tasksCompleted", {
+              completed: completedCount,
+              total: totalCount,
+            })}
           </ComposerStackedPanelRowLabel>
         </ComposerStackedPanelRowMain>
         <div className="flex shrink-0 items-center gap-0.5">
@@ -80,8 +84,8 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
             size="icon-xs"
             className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
             onClick={onOpenSidebar}
-            aria-label="Open tasks sidebar"
-            title="Open tasks sidebar"
+            aria-label={t("chat.activeTaskList.openTasksSidebar")}
+            title={t("chat.activeTaskList.openTasksSidebar")}
           >
             <PiSidebarSimple className="size-3" />
           </Button>
@@ -91,8 +95,16 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
             size="icon-xs"
             className={COMPOSER_STACKED_PANEL_ICON_BUTTON_CLASS_NAME}
             onClick={() => onCompactChange(!compact)}
-            aria-label={compact ? "Expand task banner" : "Collapse task banner"}
-            title={compact ? "Expand task banner" : "Collapse task banner"}
+            aria-label={
+              compact
+                ? t("chat.activeTaskList.expandTaskBanner")
+                : t("chat.activeTaskList.collapseTaskBanner")
+            }
+            title={
+              compact
+                ? t("chat.activeTaskList.expandTaskBanner")
+                : t("chat.activeTaskList.collapseTaskBanner")
+            }
           >
             {compact ? (
               <PiArrowsOutSimple className="size-3" />
@@ -150,7 +162,7 @@ export const ActiveTaskListCard = memo(function ActiveTaskListCard({
               <div className="flex min-w-0 items-center gap-1.5">
                 <BotIcon className="size-3 shrink-0" />
                 <span className="truncate">
-                  {backgroundTaskCount} background {pluralize(backgroundTaskCount, "agent")}
+                  {t("chat.activeTaskList.backgroundTasks", { count: backgroundTaskCount })}
                 </span>
               </div>
             </div>

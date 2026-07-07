@@ -13,6 +13,7 @@ import {
 import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
+import { useTranslation } from "react-i18next";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -72,14 +73,17 @@ function findAgentLabel(
 
 // Mirrors the trigger label assembly so callers (e.g. the composer footer
 // width planner) can measure the summary without rendering the picker.
-export function resolveTraitsTriggerSummary(options: {
-  provider: ProviderKind;
-  model: string | null | undefined;
-  prompt: string;
-  modelOptions: ProviderOptions | null | undefined;
-  runtimeModel?: ProviderModelDescriptor | undefined;
-  runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
-}): {
+export function resolveTraitsTriggerSummary(
+  options: {
+    provider: ProviderKind;
+    model: string | null | undefined;
+    prompt: string;
+    modelOptions: ProviderOptions | null | undefined;
+    runtimeModel?: ProviderModelDescriptor | undefined;
+    runtimeAgents: ReadonlyArray<ProviderAgentDescriptor> | null | undefined;
+  },
+  t: (key: string) => string,
+): {
   contextWindowLabel: string | null;
   primaryLabel: string | null;
   showsFastBadge: boolean;
@@ -115,15 +119,15 @@ export function resolveTraitsTriggerSummary(options: {
     ? (effortLevels.find((level) => level.value === effort)?.label ?? effort)
     : null;
   const primaryLabel = ultrathinkPromptControlled
-    ? "Ultrathink"
+    ? t("chat.modelEffort.ultrathink")
     : effortLabel
       ? effortLabel
       : thinkingEnabled !== null
-        ? `Thinking ${thinkingEnabled ? "On" : "Off"}`
+        ? `${t("chat.modelEffort.thinking")} ${thinkingEnabled ? t("chat.modelEffort.thinkingOn") : t("chat.modelEffort.thinkingOff")}`
         : isFastOnlyControl
           ? fastModeEnabled
-            ? "Fast"
-            : "Default"
+            ? t("chat.traitsPicker.fast")
+            : t("chat.traitsPicker.default")
           : null;
   // Only departures from the default context window earn a label.
   const contextWindowLabel =
@@ -137,7 +141,11 @@ export function resolveTraitsTriggerSummary(options: {
   // (kilo/opencode) that expose no effort/thinking controls.
   const resolvedPrimaryLabel = primaryLabel ?? agentLabel;
   const showsFastBadge = supportsFastModeControl && fastModeEnabled && !isFastOnlyControl;
-  const summaryText = [resolvedPrimaryLabel, showsFastBadge ? "Fast" : null, contextWindowLabel]
+  const summaryText = [
+    resolvedPrimaryLabel,
+    showsFastBadge ? t("chat.traitsPicker.fast") : null,
+    contextWindowLabel,
+  ]
     .filter((value): value is string => Boolean(value))
     .join(" · ");
 
@@ -178,6 +186,7 @@ function TraitRadioSection({
   onValueChange: (value: string) => void;
   onSelectionComplete?: (() => void) | undefined;
 }) {
+  const { t } = useTranslation();
   return (
     <MenuGroup>
       <MenuGroupLabel>{label}</MenuGroupLabel>
@@ -192,7 +201,7 @@ function TraitRadioSection({
               onClick={() => onSelectionComplete?.()}
             >
               {option.label}
-              {option.isDefault ? " (default)" : ""}
+              {option.isDefault ? t("chat.traitsPicker.defaultSuffix") : ""}
             </MenuRadioItem>
           );
           return option.description ? (
@@ -242,6 +251,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   onSelectionComplete,
 }: TraitsMenuContentProps) {
   const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  const { t } = useTranslation();
   const {
     caps,
     defaultEffort,
@@ -335,11 +345,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
     <>
       {thinkingEnabled !== null ? (
         <TraitRadioSection
-          label="Thinking"
+          label={t("chat.traitsPicker.thinking")}
           value={thinkingEnabled ? "on" : "off"}
           options={[
-            { value: "on", label: "On (default)" },
-            { value: "off", label: "Off" },
+            { value: "on", label: t("chat.traitsPicker.onDefault") },
+            { value: "off", label: t("chat.traitsPicker.off") },
           ]}
           onValueChange={(value) => commitTrait({ thinking: value === "on" })}
           onSelectionComplete={onSelectionComplete}
@@ -349,7 +359,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorContextWindowSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Context"
+            label={t("chat.traitsPicker.context")}
             value={contextWindow ?? defaultContextWindow ?? ""}
             options={contextWindowOptions.map((option) => ({
               value: option.value,
@@ -365,11 +375,15 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorEffortSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label={provider === "kilo" || provider === "opencode" ? "Variant" : "Effort"}
+            label={
+              provider === "kilo" || provider === "opencode"
+                ? t("chat.traitsPicker.variant")
+                : t("chat.traitsPicker.effort")
+            }
             note={
               ultrathinkPromptControlled ? (
                 <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Remove Ultrathink from the prompt to change effort.
+                  {t("chat.traitsPicker.removeUltrathink")}
                 </div>
               ) : undefined
             }
@@ -390,11 +404,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasPriorFastModeSection ? <MenuDivider /> : null}
           <TraitRadioSection
-            label="Speed"
+            label={t("chat.traitsPicker.speed")}
             value={fastModeEnabled ? "on" : "off"}
             options={[
-              { value: "off", label: "Default" },
-              { value: "on", label: "Fast" },
+              { value: "off", label: t("chat.traitsPicker.default") },
+              { value: "on", label: t("chat.traitsPicker.fast") },
             ]}
             onValueChange={(value) => commitTrait({ fastMode: value === "on" })}
             onSelectionComplete={onSelectionComplete}
@@ -405,7 +419,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         <>
           {hasVisibleControls ? <MenuDivider /> : null}
           <TraitRadioSection
-            label={provider === "kilo" ? "Mode" : "Agent"}
+            label={provider === "kilo" ? t("chat.traitsPicker.mode") : t("chat.traitsPicker.agent")}
             value={selectedAgent ?? defaultAgent ?? ""}
             options={agentOptions.map((agent) => ({
               value: agent.name,
@@ -450,6 +464,7 @@ export const TraitsPicker = memo(function TraitsPicker({
   hideLabel?: boolean;
 }) {
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
+  const { t } = useTranslation();
   const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
   const setMenuOpen = useCallback(
@@ -501,14 +516,17 @@ export const TraitsPicker = memo(function TraitsPicker({
     primaryLabel: visiblePrimaryTriggerLabel,
     showsFastBadge,
     summaryText: hiddenLabelTitle,
-  } = resolveTraitsTriggerSummary({
-    provider,
-    model,
-    prompt,
-    modelOptions,
-    runtimeModel,
-    runtimeAgents,
-  });
+  } = resolveTraitsTriggerSummary(
+    {
+      provider,
+      model,
+      prompt,
+      modelOptions,
+      runtimeModel,
+      runtimeAgents,
+    },
+    t,
+  );
 
   const isCodexStyle = provider === "codex";
 
@@ -517,7 +535,7 @@ export const TraitsPicker = memo(function TraitsPicker({
       size="sm"
       variant="chrome"
       className={`min-w-0 shrink-0 justify-start overflow-hidden whitespace-nowrap px-2 sm:px-2.5 [&_svg]:mx-0 ${COMPOSER_PICKER_TRIGGER_TEXT_CLASS_NAME}`}
-      aria-label="Change effort, context, and speed"
+      aria-label={t("chat.traitsPicker.changeEffortContextSpeed")}
       {...(hideLabel && hiddenLabelTitle.length > 0 ? { title: hiddenLabelTitle } : {})}
     />
   );
@@ -535,14 +553,14 @@ export const TraitsPicker = memo(function TraitsPicker({
         {visiblePrimaryTriggerLabel ? (
           <span className="truncate">{visiblePrimaryTriggerLabel}</span>
         ) : (
-          <span className="truncate">Options</span>
+          <span className="truncate">{t("chat.traitsPicker.options")}</span>
         )}
         {showsFastBadge ? (
           <>
             <span className="shrink-0 text-muted-foreground/45">·</span>
             <span className="inline-flex shrink-0 items-center gap-1">
               <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-              <span>Fast</span>
+              <span>{t("chat.traitsPicker.fast")}</span>
             </span>
           </>
         ) : null}
@@ -561,13 +579,13 @@ export const TraitsPicker = memo(function TraitsPicker({
     <>
       <SettingsIcon aria-hidden="true" className="size-3.5 opacity-75" />
       <span className="inline-flex items-center gap-1.5">
-        <span>{visiblePrimaryTriggerLabel ?? "Options"}</span>
+        <span>{visiblePrimaryTriggerLabel ?? t("chat.traitsPicker.options")}</span>
         {showsFastBadge ? (
           <>
             <span className="text-muted-foreground/45">·</span>
             <span className="inline-flex items-center gap-1">
               <FastModeIcon aria-hidden="true" className="size-3 text-[hsl(var(--chart-4))]" />
-              <span>Fast</span>
+              <span>{t("chat.traitsPicker.fast")}</span>
             </span>
           </>
         ) : null}
@@ -599,7 +617,7 @@ export const TraitsPicker = memo(function TraitsPicker({
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change effort, context, and speed</span>
+                <span>{t("chat.traitsPicker.changeEffortContextSpeed")}</span>
                 <ShortcutKbd
                   shortcutLabel={shortcutLabel}
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"

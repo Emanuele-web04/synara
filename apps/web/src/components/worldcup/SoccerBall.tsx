@@ -3,6 +3,8 @@
 // Layer: World Cup 2026 view
 // Exports: SoccerBall
 
+import { useTranslation } from "react-i18next";
+
 const CENTER = 50;
 const RIM_RADIUS = 47;
 const CENTER_PENTAGON_RADIUS = 14;
@@ -49,12 +51,13 @@ export interface SoccerBallProps {
 }
 
 export function SoccerBall({ className }: SoccerBallProps) {
+  const { t } = useTranslation();
   return (
     <svg
       viewBox="0 0 100 100"
       className={className}
       role="img"
-      aria-label="Soccer ball"
+      aria-label={t("accessibility.soccerBall")}
       xmlns="http://www.w3.org/2000/svg"
     >
       <defs>

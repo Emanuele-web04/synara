@@ -14,6 +14,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Checkbox } from "~/components/ui/checkbox";
 import { IconButton } from "~/components/ui/icon-button";
@@ -41,11 +42,12 @@ export function EnvironmentPinnedSection({
   onUnpin,
   onRename,
 }: EnvironmentPinnedSectionProps) {
+  const { t } = useTranslation();
   if (pins.length === 0) {
     return null;
   }
   return (
-    <EnvironmentCollapsibleSection label="Pinned">
+    <EnvironmentCollapsibleSection label={t("environment.pinned.label")}>
       <ul className="flex flex-col">
         {pins.map((pin) => (
           <PinnedMessageRow
@@ -78,6 +80,7 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
   onUnpin: (messageId: MessageId) => void;
   onRename: (messageId: MessageId, label: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -86,7 +89,8 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
 
   const available = text !== undefined;
   const resolvedLabel = displayLabelFor(pin, text);
-  const displayLabel = resolvedLabel.length > 0 ? resolvedLabel : "(message unavailable)";
+  const displayLabel =
+    resolvedLabel.length > 0 ? resolvedLabel : t("environment.pinned.messageUnavailable");
 
   const clearScheduledJump = useCallback(() => {
     if (jumpClickTimeoutRef.current !== null) {
@@ -176,7 +180,9 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
         className="size-3.5 sm:size-3.5"
         checked={pin.done}
         onCheckedChange={() => onToggleDone(pin.messageId)}
-        aria-label={pin.done ? "Mark not done" : "Mark done"}
+        aria-label={
+          pin.done ? t("environment.pinned.markNotDone") : t("environment.pinned.markDone")
+        }
       />
       {editing ? (
         <input
@@ -185,7 +191,7 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
           onChange={(event) => setDraft(event.target.value)}
           onBlur={handleInputBlur}
           onKeyDown={handleInputKeyDown}
-          placeholder={available ? "" : "Label"}
+          placeholder={available ? "" : t("environment.pinned.renamePlaceholder")}
           className="min-w-0 flex-1 rounded border border-input bg-background px-1 py-0.5 text-[length:var(--app-font-size-ui,12px)] text-foreground outline-none focus-visible:border-ring"
         />
       ) : (
@@ -197,13 +203,13 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
           onKeyDown={handleLabelKeyDown}
           aria-label={
             available
-              ? "Jump to pinned message. Press F2 to rename."
-              : "Pinned message unavailable. Press Enter to rename."
+              ? t("environment.pinned.jumpOrRename")
+              : t("environment.pinned.unavailableOrRename")
           }
           title={
             available
-              ? "Click to jump · double-click or press F2 to rename"
-              : "Click or press Enter to rename"
+              ? t("environment.pinned.clickToJumpTitle")
+              : t("environment.pinned.clickToRenameTitle")
           }
           className={cn(
             "min-w-0 flex-1 truncate text-left text-[length:var(--app-font-size-ui,12px)] outline-none transition-colors",
@@ -219,8 +225,8 @@ const PinnedMessageRow = memo(function PinnedMessageRow({
         </button>
       )}
       <IconButton
-        label="Unpin message"
-        tooltip="Unpin"
+        label={t("environment.pinned.unpinMessage")}
+        tooltip={t("environment.pinned.unpin")}
         size="icon-xs"
         className="shrink-0 opacity-0 transition-opacity group-hover/pin:opacity-100 focus-visible:opacity-100"
         onClick={() => onUnpin(pin.messageId)}

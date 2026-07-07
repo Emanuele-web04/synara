@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { ArrowUpIcon, FileIcon } from "~/lib/icons";
@@ -115,18 +116,18 @@ function isRootDirectory(directoryPath: string): boolean {
 
 // Effect/fs errors come through with deep stack traces and absolute internal paths.
 // Surface a short, user-friendly reason so the popover stays tidy on missing/denied paths.
-function summarizeDirectoryLoadError(error: unknown): string {
+function summarizeDirectoryLoadError(error: unknown, t: (key: string) => string): string {
   const raw = error instanceof Error ? error.message : String(error ?? "");
   if (/ENOENT|no such file or directory/i.test(raw)) {
-    return "Folder not found.";
+    return t("chat.localDirectory.folderNotFound");
   }
   if (/EACCES|permission denied/i.test(raw)) {
-    return "Permission denied.";
+    return t("chat.localDirectory.permissionDenied");
   }
   if (/ENOTDIR|not a directory/i.test(raw)) {
-    return "Not a folder.";
+    return t("chat.localDirectory.notAFolder");
   }
-  return "Unable to load folders.";
+  return t("chat.localDirectory.unableToLoadFolders");
 }
 
 export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMenu(props: {
@@ -142,6 +143,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
   const [loadingPaths, setLoadingPaths] = useState<ReadonlySet<string>>(() => new Set());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const { t } = useTranslation();
   const listRef = useRef<HTMLDivElement | null>(null);
 
   const { directory, filter } = useMemo(
@@ -177,7 +179,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
     if (loadingPaths.has(expandedDirectory)) return;
     const api = readNativeApi();
     if (!api) {
-      setErrorMessage("App is still connecting. Try again in a moment.");
+      setErrorMessage(t("chat.localDirectory.stillConnecting"));
       return;
     }
 
@@ -192,7 +194,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
       })
       .catch((error) => {
         setEntriesByPath((current) => ({ ...current, [expandedDirectory]: [] }));
-        setErrorMessage(summarizeDirectoryLoadError(error));
+        setErrorMessage(summarizeDirectoryLoadError(error, t));
       })
       .finally(() => {
         setLoadingPaths((current) => {
@@ -400,7 +402,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
           {parent ? (
             <button
               type="button"
-              aria-label="Go up one directory"
+              aria-label={t("chat.localDirectory.goUpDirectory")}
               onMouseDown={(event) => event.preventDefault()}
               onClick={handleGoUp}
               className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
@@ -420,7 +422,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
               onClick={handleSelectCurrentDirectory}
               className="shrink-0 rounded-md px-1.5 py-0.5 text-[10.5px] text-muted-foreground/70 transition-colors hover:bg-[var(--color-background-elevated-secondary)] hover:text-foreground"
             >
-              Use this folder
+              {t("chat.localDirectory.useThisFolder")}
             </button>
           ) : null}
         </div>
@@ -488,7 +490,7 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
                 ) : null}
                 <CommandGroup>
                   <CommandGroupLabel className="px-2 pt-1.5 pb-1 text-[10px] font-semibold text-muted-foreground/55">
-                    Matches deeper
+                    {t("chat.localDirectory.matchesDeeper")}
                   </CommandGroupLabel>
                   {searchRows.map((entry, searchIndex) => {
                     const absoluteIndex = searchRowStartIndex + searchIndex;
@@ -511,23 +513,27 @@ export const ComposerLocalDirectoryMenu = memo(function ComposerLocalDirectoryMe
         </div>
         {isAwaitingHomeDir ? (
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
-            Waiting for home directory from server…
+            {t("chat.localDirectory.waitingHomeDir")}
           </p>
         ) : isLoading && visibleCount === 0 ? (
-          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">Loading local files…</p>
+          <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
+            {t("chat.localDirectory.loadingLocalFiles")}
+          </p>
         ) : errorMessage ? (
           <p className="px-2 py-1.5 text-destructive/80 text-[11px]">{errorMessage}</p>
         ) : isSearchPending ? (
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
-            Searching nested files…
+            {t("chat.localDirectory.searchingNestedFiles")}
           </p>
         ) : visibleCount === 0 ? (
           <p className="px-2 py-1.5 text-muted-foreground/50 text-[11px]">
-            {filter.trim().length > 0 ? "No matches." : "No files or folders here."}
+            {filter.trim().length > 0
+              ? t("chat.localDirectory.noMatches")
+              : t("chat.localDirectory.noFilesOrFolders")}
           </p>
         ) : searchQuery.data?.truncated ? (
           <p className="px-2 py-1 text-muted-foreground/40 text-[10.5px]">
-            Showing top matches. Keep typing to narrow.
+            {t("chat.localDirectory.showingTopMatches")}
           </p>
         ) : null}
       </div>
@@ -542,6 +548,7 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
   onHighlight: (index: number) => void;
   onActivate: () => void;
 }) {
+  const { t } = useTranslation();
   const { directoryLabel, index, isHighlighted, onHighlight, onActivate } = props;
   return (
     <CommandItem
@@ -563,7 +570,7 @@ const UseCurrentFolderRow = memo(function UseCurrentFolderRow(props: {
       <FolderClosed className="size-3.5 text-muted-foreground/60" />
       <div className="min-w-0 flex flex-1 items-center gap-1.5 overflow-hidden">
         <span className="shrink-0 text-[11.5px] font-medium text-foreground/80">
-          Use this folder
+          {t("chat.localDirectory.useThisFolder")}
         </span>
         <span className="truncate text-[11px] text-muted-foreground/55">{directoryLabel}</span>
       </div>

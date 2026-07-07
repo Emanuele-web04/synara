@@ -16,6 +16,7 @@ import type {
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import {
   getProviderStartOptions,
@@ -109,6 +110,7 @@ export function KanbanNewTaskDialog({
   initialProjectId,
   initialSendAsDraft = false,
 }: KanbanNewTaskDialogProps) {
+  const { t } = useTranslation();
   const { settings } = useAppSettings();
   const { resolvedTheme } = useTheme();
   const assistantDeliveryMode = resolveAssistantDeliveryMode(settings);
@@ -343,11 +345,11 @@ export function KanbanNewTaskDialog({
       onUnsupportedFiles: (files) => {
         toastManager.add({
           type: "warning",
-          title: "Only images can be attached to new tasks.",
+          title: t("kanban.onlyImages"),
           description:
             files.length === 1
-              ? "That file was not added."
-              : `${files.length} files were not added.`,
+              ? t("kanban.fileNotAdded")
+              : t("kanban.filesNotAdded", { count: files.length }),
         });
       },
     },
@@ -397,13 +399,10 @@ export function KanbanNewTaskDialog({
             />
             <ChevronRightIcon className="size-3.5 shrink-0 text-muted-foreground/50" aria-hidden />
             <DialogTitle className="font-system-ui truncate font-medium text-[length:var(--app-font-size-ui,12px)] leading-none">
-              New task
+              {t("kanban.newTask")}
             </DialogTitle>
           </div>
-          <DialogDescription className="sr-only">
-            Draft a prompt and place it in the board&apos;s Draft column. Drag it to In Progress to
-            send it.
-          </DialogDescription>
+          <DialogDescription className="sr-only">{t("kanban.dialogDescription")}</DialogDescription>
         </DialogHeader>
         {/* Flush, borderless composer body: same Lexical prompt editor and attachment row as chat. */}
         <DialogPanel
@@ -424,7 +423,7 @@ export function KanbanNewTaskDialog({
                 {isLocalFolderBrowserOpen ? (
                   <ComposerLocalDirectoryMenu
                     mentionQuery={mentionTriggerQuery}
-                    rootLabel={localFolderBrowseRootPath ?? "Local folders unavailable"}
+                    rootLabel={localFolderBrowseRootPath ?? t("kanban.localFoldersUnavailable")}
                     homeDir={serverConfigQuery.data?.homeDir ?? null}
                     onSelectEntry={(absolutePath) =>
                       handleSelectLocalDirectoryMention(absolutePath)
@@ -464,7 +463,7 @@ export function KanbanNewTaskDialog({
               terminalContexts={composerTerminalContexts}
               mentionReferences={composerMentions}
               disabled={voice.isVoiceTranscribing}
-              placeholder="Describe the task, @tag files/folders, paste images, or use / for skills"
+              placeholder={t("kanban.placeholder")}
               className={cn(
                 COMPOSER_EDITOR_MIN_HEIGHT_CLASS_NAME,
                 COMPOSER_EDITOR_TYPOGRAPHY_CLASS_NAME,
@@ -557,8 +556,8 @@ export function KanbanNewTaskDialog({
                   size="icon-sm"
                   variant="ghost"
                   className="mr-1 shrink-0 text-muted-foreground/70 hover:text-foreground"
-                  aria-label="Attach images"
-                  title="Attach images"
+                  aria-label={t("kanban.attachImages")}
+                  title={t("kanban.attachImages")}
                   onClick={() => fileInputRef.current?.click()}
                 >
                   <PaperclipIcon className="size-4" />
@@ -580,10 +579,10 @@ export function KanbanNewTaskDialog({
                   checked={sendAsDraft}
                   onCheckedChange={(checked) => setSendAsDraft(checked === true)}
                 />
-                Send as draft
+                {t("kanban.sendAsDraft")}
               </label>
               <Button size="sm" onClick={handleCreateRequest} disabled={!canCreate}>
-                {isCreating ? "Creating..." : "Create task"}
+                {isCreating ? t("kanban.creating") : t("kanban.createTask")}
               </Button>
             </div>
           </div>

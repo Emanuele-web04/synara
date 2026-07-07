@@ -5,6 +5,7 @@
 
 import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogDescription,
@@ -32,6 +33,7 @@ export default function ShortcutsDialog(props: {
   platform: string;
   context: ShortcutSheetContext;
 }) {
+  const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -73,16 +75,14 @@ export default function ShortcutsDialog(props: {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogPopup className="max-w-xl">
         <DialogHeader className="pb-2">
-          <DialogTitle className="text-base">Keyboard shortcuts</DialogTitle>
-          <DialogDescription className="text-xs">
-            Reflects the bindings active in your current context.
-          </DialogDescription>
+          <DialogTitle className="text-base">{t("shortcuts.title")}</DialogTitle>
+          <DialogDescription className="text-xs">{t("shortcuts.description")}</DialogDescription>
           <div className="pt-2">
             <Input
               ref={inputRef}
               type="search"
               size="sm"
-              placeholder="Search shortcuts..."
+              placeholder={t("shortcuts.searchPlaceholder")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               onKeyDown={(event) => {
@@ -94,7 +94,7 @@ export default function ShortcutsDialog(props: {
               }}
               className="rounded-md"
               nativeInput
-              aria-label="Search shortcuts"
+              aria-label={t("shortcuts.searchPlaceholder")}
             />
           </div>
         </DialogHeader>
@@ -108,7 +108,7 @@ export default function ShortcutsDialog(props: {
             </div>
           ) : (
             <div className="px-6 py-10 text-center text-sm text-muted-foreground">
-              No shortcuts match &ldquo;{query}&rdquo;.
+              {t("shortcuts.noResults", { query })}
             </div>
           )}
         </DialogPanel>
@@ -124,6 +124,7 @@ function ShortcutSection({
   section: ShortcutSheetSection;
   isFirst: boolean;
 }) {
+  const { t } = useTranslation();
   if (section.entries.length === 0) return null;
   const muted = section.tone === "muted";
   return (
@@ -135,9 +136,11 @@ function ShortcutSection({
             muted ? "text-muted-foreground/70" : "text-muted-foreground",
           )}
         >
-          {section.title}
+          {section.titleKey ? t(section.titleKey) : section.title}
         </h3>
-        <p className="truncate text-[11px] text-muted-foreground/70">{section.description}</p>
+        <p className="truncate text-[11px] text-muted-foreground/70">
+          {section.descriptionKey ? t(section.descriptionKey) : section.description}
+        </p>
       </header>
       <ul className={cn("px-3 pb-3", muted && "opacity-75")}>
         {section.entries.map((entry) => (
@@ -145,7 +148,13 @@ function ShortcutSection({
             key={entry.id}
             className="group flex items-center justify-between gap-4 rounded-md px-3 py-1.5 hover:bg-muted/60"
           >
-            <span className="min-w-0 truncate text-sm text-foreground">{entry.label}</span>
+            <span className="min-w-0 truncate text-sm text-foreground">
+              {entry.labelKey
+                ? (entry.interpolation
+                  ? t(entry.labelKey, entry.interpolation)
+                  : t(entry.labelKey))
+                : entry.label}
+            </span>
             <ShortcutKbd shortcutLabel={entry.shortcutLabel} groupClassName="shrink-0" />
           </li>
         ))}

@@ -5,6 +5,7 @@
 // composer surface), so it reuses the composer surface chrome to stay in-tint.
 import { type ApprovalRequestId } from "@t3tools/contracts";
 import { memo, useEffect, useEffectEvent, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { type PendingUserInput } from "../../session-logic";
 import {
   derivePendingUserInputProgress,
@@ -82,6 +83,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   const activeQuestion = progress.activeQuestion;
   const autoAdvanceTimerRef = useRef<number | null>(null);
   const onAdvanceRef = useRef(onAdvance);
+  const { t } = useTranslation();
   useEffect(() => {
     onAdvanceRef.current = onAdvance;
   }, [onAdvance]);
@@ -165,7 +167,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               disabled={!canGoBack || isResponding}
               onClick={onPrevious}
               className={NAV_BUTTON_CLASS_NAME}
-              aria-label="Previous question"
+              aria-label={t("chat.composerPendingUserInputPanel.previousQuestion")}
             >
               <ChevronLeftIcon className="size-3.5" />
             </button>
@@ -177,7 +179,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               disabled={!canGoForward || isResponding}
               onClick={() => onAdvance()}
               className={NAV_BUTTON_CLASS_NAME}
-              aria-label="Next question"
+              aria-label={t("chat.composerPendingUserInputPanel.nextQuestion")}
             >
               <ChevronRightIcon className="size-3.5" />
             </button>
@@ -185,7 +187,9 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
         ) : null}
       </div>
       {activeQuestion.multiSelect ? (
-        <p className="mt-1 text-[11px] text-muted-foreground/55">Select one or more.</p>
+        <p className="mt-1 text-[11px] text-muted-foreground/55">
+          {t("chat.composerPendingUserInputPanel.selectOneOrMore")}
+        </p>
       ) : null}
       {activeQuestion.options.length > 0 ? (
         <div className="mt-2.5 space-y-0.5">
@@ -221,7 +225,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               isResponding && "cursor-not-allowed opacity-50",
             )}
           >
-            Cancel
+            {t("common.cancel")}
           </button>
         </div>
       )}

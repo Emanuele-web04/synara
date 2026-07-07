@@ -176,7 +176,21 @@ const THREAD_JUMP_COMMANDS = [
   "thread.jump.9",
 ] as const satisfies readonly KeybindingCommand[];
 
+export type ThreadStatusPillId =
+  | "working"
+  | "connecting"
+  | "completed"
+  | "pendingApproval"
+  | "awaitingInput"
+  | "planReady";
+
 export interface ThreadStatusPill {
+  /**
+   * Stable discriminator used for comparisons and i18n key lookup
+   * (`sidebar.status.${statusId}`). The English `label` is kept for tests and
+   * backwards compatibility but should not be used for identity checks.
+   */
+  statusId: ThreadStatusPillId;
   label:
     | "Working"
     | "Connecting"
@@ -191,13 +205,13 @@ export interface ThreadStatusPill {
   dismissalKey?: string;
 }
 
-const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
-  "Pending Approval": 5,
-  "Awaiting Input": 4,
-  Working: 3,
-  Connecting: 3,
-  "Plan Ready": 2,
-  Completed: 1,
+const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["statusId"], number> = {
+  pendingApproval: 5,
+  awaitingInput: 4,
+  working: 3,
+  connecting: 3,
+  planReady: 2,
+  completed: 1,
 };
 
 type ThreadStatusInput = Pick<
@@ -211,11 +225,14 @@ type ThreadStatusInput = Pick<
 };
 
 function createThreadStatusDismissalKey(
-  label: Extract<ThreadStatusPill["label"], "Pending Approval" | "Awaiting Input" | "Plan Ready">,
+  statusId: Extract<
+    ThreadStatusPill["statusId"],
+    "pendingApproval" | "awaitingInput" | "planReady"
+  >,
   thread: ThreadStatusInput,
 ): string {
   return [
-    label,
+    statusId,
     thread.updatedAt ?? "",
     thread.latestTurn?.turnId ?? "",
     thread.latestTurn?.completedAt ?? "",
@@ -228,7 +245,7 @@ function createCompletedDismissalKey(thread: ThreadStatusInput): string | null {
     return null;
   }
 
-  return ["Completed", thread.latestTurn.turnId, thread.latestTurn.completedAt].join(":");
+  return ["completed", thread.latestTurn.turnId, thread.latestTurn.completedAt].join(":");
 }
 
 export function hasUnseenCompletion(thread: ThreadStatusInput): boolean {
@@ -425,11 +442,12 @@ export function resolveThreadStatusPill(input: {
   const hasPendingUserInput = input.hasPendingUserInput && canAnswerPendingRequests;
 
   if (hasPendingApprovals) {
-    const dismissalKey = createThreadStatusDismissalKey("Pending Approval", thread);
+    const dismissalKey = createThreadStatusDismissalKey("pendingApproval", thread);
     if (thread.dismissedStatusKey === dismissalKey) {
       return null;
     }
     return {
+      statusId: "pendingApproval",
       label: "Pending Approval",
       colorClass: "text-amber-600 dark:text-amber-300/90",
       dotClass: "bg-amber-500 dark:bg-amber-300/90",
@@ -440,11 +458,12 @@ export function resolveThreadStatusPill(input: {
   }
 
   if (hasPendingUserInput) {
-    const dismissalKey = createThreadStatusDismissalKey("Awaiting Input", thread);
+    const dismissalKey = createThreadStatusDismissalKey("awaitingInput", thread);
     if (thread.dismissedStatusKey === dismissalKey) {
       return null;
     }
     return {
+      statusId: "awaitingInput",
       label: "Awaiting Input",
       colorClass: "text-indigo-600 dark:text-indigo-300/90",
       dotClass: "bg-indigo-500 dark:bg-indigo-300/90",
@@ -456,6 +475,7 @@ export function resolveThreadStatusPill(input: {
 
   if (thread.hasLiveTailWork) {
     return {
+      statusId: "working",
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
@@ -469,6 +489,7 @@ export function resolveThreadStatusPill(input: {
     (thread.latestTurn === null || hasLiveLatestTurn(thread.latestTurn, thread.session))
   ) {
     return {
+      statusId: "working",
       label: "Working",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
@@ -479,6 +500,7 @@ export function resolveThreadStatusPill(input: {
 
   if (thread.session?.status === "connecting") {
     return {
+      statusId: "connecting",
       label: "Connecting",
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
@@ -497,11 +519,12 @@ export function resolveThreadStatusPill(input: {
         findLatestProposedPlan(thread.proposedPlans ?? [], thread.latestTurn?.turnId ?? null),
       ));
   if (hasPlanReadyPrompt) {
-    const dismissalKey = createThreadStatusDismissalKey("Plan Ready", thread);
+    const dismissalKey = createThreadStatusDismissalKey("planReady", thread);
     if (thread.dismissedStatusKey === dismissalKey) {
       return null;
     }
     return {
+      statusId: "planReady",
       label: "Plan Ready",
       colorClass: "text-violet-600 dark:text-violet-300/90",
       dotClass: "bg-violet-500 dark:bg-violet-300/90",
@@ -517,6 +540,7 @@ export function resolveThreadStatusPill(input: {
       return null;
     }
     return {
+      statusId: "completed",
       label: "Completed",
       colorClass: "text-emerald-600 dark:text-emerald-300/90",
       dotClass: "bg-emerald-500 dark:bg-emerald-300/90",
@@ -538,7 +562,8 @@ export function resolveProjectStatusIndicator(
     if (status === null) continue;
     if (
       highestPriorityStatus === null ||
-      THREAD_STATUS_PRIORITY[status.label] > THREAD_STATUS_PRIORITY[highestPriorityStatus.label]
+      THREAD_STATUS_PRIORITY[status.statusId] >
+        THREAD_STATUS_PRIORITY[highestPriorityStatus.statusId]
     ) {
       highestPriorityStatus = status;
     }

@@ -3,6 +3,7 @@
 // the dedicated rate-limit panel.
 
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ProviderRateLimit } from "~/lib/rateLimits";
 import {
@@ -16,12 +17,13 @@ export function RateLimitSummaryList({
 }: {
   rateLimits: ReadonlyArray<ProviderRateLimit>;
 }) {
+  const { t } = useTranslation();
   const rows = useMemo(() => deriveVisibleRateLimitRows(rateLimits), [rateLimits]);
 
   if (rows.length === 0) {
     return (
       <p className="text-[length:var(--app-font-size-chat-meta,10px)] text-muted-foreground">
-        No rate limit data yet.
+        {t("chat.rateLimit.noDataYet")}
       </p>
     );
   }

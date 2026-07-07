@@ -13,6 +13,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
 } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Checkbox } from "~/components/ui/checkbox";
 import { IconButton } from "~/components/ui/icon-button";
@@ -46,11 +47,12 @@ export function EnvironmentMarkersSection({
   onRemove,
   onRename,
 }: EnvironmentMarkersSectionProps) {
+  const { t } = useTranslation();
   if (markers.length === 0) {
     return null;
   }
   return (
-    <EnvironmentCollapsibleSection label="Markers">
+    <EnvironmentCollapsibleSection label={t("environment.markers.label")}>
       <ul className="flex flex-col">
         {markers.map((marker) => (
           <MarkerRow
@@ -83,6 +85,7 @@ const MarkerRow = memo(function MarkerRow({
   onRemove: (markerId: ThreadMarkerId) => void;
   onRename: (markerId: ThreadMarkerId, label: string | null) => void;
 }) {
+  const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -91,7 +94,9 @@ const MarkerRow = memo(function MarkerRow({
 
   const available = text !== undefined && isThreadMarkerAvailable(marker, text);
   const resolvedLabel = marker.label?.trim() || deriveThreadMarkerLabel(marker);
-  const displayLabel = available ? resolvedLabel : `${resolvedLabel} (unavailable)`;
+  const displayLabel = available
+    ? resolvedLabel
+    : t("environment.markers.unavailableLabel", { label: resolvedLabel });
 
   const clearScheduledJump = useCallback(() => {
     if (jumpClickTimeoutRef.current !== null) {
@@ -185,7 +190,9 @@ const MarkerRow = memo(function MarkerRow({
         className="size-3.5 sm:size-3.5"
         checked={marker.done}
         onCheckedChange={() => onToggleDone(marker.id)}
-        aria-label={marker.done ? "Mark not done" : "Mark done"}
+        aria-label={
+          marker.done ? t("environment.markers.markNotDone") : t("environment.markers.markDone")
+        }
       />
       <span
         aria-hidden="true"
@@ -208,13 +215,13 @@ const MarkerRow = memo(function MarkerRow({
           onKeyDown={handleLabelKeyDown}
           aria-label={
             available
-              ? "Jump to marker. Press F2 to rename."
-              : "Marker unavailable. Press Enter to rename."
+              ? t("environment.markers.jumpToF2Rename")
+              : t("environment.markers.unavailableEnterToRename")
           }
           title={
             available
-              ? "Click to jump · double-click or press F2 to rename"
-              : "Source text changed or is unavailable"
+              ? t("environment.markers.clickJumpDoubleClickRename")
+              : t("environment.markers.sourceTextUnavailable")
           }
           className={cn(
             "min-w-0 flex-1 truncate text-left text-[length:var(--app-font-size-ui,12px)] outline-none transition-colors",
@@ -230,8 +237,8 @@ const MarkerRow = memo(function MarkerRow({
         </button>
       )}
       <IconButton
-        label="Remove marker"
-        tooltip="Remove"
+        label={t("environment.markers.removeMarker")}
+        tooltip={t("environment.markers.remove")}
         size="icon-xs"
         className="shrink-0 opacity-0 transition-opacity group-hover/marker:opacity-100 focus-visible:opacity-100"
         onClick={() => onRemove(marker.id)}

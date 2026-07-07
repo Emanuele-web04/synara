@@ -4,6 +4,7 @@
 // Depends on: shared input styling plus caller-provided content slots.
 
 import { useEffect, useRef, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "~/lib/utils";
 import { Input } from "../ui/input";
 import {
@@ -36,8 +37,9 @@ export function PickerPanelShell(props: {
   bleedParentPadding?: boolean;
   listMaxHeightClassName?: string;
 }) {
+  const { t } = useTranslation();
   const {
-    searchPlaceholder = "Search",
+    searchPlaceholder,
     query = "",
     onQueryChange,
     stopSearchKeyPropagation = false,
@@ -49,6 +51,7 @@ export function PickerPanelShell(props: {
     listMaxHeightClassName,
   } = props;
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const defaultSearchPlaceholder = t("common.search");
 
   useEffect(() => {
     if (!autoFocusSearch || !onQueryChange) {
@@ -89,7 +92,7 @@ export function PickerPanelShell(props: {
             ref={searchInputRef}
             size="sm"
             type="search"
-            placeholder={searchPlaceholder}
+            placeholder={searchPlaceholder ?? defaultSearchPlaceholder}
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             onKeyDownCapture={

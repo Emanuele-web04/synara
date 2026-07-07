@@ -7,12 +7,13 @@
 //      the sidebar project/thread rows, the project hover card, and the context
 //      menus. Centralizing both keeps every pin control's wording and glyph aligned.
 
+import type { TFunction } from "i18next";
 import type { SVGProps } from "react";
 import { PinFilledIcon, PinIcon } from "./icons";
 
 /** Accessible verb for a pin toggle: "Pin <target>" when unpinned, "Unpin <target>" when pinned. */
-export function pinActionLabel(target: string, pinned: boolean): string {
-  return `${pinned ? "Unpin" : "Pin"} ${target}`;
+export function pinActionLabel(target: string, pinned: boolean, t: TFunction): string {
+  return pinned ? t("pin.unpinTarget", { target }) : t("pin.pinTarget", { target });
 }
 
 // State-reflecting pin glyph: the solid fill-set pin once pinned, the outline pin

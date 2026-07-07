@@ -9,6 +9,7 @@
 // taxonomy. When/if we introduce a shared Tabs primitive, these can migrate.
 
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 import type { ResolvedTerminalVisualIdentity } from "@t3tools/shared/terminalThreads";
 
@@ -71,6 +72,7 @@ export function TerminalWorkspaceTabBar(props: {
   onActiveGroupChange: (groupId: string) => void;
   onCloseGroup: (groupId: string) => void;
 }) {
+  const { t } = useTranslation();
   const canCloseGroups = props.terminalGroups.length > 1;
   return (
     <div className="flex min-h-9 min-w-0 items-center gap-1 bg-[var(--color-background-surface)] px-1.5 py-1">
@@ -82,8 +84,10 @@ export function TerminalWorkspaceTabBar(props: {
             terminalIds: terminalGroup.terminalIds,
             terminalVisualIdentityById: props.terminalVisualIdentityById,
           })?.identity;
-          const groupTitle = visualIdentity?.title ?? "Terminal";
-          const closeTabLabel = `Close ${visualIdentity?.title ?? "Terminal tab"}`;
+          const groupTitle = visualIdentity?.title ?? t("terminal.defaultTerminal");
+          const closeTabLabel = t("accessibility.closeTerminalTab", {
+            title: visualIdentity?.title ?? t("terminal.defaultTerminal"),
+          });
           return (
             <SurfaceTabChip
               key={terminalGroup.id}

@@ -13,6 +13,7 @@ import { type ProjectId, type ThreadId } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { memo, useCallback, useMemo, useState } from "react";
 
+import { useTranslation } from "react-i18next";
 import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
@@ -208,6 +209,7 @@ export function GitPanel(props: {
   onClose?: () => void;
 }) {
   const queryClient = useQueryClient();
+  const { t } = useTranslation();
   const { resolvedTheme } = useTheme();
   const theme = resolvedTheme as "light" | "dark";
   const thread = useStore(
@@ -299,21 +301,21 @@ export function GitPanel(props: {
   const hasChanges = stagedFiles.length > 0 || unstagedFiles.length > 0;
 
   if (!cwd) {
-    return <PanelStateMessage>Source control is unavailable for this thread.</PanelStateMessage>;
+    return <PanelStateMessage>{t("chat.gitPanel.unavailableForThread")}</PanelStateMessage>;
   }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <DockPaneHeader
-        title="Source control"
+        title={t("chat.gitPanel.title")}
         onClose={props.onClose}
-        closeLabel="Close source control"
+        closeLabel={t("chat.gitPanel.closeLabel")}
         actions={
           <IconButton
             size="icon-xs"
             variant="ghost"
-            label="Refresh changes"
-            tooltip="Refresh changes"
+            label={t("chat.gitPanel.refreshLabel")}
+            tooltip={t("chat.gitPanel.refreshLabel")}
             className={DOCK_HEADER_ICON_BUTTON_CLASS}
             onClick={refresh}
           >
@@ -329,38 +331,40 @@ export function GitPanel(props: {
           </Alert>
         ) : null}
         {!error && isLoading && !hasChanges ? (
-          <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">Loading changes...</p>
+          <p className="px-1.5 py-1 text-[11px] text-muted-foreground/70">
+            {t("chat.gitPanel.loading")}
+          </p>
         ) : null}
         {!error && !isLoading && !hasChanges ? (
           <p className="px-1.5 py-2 text-center text-[12px] text-muted-foreground/70">
-            No changes in the working tree.
+            {t("chat.gitPanel.noChanges")}
           </p>
         ) : null}
         {hasChanges ? (
           <>
             <GitFileSection
-              title="Staged"
-              emptyLabel="No staged changes."
+              title={t("chat.gitPanel.staged")}
+              emptyLabel={t("chat.gitPanel.noStaged")}
               files={stagedFiles}
               theme={theme}
               section="staged"
               selectedPath={selectedResolved?.section === "staged" ? selectedPath : null}
-              actionLabel="Unstage file"
-              actionAllLabel="Unstage all"
+              actionLabel={t("chat.gitPanel.unstageFile")}
+              actionAllLabel={t("chat.gitPanel.unstageAll")}
               actionIcon="unstage"
               actionDisabled={mutating}
               onSelect={selectStaged}
               onAction={unstage}
             />
             <GitFileSection
-              title="Changes"
-              emptyLabel="No unstaged changes."
+              title={t("chat.gitPanel.changes")}
+              emptyLabel={t("chat.gitPanel.noUnstaged")}
               files={unstagedFiles}
               theme={theme}
               section="unstaged"
               selectedPath={selectedResolved?.section === "unstaged" ? selectedPath : null}
-              actionLabel="Stage file"
-              actionAllLabel="Stage all"
+              actionLabel={t("chat.gitPanel.stageFile")}
+              actionAllLabel={t("chat.gitPanel.stageAll")}
               actionIcon="stage"
               actionDisabled={mutating}
               onSelect={selectUnstaged}
@@ -374,7 +378,9 @@ export function GitPanel(props: {
         {selectedFileDiff ? (
           <SelectedFileDiff fileDiff={selectedFileDiff} theme={theme} />
         ) : (
-          <PanelStateMessage density="compact">Select a file to view its diff.</PanelStateMessage>
+          <PanelStateMessage density="compact">
+            {t("chat.gitPanel.selectFileDiff")}
+          </PanelStateMessage>
         )}
       </div>
     </div>

@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import React, { type ReactNode, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { IconType } from "react-icons";
 import {
   SiCanva,
@@ -348,8 +349,9 @@ function PluginGridItem({ entry }: { entry: PluginEntry }) {
 }
 
 function SkillGridItem({ skill }: { skill: ProviderSkillDescriptor }) {
+  const { t } = useTranslation();
   const description =
-    skill.interface?.shortDescription ?? skill.description ?? "No description available.";
+    skill.interface?.shortDescription ?? skill.description ?? t("plugin.noDescriptionAvailable");
 
   return (
     <div className="flex items-center gap-3 rounded-xl px-3 py-3 transition-colors hover:bg-[var(--sidebar-accent)]">
@@ -372,6 +374,7 @@ function SectionHeader({ title }: { title: string }) {
 // ── Main component ─────────────────────────────────────────────────────────
 
 export function PluginLibrary() {
+  const { t } = useTranslation();
   const desktopTopBarTrafficLightGutterClassName = useDesktopTopBarTrafficLightGutterClassName();
   const desktopTopBarWindowControlsGutterClassName =
     useDesktopTopBarWindowControlsGutterClassName();
@@ -569,12 +572,12 @@ export function PluginLibrary() {
           <SidebarHeaderNavigationControls />
           <div className="flex items-end gap-3">
             <TabButton
-              label="Plugins"
+              label={t("plugin.pluginsTab")}
               active={selectedTab === "plugins"}
               onClick={() => setSelectedTab("plugins")}
             />
             <TabButton
-              label="Skills"
+              label={t("plugin.skillsTab")}
               active={selectedTab === "skills"}
               onClick={() => setSelectedTab("skills")}
             />
@@ -611,7 +614,7 @@ export function PluginLibrary() {
           {/* Hero */}
           <div className="px-6 py-10 text-center">
             <h1 className="text-[28px] font-semibold text-foreground">
-              Make {providerLabel} work your way
+              {t("plugin.title", { provider: providerLabel })}
             </h1>
           </div>
 
@@ -629,7 +632,9 @@ export function PluginLibrary() {
                   if (selectedTab === "plugins") setPluginSearch(e.target.value);
                   else setSkillSearch(e.target.value);
                 }}
-                placeholder={selectedTab === "plugins" ? "Search plugins" : "Search skills"}
+                placeholder={
+                  selectedTab === "plugins" ? t("plugin.searchPlugins") : t("plugin.searchSkills")
+                }
                 className="text-sm"
               />
             </InputGroup>
@@ -642,9 +647,7 @@ export function PluginLibrary() {
               (pluginsQuery.data?.marketplaceLoadErrors.length ?? 0) > 0)) && (
             <div className="mx-auto max-w-2xl space-y-1.5 px-6 pb-4">
               {!discoveryCwd && selectedTab === "skills" ? (
-                <InlineWarning>
-                  Skills need a workspace path. Open a project or thread first.
-                </InlineWarning>
+                <InlineWarning>{t("plugin.skillsNeedWorkspace")}</InlineWarning>
               ) : null}
               {selectedTab === "plugins" && pluginsQuery.data?.remoteSyncError ? (
                 <InlineWarning>{pluginsQuery.data.remoteSyncError}</InlineWarning>
@@ -667,8 +670,8 @@ export function PluginLibrary() {
                 {!canListPlugins ? (
                   <div className="mx-auto max-w-2xl">
                     <EmptyPanel
-                      title={`Plugins unavailable for ${providerLabel}`}
-                      description="This provider does not expose plugin discovery."
+                      title={t("plugin.pluginsUnavailable", { provider: providerLabel })}
+                      description={t("plugin.pluginsNoDiscovery")}
                     />
                   </div>
                 ) : pluginsQuery.isLoading && pluginEntries.length === 0 ? (
@@ -679,8 +682,8 @@ export function PluginLibrary() {
                   </div>
                 ) : filteredPluginEntries.length === 0 ? (
                   <EmptyPanel
-                    title="No installed plugins found"
-                    description="This view only shows plugins already available in your Codex setup."
+                    title={t("plugin.noInstalledPlugins")}
+                    description={t("plugin.onlyInstalled")}
                   />
                 ) : (
                   <div className="space-y-6">
@@ -702,8 +705,8 @@ export function PluginLibrary() {
                 {!canListSkills ? (
                   <div className="mx-auto max-w-2xl">
                     <EmptyPanel
-                      title={`Skills unavailable for ${providerLabel}`}
-                      description="This provider does not expose skill discovery."
+                      title={t("plugin.skillsUnavailable", { provider: providerLabel })}
+                      description={t("plugin.skillsNoDiscovery")}
                     />
                   </div>
                 ) : skillsQuery.isLoading && discoveredSkills.length === 0 ? (
@@ -713,10 +716,13 @@ export function PluginLibrary() {
                     ))}
                   </div>
                 ) : filteredSkills.length === 0 ? (
-                  <EmptyPanel title="No skills found" description="No skills match this search." />
+                  <EmptyPanel
+                    title={t("plugin.noSkillsFound")}
+                    description={t("plugin.noSkillsMatch")}
+                  />
                 ) : (
                   <div>
-                    <SectionHeader title="Skills" />
+                    <SectionHeader title={t("plugin.skillsSection")} />
                     <div className="grid grid-cols-1 sm:grid-cols-2">
                       {filteredSkills.map((skill) => (
                         <SkillGridItem key={skill.path} skill={skill} />

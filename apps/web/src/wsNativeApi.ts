@@ -41,6 +41,7 @@ import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
 import { WsTransport } from "./wsTransport";
 import { emitWsTransportState } from "./wsTransportEvents";
+import i18n from "./i18n";
 
 let instance: { api: NativeApi; transport: WsTransport } | null = null;
 const welcomeListeners = new Set<(payload: WsWelcomePayload) => void>();
@@ -163,6 +164,10 @@ function getFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
   const initial = defaultBrowserState(threadId);
   fallbackBrowserStates.set(threadId, initial);
   return initial;
+}
+
+function resolveCurrentLocale(): "en" | "zh-CN" {
+  return i18n.language === "zh-CN" ? "zh-CN" : "en";
 }
 
 function emitFallbackBrowserState(threadId: ThreadId): ThreadBrowserState {
@@ -325,6 +330,7 @@ export function createWsNativeApi(): NativeApi {
 
   transport.subscribe(WS_CHANNELS.serverWelcome, (message) => {
     const payload = message.data;
+    void transport.request(WS_METHODS.serverSetLocale, { locale: resolveCurrentLocale() });
     for (const listener of welcomeListeners) {
       try {
         listener(payload);
@@ -644,6 +650,7 @@ export function createWsNativeApi(): NativeApi {
         return transport.request(WS_METHODS.serverTranscribeVoice, input);
       },
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
+      setLocale: (input) => transport.request(WS_METHODS.serverSetLocale, input),
     },
     stats: {
       getProfileStats: (input) => transport.request(WS_METHODS.statsGetProfileStats, input),

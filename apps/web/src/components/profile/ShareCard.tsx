@@ -6,6 +6,7 @@
 // Layer: web profile feature.
 
 import { forwardRef, type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { SynaraLogo } from "~/components/SynaraLogo";
@@ -44,6 +45,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
   { stats, tokenStats, displayName, handle, avatarColor, avatarImage },
   ref,
 ) {
+  const { t } = useTranslation();
   const topProvider = selectProfileTopProvider(stats, tokenStats);
 
   const tiles: Tile[] = [
@@ -54,24 +56,24 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
           {formatCompact(tokenStats?.lifetimeTotalTokens ?? null)}
         </span>
       ),
-      label: "lifetime tokens",
+      label: t("settings.profile.lifetimeTokens"),
     },
     {
       key: "peak",
       value: (
         <span className={VALUE_CLASS}>{formatCompact(tokenStats?.peakDayTokens ?? null)}</span>
       ),
-      label: "peak day",
+      label: t("settings.profile.peakDay"),
     },
     {
       key: "current",
       value: <span className={VALUE_CLASS}>{formatDays(stats.activity.currentStreakDays)}</span>,
-      label: "current streak",
+      label: t("settings.profile.currentStreak"),
     },
     {
       key: "longest",
       value: <span className={VALUE_CLASS}>{formatDays(stats.activity.longestStreakDays)}</span>,
-      label: "longest streak",
+      label: t("settings.profile.longestStreak"),
     },
     {
       key: "provider",
@@ -90,7 +92,7 @@ export const ShareCard = forwardRef<HTMLDivElement, ShareCardProps>(function Sha
       ) : (
         <span className={VALUE_CLASS}>—</span>
       ),
-      label: "top provider",
+      label: t("settings.profile.mostUsedProvider"),
     },
   ];
 

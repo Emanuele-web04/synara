@@ -338,6 +338,19 @@ export const ServerUpsertKeybindingResult = Schema.Struct({
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
 
+export const SUPPORTED_UI_LOCALES = ["en", "zh-CN"] as const;
+export type SupportedUiLocale = (typeof SUPPORTED_UI_LOCALES)[number];
+
+export const ServerSetLocaleInput = Schema.Struct({
+  locale: Schema.Literals(SUPPORTED_UI_LOCALES),
+});
+export type ServerSetLocaleInput = typeof ServerSetLocaleInput.Type;
+
+export const ServerSetLocaleResult = Schema.Struct({
+  locale: Schema.Literals(SUPPORTED_UI_LOCALES),
+});
+export type ServerSetLocaleResult = typeof ServerSetLocaleResult.Type;
+
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,

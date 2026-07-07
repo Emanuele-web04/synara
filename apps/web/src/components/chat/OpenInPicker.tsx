@@ -6,6 +6,7 @@
 import { type EditorId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { memo } from "react";
+import { useTranslation } from "react-i18next";
 import { useEditorLaunchers } from "~/hooks/useEditorLaunchers";
 import { ChevronDownIcon } from "~/lib/icons";
 import { serverConfigQueryOptions } from "~/lib/serverReactQuery";
@@ -55,6 +56,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   // to the OS viewer (e.g. Preview) while still listing installed editors.
   defaultEditor?: EditorId;
 }) {
+  const { t } = useTranslation();
   // Only subscribe to the config query when the caller did not supply config.
   const needsConfig = keybindingsProp === undefined || availableEditorsProp === undefined;
   const serverConfigQuery = useQuery({ ...serverConfigQueryOptions(), enabled: needsConfig });
@@ -72,7 +74,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   } = useEditorLaunchers({ keybindings, availableEditors, openInTarget, defaultEditor });
 
   return (
-    <ChatHeaderSplitGroup label="Open in editor">
+    <ChatHeaderSplitGroup label={t("chat.openInPicker.openInEditor")}>
       <ChatHeaderButton
         tone="outline"
         className={CHAT_HEADER_SPLIT_LEADING_CLASS_NAME}
@@ -88,7 +90,7 @@ export const OpenInPicker = memo(function OpenInPicker({
               : "sr-only @sm/header-actions:not-sr-only @sm/header-actions:ml-0.5",
           )}
         >
-          Open
+          {t("chat.openInPicker.open")}
         </span>
       </ChatHeaderButton>
       <ChatHeaderSplitDivider />
@@ -96,7 +98,7 @@ export const OpenInPicker = memo(function OpenInPicker({
         <MenuTrigger
           render={
             <ChatHeaderIconButton
-              label="Editor options"
+              label={t("chat.openInPicker.editorOptions")}
               tone="outline"
               className={CHAT_HEADER_SPLIT_TRAILING_CLASS_NAME}
             />
@@ -105,7 +107,9 @@ export const OpenInPicker = memo(function OpenInPicker({
           <ChevronDownIcon aria-hidden="true" className="size-3.5" />
         </MenuTrigger>
         <ComposerPickerMenuPopup align="end" side="bottom" className="w-44 min-w-44">
-          {options.length === 0 && <MenuItem disabled>No installed editors found</MenuItem>}
+          {options.length === 0 && (
+            <MenuItem disabled>{t("chat.openInPicker.noEditorsFound")}</MenuItem>
+          )}
           <MenuRadioGroup
             value={preferredEditor ?? ""}
             onValueChange={(value) => setDefaultEditor(value as EditorId)}
@@ -131,6 +135,7 @@ export const OpenInPicker = memo(function OpenInPicker({
               </MenuRadioItem>
             ))}
           </MenuRadioGroup>
+
         </ComposerPickerMenuPopup>
       </Menu>
     </ChatHeaderSplitGroup>

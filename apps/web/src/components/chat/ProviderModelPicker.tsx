@@ -7,6 +7,7 @@ import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import * as Schema from "effect/Schema";
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { type ProviderPickerKind, PROVIDER_OPTIONS } from "../../session-logic";
 import { formatProviderModelOptionName } from "../../providerModelOptions";
 import { compareProvidersByOrder } from "../../providerOrdering";
@@ -49,28 +50,34 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
+function resolveLiveProviderAvailability(
+  provider: ServerProviderStatus | undefined,
+  t: (key: string) => string,
+): {
   disabled: boolean;
   label: string | null;
 } {
   if (!provider) {
     return {
       disabled: true,
-      label: "Checking",
+      label: t("chat.providerModelPicker.checking"),
     };
   }
 
   if (!provider.available) {
     return {
       disabled: true,
-      label: provider.authStatus === "unauthenticated" ? "Sign in" : "Unavailable",
+      label:
+        provider.authStatus === "unauthenticated"
+          ? t("chat.providerModelPicker.signIn")
+          : t("chat.providerModelPicker.unavailable"),
     };
   }
 
   if (provider.authStatus === "unauthenticated") {
     return {
       disabled: true,
-      label: "Sign in",
+      label: t("chat.providerModelPicker.signIn"),
     };
   }
 
@@ -192,6 +199,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   props: ProviderModelMenuItemsProps,
 ) {
   const { onAfterSelection } = props;
+  const { t } = useTranslation();
   const [modelSearchQuery, setModelSearchQuery] = useState("");
   const [kiloFavoriteModelSlugs, setKiloFavoriteModelSlugs] = useLocalStorage(
     FAVORITE_MODEL_STORAGE_KEYS.kilo,
@@ -315,7 +323,10 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   const renderModelRadioGroup = (provider: ProviderKind) => {
     if (props.loadingModelProviders?.[provider]) {
       return (
-        <div className="space-y-2 px-2 py-2" aria-label="Loading models">
+        <div
+          className="space-y-2 px-2 py-2"
+          aria-label={t("chat.providerModelPicker.loadingModels")}
+        >
           {Array.from({ length: 6 }, (_, index) => (
             <div key={index} className="flex items-center gap-2 rounded-md px-2 py-1.5">
               <Skeleton className="size-3.5 rounded-full" />
@@ -371,8 +382,8 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
       ) : (
         <div className="px-2 py-2 text-muted-foreground text-sm">
           {provider === "pi" && normalizedModelSearchQuery.length === 0
-            ? "No Pi models found"
-            : "No matches"}
+            ? t("chat.providerModelPicker.noPiModels")
+            : t("chat.providerModelPicker.noMatches")}
         </div>
       );
 
@@ -398,7 +409,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
 
     return (
       <PickerPanelShell
-        searchPlaceholder="Search models or providers"
+        searchPlaceholder={t("chat.providerModelPicker.searchModels")}
         query={modelSearchQuery}
         onQueryChange={setModelSearchQuery}
         stopSearchKeyPropagation
@@ -421,7 +432,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
       {visibleAvailableProviderOptions.map((option) => {
         const OptionIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[option.value];
         const liveProvider = props.providers?.find((entry) => entry.provider === option.value);
-        const availability = resolveLiveProviderAvailability(liveProvider);
+        const availability = resolveLiveProviderAvailability(liveProvider, t);
         if (availability.disabled) {
           return (
             <MenuItem key={option.value} disabled>
@@ -470,7 +481,9 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               className="size-3 shrink-0 text-muted-foreground/85 opacity-80"
             />
             <span>{option.label}</span>
-            <span className="ms-auto text-[11px] text-muted-foreground/80">Coming soon</span>
+            <span className="ms-auto text-[11px] text-muted-foreground/80">
+              {t("chat.providerModelPicker.comingSoon")}
+            </span>
           </MenuItem>
         );
       })}
@@ -525,6 +538,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
   props: ProviderModelPickerProps,
 ) {
   const { onOpenChange, onSelectionCommitted, open } = props;
+  const { t } = useTranslation();
   const [uncontrolledMenuOpen, setUncontrolledMenuOpen] = useState(false);
   const selectionCommitTimerRef = useRef<number | null>(null);
   const isMenuOpen = open ?? uncontrolledMenuOpen;
@@ -608,7 +622,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           {!isMenuOpen ? (
             <TooltipPopup side="top" sideOffset={6} variant="picker">
               <span className="inline-flex items-center gap-2 px-1 py-0.5">
-                <span>Change model</span>
+                <span>{t("chat.providerModelPicker.changeModel")}</span>
                 <ShortcutKbd
                   shortcutLabel={props.shortcutLabel}
                   className="h-4 min-w-4 px-1 text-[length:var(--app-font-size-ui-2xs,9px)] text-muted-foreground"

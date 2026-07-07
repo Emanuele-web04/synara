@@ -7,6 +7,7 @@
 import type { ProjectId } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { SidebarHeaderNavigationControls } from "~/components/SidebarHeaderNavigationControls";
 import { Button } from "~/components/ui/button";
@@ -56,6 +57,7 @@ import { useKanbanCardContextMenu } from "./useKanbanCardContextMenu";
 import type { KanbanCard } from "./kanban.logic";
 
 export default function KanbanView({ projectId }: { projectId: string | null }) {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const board = useKanbanBoard();
   const threadsHydrated = useStore((state) => state.threadsHydrated);
@@ -185,16 +187,18 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
                   size="icon-xs"
                   variant="ghost"
                   onClick={handleBackToOverview}
-                  aria-label="Back to all projects"
+                  aria-label={t("kanban.view.backToAllProjects")}
                 >
                   <ArrowLeftIcon className="size-3.5" />
                 </Button>
               ) : null}
               <h2 className="max-w-[clamp(16rem,50vw,40rem)] truncate text-sm font-medium text-foreground">
-                {projectBoard ? projectBoard.projectName : "Kanban"}
+                {projectBoard ? projectBoard.projectName : t("kanban.view.kanban")}
               </h2>
               <span className="shrink-0 text-xs text-muted-foreground/70">
-                {projectBoard ? projectBoard.totalCount : board.totalCount} tasks
+                {projectBoard
+                  ? t("kanban.view.tasks", { count: projectBoard.totalCount })
+                  : t("kanban.view.tasks", { count: board.totalCount })}
               </span>
               <Tooltip>
                 <TooltipTrigger
@@ -207,13 +211,13 @@ export default function KanbanView({ projectId }: { projectId: string | null }) 
                       onClick={handleNewTaskInProjectBoard}
                     >
                       <PlusIcon className="size-3.5" />
-                      New task
+                      {t("kanban.view.newTask")}
                     </Button>
                   }
                 />
                 <TooltipPopup side="bottom">
                   <span className="flex items-center gap-2">
-                    New task
+                    {t("kanban.view.newTask")}
                     <KbdGroup>
                       {NEW_TASK_SHORTCUT_PARTS.map((part) => (
                         <Kbd key={part}>{part}</Kbd>

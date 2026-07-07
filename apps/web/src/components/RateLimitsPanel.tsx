@@ -3,6 +3,7 @@
 // orchestration thread activities.
 
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { OrchestrationThread } from "@t3tools/contracts";
 import { ChevronDownIcon, ExternalLinkIcon } from "~/lib/icons";
 import { deriveAccountRateLimits, deriveRateLimitLearnMoreHref } from "~/lib/rateLimits";
@@ -15,6 +16,7 @@ export default function RateLimitsPanel({
 }: {
   threads: ReadonlyArray<Pick<OrchestrationThread, "activities">>;
 }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const rateLimits = useMemo(() => deriveAccountRateLimits(threads), [threads]);
   const learnMoreHref = useMemo(() => deriveRateLimitLearnMoreHref(rateLimits), [rateLimits]);
@@ -39,7 +41,7 @@ export default function RateLimitsPanel({
                 <circle cx="12" cy="12" r="10" />
                 <polyline points="12 6 12 12 16 14" />
               </svg>
-              <span className="font-medium">Rate limits remaining</span>
+              <span className="font-medium">{t("chat.rateLimit.title")}</span>
             </span>
             <ChevronDownIcon
               className={cn("size-3.5 transition-transform duration-200", open && "rotate-180")}
@@ -55,7 +57,7 @@ export default function RateLimitsPanel({
                   rel="noopener noreferrer"
                   className="flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:underline"
                 >
-                  Learn more
+                  {t("common.learnMore")}
                   <ExternalLinkIcon className="size-3" />
                 </a>
               ) : null}

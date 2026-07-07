@@ -12,6 +12,7 @@
 // Exports: PdfFilePreview
 
 import { memo, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { basenameOfPath } from "~/file-icons";
 import { Loader2Icon, TriangleAlertIcon } from "~/lib/icons";
@@ -36,6 +37,7 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
   openInTarget: string | null;
   className?: string;
 }) {
+  const { t } = useTranslation();
   const previewUrl = useMemo(
     () =>
       buildLocalImageUrl({
@@ -118,9 +120,7 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
       <div className={outerClassName}>
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 px-4 text-center">
           <TriangleAlertIcon className="size-5 text-destructive/80" aria-hidden="true" />
-          <p className="text-[12px] text-muted-foreground">
-            {doc.error ?? "Could not open this PDF."}
-          </p>
+          <p className="text-[12px] text-muted-foreground">{doc.error ?? t("pdf.couldNotOpen")}</p>
         </div>
       </div>
     );
@@ -131,7 +131,7 @@ export const PdfFilePreview = memo(function PdfFilePreview(props: {
       <div
         className="flex min-h-0 flex-1 items-center justify-center"
         role="status"
-        aria-label="Loading PDF..."
+        aria-label={t("pdf.loadingPdf")}
       >
         <Loader2Icon className="size-4 animate-spin opacity-60" aria-hidden="true" />
       </div>

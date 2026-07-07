@@ -5,6 +5,7 @@
 
 import type { SearchAddon, ISearchOptions } from "@xterm/addon-search";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { IconButton } from "~/components/ui/icon-button";
 import { ChevronDownIcon, ChevronUpIcon, XIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
@@ -26,6 +27,7 @@ const SEARCH_DECORATIONS = {
 const SEARCH_DEBOUNCE_MS = 90;
 
 export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchProps) {
+  const { t } = useTranslation();
   const inputRef = useRef<HTMLInputElement>(null);
   const searchTimerRef = useRef<number | null>(null);
   const [query, setQuery] = useState("");
@@ -143,16 +145,18 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         value={query}
         onChange={handleInputChange}
         onKeyDown={handleKeyDown}
-        placeholder="Find"
+        placeholder={t("terminal.find")}
         className="h-6 w-28 min-w-0 flex-shrink bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
       />
       {hasResults === false && query && (
-        <span className="whitespace-nowrap px-1 text-xs text-muted-foreground">No results</span>
+        <span className="whitespace-nowrap px-1 text-xs text-muted-foreground">
+          {t("terminal.noResults")}
+        </span>
       )}
       <div className="flex shrink-0 items-center">
         <IconButton
           onClick={() => setCaseSensitive((v) => !v)}
-          label="Match case"
+          label={t("terminal.matchCase")}
           className={cn(
             "size-6 rounded-sm border-transparent bg-transparent shadow-none sm:size-6",
             caseSensitive
@@ -165,21 +169,21 @@ export function TerminalSearch({ searchAddon, isOpen, onClose }: TerminalSearchP
         <IconButton
           onClick={() => handleSearch("previous")}
           className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
-          label="Previous match (Shift+Enter)"
+          label={t("terminal.previousMatch")}
         >
           <ChevronUpIcon className="size-3.5" />
         </IconButton>
         <IconButton
           onClick={() => handleSearch("next")}
           className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
-          label="Next match (Enter)"
+          label={t("terminal.nextMatch")}
         >
           <ChevronDownIcon className="size-3.5" />
         </IconButton>
         <IconButton
           onClick={handleClose}
           className="size-6 rounded-sm border-transparent bg-transparent text-muted-foreground shadow-none hover:bg-muted-foreground/20 hover:text-foreground sm:size-6"
-          label="Close search (Esc)"
+          label={t("terminal.closeSearch")}
         >
           <XIcon className="size-3.5" />
         </IconButton>

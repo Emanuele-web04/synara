@@ -4,6 +4,7 @@
 // Exports: RenameDialog
 
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -41,10 +42,11 @@ export function RenameDialog({
   initialValue,
   allowEmpty = false,
   placeholder,
-  saveLabel = "Save",
+  saveLabel,
   onOpenChange,
   onSave,
 }: RenameDialogProps) {
+  const { t } = useTranslation();
   const [value, setValue] = useState(initialValue);
   const [isSaving, setIsSaving] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -77,6 +79,10 @@ export function RenameDialog({
       setIsSaving(false);
     }
   };
+
+  const saveButtonLabel = saveLabel ?? t("common.save");
+  const savingLabel = t("common.saving");
+  const cancelLabel = t("common.cancel");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -115,10 +121,10 @@ export function RenameDialog({
             onClick={() => onOpenChange(false)}
             disabled={isSaving}
           >
-            Cancel
+            {cancelLabel}
           </Button>
           <Button size="sm" onClick={() => void handleSubmit()} disabled={!canSave}>
-            {isSaving ? "Saving..." : saveLabel}
+            {isSaving ? savingLabel : saveButtonLabel}
           </Button>
         </DialogFooter>
       </DialogPopup>

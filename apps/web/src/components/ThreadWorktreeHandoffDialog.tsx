@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
 import {
   Dialog,
@@ -28,6 +29,7 @@ export function ThreadWorktreeHandoffDialog({
   onOpenChange,
   onConfirm,
 }: ThreadWorktreeHandoffDialogProps) {
+  const { t } = useTranslation();
   const worktreeInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -60,10 +62,8 @@ export function ThreadWorktreeHandoffDialog({
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Hand off to worktree</DialogTitle>
-          <DialogDescription>
-            Create a detached worktree from the current branch to continue working in parallel.
-          </DialogDescription>
+          <DialogTitle>{t("chat.worktreeHandoff.title")}</DialogTitle>
+          <DialogDescription>{t("chat.worktreeHandoff.description")}</DialogDescription>
         </DialogHeader>
         <DialogPanel>
           <form
@@ -73,7 +73,9 @@ export function ThreadWorktreeHandoffDialog({
             }}
           >
             <label className="grid gap-1.5">
-              <span className="text-xs font-medium text-foreground">Worktree name</span>
+              <span className="text-xs font-medium text-foreground">
+                {t("chat.worktreeHandoff.worktreeName")}
+              </span>
               <Input
                 ref={worktreeInputRef}
                 value={worktreeName}
@@ -85,17 +87,17 @@ export function ThreadWorktreeHandoffDialog({
                     onOpenChange(false);
                   }
                 }}
-                placeholder="synara/feature-name"
+                placeholder={t("chat.worktreeHandoff.placeholder")}
               />
             </label>
           </form>
         </DialogPanel>
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={() => onOpenChange(false)} disabled={busy}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button size="sm" onClick={handleSubmit} disabled={!canSubmit}>
-            {busy ? "Handing off..." : "Hand off"}
+            {busy ? t("chat.worktreeHandoff.handingOff") : t("chat.worktreeHandoff.handoff")}
           </Button>
         </DialogFooter>
       </DialogPopup>
