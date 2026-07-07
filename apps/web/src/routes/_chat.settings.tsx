@@ -1582,13 +1582,15 @@ function SettingsRouteView() {
     description: string;
     resetLabel: string;
     ariaLabel: string;
+    anchorId?: string;
   }) => {
-    const { settingKey, title, description, resetLabel, ariaLabel } = config;
+    const { settingKey, title, description, resetLabel, ariaLabel, anchorId } = config;
     const isChanged = settings[settingKey] !== defaults[settingKey];
     return (
       <SettingsRow
         title={title}
         description={description}
+        anchorId={anchorId}
         resetAction={
           isChanged ? (
             <SettingResetButton
@@ -1618,6 +1620,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.general.language")}
           description={t("settings.general.languageDescription")}
+          anchorId="setting-general-language"
           control={
             <SettingsSelectControl
               value={settings.locale}
@@ -1642,6 +1645,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.general.defaultProvider")}
           description={t("settings.general.defaultProviderDescription")}
+          anchorId="setting-general-default-provider"
           resetAction={
             settings.defaultProvider !== defaults.defaultProvider ? (
               <SettingResetButton
@@ -1680,6 +1684,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.general.newThreads")}
           description={t("settings.general.newThreadsDescription")}
+          anchorId="setting-general-new-threads"
           resetAction={
             settings.defaultThreadEnvMode !== defaults.defaultThreadEnvMode ? (
               <SettingResetButton
@@ -1723,6 +1728,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.general.projectOrder")}
           description={t("settings.general.projectOrderDescription")}
+          anchorId="setting-general-project-order"
           resetAction={
             settings.sidebarProjectSortOrder !== defaults.sidebarProjectSortOrder ? (
               <SettingResetButton
@@ -1763,6 +1769,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.general.threadOrder")}
           description={t("settings.general.threadOrderDescription")}
+          anchorId="setting-general-thread-order"
           resetAction={
             settings.sidebarThreadSortOrder !== defaults.sidebarThreadSortOrder ? (
               <SettingResetButton
@@ -1805,6 +1812,7 @@ function SettingsRouteView() {
           description: t("settings.general.chatsDescription"),
           resetLabel: t("settings.general.chats"),
           ariaLabel: t("settings.general.chatsAria"),
+          anchorId: "setting-general-chats",
         })}
 
         {renderBooleanSettingRow({
@@ -1813,6 +1821,7 @@ function SettingsRouteView() {
           description: t("settings.general.workspaceDescription"),
           resetLabel: t("settings.general.workspace"),
           ariaLabel: t("settings.general.workspaceAria"),
+          anchorId: "setting-general-workspace",
         })}
       </SettingsSection>
 
@@ -1824,6 +1833,7 @@ function SettingsRouteView() {
             description: t("settings.general.usageDescription"),
             resetLabel: t("settings.general.usage"),
             ariaLabel: t("settings.general.usageAria"),
+            anchorId: "setting-general-usage",
           })}
 
           {renderBooleanSettingRow({
@@ -1832,6 +1842,7 @@ function SettingsRouteView() {
             description: t("settings.general.repositoryDescription"),
             resetLabel: t("settings.general.repository"),
             ariaLabel: t("settings.general.repositoryAria"),
+            anchorId: "setting-general-repository",
           })}
 
           {renderBooleanSettingRow({
@@ -1841,6 +1852,7 @@ function SettingsRouteView() {
               "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
             resetLabel: "pull request section",
             ariaLabel: "Show the Pull request section in the Environment panel",
+            anchorId: "setting-general-pull-request",
           })}
 
           {renderBooleanSettingRow({
@@ -1849,6 +1861,7 @@ function SettingsRouteView() {
             description: t("settings.general.editorDescription"),
             resetLabel: t("settings.general.editor"),
             ariaLabel: t("settings.general.editorAria"),
+            anchorId: "setting-general-editor",
           })}
 
           {renderBooleanSettingRow({
@@ -1857,6 +1870,7 @@ function SettingsRouteView() {
             description: t("settings.general.recapDescription"),
             resetLabel: t("settings.general.recap"),
             ariaLabel: t("settings.general.recapAria"),
+            anchorId: "setting-general-recap",
           })}
 
           {renderBooleanSettingRow({
@@ -1865,6 +1879,7 @@ function SettingsRouteView() {
             description: t("settings.general.pinnedMessagesDescription"),
             resetLabel: t("settings.general.pinnedMessages"),
             ariaLabel: t("settings.general.pinnedMessagesAria"),
+            anchorId: "setting-general-pinned-messages",
           })}
 
           {renderBooleanSettingRow({
@@ -1873,6 +1888,7 @@ function SettingsRouteView() {
             description: t("settings.general.textMarkersDescription"),
             resetLabel: t("settings.general.textMarkers"),
             ariaLabel: t("settings.general.textMarkersAria"),
+            anchorId: "setting-general-text-markers",
           })}
 
           {renderBooleanSettingRow({
@@ -1889,6 +1905,7 @@ function SettingsRouteView() {
             description: t("settings.general.notepadDescription"),
             resetLabel: t("settings.general.notepad"),
             ariaLabel: t("settings.general.notepadAria"),
+            anchorId: "setting-general-notepad",
           })}
         </SettingsSection>
       </div>
@@ -1905,6 +1922,7 @@ function SettingsRouteView() {
           <SettingsRow
             title={t("settings.appearance.theme")}
             description={t("settings.appearance.themeDescription")}
+            anchorId="setting-appearance-theme"
             resetAction={
               theme !== "system" ? (
                 <SettingResetButton
@@ -1951,6 +1969,7 @@ function SettingsRouteView() {
           <SettingsRow
             title={t("settings.appearance.uiDensity")}
             description={t("settings.appearance.uiDensityDescription")}
+            anchorId="setting-appearance-ui-density"
             resetAction={
               settings.uiDensity !== defaults.uiDensity ? (
                 <SettingResetButton
@@ -1987,6 +2006,7 @@ function SettingsRouteView() {
           <SettingsRow
             title={t("settings.appearance.baseFontSize")}
             description={t("settings.appearance.baseFontSizeDescription")}
+            anchorId="setting-appearance-base-font-size"
             resetAction={
               settings.chatFontSizePx !== defaults.chatFontSizePx ? (
                 <SettingResetButton
@@ -2028,6 +2048,7 @@ function SettingsRouteView() {
           <SettingsRow
             title={t("settings.appearance.terminalFontSize")}
             description={t("settings.appearance.terminalFontSizeDescription")}
+            anchorId="setting-appearance-terminal-font-size"
             resetAction={
               settings.terminalFontSizePx !== defaults.terminalFontSizePx ? (
                 <SettingResetButton
@@ -2069,6 +2090,7 @@ function SettingsRouteView() {
           <SettingsRow
             title={t("settings.appearance.terminalFont")}
             description={t("settings.appearance.terminalFontDescription")}
+            anchorId="setting-appearance-terminal-font"
             resetAction={
               settings.terminalFontFamily !== defaults.terminalFontFamily ? (
                 <SettingResetButton
@@ -2139,6 +2161,7 @@ function SettingsRouteView() {
                 description: t("settings.appearance.fontSmoothingDescription"),
                 resetLabel: t("settings.appearance.fontSmoothing"),
                 ariaLabel: t("settings.appearance.fontSmoothingAria"),
+                anchorId: "setting-appearance-font-smoothing",
               })
             : null}
         </SettingsCard>
@@ -2148,6 +2171,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.appearance.timeFormat")}
           description={t("settings.appearance.timeFormatDescription")}
+          anchorId="setting-appearance-time-format"
           resetAction={
             settings.timestampFormat !== defaults.timestampFormat ? (
               <SettingResetButton
@@ -2200,12 +2224,14 @@ function SettingsRouteView() {
           description: t("settings.notifications.activityToastsDescription"),
           resetLabel: t("settings.notifications.activityToasts"),
           ariaLabel: t("settings.notifications.activityToastsAria"),
+          anchorId: "setting-notifications-activity-toasts",
         })}
 
         <SettingsRow
           title={t("settings.notifications.desktopNotifications")}
           description={t("settings.notifications.desktopNotificationsDescription")}
           status={buildNotificationSettingsSupportText(browserNotificationPermission)}
+          anchorId="setting-notifications-desktop-notifications"
           resetAction={
             settings.enableSystemTaskCompletionNotifications !==
             defaults.enableSystemTaskCompletionNotifications ? (
@@ -2248,6 +2274,7 @@ function SettingsRouteView() {
           description: t("settings.behavior.assistantOutputDescription"),
           resetLabel: t("settings.behavior.assistantOutput"),
           ariaLabel: t("settings.behavior.assistantOutputAria"),
+          anchorId: "setting-behavior-assistant-output",
         })}
 
         {renderBooleanSettingRow({
@@ -2256,6 +2283,7 @@ function SettingsRouteView() {
           description: t("settings.behavior.diffLineWrappingDescription"),
           resetLabel: t("settings.behavior.diffLineWrapping"),
           ariaLabel: t("settings.behavior.diffLineWrappingAria"),
+          anchorId: "setting-behavior-diff-line-wrapping",
         })}
       </SettingsSection>
 
@@ -2266,6 +2294,7 @@ function SettingsRouteView() {
           description: t("settings.behavior.deleteConfirmationDescription"),
           resetLabel: t("settings.behavior.deleteConfirmation"),
           ariaLabel: t("settings.behavior.deleteConfirmationAria"),
+          anchorId: "setting-behavior-delete-confirmation",
         })}
 
         {renderBooleanSettingRow({
@@ -2274,6 +2303,7 @@ function SettingsRouteView() {
           description: t("settings.behavior.archiveConfirmationDescription"),
           resetLabel: t("settings.behavior.archiveConfirmation"),
           ariaLabel: t("settings.behavior.archiveConfirmationAria"),
+          anchorId: "setting-behavior-archive-confirmation",
         })}
 
         {renderBooleanSettingRow({
@@ -2282,6 +2312,7 @@ function SettingsRouteView() {
           description: t("settings.behavior.terminalCloseConfirmationDescription"),
           resetLabel: t("settings.behavior.terminalCloseConfirmation"),
           ariaLabel: t("settings.behavior.terminalCloseConfirmationAria"),
+          anchorId: "setting-behavior-terminal-close-confirmation",
         })}
       </SettingsSection>
     </div>
@@ -2517,6 +2548,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.models.gitWritingModel")}
           description={t("settings.models.gitWritingModelDescription")}
+          anchorId="setting-models-git-writing-model"
           resetAction={
             isGitTextGenerationModelDirty ? (
               <SettingResetButton
@@ -2566,6 +2598,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.models.savedModelSlugs")}
           description={t("settings.models.savedModelSlugsDescription")}
+          anchorId="setting-models-saved-model-slugs"
           resetAction={
             totalCustomModels > 0 ? (
               <SettingResetButton
@@ -2715,6 +2748,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.providers.visibleProviders")}
           description={t("settings.providers.visibleProvidersDescription")}
+          anchorId="setting-providers-visible-providers"
           status={
             hiddenProviderCount > 0
               ? t("settings.providers.providersHidden", { count: hiddenProviderCount })
@@ -2781,11 +2815,13 @@ function SettingsRouteView() {
           description: t("settings.providerUpdates.automaticCliUpdateChecksDescription"),
           resetLabel: t("settings.providerUpdates.automaticCliUpdateChecks"),
           ariaLabel: t("settings.providerUpdates.automaticCliUpdateChecks"),
+          anchorId: "setting-providers-automatic-cli-update-checks",
         })}
 
         <SettingsRow
           title={t("settings.providerUpdates.providerUpdates")}
           description={t("settings.providerUpdates.providerUpdatesDescription")}
+          anchorId="setting-providers-provider-updates"
           status={
             !settings.enableProviderUpdateChecks
               ? t("settings.providerUpdates.automaticChecksOff")
@@ -2865,6 +2901,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.providers.installedClis")}
           description={t("settings.providers.installedClisDescription")}
+          anchorId="setting-providers-installed-clis"
           status={
             !settings.enableProviderUpdateChecks
               ? t("settings.providers.automaticChecksOff")
@@ -3371,6 +3408,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.advanced.keybindings")}
           description={t("settings.advanced.keybindingsDescription")}
+          anchorId="setting-advanced-keybindings"
           status={
             <>
               <span className="block break-all font-mono text-[11px] text-foreground">
@@ -3400,6 +3438,7 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.advanced.recoveryTools")}
           description={t("settings.advanced.recoveryToolsDescription")}
+          anchorId="setting-advanced-recovery-tools"
           status={
             shouldOfferRecoveryTools
               ? t("settings.advanced.recoveryVisibleReason")
@@ -3454,11 +3493,13 @@ function SettingsRouteView() {
         <SettingsRow
           title={t("settings.advanced.version")}
           description={t("settings.advanced.versionDescription")}
+          anchorId="setting-advanced-version"
           control={<code className="text-xs font-medium text-muted-foreground">{APP_VERSION}</code>}
         />
         <SettingsRow
           title={t("settings.advanced.releaseHistory")}
           description={t("settings.advanced.releaseHistoryDescription")}
+          anchorId="setting-advanced-release-history"
           control={
             <Button size="sm" variant="outline" onClick={() => setReleaseHistoryOpen(true)}>
               {t("settings.advanced.viewReleaseHistory")}

@@ -26,7 +26,13 @@ export interface SettingsSearchEntry {
 
 /** DOM id a result deep-links to, or null for panel-level entries with no anchored row. */
 export function settingsSearchEntryTarget(entry: SettingsSearchEntry): string | null {
-  return entry.target === undefined ? settingRowAnchorId(entry.title) : entry.target;
+  // Use entry.id to generate stable anchor that works across locales.
+  // entry.target === null means panel-level entry with no anchored row.
+  // entry.target === undefined means use default anchor derivation.
+  if (entry.target === null) return null;
+  if (entry.target !== undefined) return entry.target;
+  // Convert entry.id (e.g., "general:default-provider") to anchor id (e.g., "setting-default-provider")
+  return `setting-${entry.id.replace(/:/g, "-")}`;
 }
 
 // Mirrors row titles/descriptions rendered in settings panels. Panels only mount the active

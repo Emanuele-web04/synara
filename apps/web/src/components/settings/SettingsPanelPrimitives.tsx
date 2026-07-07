@@ -112,6 +112,7 @@ export function SettingsRow({
   control,
   children,
   onClick,
+  anchorId,
 }: {
   title: ReactNode;
   description: string;
@@ -120,14 +121,16 @@ export function SettingsRow({
   control?: ReactNode;
   children?: ReactNode;
   onClick?: () => void;
+  anchorId?: string;
 }) {
-  // String-titled rows expose a stable anchor so the sidebar search can deep-link to them
+  // Rows expose a stable anchor so the sidebar search can deep-link to them
   // via `?target=…`; scroll-margin keeps the row clear of the sticky settings header.
-  const anchorId = typeof title === "string" ? settingRowAnchorId(title) : undefined;
+  // Use explicit anchorId if provided, otherwise derive from string title (legacy behavior).
+  const resolvedAnchorId = anchorId ?? (typeof title === "string" ? settingRowAnchorId(title) : undefined);
   return (
     <div
-      id={anchorId}
-      className={cn(SETTINGS_CARD_ROW_CLASS_NAME, anchorId && "scroll-mt-24")}
+      id={resolvedAnchorId}
+      className={cn(SETTINGS_CARD_ROW_CLASS_NAME, resolvedAnchorId && "scroll-mt-24")}
       data-slot="settings-row"
     >
       <div
