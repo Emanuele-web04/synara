@@ -237,8 +237,21 @@ interface DroidSessionContext {
   // Epoch-ms of the last inbound ACP activity for the active turn; drives the
   // idle-progress watchdog that force-fails a silently hung turn.
   lastTurnActivityAt: number | undefined;
+  // Provider tool-call ids seen during the most recent turn, mapped to that
+  // turn. A backlogged consumer can process a queued ToolCallUpdated after the
+  // prompt response cleared activeTurnId; this keeps the event attributed to
+  // its originating turn instead of dropping it as an orphan. Cleared when the
+  // next turn dispatches.
+  readonly turnToolCallIds: Map<string, TurnId>;
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
+  // Pending until startSession has applied the requested model/effort config.
+  // The session is registered in `sessions` before the config RPCs run (so
+  // replay keeps draining), which means sendTurn can route to it mid-startup;
+  // turns await this gate so the first prompt never runs with provider
+  // defaults. Resolved by stopSessionInternal too, like resumeReplayReady, so
+  // a failed startup never strands waiters.
+  sessionConfigReady: Deferred.Deferred<void> | undefined;
   latestSessionCostUsd: number | undefined;
   // Count of ACP session/update events fully handled by the notification
   // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
@@ -498,6 +511,10 @@ export function makeDroidAdapter(
         ctx.stopped = true;
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
+          ctx.sessionConfigReady = undefined;
+        }
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.succeed(ctx.resumeReplayReady, undefined);
           ctx.resumeReplayReady = undefined;
@@ -797,6 +814,7 @@ export function makeDroidAdapter(
           // the session (sessionModelSwitch: "restart-session").
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
+          const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
             provider: PROVIDER,
@@ -830,8 +848,10 @@ export function makeDroidAdapter(
             activeTurnFailedToolDetail: undefined,
             activePromptFiber: undefined,
             lastTurnActivityAt: undefined,
+            turnToolCallIds: new Map(),
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
+            sessionConfigReady,
             latestSessionCostUsd: undefined,
             sessionUpdatesProcessed: 0,
             turnStarting: false,
@@ -902,10 +922,34 @@ export function makeDroidAdapter(
                     return;
                   case "ToolCallUpdated":
                     {
+                      // A queued update for a tool call the just-settled turn
+                      // already rendered belongs to that turn; emit it with the
+                      // originating turn id so the existing tool row resolves in
+                      // place instead of being dropped as an orphan. Resume
+                      // replay stays suppressed like every other event.
+                      const lateTurnId =
+                        ctx.resumeReplayReady === undefined && ctx.activeTurnId === undefined
+                          ? ctx.turnToolCallIds.get(event.toolCall.toolCallId)
+                          : undefined;
+                      if (lateTurnId !== undefined) {
+                        yield* logNative(ctx.threadId, "session/update", event.rawPayload);
+                        yield* offerRuntimeEvent(
+                          makeAcpToolCallEvent({
+                            stamp: yield* makeEventStamp(),
+                            provider: PROVIDER,
+                            threadId: ctx.threadId,
+                            turnId: lateTurnId,
+                            toolCall: scopeDroidToolCallStateForTurn(lateTurnId, event.toolCall),
+                            rawPayload: event.rawPayload,
+                          }),
+                        );
+                        return;
+                      }
                       const activeTurnId = yield* activeTurnIdForDroidRuntimeEvent(ctx, event._tag);
                       if (activeTurnId === undefined) {
                         return;
                       }
+                      ctx.turnToolCallIds.set(event.toolCall.toolCallId, activeTurnId);
                       yield* logNative(ctx.threadId, "session/update", event.rawPayload);
                       const failedToolDetail = readAcpFailedToolDetail(event.toolCall);
                       if (failedToolDetail !== undefined) {
@@ -1006,6 +1050,10 @@ export function makeDroidAdapter(
                   mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
               });
             }
+            // The requested model/effort are applied; turns gated on this
+            // deferred can now prompt without inheriting provider defaults.
+            yield* Deferred.succeed(sessionConfigReady, undefined);
+            ctx.sessionConfigReady = undefined;
 
             if (resumeReplayReady !== undefined) {
               // Settle the replay in the background: suppression stays active until
@@ -1090,7 +1138,10 @@ export function makeDroidAdapter(
         });
         // Best-effort: tell the child to abandon the turn, then unwind the
         // pending prompt fiber (its onInterrupt no-ops, the turn is cleared).
-        yield* Effect.ignore(ctx.acp.cancel);
+        // The cancel is forked, not awaited — this path only runs because the
+        // child went silent, and a hung session/cancel must not block the
+        // prompt-fiber interrupt or leak the watchdog fiber.
+        yield* Effect.ignore(ctx.acp.cancel).pipe(Effect.forkIn(ctx.scope));
         if (promptFiber) {
           yield* Fiber.interrupt(promptFiber);
         }
@@ -1125,12 +1176,17 @@ export function makeDroidAdapter(
       input: Parameters<DroidAdapterShape["sendTurn"]>[0],
     ) =>
       Effect.gen(function* () {
+        // Startup registers the session before its config RPCs settle; a turn
+        // routed in during that window must not prompt with provider defaults.
+        if (ctx.sessionConfigReady !== undefined) {
+          yield* Deferred.await(ctx.sessionConfigReady);
+        }
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
         }
-        // The gate above is resolved by stopSessionInternal too (a failed or
+        // The gates above are resolved by stopSessionInternal too (a failed or
         // stopped startup must not strand waiters); a turn that was blocked on
-        // it must fail here instead of emitting lifecycle events for a dead
+        // them must fail here instead of emitting lifecycle events for a dead
         // session.
         if (ctx.stopped) {
           return yield* new ProviderAdapterSessionNotFoundError({
@@ -1227,6 +1283,9 @@ export function makeDroidAdapter(
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
         ctx.activeTurnFailedToolDetail = undefined;
+        // Late-event attribution only matters between turns; once a new turn
+        // dispatches, stragglers from older turns are stale enough to drop.
+        ctx.turnToolCallIds.clear();
         ctx.activeInteractionMode = input.interactionMode;
         ctx.lastPlanFingerprint = undefined;
         ctx.lastTurnActivityAt = Date.now();
