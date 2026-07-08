@@ -1,3 +1,7 @@
+// FILE: ProviderCommandReactor.ts
+// Purpose: Routes orchestration intents into provider sessions and maintains replay-safe context.
+// Layer: Orchestration provider reactor
+
 import {
   type ChatAttachment,
   CommandId,
@@ -302,6 +306,12 @@ const make = Effect.gen(function* () {
   // turns are never promoted at once.
   const pendingQueuedDispatchThreads = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
+  // Fresh-session fork fallbacks need one transcript bootstrap because their
+  // provider has not inherited the source thread's native conversation state.
+  const forkContextBootstrapThreadIds = new Set<string>();
+  // Providers without native rewind restart after rollback and receive the
+  // retained projection transcript once on their next prompt.
+  const rollbackContextBootstrapThreadIds = new Set<string>();
 
   const resolveThreadTextGenerationInput = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
@@ -551,6 +561,15 @@ const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly numTurns: number;
   }) {
+    const projectedThread = yield* resolveThread(input.threadId);
+    const provider = projectedThread
+      ? Schema.is(ProviderKind)(projectedThread.session?.providerName)
+        ? projectedThread.session?.providerName
+        : projectedThread.modelSelection.provider
+      : undefined;
+    const rebuildsContext =
+      provider !== undefined &&
+      (yield* providerService.getCapabilities(provider)).conversationRollback === "restart-session";
     let attempt = 0;
     while (true) {
       let rollbackError: ProviderServiceError | null = null;
@@ -567,6 +586,9 @@ const make = Effect.gen(function* () {
           ),
         );
       if (rollbackError === null) {
+        if (rebuildsContext) {
+          rollbackContextBootstrapThreadIds.add(input.threadId);
+        }
         return;
       }
       if (isStaleCodexResumeError(rollbackError)) {
@@ -752,9 +774,7 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
-        (currentProvider === "claudeAgent" ||
-          currentProvider === "grok" ||
-          currentProvider === "droid") &&
+        (currentProvider === "claudeAgent" || currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
@@ -827,6 +847,7 @@ const make = Effect.gen(function* () {
         yield* bindSessionToThread(forkedSession);
         return threadId;
       }
+      forkContextBootstrapThreadIds.add(threadId);
     }
 
     if (thread.sidechatSourceThreadId && thread.forkSourceThreadId) {
@@ -900,7 +921,9 @@ const make = Effect.gen(function* () {
       thread.session?.providerName ??
       thread.modelSelection.provider;
     const shouldBootstrapPriorTranscriptContext =
-      (selectedProvider === "kilo" || selectedProvider === "opencode") &&
+      ((selectedProvider === "kilo" || selectedProvider === "opencode") ||
+        forkContextBootstrapThreadIds.has(input.threadId) ||
+        rollbackContextBootstrapThreadIds.has(input.threadId)) &&
       activeSessionBeforeEnsure === undefined &&
       !handoffBootstrapText &&
       !sidechatBootstrapText;
@@ -1106,6 +1129,10 @@ const make = Effect.gen(function* () {
     }
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
+    }
+    if (shouldBootstrapPriorTranscriptContext) {
+      forkContextBootstrapThreadIds.delete(input.threadId);
+      rollbackContextBootstrapThreadIds.delete(input.threadId);
     }
   });
 
@@ -1883,6 +1910,20 @@ const make = Effect.gen(function* () {
   const stopActiveProviderRuntimeForEdit = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
   }) {
+    const thread = yield* resolveThread(input.threadId);
+    const provider = thread
+      ? Schema.is(ProviderKind)(thread.session?.providerName)
+        ? thread.session?.providerName
+        : thread.modelSelection.provider
+      : undefined;
+    const rebuildsContext =
+      provider !== undefined &&
+      (yield* providerService.getCapabilities(provider)).conversationRollback === "restart-session";
+    if (rebuildsContext && providerService.clearSessionResumeCursor) {
+      yield* providerService.clearSessionResumeCursor({ threadId: input.threadId });
+      rollbackContextBootstrapThreadIds.add(input.threadId);
+      return;
+    }
     if (providerService.stopRuntimeSession) {
       yield* providerService.stopRuntimeSession({ threadId: input.threadId });
       return;

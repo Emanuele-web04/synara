@@ -3,6 +3,8 @@
 // Layer: Persistence compatibility helper
 // Exports: normalizeLegacyModelSelection, normalizePersistedModelSelection
 
+import { MODEL_OPTIONS_BY_PROVIDER } from "@t3tools/contracts";
+
 type ModelProviderKind =
   | "codex"
   | "claudeAgent"
@@ -13,6 +15,17 @@ type ModelProviderKind =
   | "kilo"
   | "opencode"
   | "pi";
+
+const NON_DROID_MODEL_SLUGS = new Set(
+  Object.entries(MODEL_OPTIONS_BY_PROVIDER).flatMap(([provider, models]) =>
+    provider === "droid" ? [] : models.map((model) => model.slug.toLowerCase()),
+  ),
+);
+const DROID_ONLY_MODEL_SLUGS = new Set(
+  MODEL_OPTIONS_BY_PROVIDER.droid
+    .map((model) => model.slug.toLowerCase())
+    .filter((slug) => !NON_DROID_MODEL_SLUGS.has(slug)),
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -81,6 +94,11 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     }
   }
   const lowerModel = model.toLowerCase();
+  // Shared Claude/Gemini/OpenAI slugs remain ambiguous without an instance label;
+  // only Factory-exclusive built-ins are safe to attribute to Droid.
+  if (DROID_ONLY_MODEL_SLUGS.has(lowerModel)) {
+    return "droid";
+  }
   if (lowerModel.includes("claude")) {
     return "claudeAgent";
   }

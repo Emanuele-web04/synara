@@ -11,11 +11,13 @@ import {
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
+  type ProviderListCommandsResult,
+  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
-  type ThreadId,
+  ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 import {
@@ -27,13 +29,10 @@ import {
   Fiber,
   FileSystem,
   Layer,
-  Option,
   PubSub,
   Random,
   Scope,
-  Semaphore,
   Stream,
-  SynchronizedRef,
 } from "effect";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
@@ -42,6 +41,9 @@ import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig, type ServerConfigShape } from "../../config.ts";
 import { appendFileAttachmentsPromptBlock } from "../attachmentProjection.ts";
 import { filterProviderPromptImageAttachments } from "../promptAttachments.ts";
+import { listFactoryPlugins, readFactoryPlugin } from "../FactoryPluginDiscovery.ts";
+import { readFactorySessionHistory } from "../FactorySessionHistory.ts";
+import { appendProviderReferencesPromptBlock } from "../promptReferenceProjection.ts";
 import {
   ProviderAdapterRequestError,
   ProviderAdapterSessionNotFoundError,
@@ -54,6 +56,14 @@ import {
   selectAcpFullAccessPermissionOptionId,
   selectAcpPermissionOptionId,
 } from "../acp/AcpAdapterSupport.ts";
+import {
+  readAcpUsdCost,
+  makeAcpThreadLock,
+  scopeAcpRuntimeItemIdForTurn,
+  scopeAcpToolCallStateForTurn,
+  settleAcpPendingApprovalsAsCancelled,
+  settleAcpPendingUserInputsAsEmptyAnswers,
+} from "../acp/AcpAdapterSessionSupport.ts";
 import { type AcpSessionRuntimeShape } from "../acp/AcpSessionRuntime.ts";
 import type { AcpSessionRuntimeOptions } from "../acp/AcpSessionRuntime.ts";
 import {
@@ -72,10 +82,16 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
+  applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
+  discoverDroidAcpModels,
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
 } from "../acp/DroidAcpSupport.ts";
+import {
+  elicitationQuestionsFromRequest,
+  elicitationResponseFromAnswers,
+} from "../acp/AcpElicitationSupport.ts";
 import { DroidAdapter, type DroidAdapterShape } from "../Services/DroidAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
@@ -102,6 +118,9 @@ const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 600_000,
 });
 const DROID_TURN_WATCHDOG_INTERVAL_MS = 15_000;
+const DROID_MODEL_DISCOVERY_CACHE_MS = 5 * 60_000;
+const DROID_MODEL_DISCOVERY_TIMEOUT_MS = 30_000;
+const DROID_DISCOVERY_CACHE_MAX_ENTRIES = 16;
 const DROID_PLAN_MODE_PROMPT_PREFIX = [
   "Synara Droid plan mode is active.",
   "Do not implement or mutate files in this turn.",
@@ -288,7 +307,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export function scopeDroidRuntimeItemIdForTurn(turnId: TurnId, itemId: string): string {
-  return `droid:${turnId}:${itemId}`;
+  return scopeAcpRuntimeItemIdForTurn(PROVIDER, turnId, itemId);
 }
 
 // Droid can close a stale assistant segment before any visible text arrives.
@@ -304,14 +323,7 @@ export function scopeDroidToolCallStateForTurn(
   turnId: TurnId,
   toolCall: AcpToolCallState,
 ): AcpToolCallState {
-  return {
-    ...toolCall,
-    toolCallId: scopeDroidRuntimeItemIdForTurn(turnId, toolCall.toolCallId),
-    data: {
-      ...toolCall.data,
-      providerToolCallId: toolCall.toolCallId,
-    },
-  };
+  return scopeAcpToolCallStateForTurn(PROVIDER, turnId, toolCall);
 }
 
 function parseDroidResume(raw: unknown): { sessionId: string } | undefined {
@@ -319,13 +331,6 @@ function parseDroidResume(raw: unknown): { sessionId: string } | undefined {
   if (raw.schemaVersion !== DROID_RESUME_VERSION) return undefined;
   if (typeof raw.sessionId !== "string" || !raw.sessionId.trim()) return undefined;
   return { sessionId: raw.sessionId.trim() };
-}
-
-function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
-  if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
-    return undefined;
-  }
-  return cost.amount >= 0 ? cost.amount : undefined;
 }
 
 function recordDroidSessionCost(
@@ -344,26 +349,6 @@ function finalizeDroidActiveTurnCost(ctx: DroidSessionContext): {
   return ctx.latestSessionCostUsd !== undefined
     ? { cumulativeCostUsd: ctx.latestSessionCostUsd }
     : {};
-}
-
-function settlePendingApprovalsAsCancelled(
-  pendingApprovals: ReadonlyMap<ApprovalRequestId, PendingApproval>,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    Array.from(pendingApprovals.values()),
-    (pending) => Deferred.succeed(pending.decision, "cancel").pipe(Effect.ignore),
-    { discard: true },
-  );
-}
-
-function settlePendingUserInputsAsEmptyAnswers(
-  pendingUserInputs: ReadonlyMap<ApprovalRequestId, PendingUserInput>,
-): Effect.Effect<void> {
-  return Effect.forEach(
-    Array.from(pendingUserInputs.values()),
-    (pending) => Deferred.succeed(pending.answers, {}).pipe(Effect.ignore),
-    { discard: true },
-  );
 }
 
 function withDroidPlanModePrompt(input: {
@@ -393,6 +378,16 @@ function resolveDroidSessionCwd(
   return fallbackCwd ? nodePath.resolve(fallbackCwd) : undefined;
 }
 
+function setDroidDiscoveryCacheEntry<T>(cache: Map<string, T>, key: string, value: T): void {
+  cache.delete(key);
+  cache.set(key, value);
+  while (cache.size > DROID_DISCOVERY_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey === undefined) break;
+    cache.delete(oldestKey);
+  }
+}
+
 export function makeDroidAdapter(
   droidSettings: DroidAcpRuntimeSettings,
   options?: DroidAdapterLiveOptions,
@@ -410,7 +405,15 @@ export function makeDroidAdapter(
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
 
     const sessions = new Map<ThreadId, DroidSessionContext>();
-    const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
+    const modelDiscoveryCache = new Map<
+      string,
+      { readonly expiresAt: number; readonly result: ProviderListModelsResult }
+    >();
+    const commandDiscoveryCache = new Map<
+      string,
+      { readonly expiresAt: number; readonly result: ProviderListCommandsResult }
+    >();
+    const withThreadLock = yield* makeAcpThreadLock();
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -420,26 +423,21 @@ export function makeDroidAdapter(
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
       PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
 
-    const getThreadSemaphore = (threadId: string) =>
-      SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
-        const existing: Option.Option<Semaphore.Semaphore> = Option.fromNullishOr(
-          current.get(threadId),
-        );
-        return Option.match(existing, {
-          onNone: () =>
-            Semaphore.make(1).pipe(
-              Effect.map((semaphore) => {
-                const next = new Map(current);
-                next.set(threadId, semaphore);
-                return [semaphore, next] as const;
-              }),
-            ),
-          onSome: (semaphore) => Effect.succeed([semaphore, current] as const),
-        });
+    // Discovery sessions are disposable and never enter the live session directory.
+    const makeDroidDiscoveryRuntime = (input: {
+      readonly binaryPath?: string;
+      readonly cwd: string;
+      readonly clientName: string;
+    }) =>
+      makeDroidAcpRuntime({
+        droidSettings: {
+          ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+        },
+        childProcessSpawner,
+        cwd: input.cwd,
+        clientInfo: { name: input.clientName, version: "0.0.0" },
       });
-
-    const withThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
-      Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
 
     const logNative = (threadId: ThreadId, method: string, payload: unknown) =>
       Effect.gen(function* () {
@@ -509,8 +507,8 @@ export function makeDroidAdapter(
       Effect.gen(function* () {
         if (ctx.stopped) return;
         ctx.stopped = true;
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         if (ctx.sessionConfigReady !== undefined) {
           yield* Deferred.succeed(ctx.sessionConfigReady, undefined);
           ctx.sessionConfigReady = undefined;
@@ -700,6 +698,7 @@ export function makeDroidAdapter(
             childProcessSpawner,
             cwd,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            clientCapabilities: { elicitation: { form: {} } },
             clientInfo: { name: "Synara", version: "0.0.0" },
             ...acpRuntimeLoggers,
           }).pipe(
@@ -801,6 +800,48 @@ export function makeDroidAdapter(
                 };
               }),
             );
+            yield* acp.handleElicitation((params) =>
+              Effect.gen(function* () {
+                yield* logNative(input.threadId, "session/elicitation", params);
+                if (params.mode !== "form") {
+                  return { action: { action: "decline" as const } };
+                }
+                const questions = elicitationQuestionsFromRequest(params);
+                if (questions.length === 0) {
+                  return { action: { action: "decline" as const } };
+                }
+                const requestId = ApprovalRequestId.makeUnsafe(crypto.randomUUID());
+                const runtimeRequestId = RuntimeRequestId.makeUnsafe(requestId);
+                const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+                pendingUserInputs.set(requestId, { answers });
+                yield* offerRuntimeEvent({
+                  type: "user-input.requested",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { questions },
+                  raw: {
+                    source: "acp.jsonrpc",
+                    method: "session/elicitation",
+                    payload: params,
+                  },
+                });
+                const resolved = yield* Deferred.await(answers);
+                pendingUserInputs.delete(requestId);
+                yield* offerRuntimeEvent({
+                  type: "user-input.resolved",
+                  ...(yield* makeEventStamp()),
+                  provider: PROVIDER,
+                  threadId: input.threadId,
+                  turnId: ctx?.activeTurnId,
+                  requestId: runtimeRequestId,
+                  payload: { answers: resolved },
+                });
+                return elicitationResponseFromAnswers(params, resolved);
+              }),
+            );
             return yield* acp.start();
           }).pipe(
             Effect.mapError((error) =>
@@ -808,12 +849,10 @@ export function makeDroidAdapter(
             ),
           );
 
-          // Model and reasoning effort are applied via `session/set_config_option`
-          // after start (droid ignores the `-m`/`-r` spawn flags in ACP mode);
-          // autonomy rides `--skip-permissions-unsafe`. Selection changes restart
-          // the session (sessionModelSwitch: "restart-session").
+          // `session/resume` does not replay history; only legacy `session/load`
+          // needs the replay-suppression gate below.
           const resumeReplayReady =
-            resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
+            started.sessionSetupMethod === "load" ? yield* Deferred.make<void>() : undefined;
           const sessionConfigReady = yield* Deferred.make<void>();
           const now = yield* nowIso;
           const session: ProviderSession = {
@@ -1210,16 +1249,26 @@ export function makeDroidAdapter(
               mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
           });
         }
+        yield* applyDroidAcpInteractionMode({
+          runtime: ctx.acp,
+          interactionMode: input.interactionMode,
+          runtimeMode: ctx.session.runtimeMode,
+          mapError: ({ cause, method }) =>
+            mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+        });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
-          text: input.input?.trim()
-            ? withDroidPlanModePrompt({
-                text: input.input.trim(),
-                ...(input.interactionMode !== undefined
-                  ? { interactionMode: input.interactionMode }
-                  : {}),
-              })
-            : undefined,
+          text: appendProviderReferencesPromptBlock({
+            text: input.input?.trim()
+              ? withDroidPlanModePrompt({
+                  text: input.input.trim(),
+                  ...(input.interactionMode !== undefined
+                    ? { interactionMode: input.interactionMode }
+                    : {}),
+                })
+              : undefined,
+            mentions: input.mentions,
+          }),
           attachments: input.attachments,
           attachmentsDir: serverConfig.attachmentsDir,
           include: "all-files",
@@ -1465,8 +1514,8 @@ export function makeDroidAdapter(
         if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
           ctx.pendingTurnInterrupted = true;
         }
-        yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
-        yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
+        yield* settleAcpPendingApprovalsAsCancelled(ctx.pendingApprovals);
+        yield* settleAcpPendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         const activePromptFiber = ctx.activePromptFiber;
         yield* Effect.ignore(
           ctx.acp.cancel.pipe(
@@ -1498,14 +1547,22 @@ export function makeDroidAdapter(
         yield* Deferred.succeed(pending.decision, decision);
       });
 
-    const respondToUserInput: DroidAdapterShape["respondToUserInput"] = (threadId, requestId) =>
+    const respondToUserInput: DroidAdapterShape["respondToUserInput"] = (
+      threadId,
+      requestId,
+      answers,
+    ) =>
       Effect.gen(function* () {
-        yield* requireSession(threadId);
-        return yield* new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "session/elicitation",
-          detail: `Unknown pending user-input request: ${requestId}`,
-        });
+        const ctx = yield* requireSession(threadId);
+        const pending = ctx.pendingUserInputs.get(requestId);
+        if (!pending) {
+          return yield* new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session/elicitation",
+            detail: `Unknown pending user-input request: ${requestId}`,
+          });
+        }
+        yield* Deferred.succeed(pending.answers, answers);
       });
 
     const readThread: DroidAdapterShape["readThread"] = (threadId) =>
@@ -1514,9 +1571,40 @@ export function makeDroidAdapter(
         return { threadId, turns: ctx.turns };
       });
 
+    const readExternalThread: NonNullable<DroidAdapterShape["readExternalThread"]> = (input) =>
+      Effect.tryPromise({
+        try: () => readFactorySessionHistory(serverConfig.homeDir, input.externalThreadId),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/read",
+            detail: cause instanceof Error ? cause.message : "Failed to read the Droid session.",
+            cause,
+          }),
+      }).pipe(
+        Effect.flatMap((history) =>
+          history
+            ? Effect.succeed({
+                threadId: ThreadId.makeUnsafe(history.sessionId),
+                ...(history.cwd ? { cwd: history.cwd } : {}),
+                turns: history.messages.map((message, index) => ({
+                  id: TurnId.makeUnsafe(`factory:${message.id}:${index}`),
+                  items: [{ type: "factoryMessage", ...message }],
+                })),
+              })
+            : Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "thread/read",
+                  detail: `Droid session '${input.externalThreadId}' was not found locally.`,
+                }),
+              ),
+        ),
+      );
+
     const rollbackThread: DroidAdapterShape["rollbackThread"] = (threadId, numTurns) =>
       Effect.gen(function* () {
-        const ctx = yield* requireSession(threadId);
+        yield* requireSession(threadId);
         if (!Number.isInteger(numTurns) || numTurns < 1) {
           return yield* new ProviderAdapterValidationError({
             provider: PROVIDER,
@@ -1524,10 +1612,93 @@ export function makeDroidAdapter(
             issue: "numTurns must be an integer >= 1.",
           });
         }
-        const nextLength = Math.max(0, ctx.turns.length - numTurns);
-        ctx.turns.splice(nextLength);
-        return { threadId, turns: ctx.turns };
+        return yield* new ProviderAdapterValidationError({
+          provider: PROVIDER,
+          operation: "rollbackThread",
+          issue:
+            "Droid does not expose a native rewind cursor; rollback must restart the session with retained transcript context.",
+        });
       });
+
+    const forkThread: NonNullable<DroidAdapterShape["forkThread"]> = (input) =>
+      Effect.gen(function* () {
+        const sourceCwd = resolveDroidSessionCwd(input.sourceCwd ?? input.cwd, serverConfig);
+        const targetCwd = resolveDroidSessionCwd(input.cwd ?? input.sourceCwd, serverConfig);
+        if (!sourceCwd || !targetCwd) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "forkThread",
+            issue: "A source and target cwd are required to fork a Droid session.",
+          });
+        }
+
+        const forkRuntime = (runtime: AcpSessionRuntimeShape) =>
+          Effect.gen(function* () {
+            if (!(yield* runtime.supportsSessionFork)) {
+              return yield* new ProviderAdapterValidationError({
+                provider: PROVIDER,
+                operation: "forkThread",
+                issue:
+                  "This Droid ACP version does not advertise session/fork; Synara will rebuild the fork from its retained transcript.",
+              });
+            }
+            return yield* runtime.forkSession({ cwd: targetCwd, mcpServers: [] });
+          });
+
+        const activeSource = sessions.get(input.sourceThreadId);
+        const forked = activeSource
+          ? yield* forkRuntime(activeSource.acp)
+          : yield* Effect.gen(function* () {
+              const sourceSessionId = parseDroidResume(input.sourceResumeCursor)?.sessionId;
+              if (!sourceSessionId) {
+                return yield* new ProviderAdapterValidationError({
+                  provider: PROVIDER,
+                  operation: "forkThread",
+                  issue: "The source Droid session has no resumable native cursor.",
+                });
+              }
+              const runtime = yield* makeDroidAcpRuntime({
+                droidSettings: {
+                  ...(droidSettings.binaryPath ? { binaryPath: droidSettings.binaryPath } : {}),
+                  ...(input.providerOptions?.droid?.binaryPath
+                    ? { binaryPath: input.providerOptions.droid.binaryPath }
+                    : {}),
+                  ...(input.runtimeMode === "full-access"
+                    ? { skipPermissionsUnsafe: true }
+                    : {}),
+                },
+                childProcessSpawner,
+                cwd: sourceCwd,
+                resumeSessionId: sourceSessionId,
+                clientInfo: { name: "Synara Fork", version: "0.0.0" },
+              });
+              yield* runtime.start();
+              return yield* forkRuntime(runtime);
+            }).pipe(Effect.scoped);
+
+        const resumeCursor = {
+          schemaVersion: DROID_RESUME_VERSION,
+          sessionId: forked.sessionId,
+        };
+        yield* startSession({
+          threadId: input.threadId,
+          provider: PROVIDER,
+          cwd: targetCwd,
+          runtimeMode: input.runtimeMode,
+          resumeCursor,
+          ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+          ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+        });
+        return { threadId: input.threadId, resumeCursor };
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterRequestError ||
+          cause instanceof ProviderAdapterSessionNotFoundError ||
+          cause instanceof ProviderAdapterValidationError
+            ? cause
+            : mapAcpToAdapterError(PROVIDER, input.sourceThreadId, "session/fork", cause),
+        ),
+      );
 
     const stopSession: DroidAdapterShape["stopSession"] = (threadId) =>
       withThreadLock(
@@ -1552,13 +1723,176 @@ export function makeDroidAdapter(
         provider: PROVIDER,
         supportsSkillMentions: false,
         supportsSkillDiscovery: false,
-        supportsNativeSlashCommandDiscovery: false,
-        supportsPluginMentions: false,
-        supportsPluginDiscovery: false,
-        supportsRuntimeModelList: false,
+        supportsNativeSlashCommandDiscovery: true,
+        supportsPluginMentions: true,
+        supportsPluginDiscovery: true,
+        supportsRuntimeModelList: true,
+        // Droid's TUI has /compact, but ACP currently exposes no compaction RPC
+        // and treats that text as an ordinary model prompt.
         supportsThreadCompaction: false,
-        supportsThreadImport: false,
+        supportsThreadImport: true,
       } satisfies ProviderComposerCapabilities);
+
+    const listModels: NonNullable<DroidAdapterShape["listModels"]> = (input) =>
+      Effect.gen(function* () {
+        const cwd = resolveDroidSessionCwd(input.cwd, serverConfig);
+        if (!cwd) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "listModels",
+            issue: "cwd is required and no server cwd fallback is available.",
+          });
+        }
+        const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+        const cached = modelDiscoveryCache.get(cacheKey);
+        if (cached && cached.expiresAt > Date.now()) {
+          return { ...cached.result, cached: true };
+        }
+        const runtime = yield* makeDroidDiscoveryRuntime({
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          cwd,
+          clientName: "Synara Model Discovery",
+        });
+        yield* runtime.start();
+        const result = yield* discoverDroidAcpModels(runtime);
+        const commands = yield* runtime.getAvailableCommands;
+        setDroidDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
+          expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
+          result: {
+            commands: commands.map((command) => ({
+              name: command.name,
+              ...(command.description ? { description: command.description } : {}),
+            })),
+            source: "droid-acp",
+            cached: false,
+          },
+        });
+        setDroidDiscoveryCacheEntry(modelDiscoveryCache, cacheKey, {
+          expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
+          result,
+        });
+        return result;
+      }).pipe(
+        Effect.scoped,
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterValidationError
+            ? cause
+            : mapAcpToAdapterError(PROVIDER, ThreadId.makeUnsafe("droid-model-discovery"), "model/list", cause),
+        ),
+        Effect.timeoutFail({
+          duration: DROID_MODEL_DISCOVERY_TIMEOUT_MS,
+          onTimeout: () =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "model/list",
+              detail: "Timed out while discovering Droid models over ACP.",
+            }),
+        }),
+      );
+
+    const listPlugins: NonNullable<DroidAdapterShape["listPlugins"]> = (input) =>
+      Effect.tryPromise({
+        try: () => listFactoryPlugins(serverConfig.homeDir, input.cwd),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "plugin/list",
+            detail: cause instanceof Error ? cause.message : "Failed to read Factory plugins.",
+            cause,
+          }),
+      });
+
+    const readPlugin: NonNullable<DroidAdapterShape["readPlugin"]> = (input) =>
+      Effect.tryPromise({
+        try: () =>
+          readFactoryPlugin({
+            homeDir: serverConfig.homeDir,
+            marketplacePath: input.marketplacePath,
+            pluginName: input.pluginName,
+          }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "plugin/read",
+            detail: cause instanceof Error ? cause.message : "Failed to read the Factory plugin.",
+            cause,
+          }),
+      }).pipe(
+        Effect.flatMap((result) =>
+          result
+            ? Effect.succeed(result)
+            : Effect.fail(
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "plugin/read",
+                  detail: `Factory plugin '${input.pluginName}' was not found.`,
+                }),
+              ),
+        ),
+      );
+
+    const listCommands: NonNullable<DroidAdapterShape["listCommands"]> = (input) =>
+      Effect.gen(function* () {
+        const cwd = resolveDroidSessionCwd(input.cwd, serverConfig);
+        if (!cwd) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "listCommands",
+            issue: "cwd is required and no server cwd fallback is available.",
+          });
+        }
+        const cacheKey = `${input.binaryPath?.trim() || droidSettings.binaryPath?.trim() || "droid"}\u0000${cwd}`;
+        const cached = commandDiscoveryCache.get(cacheKey);
+        if (input.forceReload !== true && cached && cached.expiresAt > Date.now()) {
+          return { ...cached.result, cached: true };
+        }
+        const runtime = yield* makeDroidDiscoveryRuntime({
+          ...(input.binaryPath ? { binaryPath: input.binaryPath } : {}),
+          cwd,
+          clientName: "Synara Command Discovery",
+        });
+        yield* runtime.start();
+        let commands = yield* runtime.getAvailableCommands;
+        const startedAt = Date.now();
+        while (commands.length === 0 && Date.now() - startedAt < 500) {
+          yield* Effect.sleep(25);
+          commands = yield* runtime.getAvailableCommands;
+        }
+        const result = {
+          commands: commands.map((command) => ({
+            name: command.name,
+            ...(command.description ? { description: command.description } : {}),
+          })),
+          source: "droid-acp",
+          cached: false,
+        } satisfies ProviderListCommandsResult;
+        setDroidDiscoveryCacheEntry(commandDiscoveryCache, cacheKey, {
+          expiresAt: Date.now() + DROID_MODEL_DISCOVERY_CACHE_MS,
+          result,
+        });
+        return result;
+      }).pipe(
+        Effect.scoped,
+        Effect.mapError((cause) =>
+          cause instanceof ProviderAdapterValidationError
+            ? cause
+            : mapAcpToAdapterError(
+                PROVIDER,
+                ThreadId.makeUnsafe("droid-command-discovery"),
+                "command/list",
+                cause,
+              ),
+        ),
+        Effect.timeoutFail({
+          duration: DROID_MODEL_DISCOVERY_TIMEOUT_MS,
+          onTimeout: () =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "command/list",
+              detail: "Timed out while discovering Droid commands over ACP.",
+            }),
+        }),
+      );
 
     const stopAll: DroidAdapterShape["stopAll"] = () =>
       Effect.forEach(Array.from(sessions.values()), stopSessionInternal, { discard: true });
@@ -1575,18 +1909,25 @@ export function makeDroidAdapter(
     return {
       provider: PROVIDER,
       capabilities: {
-        sessionModelSwitch: "restart-session",
+        sessionModelSwitch: "in-session",
+        conversationRollback: "restart-session",
       },
       startSession,
       sendTurn,
       interruptTurn,
       readThread,
+      readExternalThread,
       rollbackThread,
+      forkThread,
       respondToRequest,
       respondToUserInput,
       stopSession,
       listSessions,
       getComposerCapabilities,
+      listCommands,
+      listModels,
+      listPlugins,
+      readPlugin,
       hasSession,
       stopAll,
       streamEvents,

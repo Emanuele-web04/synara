@@ -1,3 +1,7 @@
+// FILE: DroidAcpSupport.test.ts
+// Purpose: Verifies Droid ACP spawn, auth, mode, model, and discovery behavior.
+// Layer: Provider ACP support tests
+
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -8,8 +12,10 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  applyDroidAcpInteractionMode,
   applyDroidAcpModelSelection,
   buildDroidAcpSpawnInput,
+  discoverDroidAcpModels,
   resolveDroidAcpAuthMethodId,
   resolveDroidCliBinaryPath,
 } from "./DroidAcpSupport.ts";
@@ -130,6 +136,144 @@ describe("applyDroidAcpModelSelection", () => {
       }).pipe(Effect.flip),
     );
     expect(error.message).toBe("failed:session/set_config_option");
+  });
+});
+
+describe("applyDroidAcpInteractionMode", () => {
+  it("uses native spec mode for plan turns and restores normal mode", async () => {
+    const calls: string[] = [];
+    const runtime = {
+      setMode: (modeId: string) => {
+        calls.push(modeId);
+        return Effect.succeed({});
+      },
+      setConfigOption: () => Effect.succeed({ configOptions: [] }),
+    };
+
+    await Effect.runPromise(
+      applyDroidAcpInteractionMode({
+        runtime,
+        interactionMode: "plan",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+    await Effect.runPromise(
+      applyDroidAcpInteractionMode({
+        runtime,
+        interactionMode: "default",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+
+    expect(calls).toEqual(["spec", "normal"]);
+  });
+
+  it("uses Droid's highest native autonomy outside plan mode for full-access sessions", async () => {
+    const calls: string[] = [];
+    await Effect.runPromise(
+      applyDroidAcpInteractionMode({
+        runtime: {
+          setMode: (modeId: string) => {
+            calls.push(modeId);
+            return Effect.succeed({});
+          },
+          setConfigOption: () => Effect.succeed({ configOptions: [] }),
+        },
+        interactionMode: "default",
+        runtimeMode: "full-access",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+    expect(calls).toEqual(["auto-high"]);
+  });
+
+  it("falls back to Droid's autonomy config for older ACP mode responses", async () => {
+    const calls: Array<{ configId: string; value: string | boolean }> = [];
+    const runtime = {
+      setMode: () =>
+        Effect.fail(
+          new EffectAcpErrors.AcpRequestError({ code: -32601, errorMessage: "mode unavailable" }),
+        ),
+      setConfigOption: (configId: string, value: string | boolean) => {
+        calls.push({ configId, value });
+        return Effect.succeed({ configOptions: [] });
+      },
+    };
+
+    await Effect.runPromise(
+      applyDroidAcpInteractionMode({
+        runtime,
+        interactionMode: "plan",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+    expect(calls).toEqual([{ configId: "autonomy_level", value: "spec" }]);
+  });
+});
+
+describe("discoverDroidAcpModels", () => {
+  it("reads each model's reasoning choices from session config options", async () => {
+    let currentModel = "model-a";
+    const configOptions = (): ReadonlyArray<EffectAcpSchema.SessionConfigOption> => [
+      {
+        id: "model",
+        name: "Model",
+        category: "model",
+        type: "select",
+        currentValue: currentModel,
+        options: [
+          { value: "model-a", name: "Model A" },
+          { value: "model-b", name: "Model B" },
+        ],
+      },
+      {
+        id: "reasoning_effort",
+        name: "Reasoning",
+        category: "thought_level",
+        type: "select",
+        currentValue: currentModel === "model-a" ? "medium" : "max",
+        options:
+          currentModel === "model-a"
+            ? [
+                { value: "low", name: "Low" },
+                { value: "medium", name: "Medium" },
+              ]
+            : [
+                { value: "high", name: "High" },
+                { value: "max", name: "Max" },
+              ],
+      },
+    ];
+    const runtime = {
+      getConfigOptions: Effect.sync(configOptions),
+      setConfigOption: (configId: string, value: string | boolean) => {
+        if (configId === "model") {
+          currentModel = String(value);
+        }
+        return Effect.succeed({ configOptions: configOptions() });
+      },
+    };
+
+    const result = await Effect.runPromise(discoverDroidAcpModels(runtime));
+    expect(result.models).toEqual([
+      expect.objectContaining({
+        slug: "model-a",
+        defaultReasoningEffort: "medium",
+        supportedReasoningEfforts: [
+          { value: "low", label: "Low" },
+          { value: "medium", label: "Medium" },
+        ],
+      }),
+      expect.objectContaining({
+        slug: "model-b",
+        defaultReasoningEffort: "max",
+        supportedReasoningEfforts: [
+          { value: "high", label: "High" },
+          { value: "max", label: "Max" },
+        ],
+      }),
+    ]);
+    expect(currentModel).toBe("model-a");
   });
 });
 

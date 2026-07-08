@@ -1,3 +1,8 @@
+// FILE: ProviderCommandReactor.test.ts
+// Purpose: Verifies provider intent orchestration, queueing, rollback, and transcript bootstrap flows.
+// Layer: Orchestration integration tests
+// Depends on: ProviderCommandReactorLive with in-memory provider and persistence services.
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -104,6 +109,7 @@ describe("ProviderCommandReactor", () => {
     readonly baseDir?: string;
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
+    readonly conversationRollback?: "native" | "restart-session";
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
   }) {
     const now = new Date().toISOString();
@@ -321,6 +327,9 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
+          ...(input?.conversationRollback
+            ? { conversationRollback: input.conversationRollback }
+            : {}),
         }),
       rollbackConversation,
       compactThread: () => unsupported(),
@@ -521,6 +530,73 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Fresh side question");
   });
 
+  it("bootstraps an ordinary fork when Droid ACP cannot fork natively", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    const importedAt = new Date(Date.parse(now) - 1_000).toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("droid-fork-user"),
+            role: "user",
+            text: "Retained question",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+          {
+            messageId: asMessageId("droid-fork-assistant"),
+            role: "assistant",
+            text: "Retained answer",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        message: {
+          messageId: asMessageId("droid-fork-latest-user"),
+          role: "user",
+          text: "Continue here",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.forkThread.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<thread_context>");
+    expect(input?.input).toContain("Retained question");
+    expect(input?.input).toContain("Retained answer");
+    expect(input?.input).toContain("Continue here");
+  });
+
   it("rolls back provider conversation state for message edits", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -690,6 +766,99 @@ describe("ProviderCommandReactor", () => {
       skills: [skill],
       mentions: [mention],
     });
+  });
+
+  it("restarts Droid edits and bootstraps only the retained transcript", async () => {
+    const harness = await createHarness({
+      threadModelSelection: { provider: "droid", model: "claude-opus-4-8" },
+      conversationRollback: "restart-session",
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.messages.import",
+        commandId: CommandId.makeUnsafe("cmd-import-droid-retained-context"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messages: [
+          {
+            messageId: asMessageId("droid-earlier-user"),
+            role: "user",
+            text: "Earlier question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("droid-earlier-assistant"),
+            role: "assistant",
+            text: "Earlier answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-original-edit-turn"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("droid-edit-target"),
+          role: "user",
+          text: "old prompt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.sendTurn.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-droid-active-edit-session"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "running",
+          providerName: "droid",
+          runtimeMode: "approval-required",
+          activeTurnId: asTurnId("turn-droid-active-edit"),
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.edit-and-resend",
+        commandId: CommandId.makeUnsafe("cmd-droid-edit-and-resend"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        messageId: asMessageId("droid-edit-target"),
+        text: "edited prompt",
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.clearSessionResumeCursor.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.stopRuntimeSession).not.toHaveBeenCalled();
+    expect(harness.clearSessionResumeCursor.mock.calls[0]?.[0]).toEqual({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+    });
+    const resent = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(resent?.input).toContain("<thread_context>");
+    expect(resent?.input).toContain("Earlier question");
+    expect(resent?.input).toContain("Earlier answer");
+    expect(resent?.input).toContain("edited prompt");
+    expect(resent?.input).not.toContain("old prompt");
   });
 
   it("keeps queued-message edits queued while an active provider turn continues", async () => {

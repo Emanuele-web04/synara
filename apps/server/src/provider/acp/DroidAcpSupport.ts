@@ -7,7 +7,11 @@ import { existsSync } from "node:fs";
 import * as nodeOs from "node:os";
 import * as nodePath from "node:path";
 
-import { type DroidModelOptions } from "@t3tools/contracts";
+import {
+  type DroidModelOptions,
+  type ProviderListModelsResult,
+  type ProviderModelDescriptor,
+} from "@t3tools/contracts";
 import { Effect, Layer, Scope, ServiceMap } from "effect";
 import type * as EffectAcpErrors from "effect-acp/errors";
 import * as EffectAcpErrorsRuntime from "effect-acp/errors";
@@ -41,8 +45,16 @@ export interface DroidAcpModelSelectionErrorContext {
   readonly method: "session/set_config_option";
 }
 
+export interface DroidAcpModeSelectionErrorContext {
+  readonly cause: EffectAcpErrors.AcpError;
+  readonly method: "session/set_config_option";
+}
+
 const DROID_MODEL_CONFIG_ID = "model";
 const DROID_REASONING_EFFORT_CONFIG_ID = "reasoning_effort";
+const DROID_AUTONOMY_CONFIG_ID = "autonomy_level";
+const DROID_DEFAULT_MODE_ID = "normal";
+const DROID_PLAN_MODE_ID = "spec";
 
 const DROID_API_KEY_AUTH_METHOD_ID = "factory-api-key";
 const DROID_DEVICE_PAIRING_AUTH_METHOD_ID = "device-pairing";
@@ -62,19 +74,13 @@ export function hasDroidApiKeyEnv(env: NodeJS.ProcessEnv = process.env): boolean
   return getDroidApiKeyEnv(env) !== undefined;
 }
 
-/** Resolves `droid` when the dev server PATH omits `~/.local/bin` (common under turbo). */
+/** Honors PATH first, then falls back to Factory's common `~/.local/bin` install location. */
 export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
   const configured = binaryPath?.trim();
   if (configured) {
     return configured;
   }
   const name = "droid";
-  if (process.platform !== "win32") {
-    const localBin = nodePath.join(nodeOs.homedir(), ".local", "bin", name);
-    if (existsSync(localBin)) {
-      return localBin;
-    }
-  }
   const searchPath = process.env.PATH ?? "";
   for (const directory of searchPath.split(nodePath.delimiter)) {
     if (!directory.trim()) {
@@ -83,6 +89,12 @@ export function resolveDroidCliBinaryPath(binaryPath?: string | null): string {
     const candidate = nodePath.join(directory, name);
     if (existsSync(candidate)) {
       return candidate;
+    }
+  }
+  if (process.platform !== "win32") {
+    const localBin = nodePath.join(nodeOs.homedir(), ".local", "bin", name);
+    if (existsSync(localBin)) {
+      return localBin;
     }
   }
   return name;
@@ -188,5 +200,126 @@ export function applyDroidAcpModelSelection<E>(input: {
         .setConfigOption(DROID_REASONING_EFFORT_CONFIG_ID, reasoningEffort)
         .pipe(Effect.mapError(mapError));
     }
+  });
+}
+
+/** Applies Droid's native read-only spec mode before a Plan-mode prompt is dispatched. */
+export function applyDroidAcpInteractionMode<E>(input: {
+  readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption" | "setMode">;
+  readonly interactionMode?: "default" | "plan";
+  readonly runtimeMode?: "approval-required" | "full-access";
+  readonly mapError: (context: DroidAcpModeSelectionErrorContext) => E;
+}): Effect.Effect<void, E> {
+  const modeId =
+    input.interactionMode === "plan"
+      ? DROID_PLAN_MODE_ID
+      : input.runtimeMode === "full-access"
+        ? "auto-high"
+        : DROID_DEFAULT_MODE_ID;
+  return input.runtime.setMode(modeId).pipe(
+    // Older Droid ACP builds exposed the autonomy selector without a modes block.
+    Effect.catch(() => input.runtime.setConfigOption(DROID_AUTONOMY_CONFIG_ID, modeId)),
+    Effect.mapError((cause) => input.mapError({ cause, method: "session/set_config_option" })),
+    Effect.asVoid,
+  );
+}
+
+export function flattenDroidConfigOptions(
+  options: EffectAcpSchema.SessionConfigSelectOptions,
+): ReadonlyArray<EffectAcpSchema.SessionConfigSelectOption> {
+  return options.flatMap((entry) => ("options" in entry ? entry.options : [entry]));
+}
+
+function findDroidSelectConfig(
+  options: ReadonlyArray<EffectAcpSchema.SessionConfigOption>,
+  input: { readonly id: string; readonly category: string },
+): Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> | undefined {
+  return options.find(
+    (option): option is Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }> =>
+      option.type === "select" && (option.id === input.id || option.category === input.category),
+  );
+}
+
+function droidModelDescriptor(
+  model: EffectAcpSchema.SessionConfigSelectOption,
+  reasoning:
+    | Extract<EffectAcpSchema.SessionConfigOption, { readonly type: "select" }>
+    | undefined,
+): ProviderModelDescriptor {
+  const efforts = reasoning ? flattenDroidConfigOptions(reasoning.options) : [];
+  return {
+    slug: model.value,
+    name: model.name,
+    supportedReasoningEfforts: efforts.map((effort) => ({
+      value: effort.value,
+      label: effort.name,
+      ...(effort.description ? { description: effort.description } : {}),
+    })),
+    ...(reasoning?.currentValue ? { defaultReasoningEffort: reasoning.currentValue } : {}),
+    supportsFastMode: false,
+    supportsThinkingToggle: false,
+  };
+}
+
+/**
+ * Reads the model catalog from ACP and reselects each model so Droid returns that
+ * model's current reasoning choices. Discovery runs in a disposable session.
+ */
+export function discoverDroidAcpModels(
+  runtime: Pick<AcpSessionRuntimeShape, "getConfigOptions" | "setConfigOption">,
+): Effect.Effect<ProviderListModelsResult, EffectAcpErrors.AcpError> {
+  return Effect.gen(function* () {
+    const initialOptions = yield* runtime.getConfigOptions;
+    const modelConfig = findDroidSelectConfig(initialOptions, {
+      id: DROID_MODEL_CONFIG_ID,
+      category: "model",
+    });
+    if (!modelConfig) {
+      return yield* new EffectAcpErrorsRuntime.AcpRequestError({
+        code: -32602,
+        errorMessage: "Droid ACP did not advertise a model configuration option.",
+      });
+    }
+
+    const originalModel = modelConfig.currentValue;
+    const originalReasoning = findDroidSelectConfig(initialOptions, {
+      id: DROID_REASONING_EFFORT_CONFIG_ID,
+      category: "thought_level",
+    })?.currentValue;
+    const models = flattenDroidConfigOptions(modelConfig.options);
+    const descriptors = yield* Effect.forEach(
+      models,
+      (model) =>
+        runtime.setConfigOption(modelConfig.id, model.value).pipe(
+          Effect.andThen(runtime.getConfigOptions),
+          Effect.map((updatedOptions) =>
+            droidModelDescriptor(
+              model,
+              findDroidSelectConfig(updatedOptions, {
+                id: DROID_REASONING_EFFORT_CONFIG_ID,
+                category: "thought_level",
+              }),
+            ),
+          ),
+          // A newly announced model should remain selectable even if its option probe fails.
+          Effect.catch(() => Effect.succeed(droidModelDescriptor(model, undefined))),
+        ),
+      { concurrency: 1 },
+    );
+
+    if (originalModel) {
+      yield* runtime.setConfigOption(modelConfig.id, originalModel).pipe(Effect.ignore);
+      if (originalReasoning) {
+        yield* runtime
+          .setConfigOption(DROID_REASONING_EFFORT_CONFIG_ID, originalReasoning)
+          .pipe(Effect.ignore);
+      }
+    }
+
+    return {
+      models: descriptors,
+      source: "droid-acp",
+      cached: false,
+    } satisfies ProviderListModelsResult;
   });
 }
