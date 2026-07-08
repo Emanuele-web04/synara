@@ -10,6 +10,7 @@ import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
+  type ProviderInstanceId,
   type ServerSettings,
   type ThreadId,
 } from "@synara/contracts";
@@ -170,6 +171,16 @@ export function codexConfiguredHomePathsFromSettings(
     addCandidate(codexOptions);
   }
   return [...candidates.values()];
+}
+
+export function enabledCodexProviderInstanceIdsFromSettings(
+  settings: ServerSettings,
+): ReadonlySet<ProviderInstanceId> {
+  return new Set(
+    deriveProviderInstances(settings)
+      .filter((instance) => instance.driver === "codex" && instance.enabled)
+      .map((instance) => instance.instanceId),
+  );
 }
 
 /**

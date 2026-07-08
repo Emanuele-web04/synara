@@ -7,6 +7,8 @@ import { DEFAULT_SERVER_SETTINGS, type ProviderRuntimeEvent } from "@synara/cont
 import {
   CODEX_GENERATED_IMAGE_ARTIFACT_KIND,
   codexConfiguredHomePathsFromSettings,
+  enabledCodexProviderInstanceIdsFromSettings,
+  extractCodexGeneratedImageReference,
   generatedImagePathFromRuntimeEvent,
   resolveCodexGeneratedImagesRoot,
   resolveCodexGeneratedImagesRoots,
@@ -200,7 +202,6 @@ describe("codexConfiguredHomePathsFromSettings", () => {
     const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
       resolveCodexGeneratedImagesRoots(home),
     );
-
     assert.ok(
       roots.some(
         (root) =>
@@ -239,7 +240,10 @@ describe("codexConfiguredHomePathsFromSettings", () => {
     const roots = codexConfiguredHomePathsFromSettings(settings).flatMap((home) =>
       resolveCodexGeneratedImagesRoots(home),
     );
+    const enabledInstanceIds = enabledCodexProviderInstanceIdsFromSettings(settings);
 
+    assert.ok([...enabledInstanceIds].some((instanceId) => instanceId === "codex_enabled"));
+    assert.ok([...enabledInstanceIds].every((instanceId) => instanceId !== "codex_disabled"));
     assert.ok(
       roots.some((root) => root.includes(path.join("accounts", "codex_enabled-"))),
       `expected enabled account overlay root, got ${JSON.stringify(roots)}`,
