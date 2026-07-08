@@ -10621,16 +10621,22 @@ describe("ProviderCommandReactor", () => {
         (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
       );
       return (
-        thread?.activities.some(
-          (activity) =>
-            activity.kind === "provider.turn.start.failed" &&
-            activity.payload.detail.includes("disabled"),
-        ) ?? false
+        thread?.activities.some((activity) => activity.kind === "provider.turn.start.failed") ??
+        false
       );
     });
 
     expect(harness.startSession.mock.calls.length).toBe(1);
     expect(harness.sendTurn.mock.calls.length).toBe(1);
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find((entry) => entry.id === ThreadId.makeUnsafe("thread-1"));
+    expect(
+      thread?.activities.find((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toMatchObject({
+      payload: {
+        detail: expect.stringMatching(/disabled/),
+      },
+    });
   });
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {
