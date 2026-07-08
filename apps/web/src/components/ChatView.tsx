@@ -4134,6 +4134,7 @@ export default function ChatView({
         providerOrder={settings.providerOrder}
         providerInstances={providerInstances}
         selectedProviderInstanceId={selectedProviderInstanceId}
+        showProviderInstanceChoices={false}
         onProviderModelChange={onProviderModelSelect}
         onSelectionCommitted={scheduleComposerFocus}
         open={isModelPickerOpen}
@@ -4176,6 +4177,7 @@ export default function ChatView({
       providerOrder={settings.providerOrder}
       providerInstances={providerInstances}
       selectedProviderInstanceId={selectedProviderInstanceId}
+      showProviderInstanceChoices={false}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModels={runtimeModelsByProvider[selectedProvider]}
