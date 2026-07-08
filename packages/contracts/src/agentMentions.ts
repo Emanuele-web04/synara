@@ -234,7 +234,7 @@ const AGENT_MENTION_AUTOCOMPLETE_ALIASES_BY_PROVIDER: Record<ProviderKind, reado
   cursor: [],
   gemini: [],
   grok: [],
-  droid: ["droid", "factory"],
+  droid: [],
   kilo: [],
   opencode: [],
   pi: [],

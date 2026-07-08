@@ -621,6 +621,13 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
   ],
   droid: [
     {
+      // Factory routes to a model automatically at its lowest (1x) token rate.
+      // Reasoning effort follows the routed model's default, so no picker.
+      slug: "auto",
+      name: "Auto Model",
+      capabilities: droidCapabilities([]),
+    },
+    {
       slug: "claude-fable-5",
       name: "Claude Fable 5",
       capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,
@@ -648,11 +655,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "claude-opus-4-6",
       name: "Claude Opus 4.6",
-      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
-    },
-    {
-      slug: "claude-opus-4-6-fast",
-      name: "Claude Opus 4.6 Fast",
       capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
     },
     {
@@ -746,6 +748,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {
+      slug: "glm-5.2-fast",
+      name: "GLM-5.2 Fast",
+      capabilities: DROID_CORE_HIGH_CAPABILITIES,
+    },
+    {
       slug: "glm-5.1",
       name: "GLM-5.1",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
@@ -763,11 +770,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
     {
       slug: "kimi-k2.6",
       name: "Kimi K2.6",
-      capabilities: DROID_CORE_HIGH_CAPABILITIES,
-    },
-    {
-      slug: "kimi-k2.5",
-      name: "Kimi K2.5",
       capabilities: DROID_CORE_HIGH_CAPABILITIES,
     },
     {

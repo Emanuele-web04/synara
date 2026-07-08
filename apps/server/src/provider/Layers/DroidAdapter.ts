@@ -67,12 +67,7 @@ import {
   makeAcpTokenUsageEvent,
   makeAcpToolCallEvent,
 } from "../acp/AcpCoreRuntimeEvents.ts";
-import {
-  type AcpSessionMode,
-  type AcpSessionModeState,
-  type AcpToolCallState,
-  parsePermissionRequest,
-} from "../acp/AcpRuntimeModel.ts";
+import { type AcpToolCallState, parsePermissionRequest } from "../acp/AcpRuntimeModel.ts";
 import { makeAcpNativeLoggers } from "../acp/AcpNativeLogging.ts";
 import {
   forkAcpTurnIdleWatchdog,
@@ -94,7 +89,12 @@ const DROID_ACP_DEBUG_ENV = "SYNARA_DROID_ACP_DEBUG";
 const DPCODE_DROID_ACP_DEBUG_ENV = "DPCODE_DROID_ACP_DEBUG";
 const LEGACY_DROID_ACP_DEBUG_ENV = "DP_DROID_ACP_DEBUG";
 const DROID_RESUME_REPLAY_QUIET_MS = 350;
+// Bounds how long startSession blocks on the replay settling; the background
+// settle loop keeps suppression alive past this until the hard timeout.
 const DROID_RESUME_REPLAY_MAX_WAIT_MS = 3_000;
+const DROID_RESUME_REPLAY_HARD_TIMEOUT_MS = 30_000;
+const DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS = 1_000;
+const DROID_TURN_SETTLE_DRAIN_POLL_MS = 25;
 // Backstop for an alive-but-silent droid child: if a turn produces no ACP
 // activity for this long, force-fail it instead of showing "Working" forever.
 // Generous by design so legitimate long, quiet tool runs are not killed;
@@ -104,9 +104,6 @@ const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 600_000,
 });
 const DROID_TURN_WATCHDOG_INTERVAL_MS = 15_000;
-const ACP_PLAN_MODE_ALIASES = ["plan"];
-const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
-const ACP_APPROVAL_MODE_ALIASES = ["ask"];
 const DROID_PLAN_MODE_PROMPT_PREFIX = [
   "Synara Droid plan mode is active.",
   "Do not implement or mutate files in this turn.",
@@ -245,6 +242,17 @@ interface DroidSessionContext {
   resumeReplayReady: Deferred.Deferred<void> | undefined;
   resumeReplayLastSuppressedAt: number | undefined;
   latestSessionCostUsd: number | undefined;
+  // Count of ACP session/update events fully handled by the notification
+  // consumer. Compared against acp.sessionUpdatesEnqueuedCount to detect when
+  // events received before a prompt response have all been processed —
+  // in-flight handlers and stream chunk buffering included.
+  sessionUpdatesProcessed: number;
+  // True while sendTurn is between its entry check and prompt dispatch; lets
+  // interruptTurn flag a turn that has no prompt fiber to interrupt yet.
+  turnStarting: boolean;
+  // Set by interruptTurn when the turn is still starting; the prompt dispatch
+  // guard honors it so a cancelled turn is never prompted.
+  pendingTurnInterrupted: boolean;
   stopped: boolean;
 }
 
@@ -359,70 +367,6 @@ function withDroidPlanModePrompt(input: {
   return text.length > 0
     ? `${DROID_PLAN_MODE_PROMPT_PREFIX}\n\nUser request:\n${text}`
     : DROID_PLAN_MODE_PROMPT_PREFIX;
-}
-
-function normalizeModeSearchText(mode: AcpSessionMode): string {
-  return [mode.id, mode.name, mode.description]
-    .filter((value): value is string => typeof value === "string" && value.length > 0)
-    .join(" ")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function findModeByAliases(
-  modes: ReadonlyArray<AcpSessionMode>,
-  aliases: ReadonlyArray<string>,
-): AcpSessionMode | undefined {
-  const normalizedAliases = aliases.map((alias) => alias.toLowerCase());
-  for (const alias of normalizedAliases) {
-    const exact = modes.find((mode) => {
-      const id = mode.id.toLowerCase();
-      const name = mode.name.toLowerCase();
-      return id === alias || name === alias;
-    });
-    if (exact) return exact;
-  }
-  for (const alias of normalizedAliases) {
-    const partial = modes.find((mode) => normalizeModeSearchText(mode).includes(alias));
-    if (partial) return partial;
-  }
-  return undefined;
-}
-
-function isPlanMode(mode: AcpSessionMode): boolean {
-  return findModeByAliases([mode], ACP_PLAN_MODE_ALIASES) !== undefined;
-}
-
-function resolveRequestedModeId(input: {
-  readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly runtimeMode: RuntimeMode;
-  readonly modeState: AcpSessionModeState | undefined;
-}): string | undefined {
-  const modeState = input.modeState;
-  if (!modeState) {
-    return undefined;
-  }
-
-  if (input.interactionMode === "plan") {
-    return findModeByAliases(modeState.availableModes, ACP_PLAN_MODE_ALIASES)?.id;
-  }
-
-  if (input.runtimeMode === "approval-required") {
-    return (
-      findModeByAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES)?.id ??
-      findModeByAliases(modeState.availableModes, ACP_IMPLEMENT_MODE_ALIASES)?.id ??
-      modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
-      modeState.currentModeId
-    );
-  }
-
-  return (
-    findModeByAliases(modeState.availableModes, ACP_IMPLEMENT_MODE_ALIASES)?.id ??
-    findModeByAliases(modeState.availableModes, ACP_APPROVAL_MODE_ALIASES)?.id ??
-    modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
-    modeState.currentModeId
-  );
 }
 
 function resolveDroidSessionCwd(
@@ -608,9 +552,31 @@ export function makeDroidAdapter(
         return ctx.activeTurnId;
       });
 
+    // Holds the active-turn window open until session/update events that were
+    // already enqueued when the prompt response resolved have been fully
+    // handled by the notification consumer, so they settle with their turn
+    // attribution (and recorded failed-tool detail) intact. Snapshotting the
+    // runtime's enqueued count and waiting for the adapter's processed count
+    // to catch up is immune to stream chunk buffering and in-flight handlers,
+    // unlike a queue-size probe. Returns immediately when the consumer kept
+    // up; bounded so a chatty stream cannot stall settlement past the cap.
+    const waitForDroidQueuedTurnEventsDrained = (ctx: DroidSessionContext) =>
+      Effect.gen(function* () {
+        const target = yield* ctx.acp.sessionUpdatesEnqueuedCount;
+        const startedAt = Date.now();
+        while (
+          ctx.sessionUpdatesProcessed < target &&
+          Date.now() - startedAt < DROID_TURN_SETTLE_DRAIN_MAX_WAIT_MS
+        ) {
+          yield* Effect.sleep(DROID_TURN_SETTLE_DRAIN_POLL_MS);
+        }
+      });
+
     // On session/load, Droid can replay old ACP updates after the session is "ready".
-    // Wait for that stream to go quiet so the next user turn cannot inherit stale chunks.
-    const waitForDroidResumeReplayQuiet = (ctx: DroidSessionContext) =>
+    // Keep suppression active until that stream actually goes quiet — clearing it
+    // on a fixed timeout lets late historical deltas leak into the first turn as
+    // its content. The hard cap only guards against a replay that never settles.
+    const settleDroidResumeReplayWhenQuiet = (ctx: DroidSessionContext) =>
       Effect.gen(function* () {
         const ready = ctx.resumeReplayReady;
         if (ready === undefined) {
@@ -625,9 +591,9 @@ export function makeDroidAdapter(
           const elapsedMs = now - startedAt;
           if (
             quietForMs >= DROID_RESUME_REPLAY_QUIET_MS ||
-            elapsedMs >= DROID_RESUME_REPLAY_MAX_WAIT_MS
+            elapsedMs >= DROID_RESUME_REPLAY_HARD_TIMEOUT_MS
           ) {
-            const timedOut = elapsedMs >= DROID_RESUME_REPLAY_MAX_WAIT_MS;
+            const timedOut = elapsedMs >= DROID_RESUME_REPLAY_HARD_TIMEOUT_MS;
             ctx.resumeReplayReady = undefined;
             ctx.resumeReplayLastSuppressedAt = undefined;
             if (timedOut) {
@@ -869,6 +835,9 @@ export function makeDroidAdapter(
             resumeReplayReady,
             resumeReplayLastSuppressedAt: resumeReplayReady !== undefined ? Date.now() : undefined,
             latestSessionCostUsd: undefined,
+            sessionUpdatesProcessed: 0,
+            turnStarting: false,
+            pendingTurnInterrupted: false,
             stopped: false,
           };
 
@@ -1007,7 +976,16 @@ export function makeDroidAdapter(
                     }
                     return;
                 }
-              }),
+              }).pipe(
+                // Bump the processed count only after the handler fully ran, so
+                // waitForDroidQueuedTurnEventsDrained cannot observe an event as
+                // consumed while its state updates are still being applied.
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    ctx.sessionUpdatesProcessed += 1;
+                  }),
+                ),
+              ),
             ),
           ).pipe(Effect.forkChild);
 
@@ -1015,8 +993,16 @@ export function makeDroidAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          if (resumeSessionId !== undefined) {
-            yield* waitForDroidResumeReplayQuiet(ctx);
+          if (resumeReplayReady !== undefined) {
+            // Settle the replay in the background: suppression stays active until
+            // the stream is genuinely quiet, while startup only blocks briefly so
+            // a long replay cannot hold session startup hostage. sendTurn awaits
+            // the deferred, so the first turn stays gated until the replay has
+            // actually finished.
+            yield* settleDroidResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
+            yield* Deferred.await(resumeReplayReady).pipe(
+              Effect.timeoutOption(DROID_RESUME_REPLAY_MAX_WAIT_MS),
+            );
           }
 
           yield* offerRuntimeEvent({
@@ -1094,8 +1080,44 @@ export function makeDroidAdapter(
     const sendTurn: DroidAdapterShape["sendTurn"] = (input) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(input.threadId);
+        // A second sendTurn entering while another turn is still starting would
+        // clear that turn's pendingTurnInterrupted flag (letting a cancelled
+        // turn dispatch anyway) and race two ACP prompts; reject it instead.
+        if (ctx.turnStarting) {
+          return yield* new ProviderAdapterValidationError({
+            provider: PROVIDER,
+            operation: "sendTurn",
+            issue: "Another Droid turn is still starting for this thread.",
+          });
+        }
+        ctx.turnStarting = true;
+        ctx.pendingTurnInterrupted = false;
+        return yield* startDroidTurn(ctx, input).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              ctx.turnStarting = false;
+            }),
+          ),
+        );
+      });
+
+    const startDroidTurn = (
+      ctx: DroidSessionContext,
+      input: Parameters<DroidAdapterShape["sendTurn"]>[0],
+    ) =>
+      Effect.gen(function* () {
         if (ctx.resumeReplayReady !== undefined) {
           yield* Deferred.await(ctx.resumeReplayReady);
+        }
+        // The gate above is resolved by stopSessionInternal too (a failed or
+        // stopped startup must not strand waiters); a turn that was blocked on
+        // it must fail here instead of emitting lifecycle events for a dead
+        // session.
+        if (ctx.stopped) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
         }
         const turnId = TurnId.makeUnsafe(crypto.randomUUID());
         const turnModelSelection =
@@ -1161,6 +1183,15 @@ export function makeDroidAdapter(
           });
         }
 
+        // A stop can land while the replay gate or attachment reads above were
+        // in flight; opening the turn now would publish turn.started (and a
+        // phantom cancelled completion) for a session that already exited.
+        if (ctx.stopped) {
+          return yield* new ProviderAdapterSessionNotFoundError({
+            provider: PROVIDER,
+            threadId: input.threadId,
+          });
+        }
         ctx.activeTurnId = turnId;
         ctx.activeTurnHadAssistantContent = false;
         ctx.activeAssistantItemsWithContent.clear();
@@ -1185,13 +1216,24 @@ export function makeDroidAdapter(
           payload: { ...(model ? { model } : {}) },
         });
 
-        const runPrompt = ctx.acp.prompt({ prompt: promptParts }).pipe(
+        const runPrompt = Effect.suspend(() =>
+          // interruptTurn during the pre-prompt waits (resume replay, attachment
+          // reads) or between turn.started publishing and this fiber being
+          // registered sets pendingTurnInterrupted; honor it (and a concurrent
+          // stop) here so a cancelled turn is never prompted. Self-interrupting
+          // routes through the onInterrupt branch below, which completes the
+          // turn as cancelled rather than as a provider failure.
+          ctx.pendingTurnInterrupted || ctx.stopped
+            ? Effect.interrupt
+            : ctx.acp.prompt({ prompt: promptParts }),
+        ).pipe(
           Effect.mapError((error) =>
             mapAcpToAdapterError(PROVIDER, input.threadId, "session/prompt", error),
           ),
           Effect.matchEffect({
             onFailure: (error) =>
               Effect.gen(function* () {
+                yield* waitForDroidQueuedTurnEventsDrained(ctx);
                 if (!clearDroidActiveTurn(ctx, turnId)) {
                   return;
                 }
@@ -1221,6 +1263,9 @@ export function makeDroidAdapter(
               }),
             onSuccess: (result) =>
               Effect.gen(function* () {
+                // Drain BEFORE snapshotting turn state: queued events may still
+                // set activeTurnFailedToolDetail or assistant-content flags.
+                yield* waitForDroidQueuedTurnEventsDrained(ctx);
                 const hadAssistantContent = ctx.activeTurnHadAssistantContent;
                 const failedToolDetail = ctx.activeTurnFailedToolDetail;
                 if (!clearDroidActiveTurn(ctx, turnId)) {
@@ -1324,6 +1369,12 @@ export function makeDroidAdapter(
     const interruptTurn: DroidAdapterShape["interruptTurn"] = (threadId) =>
       Effect.gen(function* () {
         const ctx = yield* requireSession(threadId);
+        // A turn that is still starting has no prompt fiber to interrupt yet
+        // (it may be gated on resume replay); flag it so startDroidTurn aborts
+        // before prompting instead of running the cancelled turn anyway.
+        if (ctx.turnStarting && ctx.activePromptFiber === undefined) {
+          ctx.pendingTurnInterrupted = true;
+        }
         yield* settlePendingApprovalsAsCancelled(ctx.pendingApprovals);
         yield* settlePendingUserInputsAsEmptyAnswers(ctx.pendingUserInputs);
         const activePromptFiber = ctx.activePromptFiber;
