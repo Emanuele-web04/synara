@@ -1507,6 +1507,30 @@ it.layer(TestLayer)("git integration", (it) => {
       }),
     );
 
+    it.effect("does not resolve upstream before rejecting non-repository directories", () =>
+      Effect.gen(function* () {
+        const operations: string[] = [];
+        const core = yield* makeIsolatedGitCore((input) =>
+          Effect.sync(() => {
+            operations.push(input.operation);
+            if (input.operation === "GitCore.statusDetails.isInsideWorkTree") {
+              return {
+                code: 128,
+                stdout: "",
+                stderr: "fatal: not a git repository",
+              };
+            }
+            throw new Error(`Unexpected git command: ${input.operation}`);
+          }),
+        );
+
+        const details = yield* core.statusDetails("C:\\Users\\Windows");
+
+        expect(details.isRepo).toBe(false);
+        expect(operations).toEqual(["GitCore.statusDetails.isInsideWorkTree"]);
+      }),
+    );
+
     it.effect("reports the tracked branch name without the remote prefix", () =>
       Effect.gen(function* () {
         const remote = yield* makeTmpDir();

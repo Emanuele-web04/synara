@@ -1300,6 +1300,22 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
     const statusDetails: GitCoreShape["statusDetails"] = (cwd) =>
       Effect.gen(function* () {
+        const isInsideWorkTree = yield* executeGit(
+          "GitCore.statusDetails.isInsideWorkTree",
+          cwd,
+          ["rev-parse", "--is-inside-work-tree"],
+          {
+            allowNonZeroExit: true,
+            timeoutMs: 5_000,
+          },
+        ).pipe(
+          Effect.map((result) => result.code === 0 && result.stdout.trim() === "true"),
+          Effect.catch(() => Effect.succeed(false)),
+        );
+        if (!isInsideWorkTree) {
+          return NON_REPOSITORY_STATUS_DETAILS;
+        }
+
         yield* refreshStatusUpstreamIfStale(cwd).pipe(
           Effect.catchIf(isMissingGitCwdError, () => Effect.void),
           Effect.ignoreCause({ log: true }),
