@@ -122,6 +122,7 @@ import ClaudeTokenAccountingMigration from "./Migrations/103_ClaudeTokenAccounti
 import Migration0104 from "./Migrations/104_ProjectionThreadSessionProviderInstance.ts";
 import Migration0105 from "./Migrations/105_ProviderSessionRuntimeInstanceId.ts";
 import Migration0106 from "./Migrations/106_ProfileStatsDeletedProviderInstances.ts";
+import Migration0107 from "./Migrations/107_ClearAutomationDefinitionProviderOptions.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -244,6 +245,7 @@ export const migrationEntries = [
   [104, "ProjectionThreadSessionProviderInstance", Migration0104],
   [105, "ProviderSessionRuntimeInstanceId", Migration0105],
   [106, "ProfileStatsDeletedProviderInstances", Migration0106],
+  [107, "ClearAutomationDefinitionProviderOptions", Migration0107],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

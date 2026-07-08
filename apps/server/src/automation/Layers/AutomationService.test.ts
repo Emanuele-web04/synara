@@ -1292,6 +1292,19 @@ layer("AutomationService", (it) => {
           },
         },
       });
+      assert.strictEqual(created.providerOptions, undefined);
+      assert.ok(!JSON.stringify(created).includes("must-not-leak"));
+
+      const updated = yield* service.update({
+        id: created.id,
+        providerOptions: {
+          codex: {
+            environment: { UPDATED_STALE_SECRET: "must-not-persist" },
+          },
+        },
+      });
+      assert.strictEqual(updated.providerOptions, undefined);
+      assert.ok(!JSON.stringify(updated).includes("must-not-persist"));
 
       yield* service.runNow({ automationId: created.id });
 
@@ -1307,6 +1320,9 @@ layer("AutomationService", (it) => {
       assert.strictEqual(turnStart.providerOptions, undefined);
       assert.ok(!JSON.stringify(turnStart).includes("super-secret"));
       const listed = yield* service.list({ projectId });
+      const listedDefinition = listed.definitions.find((entry) => entry.id === created.id);
+      assert.strictEqual(listedDefinition?.providerOptions, undefined);
+      assert.ok(!JSON.stringify(listedDefinition).includes("must-not-persist"));
       const run = listed.runs.find((entry) => entry.automationId === created.id);
       assert.strictEqual(run?.permissionSnapshot.providerOptions, undefined);
       assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("super-secret"));

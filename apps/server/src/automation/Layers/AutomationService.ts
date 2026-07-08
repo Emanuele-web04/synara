@@ -421,6 +421,16 @@ function hasOwn<T extends object, K extends PropertyKey>(
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+// Instance-backed automations resolve launch options from current server settings.
+// Client-supplied snapshots can be stale or contain secrets, so they never belong
+// in the persisted definition or any definition event sent back to clients.
+function withoutAutomationProviderOptions<
+  T extends { readonly providerOptions?: ProviderStartOptions },
+>(value: T): Omit<T, "providerOptions"> {
+  const { providerOptions: _providerOptions, ...withoutProviderOptions } = value;
+  return withoutProviderOptions;
+}
+
 function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAllowedCapability[] {
   const capabilities: AutomationAllowedCapability[] = ["send-turn"];
   if (definition.worktreeMode !== "local") {
@@ -608,7 +618,6 @@ function mergeDefinitionUpdate(
       : input.schedule
         ? safeComputeNextRunAt(schedule, now, current.nextRunAt, jitterContext)
         : (current.nextRunAt ?? safeComputeNextRunAt(schedule, now, null, jitterContext));
-  const providerOptions = input.providerOptions ?? current.providerOptions;
   const mode = input.mode ?? current.mode;
   const currentCompletionPolicy = completionPolicyForDefinition(current);
   const completionPolicy = input.completionPolicy ?? currentCompletionPolicy;
@@ -689,7 +698,7 @@ function mergeDefinitionUpdate(
     updatedAt: now,
   };
 
-  return providerOptions ? { ...nextDefinition, providerOptions } : nextDefinition;
+  return withoutAutomationProviderOptions(nextDefinition);
 }
 
 type ThreadEnvironment = {
@@ -2738,8 +2747,9 @@ export const AutomationServiceLive = Layer.effect(
           now,
           jitterContextFor(id),
         );
+        const persistenceInput = withoutAutomationProviderOptions(normalizedInput);
         const definition = yield* automationRepository
-          .createDefinition({ id, input: normalizedInput, now, nextRunAt: initialNextRunAt })
+          .createDefinition({ id, input: persistenceInput, now, nextRunAt: initialNextRunAt })
           .pipe(Effect.mapError(toServiceError("Failed to create automation.")));
         const normalized = yield* normalizeCreatedDefinitionSchedule(definition, now).pipe(
           Effect.mapError(toServiceError("Failed to initialize automation schedule.")),

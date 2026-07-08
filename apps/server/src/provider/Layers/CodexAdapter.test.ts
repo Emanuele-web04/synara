@@ -322,7 +322,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
     }),
   );
 
-  it.effect("lists generated-image homes from live session Codex options", () =>
+  it.effect("lists only explicit generated-image homes from live session Codex options", () =>
     Effect.gen(function* () {
       const now = new Date().toISOString();
       const originalSynaraHome = process.env.SYNARA_HOME;
@@ -333,6 +333,14 @@ validationLayer("CodexAdapterLive validation", (it) => {
           status: "ready",
           runtimeMode: "full-access",
           threadId: asThreadId("thread-live-work"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-without-context"),
           createdAt: now,
           updatedAt: now,
         },
