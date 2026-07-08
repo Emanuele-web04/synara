@@ -129,6 +129,19 @@ describe("monitorBackendStartupHealth", () => {
     expect(onReady).not.toHaveBeenCalled();
   });
 
+  it("does not report readiness when the health monitor fails", async () => {
+    const onReady = vi.fn();
+
+    monitorBackendStartupHealth({
+      waitUntilReady: () => Promise.reject(new Error("health readiness timed out")),
+      isCurrent: () => true,
+      onReady,
+    });
+    await Promise.resolve();
+
+    expect(onReady).not.toHaveBeenCalled();
+  });
+
   it("requires a successful health response with startupReady enabled", async () => {
     await expect(
       isBackendStartupReadyResponse(

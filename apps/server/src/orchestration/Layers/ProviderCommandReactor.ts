@@ -1986,7 +1986,14 @@ const make = Effect.gen(function* () {
         issue: `Thread '${threadId}' is bound to provider instance '${currentProviderInstanceId}' and cannot switch to '${desiredProviderInstanceId}'.`,
       });
     }
-    if (desiredProviderInstance && !desiredProviderInstance.enabled) {
+    if (!desiredProviderInstance) {
+      return yield* new ProviderAdapterValidationError({
+        provider: desiredProvider,
+        operation: "thread.turn.start",
+        issue: `Unknown provider instance '${desiredProviderInstanceId}'.`,
+      });
+    }
+    if (!desiredProviderInstance.enabled) {
       return yield* new ProviderAdapterValidationError({
         provider: preferredProvider,
         operation: "thread.turn.start",
@@ -2002,7 +2009,7 @@ const make = Effect.gen(function* () {
     }
     const resolvedProviderOptions = mergeProviderStartOptions(
       providerStartOptionsFromServerSettings(settings),
-      desiredProviderInstance?.driver === preferredProvider
+      desiredProviderInstance.driver === preferredProvider
         ? providerStartOptionsFromInstance(desiredProviderInstance)
         : undefined,
     );
