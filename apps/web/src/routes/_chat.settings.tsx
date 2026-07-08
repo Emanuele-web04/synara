@@ -980,25 +980,17 @@ function SettingsRouteView() {
     activeProjectCwd: null,
     serverCwd: serverConfigQuery.data?.cwd ?? null,
   });
-  const { modelOptionsByProvider: gitWritingCatalogOptionsByProvider } = useProviderModelCatalog({
-    selectedProvider: currentGitTextGenerationProvider,
-    discoveryEnabled: activeSection === "models",
-    cwd: providerModelDiscoveryCwd,
-    modelHintByProvider: gitWritingModelHintByProvider,
-  });
+  const { modelOptionsByProviderInstance: gitWritingCatalogOptionsByProviderInstance } =
+    useProviderModelCatalog({
+      selectedProvider: currentGitTextGenerationProvider,
+      selectedProviderInstanceId: currentGitTextGenerationInstanceId,
+      discoveryEnabled: activeSection === "models",
+      cwd: providerModelDiscoveryCwd,
+      modelHintByProvider: gitWritingModelHintByProvider,
+    });
   const gitTextGenerationModelOptions = useMemo(
-    () =>
-      getGitTextGenerationPickerOptions(settings, {
-        codex: gitWritingCatalogOptionsByProvider.codex,
-        kilo: gitWritingCatalogOptionsByProvider.kilo,
-        opencode: gitWritingCatalogOptionsByProvider.opencode,
-      }),
-    [
-      gitWritingCatalogOptionsByProvider.codex,
-      gitWritingCatalogOptionsByProvider.kilo,
-      gitWritingCatalogOptionsByProvider.opencode,
-      settings,
-    ],
+    () => getGitTextGenerationPickerOptions(settings, gitWritingCatalogOptionsByProviderInstance),
+    [gitWritingCatalogOptionsByProviderInstance, settings],
   );
   const currentGitTextGenerationValue = `${currentGitTextGenerationInstanceId}:${currentGitTextGenerationProvider}:${currentGitTextGenerationModel}`;
   const defaultGitTextGenerationProvider = defaults.textGenerationProvider ?? "codex";

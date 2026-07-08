@@ -893,10 +893,9 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
           if (Option.isNone(existingRow)) {
             return;
           }
-          // The provider reactor may still reject an instance switch for a
-          // bound thread after this event is projected. Only adopt a selection
-          // routed at another instance on a fresh thread, so a rejected switch
-          // cannot overwrite the thread's working selection.
+          // Mirror the in-memory projector's binding guard: terminal sessions
+          // can move to another instance, while live sessions only accept the
+          // instance they are already bound to.
           const [messages, session] = yield* Effect.all([
             projectionThreadMessageRepository.listByThreadId({
               threadId: event.payload.threadId,
@@ -909,11 +908,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             existingRow.value.latestTurnId === null &&
             Option.isNone(session) &&
             messages.length <= 1;
+          const requestedInstanceId =
+            event.payload.modelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(event.payload.modelSelection);
+          const canAdoptProjectedSessionInstance = Option.isSome(session)
+            ? session.value.status === "stopped" ||
+              session.value.status === "error" ||
+              (session.value.providerInstanceId ?? session.value.providerName) === null ||
+              requestedInstanceId ===
+                (session.value.providerInstanceId ?? session.value.providerName)
+            : requestedInstanceId ===
+                resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+              canAdoptFirstTurnInstance;
           const modelSelectionPatch =
-            event.payload.modelSelection !== undefined &&
-            (resolveModelSelectionInstanceId(event.payload.modelSelection) ===
-              resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
-              canAdoptFirstTurnInstance)
+            event.payload.modelSelection !== undefined && canAdoptProjectedSessionInstance
               ? { modelSelection: event.payload.modelSelection }
               : {};
           yield* projectionThreadRepository.upsert({

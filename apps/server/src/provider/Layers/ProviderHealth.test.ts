@@ -370,6 +370,39 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(workCodex?.authLabel, "Work Account");
     });
 
+    it("does not project a cached status after its instance id changes drivers", () => {
+      const statuses = projectProviderStatusesForSettings(
+        [
+          {
+            ...cachedReadyCodexStatus,
+            instanceId: "work",
+            displayName: "Codex Work",
+            authType: "chatgpt",
+            authLabel: "Old Codex Account",
+          },
+        ],
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providerInstances: {
+            work: {
+              driver: "claudeAgent",
+              displayName: "Claude Work",
+            },
+          },
+        },
+        "2026-06-16T12:05:00.000Z",
+      );
+
+      const work = statuses.find((status) => status.instanceId === "work");
+      assert.strictEqual(work?.provider, "claudeAgent");
+      assert.strictEqual(work?.driver, "claudeAgent");
+      assert.strictEqual(work?.status, "warning");
+      assert.strictEqual(work?.available, false);
+      assert.strictEqual(work?.authStatus, "unknown");
+      assert.strictEqual(work?.authLabel, undefined);
+      assert.strictEqual(work?.message, "Provider instance has not been checked yet.");
+    });
+
     it("projects unsupported provider instances as unavailable shadows", () => {
       const statuses = projectProviderStatusesForSettings(
         [cachedReadyCodexStatus],
@@ -666,6 +699,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
           [unavailableStatus],
         ),
         [unavailableStatus],
+      );
+    });
+
+    it("does not stabilize a reused instance id against another driver's status", () => {
+      const previousCodex = {
+        ...cachedReadyCodexStatus,
+        instanceId: "work",
+      } satisfies ServerProviderStatus;
+      const claudeTimeout = {
+        provider: "claudeAgent",
+        instanceId: "work",
+        driver: "claudeAgent",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-06-04T17:01:00.000Z",
+        message: "Could not verify Claude authentication status. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+
+      assert.deepStrictEqual(
+        stabilizeProviderStatusesAgainstTransientTimeouts([previousCodex], [claudeTimeout]),
+        [claudeTimeout],
       );
     });
 

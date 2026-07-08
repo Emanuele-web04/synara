@@ -141,11 +141,24 @@ function providerStatusInstanceKey(status: ServerProviderStatus): ProviderInstan
   return status.instanceId ?? status.provider;
 }
 
+// Instance ids are editable settings keys, so driver identity must travel with
+// them to prevent a reused id from inheriting another provider's auth/status.
+function providerStatusIdentityKey(status: ServerProviderStatus): string {
+  return `${status.driver ?? status.provider}\u0000${providerStatusInstanceKey(status)}`;
+}
+
 function providerStatusKey(input: {
   readonly provider: ProviderKind;
   readonly instanceId?: ProviderInstanceId | undefined;
 }): ProviderInstanceId {
   return input.instanceId ?? input.provider;
+}
+
+function providerTargetIdentityKey(input: {
+  readonly provider: ProviderKind;
+  readonly instanceId?: ProviderInstanceId | undefined;
+}): string {
+  return `${input.provider}\u0000${providerStatusKey(input)}`;
 }
 
 function isClaudeNativeCommandPath(commandPath: string): boolean {
@@ -2087,11 +2100,11 @@ export function stabilizeProviderStatusesAgainstTransientTimeouts(
   }
 
   const previousByInstance = new Map(
-    previousStatuses.map((status) => [providerStatusInstanceKey(status), status] as const),
+    previousStatuses.map((status) => [providerStatusIdentityKey(status), status] as const),
   );
 
   return nextStatuses.map((status) => {
-    const previous = previousByInstance.get(providerStatusInstanceKey(status));
+    const previous = previousByInstance.get(providerStatusIdentityKey(status));
     if (
       !previous ||
       !wasPreviouslyUsableProviderStatus(previous) ||
@@ -2155,7 +2168,9 @@ function projectStatusForProviderInstance(
     displayName: instance.displayName,
     enabled: instance.enabled,
   } satisfies ServerProviderStatus;
-  const isExactInstanceStatus = providerStatusInstanceKey(status) === instance.instanceId;
+  const isExactInstanceStatus =
+    providerStatusInstanceKey(status) === instance.instanceId &&
+    (status.driver ?? status.provider) === instance.driver;
   if (isExactInstanceStatus || instance.isDefault || status.authStatus === "unknown") {
     return projected;
   }
@@ -2216,10 +2231,19 @@ function mergeProviderStatusUpdates(
   updatedStatuses: ReadonlyArray<ServerProviderStatus>,
 ): ProviderStatuses {
   const statusByInstance = new Map(
-    previousStatuses.map((status) => [providerStatusInstanceKey(status), status] as const),
+    previousStatuses.map((status) => [providerStatusIdentityKey(status), status] as const),
   );
   for (const status of updatedStatuses) {
-    statusByInstance.set(providerStatusInstanceKey(status), status);
+    const instanceId = providerStatusInstanceKey(status);
+    for (const [key, previous] of statusByInstance) {
+      if (
+        providerStatusInstanceKey(previous) === instanceId &&
+        providerStatusIdentityKey(previous) !== providerStatusIdentityKey(status)
+      ) {
+        statusByInstance.delete(key);
+      }
+    }
+    statusByInstance.set(providerStatusIdentityKey(status), status);
   }
   return orderProviderStatuses([...statusByInstance.values()]);
 }
@@ -2255,7 +2279,7 @@ export function projectProviderStatusesForSettings(
   checkedAt = new Date().toISOString(),
 ): ProviderStatuses {
   const statusByInstance = new Map(
-    statuses.map((status) => [providerStatusInstanceKey(status), status] as const),
+    statuses.map((status) => [providerStatusIdentityKey(status), status] as const),
   );
   const instancesByProvider = new Map<ProviderKind, ReturnType<typeof deriveProviderInstances>>();
   for (const instance of deriveProviderInstances(settings)) {
@@ -2287,7 +2311,9 @@ export function projectProviderStatusesForSettings(
       }
     };
 
-    const defaultStatus = statusByInstance.get(provider);
+    const defaultStatus = statusByInstance.get(
+      providerTargetIdentityKey({ provider, instanceId: provider }),
+    );
     if (instances.every((instance) => !instance.enabled)) {
       const disabledStatus = makeDisabledProviderStatus(
         provider,
@@ -2309,7 +2335,12 @@ export function projectProviderStatusesForSettings(
     }
 
     for (const instance of instances) {
-      const exactStatus = statusByInstance.get(instance.instanceId);
+      const exactStatus = statusByInstance.get(
+        providerTargetIdentityKey({
+          provider: instance.driver,
+          instanceId: instance.instanceId,
+        }),
+      );
       const status = exactStatus ?? (instance.isDefault ? defaultStatus : undefined);
       if (!instance.enabled) {
         projected.push({
@@ -2406,9 +2437,9 @@ export const ProviderHealthLive = Layer.effect(
     );
 
     const statusesRef = yield* Ref.make<ProviderStatuses>(cachedStatuses);
-    const updateStatesRef = yield* Ref.make<
-      ReadonlyMap<ProviderInstanceId, ServerProviderUpdateState>
-    >(new Map());
+    const updateStatesRef = yield* Ref.make<ReadonlyMap<string, ServerProviderUpdateState>>(
+      new Map(),
+    );
     const refreshFiberRef = yield* Ref.make<Fiber.Fiber<ProviderStatuses, never> | null>(null);
     const commandCoordinator = yield* makeProviderMaintenanceCommandCoordinator({
       makeAlreadyRunningError: (provider) =>
@@ -2536,7 +2567,7 @@ export const ProviderHealthLive = Layer.effect(
       status: ServerProviderStatus,
     ) {
       const updateStates = yield* Ref.get(updateStatesRef);
-      const updateState = updateStates.get(providerStatusInstanceKey(status));
+      const updateState = updateStates.get(providerStatusIdentityKey(status));
       if (!updateState) {
         const { updateState: _updateState, ...statusWithoutUpdateState } = status;
         return statusWithoutUpdateState;
@@ -2593,7 +2624,7 @@ export const ProviderHealthLive = Layer.effect(
       },
       state: ServerProviderUpdateState | null,
     ) {
-      const key = providerStatusKey(target);
+      const key = providerTargetIdentityKey(target);
       yield* Ref.update(updateStatesRef, (previous) => {
         const next = new Map(previous);
         if (!state || state.status === "idle") {

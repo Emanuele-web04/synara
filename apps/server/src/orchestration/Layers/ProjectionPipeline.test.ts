@@ -394,6 +394,147 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       });
     }),
   );
+
+  it.effect("lets terminal sessions adopt a different provider instance", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-07-08T10:00:00.000Z";
+      const sessionUpdatedAt = "2026-07-08T10:00:01.000Z";
+      const turnRequestedAt = "2026-07-08T10:00:02.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.makeUnsafe("evt-terminal-account-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.makeUnsafe("project-terminal-account"),
+        occurredAt: createdAt,
+        commandId: CommandId.makeUnsafe("cmd-terminal-account-project"),
+        causationEventId: null,
+        correlationId: CommandId.makeUnsafe("cmd-terminal-account-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.makeUnsafe("project-terminal-account"),
+          title: "Project",
+          workspaceRoot: "/tmp/project-terminal-account",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      for (const status of ["stopped", "error"] as const) {
+        const threadId = ThreadId.makeUnsafe(`thread-terminal-account-${status}`);
+
+        yield* eventStore.append({
+          type: "thread.created",
+          eventId: EventId.makeUnsafe(`evt-terminal-account-${status}-thread`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: createdAt,
+          commandId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-thread`),
+          causationEventId: null,
+          correlationId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-thread`),
+          metadata: {},
+          payload: {
+            threadId,
+            projectId: ProjectId.makeUnsafe("project-terminal-account"),
+            title: `Thread ${status}`,
+            modelSelection: {
+              instanceId: "codex_personal",
+              model: "gpt-5.4",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.session-set",
+          eventId: EventId.makeUnsafe(`evt-terminal-account-${status}-session`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: sessionUpdatedAt,
+          commandId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-session`),
+          causationEventId: null,
+          correlationId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-session`),
+          metadata: {},
+          payload: {
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              providerInstanceId: "codex_personal",
+              runtimeMode: "full-access",
+              activeTurnId: null,
+              lastError: status === "error" ? "provider failed" : null,
+              updatedAt: sessionUpdatedAt,
+            },
+          },
+        });
+
+        yield* eventStore.append({
+          type: "thread.turn-start-requested",
+          eventId: EventId.makeUnsafe(`evt-terminal-account-${status}-start`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: turnRequestedAt,
+          commandId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-start`),
+          causationEventId: null,
+          correlationId: CommandId.makeUnsafe(`cmd-terminal-account-${status}-start`),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.makeUnsafe(`message-terminal-account-${status}`),
+            modelSelection: {
+              instanceId: "codex_work",
+              model: "gpt-5.4",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: turnRequestedAt,
+          },
+        });
+      }
+
+      yield* projectionPipeline.bootstrap;
+
+      const rows = yield* sql<{
+        readonly threadId: string;
+        readonly modelSelectionJson: string;
+      }>`
+        SELECT
+          thread_id AS "threadId",
+          model_selection_json AS "modelSelectionJson"
+        FROM projection_threads
+        WHERE thread_id LIKE 'thread-terminal-account-%'
+        ORDER BY thread_id ASC
+      `;
+
+      assert.deepEqual(
+        rows.map((row) => ({
+          threadId: row.threadId,
+          modelSelection: JSON.parse(row.modelSelectionJson),
+        })),
+        [
+          {
+            threadId: "thread-terminal-account-error",
+            modelSelection: { instanceId: "codex_work", model: "gpt-5.4" },
+          },
+          {
+            threadId: "thread-terminal-account-stopped",
+            modelSelection: { instanceId: "codex_work", model: "gpt-5.4" },
+          },
+        ],
+      );
+    }),
+  );
 });
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-base-")))(

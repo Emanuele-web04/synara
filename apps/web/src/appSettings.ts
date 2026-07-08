@@ -1533,11 +1533,8 @@ export function getGitTextGenerationPickerOptions(
     | "textGenerationProvider"
     | "textGenerationProviderInstanceId"
   >,
-  discoveredOptionsByProvider?: Partial<
-    Record<
-      GitTextGenerationDiscoveredProvider,
-      ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>
-    >
+  discoveredOptionsByProviderInstance?: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
   >,
 ): GitTextGenerationModelPickerOption[] {
   const selectedModel = settings.textGenerationModel?.trim();
@@ -1568,7 +1565,7 @@ export function getGitTextGenerationPickerOptions(
       : undefined;
     const catalogOptions = isGitTextGenerationDiscoveredProvider(instance.provider)
       ? (() => {
-          const discoveredOptions = discoveredOptionsByProvider?.[instance.provider];
+          const discoveredOptions = discoveredOptionsByProviderInstance?.[instance.instanceId];
           return discoveredOptions
             ? mapCatalogModelOptionsToAppModelOptions(instance.provider, discoveredOptions)
             : null;
