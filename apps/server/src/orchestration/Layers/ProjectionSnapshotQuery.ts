@@ -19,6 +19,7 @@ import {
   ProjectKind,
   ProviderMentionReference,
   ProviderSkillReference,
+  STUDIO_OUTPUTS_ACTIVITY_KIND,
   ThreadId,
   ThreadEnvironmentMode,
   TurnDispatchMode,
@@ -59,6 +60,7 @@ import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import {
   ProjectionSnapshotQuery,
   type ProjectionFullThreadDiffContext,
+  type ProjectionGeneratedImageActivityRecord,
   type ProjectionSnapshotCounts,
   type ProjectionSnapshotSequence,
   type ProjectionThreadCheckpointContext,
@@ -73,6 +75,8 @@ const decodeModelSelection = Schema.decodeUnknownEffect(ModelSelection);
 const ModelSelectionJsonUnknown = Schema.fromJsonString(Schema.Unknown);
 const MAX_THREAD_MESSAGES = 2_000;
 const MAX_THREAD_ACTIVITIES = 500;
+const MAX_THREAD_FILE_CHANGE_ACTIVITIES = 2_000;
+const MAX_TURN_GENERATED_IMAGE_ACTIVITY_RECORDS = 64;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(ModelSelectionJsonUnknown),
@@ -129,6 +133,13 @@ const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
   }),
 );
+const ProjectionFileChangeActivityPayloadDbRowSchema = Schema.Struct({
+  payload: Schema.fromJsonString(Schema.Unknown),
+});
+const ProjectionGeneratedImageActivityDbRowSchema = Schema.Struct({
+  kind: Schema.String,
+  payload: Schema.fromJsonString(Schema.Unknown),
+});
 const ProjectionLatestTurnDbRowSchema = Schema.Struct({
   threadId: ProjectionThread.fields.threadId,
   turnId: TurnId,
@@ -153,6 +164,10 @@ const ProjectIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const ThreadTurnLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
 });
 const ThreadMessagesByThreadLookupInput = Schema.Struct({
   threadId: ThreadId,
@@ -1473,6 +1488,53 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  // File-change tool payloads and captured per-turn Studio outputs remain available in
+  // non-Git workspaces, where checkpoint capture intentionally does not run. Studio output
+  // attribution requests this narrow slice.
+  const listFileChangeActivityPayloadsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionFileChangeActivityPayloadDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        SELECT payload_json AS "payload"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND (
+            (kind = 'tool.completed' AND json_extract(payload_json, '$.itemType') = 'file_change')
+            OR kind = ${STUDIO_OUTPUTS_ACTIVITY_KIND}
+          )
+        ORDER BY created_at DESC, activity_id DESC
+        LIMIT ${MAX_THREAD_FILE_CHANGE_ACTIVITIES}
+      `,
+  });
+
+  // Generated-image references are recovered at turn settlement. Keep this query
+  // independent of the 500-row thread-detail activity window: a long-running turn
+  // can emit far more tool activities before its terminal event arrives.
+  const listGeneratedImageActivityRowsByTurn = SqlSchema.findAll({
+    Request: ThreadTurnLookupInput,
+    Result: ProjectionGeneratedImageActivityDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT kind, payload_json AS "payload"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND (
+            (kind = 'tool.completed' AND json_extract(payload_json, '$.itemType') = 'image_generation')
+            OR (
+              kind = ${STUDIO_OUTPUTS_ACTIVITY_KIND}
+              AND json_type(payload_json, '$.data.generatedImage') = 'object'
+            )
+          )
+        -- Provider replay can project the same completion more than once. Collapse
+        -- exact payload duplicates before applying the two-records-per-image cap.
+        GROUP BY kind, payload_json
+        ORDER BY MIN(created_at) ASC, MIN(activity_id) ASC
+        LIMIT ${MAX_TURN_GENERATED_IMAGE_ACTIVITY_RECORDS}
+      `,
+  });
+
   const getFullThreadDiffContextRow = SqlSchema.findOneOption({
     Request: FullThreadDiffContextLookupInput,
     Result: ProjectionFullThreadDiffContextRowSchema,
@@ -1980,6 +2042,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
 
   const getThreadCheckpointContext: ProjectionSnapshotQueryShape["getThreadCheckpointContext"] = (
     threadId,
+    options,
   ) =>
     Effect.gen(function* () {
       const threadRow = yield* getThreadCheckpointContextThreadRow({ threadId }).pipe(
@@ -2002,6 +2065,17 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           ),
         ),
       );
+      const fileChangeActivityPayloads = options?.includeFileChangeActivityPayloads
+        ? yield* listFileChangeActivityPayloadsByThread({ threadId }).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getThreadCheckpointContext:listFileChangeActivities:query",
+                "ProjectionSnapshotQuery.getThreadCheckpointContext:listFileChangeActivities:decodeRows",
+              ),
+            ),
+            Effect.map((rows) => rows.map((row) => row.payload)),
+          )
+        : undefined;
 
       return Option.some({
         threadId: threadRow.value.threadId,
@@ -2021,8 +2095,24 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             completedAt: row.completedAt,
           }),
         ),
+        ...(fileChangeActivityPayloads ? { fileChangeActivityPayloads } : {}),
       });
     });
+
+  const listGeneratedImageActivitiesByTurn: ProjectionSnapshotQueryShape["listGeneratedImageActivitiesByTurn"] =
+    (threadId, turnId) =>
+      listGeneratedImageActivityRowsByTurn({ threadId, turnId }).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listGeneratedImageActivitiesByTurn:query",
+            "ProjectionSnapshotQuery.listGeneratedImageActivitiesByTurn:decodeRows",
+          ),
+        ),
+        Effect.map(
+          (rows): ReadonlyArray<ProjectionGeneratedImageActivityRecord> =>
+            rows.map((row) => ({ kind: row.kind, payload: row.payload })),
+        ),
+      );
 
   const getFullThreadDiffContext: ProjectionSnapshotQueryShape["getFullThreadDiffContext"] = (
     threadId,
@@ -2351,6 +2441,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getProjectShellById,
     getFirstActiveThreadIdByProjectId,
     getThreadCheckpointContext,
+    listGeneratedImageActivitiesByTurn,
     getFullThreadDiffContext,
     getThreadShellById,
     findSyntheticSubagentParentThread,

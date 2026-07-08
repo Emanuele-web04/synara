@@ -33,6 +33,7 @@ import {
   recoverExistingAddProjectTarget,
   resolveSidebarThreadListPaging,
   resolveProjectEmptyState,
+  resolvePendingSidebarViewSelection,
   resolveSettingsBackTarget,
   resolveProjectStatusIndicator,
   resolveSidebarNewThreadEnvMode,
@@ -67,6 +68,16 @@ function makeLatestTurn(overrides?: {
     completedAt: overrides?.completedAt ?? "2026-03-09T10:05:00.000Z",
   };
 }
+
+describe("resolvePendingSidebarViewSelection", () => {
+  it("optimistically follows a destination segment", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "studio")).toBe("studio");
+  });
+
+  it("clears the optimistic segment when the user returns to the active view", () => {
+    expect(resolvePendingSidebarViewSelection("threads", "threads")).toBeNull();
+  });
+});
 
 describe("hasUnseenCompletion", () => {
   it("returns true when a thread completed after its last visit", () => {

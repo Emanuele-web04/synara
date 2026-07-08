@@ -27,9 +27,14 @@ import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
 import { ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
+import { resolveThreadWorkspaceCwd } from "./checkpointing/Utils";
 import { ServerConfig } from "./config";
 import { realpathNearestExisting } from "./realpathNearestExisting";
-import { listRecentStudioOutputs } from "./studioOutputs";
+import { listStudioThreadOutputs } from "./studioOutputs";
+import {
+  ensureStudioWorkspaceInstructionsFiles,
+  STUDIO_WORKSPACE_SUBDIRECTORIES,
+} from "./studioWorkspaceScaffold";
 import { DevServerManager, findProjectDevServerForLocalServer } from "./devServerManager";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore";
 import { GitManager } from "./git/Services/GitManager";
@@ -65,21 +70,9 @@ import { bufferLiveUiStream, type LiveUiStreamDropReport } from "./wsStreamBackp
 const MAX_DIAGNOSTIC_CHILD_PROCESSES = 80;
 const MAX_DIAGNOSTIC_ARGS_CHARS = 500;
 
-// Relative subdirectories scaffolded under a freshly created container workspace root.
-// General chats get a minimal work/outputs split; Studio mirrors the Claude `~/Documents/Claude`
-// Outbox layout so generated content lands in predictable folders.
+// Relative subdirectories scaffolded under a freshly created chat container workspace root.
+// The Studio layout lives in studioWorkspaceScaffold.ts alongside its instruction files.
 const CHAT_WORKSPACE_SUBDIRECTORIES = ["work", "outputs"] as const;
-const STUDIO_WORKSPACE_SUBDIRECTORIES = [
-  "Inbox",
-  "Context",
-  "Logs",
-  "Skills",
-  "Outbox/Content",
-  "Outbox/Daily",
-  "Outbox/Notion",
-  "Outbox/TikTok",
-  "Outbox/YouTube",
-] as const;
 
 interface ProcessTableRow {
   readonly pid: number;
@@ -443,8 +436,23 @@ export const makeWsRpcLayer = () =>
       });
       const prepareChatWorkspaceRoot = (workspaceRoot: string) =>
         prepareWorkspaceSubdirectories(workspaceRoot, CHAT_WORKSPACE_SUBDIRECTORIES);
+      // Instruction files are best-effort: they steer agents toward the Outbox layout but
+      // must never fail (or retry-loop) the container create that scaffolds the folders.
       const prepareStudioWorkspaceRoot = (workspaceRoot: string) =>
-        prepareWorkspaceSubdirectories(workspaceRoot, STUDIO_WORKSPACE_SUBDIRECTORIES);
+        prepareWorkspaceSubdirectories(workspaceRoot, STUDIO_WORKSPACE_SUBDIRECTORIES).pipe(
+          Effect.andThen(
+            ensureStudioWorkspaceInstructionsFiles(workspaceRoot).pipe(
+              Effect.catch((cause) =>
+                Effect.logWarning("failed to write studio workspace instructions", {
+                  workspaceRoot,
+                  cause,
+                }),
+              ),
+              Effect.provideService(FileSystem.FileSystem, fileSystem),
+              Effect.provideService(Path.Path, path),
+            ),
+          ),
+        );
 
       const normalizeDispatchCommand = makeDispatchCommandNormalizer<WsRpcError>({
         attachmentsDir: config.attachmentsDir,
@@ -765,22 +773,52 @@ export const makeWsRpcLayer = () =>
               onDroppedEvents: failLiveUiStreamForSnapshotResync,
             }),
           ),
-        [WS_METHODS.studioListRecentOutputs]: (input) =>
+        [WS_METHODS.studioListThreadOutputs]: (input) =>
           rpcEffect(
             Effect.gen(function* () {
               // Self-heal the Studio folder tree: an accepted create whose deferred scaffold
               // failed (crash, transient FS error) must not leave Studio without its Outbox
               // forever. mkdir -p is idempotent and cheap, and this endpoint only fires while
-              // the Studio UI is actually open. Failures degrade to the empty-list behavior.
+              // a Studio chat's environment panel is actually open. Failures degrade to the
+              // empty-list behavior.
               yield* prepareStudioWorkspaceRoot(config.studioWorkspaceRoot).pipe(
                 Effect.catch(() => Effect.void),
               );
-              return yield* listRecentStudioOutputs({
-                outboxRoot: path.join(config.studioWorkspaceRoot, "Outbox"),
-                limit: input.limit,
+              // Checkpoints cover Git workspaces; file-change activities preserve the same
+              // attribution in the default non-Git Studio root. Unknown/non-Studio ids stay empty.
+              const context = yield* projectionReadModelQuery.getThreadCheckpointContext(
+                input.threadId,
+                { includeFileChangeActivityPayloads: true },
+              );
+              if (Option.isNone(context) || context.value.projectKind !== "studio") {
+                return { entries: [] };
+              }
+              const workspaceCwd = resolveThreadWorkspaceCwd({
+                thread: {
+                  projectId: context.value.projectId,
+                  envMode: context.value.envMode,
+                  worktreePath: context.value.worktreePath,
+                },
+                projects: [
+                  {
+                    id: context.value.projectId,
+                    kind: context.value.projectKind,
+                    workspaceRoot: context.value.workspaceRoot,
+                  },
+                ],
+              });
+              if (!workspaceCwd) {
+                return { entries: [] };
+              }
+              return yield* listStudioThreadOutputs({
+                workspaceRoot: workspaceCwd,
+                checkpoints: context.value.checkpoints,
+                ...(context.value.fileChangeActivityPayloads
+                  ? { fileChangeActivityPayloads: context.value.fileChangeActivityPayloads }
+                  : {}),
               });
             }),
-            "Failed to list studio outputs",
+            "Failed to list studio thread outputs",
           ),
         [WS_METHODS.filesystemBrowse]: (input) =>
           rpcEffect(workspaceEntries.browse(input), "Failed to browse filesystem"),

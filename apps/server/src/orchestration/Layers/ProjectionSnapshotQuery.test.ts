@@ -1417,6 +1417,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_threads`;
       yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_activities`;
 
       yield* sql`
         INSERT INTO projection_projects (
@@ -1546,6 +1547,76 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           )
       `;
 
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          created_at,
+          sequence
+        )
+        VALUES
+          (
+            'activity-file-change',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'File change',
+            '{"itemType":"file_change","status":"completed","data":{"path":"Outbox/Content/post.md"}}',
+            '2026-03-02T00:00:05.100Z',
+            1
+          ),
+          (
+            'activity-command',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'Command',
+            '{"itemType":"command_execution","status":"completed","data":{"path":"Outbox/ignored.md"}}',
+            '2026-03-02T00:00:05.200Z',
+            2
+          ),
+          (
+            'activity-studio-outputs',
+            'thread-context',
+            'turn-2',
+            'info',
+            'studio.outputs.captured',
+            'Studio outputs captured',
+            '{"itemType":"studio_outputs","data":{"files":[{"path":"output/pdf/report.pdf"}]}}',
+            '2026-03-02T00:00:05.300Z',
+            3
+          ),
+          (
+            'activity-generated-image-copy',
+            'thread-context',
+            'turn-2',
+            'info',
+            'studio.outputs.captured',
+            'Studio outputs captured',
+            '{"itemType":"studio_outputs","data":{"files":[{"path":"Outbox/Images/generated.png"}],"generatedImage":{"sourcePath":"/codex/generated.png","fullPath":"/tmp/context-workspace/Outbox/Images/generated.png"}}}',
+            '2026-03-02T00:00:05.400Z',
+            4
+          ),
+          (
+            'activity-generated-image-tool',
+            'thread-context',
+            'turn-2',
+            'tool',
+            'tool.completed',
+            'Generated image',
+            '{"itemType":"image_generation","status":"completed","data":{"kind":"codex.generated_image","path":"/codex/generated.png"}}',
+            '2026-03-02T00:00:05.500Z',
+            5
+          )
+      `;
+
       const context = yield* snapshotQuery.getThreadCheckpointContext(
         ThreadId.makeUnsafe("thread-context"),
       );
@@ -1580,6 +1651,63 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           ],
         });
       }
+
+      const outputContext = yield* snapshotQuery.getThreadCheckpointContext(
+        ThreadId.makeUnsafe("thread-context"),
+        { includeFileChangeActivityPayloads: true },
+      );
+      assert.equal(outputContext._tag, "Some");
+      if (outputContext._tag === "Some") {
+        assert.deepEqual(outputContext.value.fileChangeActivityPayloads, [
+          {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/generated.png" }],
+              generatedImage: {
+                sourcePath: "/codex/generated.png",
+                fullPath: "/tmp/context-workspace/Outbox/Images/generated.png",
+              },
+            },
+          },
+          {
+            itemType: "studio_outputs",
+            data: { files: [{ path: "output/pdf/report.pdf" }] },
+          },
+          {
+            itemType: "file_change",
+            status: "completed",
+            data: { path: "Outbox/Content/post.md" },
+          },
+        ]);
+      }
+
+      const generatedImageActivities = yield* snapshotQuery.listGeneratedImageActivitiesByTurn(
+        ThreadId.makeUnsafe("thread-context"),
+        TurnId.makeUnsafe("turn-2"),
+      );
+      assert.deepEqual(generatedImageActivities, [
+        {
+          kind: "studio.outputs.captured",
+          payload: {
+            itemType: "studio_outputs",
+            data: {
+              files: [{ path: "Outbox/Images/generated.png" }],
+              generatedImage: {
+                sourcePath: "/codex/generated.png",
+                fullPath: "/tmp/context-workspace/Outbox/Images/generated.png",
+              },
+            },
+          },
+        },
+        {
+          kind: "tool.completed",
+          payload: {
+            itemType: "image_generation",
+            status: "completed",
+            data: { kind: "codex.generated_image", path: "/codex/generated.png" },
+          },
+        },
+      ]);
 
       const fullThreadDiffContext = yield* snapshotQuery.getFullThreadDiffContext(
         ThreadId.makeUnsafe("thread-context"),
