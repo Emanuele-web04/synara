@@ -119,6 +119,7 @@ export const FolderOpenFrontIcon: LucideIcon = centralIconWrapper("folder-open-f
 export const ImportThreadIcon: LucideIcon = centralIconWrapper("import");
 export const UsageGaugeIcon: LucideIcon = centralIconWrapper("gauge");
 export const BugReportIcon: LucideIcon = centralIconWrapper("bug");
+export const UserIcon: LucideIcon = centralIconWrapper("user");
 /** The "+" affordance behind every add/create action (Add project, activity header). */
 export const AddPlusIcon: LucideIcon = centralIconWrapper("plus-medium");
 /** 2x3 dot grip for drag-to-reorder handles (provider rows, sidebar nav customize). */

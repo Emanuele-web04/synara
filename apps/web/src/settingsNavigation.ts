@@ -32,6 +32,7 @@ export type SettingsNavGroupId = "personal" | "integrations" | "coding" | "syste
  */
 export const SETTINGS_TARGETS = {
   providerUpdates: "provider-updates",
+  providerInstalls: "provider-installs",
   environmentPanel: "environment-panel",
 } as const;
 

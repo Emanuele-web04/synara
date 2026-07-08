@@ -36,14 +36,7 @@ import { SearchIcon } from "~/lib/icons";
 import { starredModelSlotKey } from "~/lib/starredModels";
 import { cn, isMacNavigatorPlatform } from "~/lib/utils";
 import { Input } from "../ui/input";
-import {
-  Menu,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-} from "../ui/menu";
+import { Menu, MenuGroup, MenuGroupLabel } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { ComposerModelMenuTrigger } from "./ComposerModelMenuTrigger";
 import {
@@ -84,7 +77,6 @@ import {
 import {
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
-  resolveProviderInstanceLabel,
   resolveProviderModelLabel,
   resolveVisibleProviderOptions,
 } from "./ProviderModelPicker";
@@ -253,14 +245,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
-  const selectedInstanceLabel = resolveProviderInstanceLabel({
-    provider: activeProvider,
-    selectedProviderInstanceId: props.selectedProviderInstanceId,
-    providerInstances: props.providerInstances,
-  });
-  const triggerModelLabel = selectedInstanceLabel
-    ? `${selectedInstanceLabel} · ${modelLabel}`
-    : modelLabel;
   const currentTraitSelection = getComposerTraitSelection(
     props.provider,
     props.model,
@@ -445,7 +429,7 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
     >
       <ComposerModelMenuTrigger
         provider={activeProvider}
-        modelLabel={triggerModelLabel}
+        modelLabel={modelLabel}
         statusLabel={resolveComposerTraitStatusLabel(currentTraitSelection)}
         contextWindowLabel={activeProvider === "claudeAgent" ? props.contextWindowLabel : null}
         showsFastBadge={showsComposerFastModeBadge(currentTraitSelection)}
@@ -520,40 +504,6 @@ export function ComposerModelPicker(props: ComposerModelPickerProps) {
               COMPOSER_PICKER_MODEL_LIST_SCROLL_CLASS_NAME,
             )}
           >
-            {tab !== STARRED_TAB && instancesFor(tab).length > 1 ? (
-              <>
-                <MenuGroup>
-                  <MenuGroupLabel className={PICKER_PANEL_GROUP_LABEL_CLASS_NAME}>
-                    Instance
-                  </MenuGroupLabel>
-                  <MenuRadioGroup
-                    value={selectedInstanceIdFor(tab)}
-                    onValueChange={(value) => {
-                      if (props.disabled || !value) return;
-                      const model =
-                        tab === activeProvider
-                          ? props.model
-                          : modelOptionsFor(tab)[0]?.slug;
-                      if (!model) return;
-                      props.onProviderModelChange(tab, model, { instanceId: value });
-                      setMenuOpen(false);
-                      props.onSelectionCommitted?.();
-                    }}
-                  >
-                    {instancesFor(tab).map((instance) => (
-                      <MenuRadioItem
-                        key={instance.instanceId}
-                        value={instance.instanceId}
-                        disabled={!instance.enabled}
-                      >
-                        <span className="truncate">{instance.label}</span>
-                      </MenuRadioItem>
-                    ))}
-                  </MenuRadioGroup>
-                </MenuGroup>
-                <MenuSeparator />
-              </>
-            ) : null}
             {discoveryError ? (
               <div className="px-2 py-1.5 text-ui leading-snug text-destructive">
                 {discoveryError}

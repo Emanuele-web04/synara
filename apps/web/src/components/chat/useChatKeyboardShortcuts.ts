@@ -25,6 +25,7 @@ import { useChatTerminalController } from "./useChatTerminalController";
 import { useChatWorkLog } from "./useChatWorkLog";
 import { useComposerVoiceController } from "./useComposerVoiceController";
 import { toastManager } from "../ui/toast";
+import type { ComposerModelSelectionOptions } from "./ComposerModelPicker";
 function eventTargetsComposer(
   event: globalThis.KeyboardEvent,
   composerForm: HTMLFormElement | null,
@@ -87,7 +88,7 @@ interface ChatKeyboardShortcutsInput {
   onProviderModelSelect: (
     provider: ProviderKind,
     model: ModelSlug,
-    instanceId?: ProviderInstanceId,
+    selectionOptions?: ComposerModelSelectionOptions,
   ) => Promise<void>;
   handleTraitsPickerOpenChange: (open: boolean) => void;
   toggleTerminalVisibility: ReturnType<
@@ -287,11 +288,9 @@ export function useChatKeyboardShortcuts({
           direction,
         });
         if (!nextSlug) return;
-        onProviderModelSelect(
-          selectedProvider,
-          nextSlug as ModelSlug,
-          selectedProviderInstanceId,
-        );
+        onProviderModelSelect(selectedProvider, nextSlug as ModelSlug, {
+          instanceId: selectedProviderInstanceId,
+        });
         return;
       }
 
