@@ -70,7 +70,6 @@ import {
   extractCodexGeneratedImageReference,
   firstStringValue,
   isCodexGeneratedImageItemType,
-  resolveCodexHomePath,
   sanitizeNestedCodexGeneratedImagePayloads,
 } from "../../codexGeneratedImages.ts";
 import {
@@ -2345,8 +2344,10 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
       Effect.sync(() => {
         const homePaths = new Map<string, CodexGeneratedImageHomeCandidate>();
         for (const session of manager.listSessions()) {
-          const codexOptions = manager.getSessionCodexOptions(session.threadId);
-          const candidate = codexOptions ?? resolveCodexHomePath(undefined);
+          const candidate = manager.getSessionCodexOptions(session.threadId);
+          if (!candidate) {
+            continue;
+          }
           const candidateKey =
             typeof candidate === "string" ? `path:${candidate}` : JSON.stringify(candidate);
           homePaths.set(candidateKey, candidate);
