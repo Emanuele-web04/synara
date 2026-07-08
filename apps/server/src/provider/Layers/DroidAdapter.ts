@@ -1,5 +1,5 @@
 /**
- * DroidAdapterLive - Droid Build CLI (`droid agent ... stdio`) via ACP.
+ * DroidAdapterLive - Factory Droid CLI (`droid exec --output-format acp`) via ACP.
  *
  * @module DroidAdapterLive
  */
@@ -7,12 +7,10 @@ import * as nodePath from "node:path";
 
 import {
   ApprovalRequestId,
-  type DroidModelOptions,
   EventId,
   type ProviderComposerCapabilities,
   type ProviderApprovalDecision,
   type ProviderInteractionMode,
-  type ProviderListModelsResult,
   type ProviderRuntimeEvent,
   type ProviderSession,
   type ProviderUserInputAnswers,
@@ -81,7 +79,6 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
-  applyDroidAcpModelSelection,
   getDroidApiKeyEnv,
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
@@ -91,7 +88,6 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 
 const PROVIDER = "droid" as const;
 const DROID_RESUME_VERSION = 1 as const;
-const DROID_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const DROID_ACP_TRANSPORT_DEBUG_MARKER = "droid-acp-meta-stripper-v2";
 const DROID_ACP_LOG_PAYLOAD_LIMIT = 4_000;
 const DROID_ACP_DEBUG_ENV = "SYNARA_DROID_ACP_DEBUG";
@@ -108,7 +104,6 @@ const DROID_TURN_IDLE_TIMEOUT_MS = resolveAcpTurnIdleTimeoutMs({
   defaultMs: 600_000,
 });
 const DROID_TURN_WATCHDOG_INTERVAL_MS = 15_000;
-const XAI_API_BASE_URL = "https://api.x.ai/v1";
 const ACP_PLAN_MODE_ALIASES = ["plan"];
 const ACP_IMPLEMENT_MODE_ALIASES = ["code", "agent", "default", "chat", "implement"];
 const ACP_APPROVAL_MODE_ALIASES = ["ask"];
@@ -118,13 +113,6 @@ const DROID_PLAN_MODE_PROMPT_PREFIX = [
   "Do not ask follow-up questions or wait for confirmation; if scope is ambiguous, choose a reasonable default and state the assumption in the plan.",
   "When ready, create the final implementation plan.",
 ].join("\n");
-
-const collectStreamAsString = <E>(stream: Stream.Stream<Uint8Array, E>): Effect.Effect<string, E> =>
-  Stream.runFold(
-    stream,
-    () => "",
-    (acc, chunk) => acc + new TextDecoder().decode(chunk),
-  );
 
 function summarizeDroidAcpLogPayload(payload: unknown): unknown {
   const text =
@@ -158,18 +146,6 @@ function isDroidAcpDebugEnabled(): boolean {
   );
 }
 
-function mapDroidModelDiscoveryError(cause: unknown): ProviderAdapterRequestError {
-  if (cause instanceof ProviderAdapterRequestError) {
-    return cause;
-  }
-  return new ProviderAdapterRequestError({
-    provider: PROVIDER,
-    method: "model/list",
-    detail: cause instanceof Error ? cause.message : String(cause),
-    cause,
-  });
-}
-
 function shouldMirrorDroidAcpProtocolLog(event: {
   readonly direction: "incoming" | "outgoing";
   readonly stage: "raw" | "decoded" | "decode_failed" | "dropped";
@@ -180,7 +156,7 @@ function shouldMirrorDroidAcpProtocolLog(event: {
   if (event.direction !== "incoming" || event.stage !== "raw") return false;
   const payload = summarizeDroidAcpLogPayload(event.payload);
   if (typeof payload !== "string") return false;
-  return payload.includes("droidShell") || payload.includes("x.ai/fs_notify");
+  return payload.includes("droidShell");
 }
 
 function makeDroidAcpRuntimeLoggers(
@@ -326,173 +302,6 @@ function parseDroidResume(raw: unknown): { sessionId: string } | undefined {
   return { sessionId: raw.sessionId.trim() };
 }
 
-function formatDroidModelName(slug: string): string {
-  if (slug === "droid-build-0.1") {
-    return "Droid Build 0.1";
-  }
-  if (slug === "droid-build") {
-    return "Droid 4.3";
-  }
-  return slug.replace(/[-_/]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
-}
-
-function isDroidBuildApiModelSlug(slug: string): boolean {
-  return slug === "droid-build-0.1" || /^droid-code-fast(?:-\d+(?:-\d+)?)?$/u.test(slug);
-}
-
-function readXaiModelAliases(rawModel: Record<string, unknown>): string[] {
-  const aliases = rawModel.aliases;
-  if (!Array.isArray(aliases)) {
-    return [];
-  }
-  return aliases
-    .filter((alias): alias is string => typeof alias === "string")
-    .map((alias) => alias.trim())
-    .filter((alias) => alias.length > 0);
-}
-
-function parseDroidCliModelList(stdout: string): Array<{ slug: string; name: string }> {
-  const models: Array<{ slug: string; name: string; isDefault: boolean }> = [];
-  let inAvailableModels = false;
-  let fallbackDefaultModel: string | undefined;
-
-  for (const line of stdout.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      if (inAvailableModels && models.length > 0) {
-        break;
-      }
-      continue;
-    }
-    const defaultMatch = /^Default model:\s*(\S+)/iu.exec(trimmed);
-    if (defaultMatch?.[1]) {
-      fallbackDefaultModel = defaultMatch[1].trim();
-      continue;
-    }
-    if (/^Available models:/iu.test(trimmed)) {
-      inAvailableModels = true;
-      continue;
-    }
-    if (!inAvailableModels) {
-      continue;
-    }
-
-    const modelMatch = /^(?:[*-]\s*)?([A-Za-z0-9._/-]+)(?:\s+\(([^)]*)\))?/u.exec(trimmed);
-    if (!modelMatch?.[1]) {
-      continue;
-    }
-    const slug = modelMatch[1].trim();
-    if (!slug) {
-      continue;
-    }
-    models.push({
-      slug,
-      name: formatDroidModelName(slug),
-      isDefault: (modelMatch[2] ?? "").toLowerCase().includes("default"),
-    });
-  }
-
-  if (models.length === 0 && fallbackDefaultModel) {
-    models.push({
-      slug: fallbackDefaultModel,
-      name: formatDroidModelName(fallbackDefaultModel),
-      isDefault: true,
-    });
-  }
-
-  return models
-    .toSorted((left, right) => Number(right.isDefault) - Number(left.isDefault))
-    .map(({ slug, name }) => ({ slug, name }));
-}
-
-export function parseXaiLanguageModelDescriptors(
-  input: unknown,
-): Array<{ slug: string; name: string }> {
-  if (!isRecord(input)) return [];
-  const rawModels = Array.isArray(input.models)
-    ? input.models
-    : Array.isArray(input.data)
-      ? input.data
-      : [];
-  const models: Array<{ slug: string; name: string }> = [];
-  const seen = new Set<string>();
-
-  for (const rawModel of rawModels) {
-    if (!isRecord(rawModel) || typeof rawModel.id !== "string") {
-      continue;
-    }
-    const slug = rawModel.id.trim();
-    if (!slug) {
-      continue;
-    }
-    const aliases = readXaiModelAliases(rawModel);
-    const supportedSlugs = [slug, ...aliases].filter(isDroidBuildApiModelSlug);
-    for (const supportedSlug of supportedSlugs) {
-      const key = supportedSlug.toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push({ slug: supportedSlug, name: formatDroidModelName(supportedSlug) });
-    }
-  }
-
-  return models;
-}
-
-export function mergeDroidModelDescriptors(
-  groups: ReadonlyArray<ReadonlyArray<{ slug: string; name: string }>>,
-): Array<{ slug: string; name: string }> {
-  const models: Array<{ slug: string; name: string }> = [];
-  const seen = new Set<string>();
-  for (const group of groups) {
-    for (const model of group) {
-      const slug = model.slug.trim();
-      const key = slug.toLowerCase();
-      if (!slug || seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      models.push({ slug, name: model.name.trim() || formatDroidModelName(slug) });
-    }
-  }
-  return models;
-}
-
-function xaiApiBaseUrl(env: NodeJS.ProcessEnv = process.env): string {
-  return (env.XAI_API_BASE_URL?.trim() || XAI_API_BASE_URL).replace(/\/+$/u, "");
-}
-
-function fetchXaiLanguageModels(input: {
-  readonly apiKey: string;
-  readonly baseUrl?: string;
-}): Effect.Effect<Array<{ slug: string; name: string }>, ProviderAdapterRequestError> {
-  return Effect.tryPromise({
-    try: async () => {
-      const response = await fetch(`${input.baseUrl ?? XAI_API_BASE_URL}/language-models`, {
-        headers: {
-          Authorization: `Bearer ${input.apiKey}`,
-          "Content-Type": "application/json",
-        },
-      });
-      if (!response.ok) {
-        const detail = await response.text().catch(() => "");
-        throw new Error(
-          detail.trim() || `xAI language model discovery failed with HTTP ${response.status}.`,
-        );
-      }
-      return parseXaiLanguageModelDescriptors(await response.json());
-    },
-    catch: (cause) =>
-      new ProviderAdapterRequestError({
-        provider: PROVIDER,
-        method: "model/list",
-        detail: cause instanceof Error ? cause.message : String(cause),
-        cause,
-      }),
-  });
-}
-
 function readAcpUsdCost(cost: EffectAcpSchema.Cost | null | undefined): number | undefined {
   if (!cost || cost.currency.toUpperCase() !== "USD" || !Number.isFinite(cost.amount)) {
     return undefined;
@@ -614,36 +423,6 @@ function resolveRequestedModeId(input: {
     modeState.availableModes.find((mode) => !isPlanMode(mode))?.id ??
     modeState.currentModeId
   );
-}
-
-function applyRequestedSessionConfiguration<E>(input: {
-  readonly runtime: AcpSessionRuntimeShape;
-  readonly runtimeMode: RuntimeMode;
-  readonly interactionMode: ProviderInteractionMode | undefined;
-  readonly modelSelection:
-    | {
-        readonly model: string;
-        readonly options?: DroidModelOptions | null | undefined;
-      }
-    | undefined;
-  readonly mapError: (context: {
-    readonly cause: import("effect-acp/errors").AcpError;
-    readonly method: "session/set_config_option" | "session/set_mode";
-  }) => E;
-}): Effect.Effect<void, E> {
-  return Effect.gen(function* () {
-    if (input.modelSelection) {
-      yield* applyDroidAcpModelSelection({
-        runtime: input.runtime,
-        model: input.modelSelection.model,
-        options: input.modelSelection.options,
-        mapError: ({ cause, method }) => input.mapError({ cause, method }),
-      });
-    }
-
-    // Factory Droid ACP rejects `session/set_config_option` for id `mode` ("Unknown config option: mode").
-    // Autonomy is controlled via `droid exec` flags (`--auto`, `--skip-permissions-unsafe`), not ACP modes.
-  });
 }
 
 function resolveDroidSessionCwd(
@@ -1048,15 +827,10 @@ export function makeDroidAdapter(
             ),
           );
 
-          yield* applyRequestedSessionConfiguration({
-            runtime: acp,
-            runtimeMode: input.runtimeMode,
-            interactionMode: undefined,
-            modelSelection: droidModelSelection,
-            mapError: ({ cause, method }) =>
-              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-          });
-
+          // Model and reasoning effort are applied via `droid exec` spawn flags (`-m`/`-r`)
+          // and mode/autonomy via `--auto`/`--skip-permissions-unsafe`; Factory Droid ACP
+          // rejects `session/set_config_option` for id `mode` ("Unknown config option: mode").
+          // Selection changes restart the session (sessionModelSwitch: "restart-session").
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
           const now = yield* nowIso;
@@ -1327,20 +1101,6 @@ export function makeDroidAdapter(
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
-        yield* applyRequestedSessionConfiguration({
-          runtime: ctx.acp,
-          runtimeMode: ctx.session.runtimeMode,
-          interactionMode: input.interactionMode,
-          modelSelection:
-            model === undefined
-              ? undefined
-              : {
-                  model,
-                  options: turnModelSelection?.options,
-                },
-          mapError: ({ cause, method }) =>
-            mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
-        });
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: input.input?.trim()

@@ -651,6 +651,11 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
     },
     {
+      slug: "claude-opus-4-6-fast",
+      name: "Claude Opus 4.6 Fast",
+      capabilities: DROID_CLAUDE_MAX_CAPABILITIES,
+    },
+    {
       slug: "claude-sonnet-5",
       name: "Claude Sonnet 5",
       capabilities: DROID_CLAUDE_XHIGH_CAPABILITIES,

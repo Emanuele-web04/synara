@@ -36,11 +36,6 @@ export interface DroidAcpRuntimeInput extends Omit<
   readonly droidSettings: DroidAcpRuntimeSettings | null | undefined;
 }
 
-export interface DroidAcpModelSelectionErrorContext {
-  readonly cause: EffectAcpErrors.AcpError;
-  readonly method: "session/set_config_option";
-}
-
 const DROID_API_KEY_AUTH_METHOD_ID = "factory-api-key";
 const DROID_DEVICE_PAIRING_AUTH_METHOD_ID = "device-pairing";
 const DROID_API_KEY_ENV_KEYS = ["FACTORY_API_KEY"] as const;
@@ -155,15 +150,3 @@ export const makeDroidAcpRuntime = (
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
 
-export function applyDroidAcpModelSelection<E>(input: {
-  readonly runtime: Pick<
-    AcpSessionRuntimeShape,
-    "getConfigOptions" | "setConfigOption" | "setModel"
-  >;
-  readonly model: string;
-  readonly options?: DroidModelOptions | null | undefined;
-  readonly mapError: (context: DroidAcpModelSelectionErrorContext) => E;
-}): Effect.Effect<void, E> {
-  void input;
-  return Effect.void;
-}

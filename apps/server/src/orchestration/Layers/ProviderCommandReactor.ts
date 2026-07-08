@@ -752,7 +752,9 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
-        (currentProvider === "claudeAgent" || currentProvider === "grok") &&
+        (currentProvider === "claudeAgent" ||
+          currentProvider === "grok" ||
+          currentProvider === "droid") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
