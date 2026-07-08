@@ -88,7 +88,11 @@ import {
   isWatchableBundlePath,
   type BundleSignature,
 } from "./bundleSwapDetection";
-import { waitForBackendStartupReady } from "./backendStartupReadiness";
+import {
+  isBackendStartupReadyResponse,
+  monitorBackendStartupHealth,
+  waitForBackendStartupReady,
+} from "./backendStartupReadiness";
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import {
   desktopAppIconResourceName,
@@ -704,19 +708,7 @@ async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" |
         // minute; this observer is cancelled when that child exits or the app
         // shuts down.
         timeoutMs: null,
-        isReady: async (response) => {
-          if (!response.ok) {
-            return false;
-          }
-          try {
-            const payload = (await response.json()) as {
-              startupReady?: unknown;
-            };
-            return payload.startupReady === true;
-          } catch {
-            return false;
-          }
-        },
+        isReady: isBackendStartupReadyResponse,
       }),
     cancelHttpWait: cancelBackendReadinessWait,
   });
@@ -4083,6 +4075,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   const outputTailDetector = new BackendOutputTailDetector();
   backendListeningDetector = listeningDetector;
   backendProcess = child;
+  const backendBaseUrl = backendHttpUrl;
   let backendSessionClosed = false;
   const closeBackendSession = (details: string) => {
     if (backendSessionClosed) return;
@@ -4107,19 +4100,24 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
     detectors: [listeningDetector, startupBlockDetector, outputTailDetector],
   });
 
-  // A successful spawn only proves that Electron created the process. Reset the
-  // crash backoff and the circuit breaker after the backend actually listens;
-  // otherwise a startup error becomes a permanent 500 ms restart loop.
-  void listeningDetector.promise.then(
-    () => {
-      if (backendListeningDetector === listeningDetector) {
-        backendSupervision.recordReadiness();
-      }
+  // Readiness is authoritative even when the optional log marker is delayed or
+  // absent. A successful spawn alone must never reset crash supervision.
+  const startupHealthMonitor = monitorBackendStartupHealth({
+    waitUntilReady: (signal) =>
+      waitForHttpReady(backendBaseUrl, {
+        path: "/health",
+        timeoutMs: null,
+        signal,
+        isReady: isBackendStartupReadyResponse,
+      }),
+    isCurrent: () => backendProcess === child,
+    onReady: () => {
+      backendSupervision.recordReadiness();
     },
-    () => undefined,
-  );
+  });
 
   child.on("error", (error) => {
+    startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(error);
       backendListeningDetector = null;
@@ -4133,6 +4131,7 @@ function startBackend(trigger: BackendStartTrigger = "lifecycle"): void {
   });
 
   child.on("exit", (code, signal) => {
+    startupHealthMonitor.abort();
     if (backendListeningDetector === listeningDetector) {
       listeningDetector.fail(
         new Error(
