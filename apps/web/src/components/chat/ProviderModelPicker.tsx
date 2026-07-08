@@ -343,6 +343,7 @@ type ProviderModelMenuItemsProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
   selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
   favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
   onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   disabled?: boolean;
@@ -587,6 +588,63 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
     onAfterSelection?.();
   };
 
+  const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
+    if (props.disabled || !instanceId) return;
+    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
+    const model = activeProvider === provider ? props.model : (providerOptions[0]?.slug ?? "");
+    if (!model) return;
+    const resolvedModel = resolveSelectableModel(provider, model, providerOptions);
+    props.onProviderModelChange(
+      provider,
+      resolvedModel ?? providerOptions[0]?.slug ?? model,
+      instanceId,
+    );
+  };
+
+  const renderProviderInstanceRadioGroup = (provider: ProviderKind) => {
+    const instances = getProviderInstances(provider);
+    if (props.showProviderInstanceChoices === false || instances.length <= 1) {
+      return null;
+    }
+    const sectionLabel =
+      provider === "codex" || provider === "claudeAgent" ? "Accounts" : "Profiles";
+    return (
+      <>
+        <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
+          {sectionLabel}
+        </div>
+        <MenuRadioGroup
+          value={getSelectedInstanceIdForProvider(provider)}
+          onValueChange={(value) => {
+            if (props.disabled || !value) {
+              return;
+            }
+            handleInstanceChange(provider, value);
+          }}
+        >
+          {instances.map((instance) => {
+            const availability = resolveInstanceAvailability(instance);
+            return (
+              <MenuRadioItem
+                key={instance.instanceId}
+                value={instance.instanceId}
+                disabled={availability.disabled}
+              >
+                <span className="truncate">{instance.label}</span>
+                {availability.label ? (
+                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
+                    {availability.label}
+                  </span>
+                ) : null}
+              </MenuRadioItem>
+            );
+          })}
+        </MenuRadioGroup>
+        <MenuSeparator />
+      </>
+    );
+  };
+
   const favoriteModels = props.favoriteModels;
   const onFavoriteModelsChange = props.onFavoriteModelsChange;
   const toggleFavoriteModel = useCallback(
@@ -746,7 +804,12 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
   };
 
   if (props.lockedProvider !== null) {
-    return renderModelRadioGroup(props.lockedProvider);
+    return (
+      <>
+        {renderProviderInstanceRadioGroup(props.lockedProvider)}
+        {renderModelRadioGroup(props.lockedProvider)}
+      </>
+    );
   }
 
   return (
@@ -787,6 +850,7 @@ export const ProviderModelMenuItems = memo(function ProviderModelMenuItems(
               fixedWidth
               className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
             >
+              {renderProviderInstanceRadioGroup(option.value)}
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
@@ -869,6 +933,7 @@ type ProviderModelPickerProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
   selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
   favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
   onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   activeProviderIconClassName?: string;
@@ -1009,6 +1074,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(
           {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
           {...(props.selectedProviderInstanceId
             ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+            : {})}
+          {...(props.showProviderInstanceChoices !== undefined
+            ? { showProviderInstanceChoices: props.showProviderInstanceChoices }
             : {})}
           {...(props.favoriteModels ? { favoriteModels: props.favoriteModels } : {})}
           {...(props.onFavoriteModelsChange

@@ -9174,6 +9174,7 @@ export default function ChatView({
         providerOrder={settings.providerOrder}
         providerInstances={providerInstances}
         selectedProviderInstanceId={selectedProviderInstanceId}
+        showProviderInstanceChoices={false}
         favoriteModels={settings.favorites}
         onFavoriteModelsChange={handleFavoriteModelsChange}
         onProviderModelChange={onProviderModelSelect}
@@ -9221,6 +9222,7 @@ export default function ChatView({
       providerOrder={settings.providerOrder}
       providerInstances={providerInstances}
       selectedProviderInstanceId={selectedProviderInstanceId}
+      showProviderInstanceChoices={false}
       favoriteModels={settings.favorites}
       onFavoriteModelsChange={handleFavoriteModelsChange}
       threadId={threadId}

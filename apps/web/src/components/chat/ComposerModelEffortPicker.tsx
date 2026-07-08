@@ -63,6 +63,7 @@ type ComposerModelEffortPickerProps = {
   providerOrder?: ReadonlyArray<ProviderKind>;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
   selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
   favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
   onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   compact?: boolean;
@@ -334,6 +335,9 @@ export const ComposerModelEffortPicker = memo(function ComposerModelEffortPicker
               {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
               {...(props.selectedProviderInstanceId
                 ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+                : {})}
+              {...(props.showProviderInstanceChoices !== undefined
+                ? { showProviderInstanceChoices: props.showProviderInstanceChoices }
                 : {})}
               {...(props.favoriteModels ? { favoriteModels: props.favoriteModels } : {})}
               {...(props.onFavoriteModelsChange

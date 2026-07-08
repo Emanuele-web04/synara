@@ -153,6 +153,7 @@ async function mountPicker(props: {
   onSelectionCommitted?: () => void;
   providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
   selectedProviderInstanceId?: ProviderInstanceId;
+  showProviderInstanceChoices?: boolean;
   favoriteModels?: ReadonlyArray<ProviderModelFavorite>;
   onFavoriteModelsChange?: (favoriteModels: ProviderModelFavorite[]) => void;
   modelOptionsByProviderInstance?: Partial<
@@ -179,6 +180,9 @@ async function mountPicker(props: {
       {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
       {...(props.selectedProviderInstanceId
         ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+        : {})}
+      {...(props.showProviderInstanceChoices !== undefined
+        ? { showProviderInstanceChoices: props.showProviderInstanceChoices }
         : {})}
       {...(props.favoriteModels ? { favoriteModels: props.favoriteModels } : {})}
       {...(props.onFavoriteModelsChange
@@ -378,6 +382,7 @@ describe("ProviderModelPicker", () => {
       provider: "codex",
       model: "gpt-5-codex",
       lockedProvider: "codex",
+      showProviderInstanceChoices: false,
       selectedProviderInstanceId: "codex",
       providerInstances: [
         {
@@ -426,6 +431,54 @@ describe("ProviderModelPicker", () => {
         expect(document.body.textContent ?? "").not.toContain("Work");
         expect(document.body.textContent ?? "").toContain("GPT-5 Codex");
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps embedded account choices for standalone picker callers", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", {
+          instanceId: "codex_work",
+          displayName: "Work",
+        }),
+      ],
+      modelOptionsByProviderInstance: {
+        codex_work: [{ slug: "gpt-5-work-codex", name: "GPT-5 Work Codex" }],
+      },
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await page.getByRole("menuitemradio", { name: "Work" }).click();
+
+      expect(mounted.onProviderModelChange).toHaveBeenCalledWith(
+        "codex",
+        "gpt-5-work-codex",
+        "codex_work",
+      );
     } finally {
       await mounted.cleanup();
     }
