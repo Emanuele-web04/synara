@@ -4,6 +4,7 @@ import {
   type ModelSelection,
   type ModelSlug,
   type ProviderApprovalDecision,
+  type ProviderInstanceId,
   type ProviderKind,
   type RuntimeMode,
   type ServerProviderAuthStatus,
@@ -28,6 +29,7 @@ import { type DraftThreadState } from "../composerDraftStore";
 import { Schema } from "effect";
 import {
   filterTerminalContextsWithText,
+  deriveDisplayedUserMessageState,
   stripInlineTerminalContextPlaceholders,
   type TerminalContextDraft,
 } from "../lib/terminalContext";
@@ -46,6 +48,7 @@ import type { ProviderModelOption } from "../providerModelOptions";
 
 export const LAST_INVOKED_SCRIPT_BY_PROJECT_KEY = "synara:last-invoked-script-by-project";
 export const DISMISSED_PROVIDER_HEALTH_BANNERS_KEY = "synara:dismissed-provider-health-banners";
+export const PROMPT_HISTORY_MAX_ENTRIES = 100;
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);
 export const DismissedProviderHealthBannersSchema = Schema.Array(Schema.String);
@@ -104,6 +107,221 @@ export function buildComposerMenuSelectionKey(input: {
   return `${sourceKey}\u001f${input.items.map((item) => item.id).join("\u001e")}`;
 }
 
+// Prefer the exact active draft instance; only legacy drafts without that
+// pointer fall back to scanning their provider-instance selection map.
+export function resolveDraftProviderInstanceId(input: {
+  selectedProvider: ProviderKind;
+  activeProviderInstanceId: ProviderInstanceId | null | undefined;
+  activeProvider: ProviderKind | null | undefined;
+  modelSelections: readonly (ModelSelection | undefined)[];
+  resolveProviderForModelSelection: (selection: ModelSelection) => ProviderKind | null;
+}): ProviderInstanceId | undefined {
+  if (input.activeProviderInstanceId && input.activeProvider === input.selectedProvider) {
+    return input.activeProviderInstanceId;
+  }
+
+  const fallbackSelection = input.modelSelections.find(
+    (selection): selection is ModelSelection =>
+      selection !== undefined &&
+      input.resolveProviderForModelSelection(selection) === input.selectedProvider,
+  );
+  return fallbackSelection?.instanceId;
+}
+
+export interface PromptHistoryNavigationState {
+  index: number;
+  draft: string;
+}
+
+export type PromptHistoryDirection = "older" | "newer";
+
+// All cursor values in prompt history navigation are EXPANDED offsets — raw
+// indices into the prompt string. Collapsed composer cursors (where inline
+// token chips like mentions count as a single unit) must be expanded before
+// calling in and collapsed again before being applied to composer state, or
+// the line-boundary math below misfires on any prompt containing a chip.
+export interface PromptHistoryNavigationResult {
+  handled: boolean;
+  prompt: string;
+  expandedCursor: number;
+  state: PromptHistoryNavigationState | null;
+}
+
+export function derivePromptHistoryFromMessages(
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "source" | "text">>,
+  limit: number = PROMPT_HISTORY_MAX_ENTRIES,
+): string[] {
+  if (limit <= 0) {
+    return [];
+  }
+  const history: string[] = [];
+  for (let index = messages.length - 1; index >= 0 && history.length < limit; index -= 1) {
+    const message = messages[index];
+    if (!message || message.role !== "user" || (message.source ?? "native") !== "native") {
+      continue;
+    }
+    const prompt = deriveDisplayedUserMessageState(message.text, {
+      hideImageOnlyBootstrapPrompt: true,
+    }).copyText.trim();
+    if (prompt.length === 0) {
+      continue;
+    }
+    history.push(prompt);
+  }
+  return history;
+}
+
+export function promptStillMatchesActiveHistoryBrowse(input: {
+  state: PromptHistoryNavigationState | null;
+  history: readonly string[];
+  nextPrompt: string;
+  appliedPrompt: string | null;
+}): boolean {
+  if (input.state === null) {
+    return false;
+  }
+  const activeEntry = input.history[input.state.index] ?? null;
+  return input.nextPrompt === activeEntry || input.nextPrompt === input.appliedPrompt;
+}
+
+export function shouldHandlePromptHistoryNavigationKey(input: {
+  key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab" | "Slash";
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+  menuIsActive: boolean;
+  hasActivePendingProgress: boolean;
+  isComposerApprovalState: boolean;
+  pendingUserInputCount: number;
+}): boolean {
+  return (
+    (input.key === "ArrowUp" || input.key === "ArrowDown") &&
+    !input.metaKey &&
+    !input.ctrlKey &&
+    !input.altKey &&
+    !input.shiftKey &&
+    !input.menuIsActive &&
+    !input.hasActivePendingProgress &&
+    !input.isComposerApprovalState &&
+    input.pendingUserInputCount === 0
+  );
+}
+
+// `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
+export function isComposerCursorOnFirstLine(prompt: string, expandedCursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
+  const firstLineEnd = prompt.indexOf("\n");
+  return firstLineEnd < 0 || boundedCursor <= firstLineEnd;
+}
+
+// `expandedCursor` is a raw index into `prompt` (see PromptHistoryNavigationResult).
+export function isComposerCursorOnLastLine(prompt: string, expandedCursor: number): boolean {
+  const boundedCursor = Math.max(0, Math.min(prompt.length, expandedCursor));
+  const lastLineStart = prompt.lastIndexOf("\n") + 1;
+  return boundedCursor >= lastLineStart;
+}
+
+function expandedCursorForPromptHistoryItem(
+  prompt: string,
+  direction: PromptHistoryDirection,
+): number {
+  if (direction === "older") {
+    const firstLineEnd = prompt.indexOf("\n");
+    return firstLineEnd < 0 ? prompt.length : firstLineEnd;
+  }
+  return prompt.length;
+}
+
+export function resolvePromptHistoryNavigation(input: {
+  direction: PromptHistoryDirection;
+  history: readonly string[];
+  currentPrompt: string;
+  currentExpandedCursor: number;
+  selectionCollapsed: boolean;
+  state: PromptHistoryNavigationState | null;
+}): PromptHistoryNavigationResult {
+  const notHandled = (
+    state: PromptHistoryNavigationState | null,
+  ): PromptHistoryNavigationResult => ({
+    handled: false,
+    prompt: input.currentPrompt,
+    expandedCursor: input.currentExpandedCursor,
+    state,
+  });
+  if (!input.selectionCollapsed || input.history.length === 0) {
+    return notHandled(input.state);
+  }
+  // The active history entry the composer should still be showing. When it no
+  // longer matches (history changed under us or the index fell out of range),
+  // the browse lost its place: never keep navigating from a bogus index, and
+  // never abandon the saved draft — restart from the newest entry when going
+  // older, or restore the draft when going newer.
+  const activeEntry = input.state ? input.history[input.state.index] : undefined;
+  const stateIsStale =
+    input.state !== null && (activeEntry === undefined || input.currentPrompt !== activeEntry);
+
+  if (input.direction === "older") {
+    if (!isComposerCursorOnFirstLine(input.currentPrompt, input.currentExpandedCursor)) {
+      return notHandled(input.state);
+    }
+    const nextState: PromptHistoryNavigationState =
+      input.state === null
+        ? { index: 0, draft: input.currentPrompt }
+        : stateIsStale
+          ? { index: 0, draft: input.state.draft }
+          : {
+              ...input.state,
+              index: Math.min(input.state.index + 1, input.history.length - 1),
+            };
+    const nextPrompt = input.history[nextState.index] ?? input.currentPrompt;
+    return {
+      handled: true,
+      prompt: nextPrompt,
+      expandedCursor: expandedCursorForPromptHistoryItem(nextPrompt, "older"),
+      state: nextState,
+    };
+  }
+
+  if (!input.state) {
+    return notHandled(null);
+  }
+  const cursorCanNavigateNewer =
+    isComposerCursorOnLastLine(input.currentPrompt, input.currentExpandedCursor) ||
+    isComposerCursorOnFirstLine(input.currentPrompt, input.currentExpandedCursor);
+  if (!cursorCanNavigateNewer) {
+    return notHandled(input.state);
+  }
+  if (stateIsStale) {
+    return {
+      handled: true,
+      prompt: input.state.draft,
+      expandedCursor: input.state.draft.length,
+      state: null,
+    };
+  }
+  if (input.state.index > 0) {
+    const nextState = {
+      ...input.state,
+      index: input.state.index - 1,
+    };
+    const nextPrompt = input.history[nextState.index] ?? input.currentPrompt;
+    return {
+      handled: true,
+      prompt: nextPrompt,
+      expandedCursor: expandedCursorForPromptHistoryItem(nextPrompt, "newer"),
+      state: nextState,
+    };
+  }
+
+  return {
+    handled: true,
+    prompt: input.state.draft,
+    expandedCursor: input.state.draft.length,
+    state: null,
+  };
+}
+
 // Default-open policy for the Environment panel; render-time visibility is resolved separately.
 export function resolveDefaultEnvironmentPanelOpen(input: {
   environmentEnabled: boolean;
@@ -121,12 +339,8 @@ export function resolveDefaultEnvironmentPanelOpen(input: {
 
 export function resolveEnvironmentPanelOpen(input: {
   defaultOpen: boolean;
-  actionDismissed: boolean;
   userPreferenceOpen: boolean | null;
 }): boolean {
-  if (input.actionDismissed) {
-    return false;
-  }
   return input.userPreferenceOpen ?? input.defaultOpen;
 }
 
@@ -464,16 +678,46 @@ export const WORKTREE_SETUP_STEP_DEFINITIONS: ReadonlyArray<{
   { id: "start-session", label: "Starting session" },
 ];
 
+export interface WorktreeSetupSnapshotOptions {
+  setupScriptName?: string | null;
+}
+
+export interface WorktreeSetupDispatchOptions extends WorktreeSetupSnapshotOptions {
+  worktreeSetupStepId?: WorktreeSetupStepId;
+}
+
+function worktreeSetupStepDefinitions(
+  activeStepId: WorktreeSetupStepId,
+  options?: WorktreeSetupSnapshotOptions,
+): ReadonlyArray<{ id: WorktreeSetupStepId; label: string }> {
+  const setupScriptName = options?.setupScriptName?.trim();
+  const includeSetupStep = activeStepId === "run-setup-action" || Boolean(setupScriptName);
+  if (!includeSetupStep) {
+    return WORKTREE_SETUP_STEP_DEFINITIONS;
+  }
+  return [
+    { id: "create-worktree", label: "Creating branch and worktree" },
+    { id: "prepare-thread", label: "Linking thread workspace" },
+    {
+      id: "run-setup-action",
+      label: setupScriptName ? `Running setup action: ${setupScriptName}` : "Running setup action",
+    },
+    { id: "start-session", label: "Starting session" },
+  ];
+}
+
 // How long a failed setup step stays visible before the row is dismissed, so
 // the error state can paint instead of being batched away with the reset.
 export const WORKTREE_SETUP_ERROR_HOLD_MS = 1200;
 
 export function createWorktreeSetupSnapshot(
   activeStepId: WorktreeSetupStepId,
+  options?: WorktreeSetupSnapshotOptions,
 ): WorktreeSetupSnapshot {
-  const activeIndex = WORKTREE_SETUP_STEP_DEFINITIONS.findIndex((step) => step.id === activeStepId);
+  const stepDefinitions = worktreeSetupStepDefinitions(activeStepId, options);
+  const activeIndex = stepDefinitions.findIndex((step) => step.id === activeStepId);
   return {
-    steps: WORKTREE_SETUP_STEP_DEFINITIONS.map((step, index) => ({
+    steps: stepDefinitions.map((step, index) => ({
       ...step,
       status: index < activeIndex ? "done" : index === activeIndex ? "active" : "pending",
     })),
@@ -516,14 +760,14 @@ export interface LocalDispatchSnapshot {
 
 export function createLocalDispatchSnapshot(
   activeThread: Thread | undefined,
-  options?: { worktreeSetupStepId?: WorktreeSetupStepId },
+  options?: WorktreeSetupDispatchOptions,
 ): LocalDispatchSnapshot {
   const latestTurn = activeThread?.latestTurn ?? null;
   const session = activeThread?.session ?? null;
   return {
     startedAt: new Date().toISOString(),
     worktreeSetup: options?.worktreeSetupStepId
-      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId)
+      ? createWorktreeSetupSnapshot(options.worktreeSetupStepId, options)
       : null,
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
@@ -539,7 +783,7 @@ export function createLocalDispatchSnapshot(
 export function resolveNextLocalDispatchSnapshot(input: {
   current: LocalDispatchSnapshot | null;
   activeThread: Thread | undefined;
-  options?: { worktreeSetupStepId?: WorktreeSetupStepId };
+  options?: WorktreeSetupDispatchOptions;
 }): LocalDispatchSnapshot {
   const worktreeSetupStepId = input.options?.worktreeSetupStepId;
   if (!input.current || worktreeSetupHasError(input.current.worktreeSetup)) {
@@ -555,7 +799,10 @@ export function resolveNextLocalDispatchSnapshot(input: {
   );
   return alreadyActive
     ? input.current
-    : { ...input.current, worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId) };
+    : {
+        ...input.current,
+        worktreeSetup: createWorktreeSetupSnapshot(worktreeSetupStepId, input.options),
+      };
 }
 
 export function hasServerAcknowledgedLocalDispatch(input: {

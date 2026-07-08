@@ -5,6 +5,8 @@
  * keep UI-only preferences in local storage while these values become durable
  * and process-authoritative on the server.
  */
+import { randomUUID } from "node:crypto";
+
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   DEFAULT_SERVER_SETTINGS,
@@ -134,6 +136,14 @@ function legacyProviderConfigSecretName(input: {
   return `legacy-provider-config-${input.provider}-${input.key}`;
 }
 
+function newVersionedSecretReference(): string {
+  return `provider-secret-v2-${randomUUID()}`;
+}
+
+function providerConfigSecretReferenceKey(key: string): string {
+  return `${key}SecretRef`;
+}
+
 function defaultTextGenerationModel(provider: ProviderKind): string {
   return provider === "pi" ? "openai/gpt-5.5" : DEFAULT_MODEL_BY_PROVIDER[provider];
 }
@@ -216,6 +226,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+type PersistedSecretReferences = ReadonlyMap<string, string>;
+
+// Capture the exact physical names referenced by the durable settings file.
+// Missing refs are legacy markers whose logical name was also the store key.
+function collectPersistedSecretReferences(settings: ServerSettings): PersistedSecretReferences {
+  const references = new Map<string, string>();
+  for (const provider of LEGACY_SERVER_PASSWORD_PROVIDERS) {
+    const providerSettings = settings.providers[provider];
+    if (providerSettings.serverPasswordRedacted !== true) continue;
+    const logicalName = legacyProviderConfigSecretName({ provider, key: "serverPassword" });
+    references.set(logicalName, providerSettings.serverPasswordSecretRef ?? logicalName);
+  }
+  for (const [instanceId, instance] of Object.entries(settings.providerInstances)) {
+    for (const variable of instance.environment ?? []) {
+      if (!variable.sensitive || variable.valueRedacted !== true) continue;
+      const logicalName = providerEnvironmentSecretName({ instanceId, name: variable.name });
+      references.set(logicalName, variable.valueSecretRef ?? logicalName);
+    }
+    if (!isRecord(instance.config)) continue;
+    for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+      if (instance.config[`${key}Redacted`] !== true) continue;
+      const logicalName = providerConfigSecretName({ instanceId, key });
+      const configuredReference = instance.config[providerConfigSecretReferenceKey(key)];
+      references.set(
+        logicalName,
+        typeof configuredReference === "string" && configuredReference.length > 0
+          ? configuredReference
+          : logicalName,
+      );
+    }
+  }
+  return references;
+}
+
 function preserveRedactedProviderInstanceConfig(
   currentConfig: unknown,
   nextConfig: unknown,
@@ -224,10 +268,15 @@ function preserveRedactedProviderInstanceConfig(
     return nextConfig;
   }
 
-  let didRestore = false;
+  let didChange = false;
   const restored: Record<string, unknown> = { ...nextConfig };
   for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
     const markerKey = `${key}Redacted`;
+    const referenceKey = providerConfigSecretReferenceKey(key);
+    if (referenceKey in restored) {
+      delete restored[referenceKey];
+      didChange = true;
+    }
     if (nextConfig[markerKey] !== true) {
       continue;
     }
@@ -237,10 +286,10 @@ function preserveRedactedProviderInstanceConfig(
     }
     restored[key] = currentValue;
     delete restored[markerKey];
-    didRestore = true;
+    didChange = true;
   }
 
-  return didRestore ? restored : nextConfig;
+  return didChange ? restored : nextConfig;
 }
 
 function preserveRedactedProviderInstanceEnvironment(
@@ -260,8 +309,9 @@ function preserveRedactedProviderInstanceEnvironment(
       current.providerInstances[instanceId]?.environment,
     );
     const nextEnvironment = nextInstance.environment?.map((entry) => {
-      if (entry.valueRedacted !== true) {
-        return entry;
+      const { valueSecretRef: _valueSecretRef, ...entryWithoutReference } = entry;
+      if (entryWithoutReference.valueRedacted !== true) {
+        return entryWithoutReference;
       }
       const currentEntry = currentEnvironment.get(entry.name.trim());
       if (
@@ -269,9 +319,9 @@ function preserveRedactedProviderInstanceEnvironment(
         typeof currentEntry.value !== "string" ||
         currentEntry.value.length === 0
       ) {
-        return entry;
+        return entryWithoutReference;
       }
-      const { valueRedacted: _valueRedacted, ...unredactedEntry } = entry;
+      const { valueRedacted: _valueRedacted, ...unredactedEntry } = entryWithoutReference;
       return {
         ...unredactedEntry,
         sensitive: entry.sensitive || currentEntry.sensitive,
@@ -339,6 +389,11 @@ function redactProviderInstanceConfig(config: unknown): unknown {
   let didRedact = false;
   const redacted: Record<string, unknown> = { ...config };
   for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
+    const referenceKey = providerConfigSecretReferenceKey(key);
+    if (referenceKey in redacted) {
+      delete redacted[referenceKey];
+      didRedact = true;
+    }
     const value = config[key];
     if (typeof value !== "string" || value.length === 0) {
       continue;
@@ -354,12 +409,13 @@ function redactProviderInstanceConfig(config: unknown): unknown {
 function redactProviderEnvironmentVariable(
   variable: ProviderInstanceEnvironmentVariable,
 ): ProviderInstanceEnvironmentVariable {
+  const { valueSecretRef: _valueSecretRef, ...variableWithoutReference } = variable;
   if (!variable.sensitive) {
-    const { valueRedacted: _valueRedacted, ...rest } = variable;
+    const { valueRedacted: _valueRedacted, ...rest } = variableWithoutReference;
     return rest;
   }
   return {
-    ...variable,
+    ...variableWithoutReference,
     value: "",
     ...((variable.value ?? "").length > 0 || variable.valueRedacted === true
       ? { valueRedacted: true }
@@ -368,16 +424,22 @@ function redactProviderEnvironmentVariable(
 }
 
 function redactLegacyServerPasswordProvider<
-  T extends { readonly serverPassword: string; readonly serverPasswordRedacted?: boolean },
+  T extends {
+    readonly serverPassword: string;
+    readonly serverPasswordRedacted?: boolean;
+    readonly serverPasswordSecretRef?: string;
+  },
 >(provider: T): T {
+  const { serverPasswordSecretRef: _serverPasswordSecretRef, ...providerWithoutReference } =
+    provider;
   if (!provider.serverPassword) {
-    return provider;
+    return providerWithoutReference as T;
   }
   return {
-    ...provider,
+    ...providerWithoutReference,
     serverPassword: "",
     serverPasswordRedacted: true,
-  };
+  } as T;
 }
 
 export function redactServerSettingsForClient(settings: ServerSettings): ServerSettings {
@@ -456,6 +518,7 @@ const makeServerSettings = Effect.gen(function* () {
   const writeSemaphore = yield* Semaphore.make(1);
   const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const settingsRef = yield* Ref.make<ServerSettings>(DEFAULT_SERVER_SETTINGS);
+  const persistedSecretReferencesRef = yield* Ref.make<PersistedSecretReferences>(new Map());
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
 
@@ -480,8 +543,11 @@ const makeServerSettings = Effect.gen(function* () {
             environment.push(variable);
             continue;
           }
+          const secretReference =
+            variable.valueSecretRef ??
+            providerEnvironmentSecretName({ instanceId, name: variable.name });
           const secret = yield* secretStore
-            .get(providerEnvironmentSecretName({ instanceId, name: variable.name }))
+            .get(secretReference)
             .pipe(
               Effect.mapError(
                 (cause) =>
@@ -492,7 +558,11 @@ const makeServerSettings = Effect.gen(function* () {
                   }),
               ),
             );
-          const { valueRedacted: _valueRedacted, ...materialized } = variable;
+          const {
+            valueRedacted: _valueRedacted,
+            valueSecretRef: _valueSecretRef,
+            ...materialized
+          } = variable;
           environment.push({
             ...materialized,
             value: secret ? textDecoder.decode(secret) : "",
@@ -529,7 +599,13 @@ const makeServerSettings = Effect.gen(function* () {
           if (config[markerKey] !== true) {
             continue;
           }
-          const secret = yield* secretStore.get(providerConfigSecretName({ instanceId, key })).pipe(
+          const referenceKey = providerConfigSecretReferenceKey(key);
+          const configuredReference = config[referenceKey];
+          const secretReference =
+            typeof configuredReference === "string" && configuredReference.length > 0
+              ? configuredReference
+              : providerConfigSecretName({ instanceId, key });
+          const secret = yield* secretStore.get(secretReference).pipe(
             Effect.mapError(
               (cause) =>
                 new ServerSettingsError({
@@ -541,6 +617,7 @@ const makeServerSettings = Effect.gen(function* () {
           );
           config[key] = secret ? textDecoder.decode(secret) : "";
           delete config[markerKey];
+          delete config[referenceKey];
           didMaterialize = true;
         }
         if (didMaterialize) {
@@ -568,8 +645,11 @@ const makeServerSettings = Effect.gen(function* () {
         if (providerSettings.serverPasswordRedacted !== true) {
           continue;
         }
+        const secretReference =
+          providerSettings.serverPasswordSecretRef ??
+          legacyProviderConfigSecretName({ provider, key: "serverPassword" });
         const secret = yield* secretStore
-          .get(legacyProviderConfigSecretName({ provider, key: "serverPassword" }))
+          .get(secretReference)
           .pipe(
             Effect.mapError(
               (cause) =>
@@ -580,8 +660,11 @@ const makeServerSettings = Effect.gen(function* () {
                 }),
             ),
           );
-        const { serverPasswordRedacted: _serverPasswordRedacted, ...materialized } =
-          providerSettings;
+        const {
+          serverPasswordRedacted: _serverPasswordRedacted,
+          serverPasswordSecretRef: _serverPasswordSecretRef,
+          ...materialized
+        } = providerSettings;
         providers = {
           ...providers,
           [provider]: {
@@ -608,18 +691,19 @@ const makeServerSettings = Effect.gen(function* () {
   // on every subsequent cleanup until removal succeeds.
   const pendingObsoleteSecretNames = new Set<string>();
 
-  // Secret writes must land before the settings file references them (a crash
-  // after the file write must still materialize), while removals are returned
-  // as obsolete names the caller cleans up best-effort only after the settings
-  // write succeeded and was applied — otherwise a failed write leaves a
-  // settings file whose redacted markers point at secrets that no longer
-  // exist, and a failed removal would fail an update that already landed.
+  // New values use generation-versioned references, so staging them before the
+  // settings rename never overwrites a secret still named by the old file.
+  // Superseded references are cleaned up only after commit and in-memory apply.
   const persistProviderSecrets = (
     current: ServerSettings,
     next: ServerSettings,
+    currentSecretReferences: PersistedSecretReferences,
   ): Effect.Effect<
     {
       readonly settings: ServerSettings;
+      readonly secretReferences: PersistedSecretReferences;
+      readonly liveSecretNames: ReadonlySet<string>;
+      readonly stagedSecretNames: ReadonlySet<string>;
       readonly obsoleteSecretNames: ReadonlySet<string>;
     },
     ServerSettingsError
@@ -629,21 +713,48 @@ const makeServerSettings = Effect.gen(function* () {
         ...next.providerInstances,
       };
       let providers = next.providers;
-      const nextEnvironmentSecretKeys = new Set<string>();
-      const nextConfigSecretKeys = new Set<string>();
-      const nextLegacyConfigSecretKeys = new Set<string>();
-      const obsoleteSecretNames = new Set<string>();
+      const liveSecretNames = new Set<string>();
+      const nextSecretReferences = new Map<string, string>();
+      const currentPhysicalSecretNames = new Set(currentSecretReferences.values());
+      const stagedSecretNames = new Set<string>();
+      const obsoleteSecretNames = new Set(currentSecretReferences.values());
 
       for (const provider of LEGACY_SERVER_PASSWORD_PROVIDERS) {
-        const secretName = legacyProviderConfigSecretName({ provider, key: "serverPassword" });
+        const logicalName = legacyProviderConfigSecretName({
+          provider,
+          key: "serverPassword",
+        });
+        obsoleteSecretNames.add(logicalName);
         const value = next.providers[provider].serverPassword;
         if (value.length === 0) {
-          obsoleteSecretNames.add(secretName);
+          const {
+            serverPasswordRedacted: _serverPasswordRedacted,
+            serverPasswordSecretRef: _serverPasswordSecretRef,
+            ...withoutSecretMetadata
+          } = providers[provider];
+          providers = {
+            ...providers,
+            [provider]: {
+              ...withoutSecretMetadata,
+              serverPassword: "",
+            },
+          };
           continue;
         }
 
-        nextLegacyConfigSecretKeys.add(secretName);
-        yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
+        const currentReference = currentSecretReferences.get(logicalName);
+        const secretReference =
+          currentReference &&
+          currentReference !== logicalName &&
+          current.providers[provider].serverPassword === value
+            ? currentReference
+            : newVersionedSecretReference();
+        nextSecretReferences.set(logicalName, secretReference);
+        liveSecretNames.add(secretReference);
+        if (!currentPhysicalSecretNames.has(secretReference)) {
+          stagedSecretNames.add(secretReference);
+        }
+        yield* secretStore.set(secretReference, textEncoder.encode(value)).pipe(
           Effect.mapError(
             (cause) =>
               new ServerSettingsError({
@@ -659,46 +770,68 @@ const makeServerSettings = Effect.gen(function* () {
             ...providers[provider],
             serverPassword: "",
             serverPasswordRedacted: true,
+            serverPasswordSecretRef: secretReference,
           },
         };
       }
 
       for (const [instanceId, instance] of Object.entries(next.providerInstances)) {
+        const currentInstance = current.providerInstances[instanceId];
+        const currentEnvironment = environmentByName(currentInstance?.environment);
         if (instance.environment) {
           const environment: ProviderInstanceEnvironmentVariable[] = [];
           for (const variable of instance.environment) {
-            const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
+            const logicalName = providerEnvironmentSecretName({
+              instanceId,
+              name: variable.name,
+            });
+            obsoleteSecretNames.add(logicalName);
             if (!variable.sensitive) {
-              obsoleteSecretNames.add(secretName);
               environment.push(redactProviderEnvironmentVariable(variable));
               continue;
             }
 
-            nextEnvironmentSecretKeys.add(secretName);
-            if (variable.valueRedacted !== true) {
-              const value = variable.value ?? "";
-              if (value.length > 0) {
-                yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new ServerSettingsError({
-                        settingsPath,
-                        detail: `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
-                        cause,
-                      }),
-                  ),
-                );
-                environment.push({ ...variable, value: "", valueRedacted: true });
-              } else {
-                obsoleteSecretNames.add(secretName);
-                nextEnvironmentSecretKeys.delete(secretName);
-                const { valueRedacted: _valueRedacted, ...withoutRedaction } = variable;
-                environment.push(withoutRedaction);
-              }
+            const value = variable.value ?? "";
+            if (value.length === 0) {
+              const {
+                valueRedacted: _valueRedacted,
+                valueSecretRef: _valueSecretRef,
+                ...withoutRedaction
+              } = variable;
+              environment.push(withoutRedaction);
               continue;
             }
 
-            environment.push(redactProviderEnvironmentVariable(variable));
+            const currentReference = currentSecretReferences.get(logicalName);
+            const currentVariable = currentEnvironment.get(variable.name.trim());
+            const secretReference =
+              currentReference &&
+              currentReference !== logicalName &&
+              currentVariable?.value === value
+                ? currentReference
+                : newVersionedSecretReference();
+            nextSecretReferences.set(logicalName, secretReference);
+            liveSecretNames.add(secretReference);
+            if (!currentPhysicalSecretNames.has(secretReference)) {
+              stagedSecretNames.add(secretReference);
+            }
+            yield* secretStore.set(secretReference, textEncoder.encode(value)).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ServerSettingsError({
+                    settingsPath,
+                    detail: `failed to write secret for provider instance '${instanceId}' environment variable '${variable.name}'`,
+                    cause,
+                  }),
+              ),
+            );
+            const { valueSecretRef: _valueSecretRef, ...withoutReference } = variable;
+            environment.push({
+              ...withoutReference,
+              value: "",
+              valueRedacted: true,
+              valueSecretRef: secretReference,
+            });
           }
           providerInstances[instanceId] = {
             ...instance,
@@ -707,17 +840,42 @@ const makeServerSettings = Effect.gen(function* () {
         }
 
         if (isRecord(instance.config)) {
-          let persistedConfig: Record<string, unknown> | undefined;
+          const persistedConfig: Record<string, unknown> = { ...instance.config };
+          let didChangeConfig = false;
           for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
-            const secretName = providerConfigSecretName({ instanceId, key });
+            const logicalName = providerConfigSecretName({ instanceId, key });
+            const markerKey = `${key}Redacted`;
+            const referenceKey = providerConfigSecretReferenceKey(key);
+            obsoleteSecretNames.add(logicalName);
+            if (markerKey in persistedConfig) {
+              delete persistedConfig[markerKey];
+              didChangeConfig = true;
+            }
+            if (referenceKey in persistedConfig) {
+              delete persistedConfig[referenceKey];
+              didChangeConfig = true;
+            }
             const value = instance.config[key];
             if (typeof value !== "string" || value.length === 0) {
-              obsoleteSecretNames.add(secretName);
               continue;
             }
 
-            nextConfigSecretKeys.add(secretName);
-            yield* secretStore.set(secretName, textEncoder.encode(value)).pipe(
+            const currentReference = currentSecretReferences.get(logicalName);
+            const currentConfigValue = isRecord(currentInstance?.config)
+              ? currentInstance.config[key]
+              : undefined;
+            const secretReference =
+              currentReference &&
+              currentReference !== logicalName &&
+              currentConfigValue === value
+                ? currentReference
+                : newVersionedSecretReference();
+            nextSecretReferences.set(logicalName, secretReference);
+            liveSecretNames.add(secretReference);
+            if (!currentPhysicalSecretNames.has(secretReference)) {
+              stagedSecretNames.add(secretReference);
+            }
+            yield* secretStore.set(secretReference, textEncoder.encode(value)).pipe(
               Effect.mapError(
                 (cause) =>
                   new ServerSettingsError({
@@ -727,12 +885,13 @@ const makeServerSettings = Effect.gen(function* () {
                   }),
               ),
             );
-            persistedConfig ??= { ...instance.config };
             persistedConfig[key] = "";
-            persistedConfig[`${key}Redacted`] = true;
+            persistedConfig[markerKey] = true;
+            persistedConfig[referenceKey] = secretReference;
+            didChangeConfig = true;
           }
           const existingInstance = providerInstances[instanceId];
-          if (persistedConfig && existingInstance) {
+          if (didChangeConfig && existingInstance) {
             providerInstances[instanceId] = {
               ...existingInstance,
               config: persistedConfig,
@@ -741,44 +900,10 @@ const makeServerSettings = Effect.gen(function* () {
         }
       }
 
-      for (const provider of LEGACY_SERVER_PASSWORD_PROVIDERS) {
-        const secretName = legacyProviderConfigSecretName({ provider, key: "serverPassword" });
-        if (!nextLegacyConfigSecretKeys.has(secretName)) {
-          obsoleteSecretNames.add(secretName);
-        }
-      }
-
-      for (const [instanceId, instance] of Object.entries(current.providerInstances)) {
-        for (const variable of instance.environment ?? []) {
-          if (!variable.sensitive) {
-            continue;
-          }
-          const secretName = providerEnvironmentSecretName({ instanceId, name: variable.name });
-          if (!nextEnvironmentSecretKeys.has(secretName)) {
-            obsoleteSecretNames.add(secretName);
-          }
-        }
-        if (isRecord(instance.config)) {
-          for (const key of SENSITIVE_PROVIDER_INSTANCE_CONFIG_KEYS) {
-            const secretName = providerConfigSecretName({ instanceId, key });
-            if (!nextConfigSecretKeys.has(secretName)) {
-              obsoleteSecretNames.add(secretName);
-            }
-          }
-        }
-      }
-
-      // A secret that failed to be removed earlier but is live again (same
-      // instance id and name re-created) must not be deleted by a later
-      // pending-cleanup retry.
-      for (const key of nextEnvironmentSecretKeys) {
-        pendingObsoleteSecretNames.delete(key);
-      }
-      for (const key of nextConfigSecretKeys) {
-        pendingObsoleteSecretNames.delete(key);
-      }
-      for (const key of nextLegacyConfigSecretKeys) {
-        pendingObsoleteSecretNames.delete(key);
+      // Current-generation cleanup never includes a live reference. Pending
+      // retries are retired separately, only after the settings file commits.
+      for (const name of liveSecretNames) {
+        obsoleteSecretNames.delete(name);
       }
 
       return {
@@ -787,6 +912,9 @@ const makeServerSettings = Effect.gen(function* () {
           providers,
           providerInstances: providerInstances as ServerSettings["providerInstances"],
         },
+        secretReferences: nextSecretReferences,
+        liveSecretNames,
+        stagedSecretNames,
         obsoleteSecretNames,
       };
     });
@@ -870,7 +998,10 @@ const makeServerSettings = Effect.gen(function* () {
       ),
     );
     if (!exists) {
-      return DEFAULT_SERVER_SETTINGS;
+      return {
+        settings: DEFAULT_SERVER_SETTINGS,
+        secretReferences: new Map<string, string>() as PersistedSecretReferences,
+      };
     }
 
     const raw = yield* fs.readFileString(settingsPath).pipe(
@@ -889,8 +1020,12 @@ const makeServerSettings = Effect.gen(function* () {
         path: settingsPath,
         error: decoded.error,
       });
-      return DEFAULT_SERVER_SETTINGS;
+      return {
+        settings: DEFAULT_SERVER_SETTINGS,
+        secretReferences: new Map<string, string>() as PersistedSecretReferences,
+      };
     }
+    const decodedSecretReferences = collectPersistedSecretReferences(decoded.value);
     if (hasPlaintextProviderInstanceSecrets(decoded.value)) {
       // A previous build (or interrupted migration) left instance secrets in
       // plaintext on disk. Materialize existing redacted secrets first so the
@@ -899,15 +1034,26 @@ const makeServerSettings = Effect.gen(function* () {
       // redacted settings file, and only then drop obsolete store entries so
       // a failed write never loses a still-referenced secret.
       const materialized = yield* materializeProviderSecrets(decoded.value);
-      const { settings: persisted, obsoleteSecretNames } = yield* persistProviderSecrets(
-        materialized,
-        materialized,
+      const {
+        settings: persisted,
+        secretReferences,
+        liveSecretNames,
+        stagedSecretNames,
+        obsoleteSecretNames,
+      } = yield* persistProviderSecrets(materialized, materialized, decodedSecretReferences);
+      yield* writeSettingsAtomically(persisted).pipe(
+        Effect.tapError(() => runObsoleteSecretCleanup(stagedSecretNames)),
       );
-      yield* writeSettingsAtomically(persisted);
+      for (const name of liveSecretNames) {
+        pendingObsoleteSecretNames.delete(name);
+      }
       yield* runObsoleteSecretCleanup(obsoleteSecretNames);
-      return materialized;
+      return { settings: materialized, secretReferences };
     }
-    return yield* materializeProviderSecrets(decoded.value);
+    return {
+      settings: yield* materializeProviderSecrets(decoded.value),
+      secretReferences: decodedSecretReferences,
+    };
   });
 
   const writeSettingsAtomically = (settings: ServerSettings) => {
@@ -945,8 +1091,9 @@ const makeServerSettings = Effect.gen(function* () {
             }),
         ),
       );
-      const settings = yield* loadSettingsFromDisk;
+      const { settings, secretReferences } = yield* loadSettingsFromDisk;
       yield* Ref.set(settingsRef, settings);
+      yield* Ref.set(persistedSecretReferencesRef, secretReferences);
     });
 
     const startupExit = yield* Effect.exit(startup);
@@ -966,14 +1113,24 @@ const makeServerSettings = Effect.gen(function* () {
       writeSemaphore.withPermits(1)(
         Effect.gen(function* () {
           const current = yield* Ref.get(settingsRef);
+          const currentSecretReferences = yield* Ref.get(persistedSecretReferencesRef);
           const next = yield* normalizeSettings(settingsPath, current, patch);
-          const { settings: persisted, obsoleteSecretNames } = yield* persistProviderSecrets(
-            current,
-            next,
+          const {
+            settings: persisted,
+            secretReferences,
+            liveSecretNames,
+            stagedSecretNames,
+            obsoleteSecretNames,
+          } = yield* persistProviderSecrets(current, next, currentSecretReferences);
+          yield* writeSettingsAtomically(persisted).pipe(
+            Effect.tapError(() => runObsoleteSecretCleanup(stagedSecretNames)),
           );
-          yield* writeSettingsAtomically(persisted);
           yield* Ref.set(settingsRef, next);
+          yield* Ref.set(persistedSecretReferencesRef, secretReferences);
           yield* emitChange(next);
+          for (const name of liveSecretNames) {
+            pendingObsoleteSecretNames.delete(name);
+          }
           yield* runObsoleteSecretCleanup(obsoleteSecretNames);
           return resolveTextGenerationProvider(next);
         }),

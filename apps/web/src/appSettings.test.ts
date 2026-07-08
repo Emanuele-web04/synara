@@ -41,6 +41,7 @@ import {
   normalizeTerminalFontSizePx,
   patchCustomModels,
   patchCustomModelsForProviderInstance,
+  removeProviderInstancePreferences,
   resolveAppModelSelection,
   resolveSelectableProviderInstanceId,
   resolveTerminalFontFamilyStack,
@@ -499,6 +500,26 @@ describe("normalizeStoredAppSettings", () => {
     });
   });
 
+  it("redacts legacy provider server passwords after migration", () => {
+    const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
+      JSON.stringify({
+        kiloServerPassword: "kilo-secret",
+        openCodeServerPassword: "opencode-secret",
+      }),
+    );
+
+    expect(normalizeStoredAppSettings(decodedSettings)).toMatchObject({
+      kiloServerPassword: "",
+      openCodeServerPassword: "",
+    });
+    expect(
+      normalizeInitialStoredAppSettingsForServerMigration(decodedSettings, false),
+    ).toMatchObject({
+      kiloServerPassword: "kilo-secret",
+      openCodeServerPassword: "opencode-secret",
+    });
+  });
+
   it("builds the initial server migration patch from legacy plaintext before storage redaction", () => {
     const decodedSettings = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(
       JSON.stringify({
@@ -673,6 +694,35 @@ describe("provider-specific custom models", () => {
     const claudeOptions = getAppModelOptions("claudeAgent", ["claude/custom-opus"]);
 
     expect(claudeOptions.some((option) => option.slug === "claude/custom-opus")).toBe(true);
+  });
+});
+
+describe("removeProviderInstancePreferences", () => {
+  it("removes the instance and its id-scoped favorites without touching sibling accounts", () => {
+    expect(
+      removeProviderInstancePreferences(
+        {
+          providerInstances: {
+            codex_2: { driver: "codex", enabled: true },
+            codex_3: { driver: "codex", enabled: true },
+          },
+          favorites: [
+            { provider: "codex_2", model: "gpt-5.4" },
+            { provider: "codex_3", model: "gpt-5.5" },
+            { provider: "codex", model: "gpt-5.3-codex" },
+          ],
+        },
+        "codex_2",
+      ),
+    ).toEqual({
+      providerInstances: {
+        codex_3: { driver: "codex", enabled: true },
+      },
+      favorites: [
+        { provider: "codex_3", model: "gpt-5.5" },
+        { provider: "codex", model: "gpt-5.3-codex" },
+      ],
+    });
   });
 });
 
@@ -954,6 +1004,41 @@ describe("getProviderStartOptions", () => {
         homePath: "/Users/work/.codex",
       },
     });
+  });
+
+  it("routes a generic Codex instance through its account-isolated overlay", () => {
+    expect(
+      getProviderStartOptions(
+        {
+          claudeBinaryPath: "",
+          codexBinaryPath: "",
+          codexHomePath: "",
+          codexAccounts: [],
+          selectedCodexAccountId: "default",
+          cursorApiEndpoint: "",
+          cursorBinaryPath: "",
+          geminiBinaryPath: "",
+          grokBinaryPath: "",
+          kiloBinaryPath: "",
+          kiloServerPassword: "",
+          kiloServerUrl: "",
+          openCodeBinaryPath: "",
+          openCodeExperimentalWebSockets: false,
+          openCodeServerPassword: "",
+          openCodeServerUrl: "",
+          piAgentDir: "",
+          piBinaryPath: "",
+          providerInstances: {
+            codex_2: {
+              driver: "codex",
+              enabled: true,
+              config: { accountId: "codex_2" },
+            },
+          },
+        },
+        "codex_2",
+      ),
+    ).toEqual({ codex: { accountId: "codex_2" } });
   });
 
   it("emits an empty Codex options object when switching back to default among accounts", () => {
@@ -1751,6 +1836,7 @@ describe("AppSettingsSchema", () => {
       enableAssistantStreaming: true,
       sidebarProjectSortOrder: DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
       sidebarThreadSortOrder: DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
+      showStudioSection: true,
       timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
       customCodexModels: [],
       customClaudeModels: [],

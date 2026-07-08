@@ -2,7 +2,11 @@ import { Schema } from "effect";
 import { TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
-import { ProviderInstanceConfigMap, ProviderInstanceId } from "./providerInstance";
+import {
+  ProviderInstanceConfigMap,
+  ProviderInstanceId,
+  ProviderSecretReference,
+} from "./providerInstance";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
@@ -77,6 +81,7 @@ export const OpenCodeServerProviderSettings = Schema.Struct({
   serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPassword: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPasswordRedacted: Schema.optionalKey(Schema.Boolean),
+  serverPasswordSecretRef: Schema.optionalKey(ProviderSecretReference),
   experimentalWebSockets: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
 });
 export type OpenCodeServerProviderSettings = typeof OpenCodeServerProviderSettings.Type;
@@ -87,6 +92,7 @@ export const KiloServerProviderSettings = Schema.Struct({
   serverUrl: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPassword: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
   serverPasswordRedacted: Schema.optionalKey(Schema.Boolean),
+  serverPasswordSecretRef: Schema.optionalKey(ProviderSecretReference),
 });
 export type KiloServerProviderSettings = typeof KiloServerProviderSettings.Type;
 

@@ -3842,6 +3842,119 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("runs the setup action from the newly-created worktree before starting the turn", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: withProjectScripts(
+        createSnapshotForTargetUser({
+          targetMessageId: "msg-user-new-worktree-setup-action-test" as MessageId,
+          targetText: "new worktree setup action test",
+        }),
+        [
+          {
+            id: "setup",
+            name: "Setup",
+            command: "printf setup",
+            icon: "configure",
+            runOnWorktreeCreate: true,
+          },
+        ],
+      ),
+    });
+
+    try {
+      const newThreadButton = page.getByTestId("new-thread-button");
+      await expect.element(newThreadButton).toBeInTheDocument();
+      await newThreadButton.click();
+
+      const newThreadPath = await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID.",
+      );
+      const newThreadId = newThreadPath.slice(1) as ThreadId;
+
+      const envPickerTrigger = await waitForEnvironmentModeButton("Local");
+      envPickerTrigger.click();
+
+      const newWorktreeOption = page.getByText("New worktree");
+      await expect.element(newWorktreeOption).toBeInTheDocument();
+      await newWorktreeOption.click();
+
+      useComposerDraftStore.getState().setPrompt(newThreadId, "Ship it with setup");
+      const composerEditor = await waitForComposerEditor();
+      await vi.waitFor(
+        () => {
+          expect(composerEditor.textContent ?? "").toContain("Ship it with setup");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      await sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const createWorktreeIndex = wsRequests.findIndex((request) => {
+            return (
+              request._tag === WS_METHODS.gitCreateWorktree &&
+              request.cwd === "/repo/project" &&
+              request.branch === "main" &&
+              typeof request.newBranch === "string"
+            );
+          });
+          expect(createWorktreeIndex).toBeGreaterThanOrEqual(0);
+          const createWorktreeRequest = wsRequests[createWorktreeIndex];
+          if (
+            !createWorktreeRequest ||
+            createWorktreeRequest._tag !== WS_METHODS.gitCreateWorktree
+          ) {
+            throw new Error("Expected create worktree request.");
+          }
+          const worktreePath = `/repo/.codex/worktrees/project/${String(
+            createWorktreeRequest.newBranch,
+          ).replaceAll("/", "-")}`;
+
+          const terminalOpenIndex = wsRequests.findIndex((request) => {
+            return (
+              request._tag === WS_METHODS.terminalOpen &&
+              request.threadId === newThreadId &&
+              request.cwd === worktreePath
+            );
+          });
+          expect(terminalOpenIndex).toBeGreaterThan(createWorktreeIndex);
+          expect(wsRequests[terminalOpenIndex]).toMatchObject({
+            _tag: WS_METHODS.terminalOpen,
+            cwd: worktreePath,
+            env: {
+              T3CODE_PROJECT_ROOT: "/repo/project",
+              T3CODE_WORKTREE_PATH: worktreePath,
+            },
+          });
+
+          const terminalWriteIndex = wsRequests.findIndex((request) => {
+            return (
+              request._tag === WS_METHODS.terminalWrite &&
+              request.threadId === newThreadId &&
+              request.data === "printf setup\r"
+            );
+          });
+          expect(terminalWriteIndex).toBeGreaterThan(terminalOpenIndex);
+
+          const turnStartIndex = wsRequests.findIndex((request) => {
+            const command = readDispatchedCommand(request);
+            return command?.type === "thread.turn.start" && command.threadId === newThreadId;
+          });
+          expect(turnStartIndex).toBeGreaterThan(terminalWriteIndex);
+        },
+        { timeout: 10_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("hydrates the provider alongside a sticky claude model", async () => {
     useComposerDraftStore.setState({
       stickyModelSelectionByProvider: {
@@ -4147,6 +4260,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
       draftsByThreadId: {
         [draftThreadId]: {
           prompt: "",
+          promptHistorySavedDraft: null,
           images: [],
           files: [],
           nonPersistedImageIds: [],

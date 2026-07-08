@@ -21,6 +21,8 @@ export interface CodexHomePathsInput {
   readonly homePath?: string;
   readonly shadowHomePath?: string;
   readonly accountId?: string;
+  /** Canonical filesystem decision supplied by IO-aware callers. */
+  readonly accountSourceHomeIsDedicated?: boolean;
 }
 
 function expandHomePath(input: string): string {
@@ -86,6 +88,7 @@ function shouldUseDirectAccountOverlay(input: {
   readonly sourceHomePath: string;
   readonly explicitHomePath?: string | undefined;
   readonly accountId?: string | undefined;
+  readonly accountSourceHomeIsDedicated?: boolean | undefined;
 }): boolean {
   const accountSegment = resolveCodexHomeOverlayAccountSegment({
     homePath: input.sourceHomePath,
@@ -96,6 +99,9 @@ function shouldUseDirectAccountOverlay(input: {
   }
   if (!input.explicitHomePath?.trim()) {
     return true;
+  }
+  if (input.accountSourceHomeIsDedicated !== undefined) {
+    return !input.accountSourceHomeIsDedicated;
   }
   return path.resolve(input.sourceHomePath) === path.resolve(resolveBaseCodexHomePath(input.env));
 }
@@ -119,6 +125,7 @@ export function resolveActiveCodexHomeWritePath(input: CodexHomePathsInput = {})
         sourceHomePath: source,
         explicitHomePath: input.homePath,
         accountId: input.accountId,
+        accountSourceHomeIsDedicated: input.accountSourceHomeIsDedicated,
       })
     ) {
       const directAccountSegment = resolveCodexHomeOverlayAccountSegment({
@@ -177,17 +184,29 @@ export function resolveCodexHomeAllowlistCandidates(
   const accountOverlay = accountSegment
     ? resolveDpCodeCodexHomeOverlayPath(env, source, accountSegment)
     : undefined;
+
+  // Account-scoped instances must not inherit the default source/overlay roots.
+  // Their legitimate history is limited to their account overlay plus an
+  // explicitly dedicated direct home or shadow home.
+  if (accountOverlay) {
+    const hasDedicatedSource = Boolean(
+      !shadow && input.homePath?.trim() && input.accountSourceHomeIsDedicated === true,
+    );
+    const accountCandidates = [
+      ...(hasDedicatedSource ? [source] : []),
+      accountOverlay,
+      ...(shadow ? [shadow] : []),
+    ];
+    return accountCandidates.filter(
+      (candidate, index) =>
+        accountCandidates.findIndex(
+          (existing) => path.resolve(existing) === path.resolve(candidate),
+        ) === index,
+    );
+  }
+
   const sourceResolved = path.resolve(source);
   const overlayResolved = path.resolve(overlay);
   const candidates = sourceResolved === overlayResolved ? [source] : [source, overlay];
-  if (
-    accountOverlay &&
-    !candidates.some((candidate) => path.resolve(candidate) === path.resolve(accountOverlay))
-  ) {
-    candidates.push(accountOverlay);
-  }
-  if (shadow && !candidates.some((candidate) => path.resolve(candidate) === path.resolve(shadow))) {
-    candidates.push(shadow);
-  }
   return candidates;
 }

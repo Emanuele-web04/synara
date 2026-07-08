@@ -145,7 +145,11 @@ export interface TurnDiffSummary {
 // Ephemeral client-side progress of the "New worktree" first-send setup
 // sequence (create worktree → link thread → start session). Rendered as a
 // transient transcript row; never persisted.
-export type WorktreeSetupStepId = "create-worktree" | "prepare-thread" | "start-session";
+export type WorktreeSetupStepId =
+  | "create-worktree"
+  | "prepare-thread"
+  | "run-setup-action"
+  | "start-session";
 export type WorktreeSetupStepStatus = "pending" | "active" | "done" | "error";
 
 export interface WorktreeSetupStep {

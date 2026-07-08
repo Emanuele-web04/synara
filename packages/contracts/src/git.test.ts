@@ -53,11 +53,19 @@ describe("GitResolvePullRequestResult", () => {
         baseBranch: "main",
         headBranch: "feature/pr-threads",
         state: "open",
+        isDraft: true,
+        mergeability: "conflicting",
+        additions: 38,
+        deletions: 36,
+        changedFiles: 3,
       },
     });
 
     expect(parsed.pullRequest.number).toBe(42);
     expect(parsed.pullRequest.headBranch).toBe("feature/pr-threads");
+    expect(parsed.pullRequest.isDraft).toBe(true);
+    expect(parsed.pullRequest.mergeability).toBe("conflicting");
+    expect(parsed.pullRequest.additions).toBe(38);
   });
 });
 

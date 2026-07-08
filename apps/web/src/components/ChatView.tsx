@@ -123,6 +123,7 @@ import { isElectron } from "../env";
 import { stripDiffSearchParams } from "../diffRouteSearch";
 import { resolveSubagentPresentationForThread } from "../lib/subagentPresentation";
 import { ensureHomeChatProject, isHomeChatContainerProject } from "../lib/chatProjects";
+import { ensureStudioProject, isStudioContainerProject } from "../lib/studioProjects";
 import { resolveFirstSendTarget } from "../lib/chatFirstSend";
 import {
   createOrRecoverProjectFromPath,
@@ -163,14 +164,20 @@ import { useComposerDropzone } from "../hooks/useComposerDropzone";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
 import {
   buildThreadBreadcrumbs,
+  derivePromptHistoryFromMessages,
   enrichSubagentWorkEntries,
+  promptStillMatchesActiveHistoryBrowse,
+  type PromptHistoryNavigationState,
   resolveActiveThreadTitle,
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveDraftProviderInstanceId,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
+  resolvePromptHistoryNavigation,
+  shouldHandlePromptHistoryNavigationKey,
   shouldEnableComposerPastedTextCollapse,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldShowComposerModelBootstrapSkeleton,
@@ -245,7 +252,6 @@ import {
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
   type Thread,
-  type WorktreeSetupStepId,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { useThreadWorkspaceHandoff } from "../hooks/useThreadWorkspaceHandoff";
@@ -289,6 +295,8 @@ import {
   projectScriptRuntimeEnv,
   projectScriptIdFromCommand,
   setupProjectScript,
+  type ProjectScriptRunOptions,
+  type ProjectScriptRunResult,
 } from "~/projectScripts";
 import { runProjectCommandInTerminal } from "~/projectTerminalRunner";
 import { newCommandId, newMessageId, newProjectId, newThreadId } from "~/lib/utils";
@@ -325,6 +333,7 @@ import {
   type QueuedComposerPlanFollowUp,
   type QueuedComposerTurn,
   type RestoredComposerSourceProposedPlan,
+  captureComposerPromptHistorySavedDraft,
   providerInstanceModelSelectionKey,
   useComposerDraftStore,
   useComposerThreadDraft,
@@ -513,6 +522,7 @@ import {
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
   type LocalDispatchSnapshot,
+  type WorktreeSetupDispatchOptions,
   PullRequestDialogState,
   type QueuedSteerGate,
   resolveQueuedSteerGateTransition,
@@ -565,6 +575,87 @@ const LOCAL_PROJECT_DRAFT_CONTEXT = {
 } as const;
 const DRAFT_PROJECT_SYNC_MAX_ATTEMPTS = 6;
 const DRAFT_PROJECT_SYNC_DELAY_MS = 50;
+const SETUP_SCRIPT_TERMINAL_ACTIVITY_START_TIMEOUT_MS = 1_000;
+const SETUP_SCRIPT_TERMINAL_MAX_RUNTIME_MS = 10 * 60 * 1000;
+
+function terminalHasRunningSubprocess(threadId: ThreadId, terminalId: string): boolean {
+  const terminalState = selectThreadTerminalState(
+    useTerminalStateStore.getState().terminalStateByThreadId,
+    threadId,
+  );
+  return terminalState.runningTerminalIds.includes(terminalId);
+}
+
+function waitForSetupScriptTerminalActivity(input: {
+  threadId: ThreadId;
+  terminalId: string;
+  observeStartTimeoutMs?: number;
+  maxRuntimeMs?: number;
+}): Promise<void> {
+  if (typeof window === "undefined") {
+    return Promise.resolve();
+  }
+
+  const observeStartTimeoutMs =
+    input.observeStartTimeoutMs ?? SETUP_SCRIPT_TERMINAL_ACTIVITY_START_TIMEOUT_MS;
+  const maxRuntimeMs = input.maxRuntimeMs ?? SETUP_SCRIPT_TERMINAL_MAX_RUNTIME_MS;
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    let observedRunning = terminalHasRunningSubprocess(input.threadId, input.terminalId);
+    let observeStartTimer: number | null = null;
+    let maxRuntimeTimer: number | null = null;
+
+    const unsubscribe = useTerminalStateStore.subscribe(() => {
+      checkRunningState();
+    });
+
+    const clearTimers = () => {
+      if (observeStartTimer !== null) {
+        window.clearTimeout(observeStartTimer);
+        observeStartTimer = null;
+      }
+      if (maxRuntimeTimer !== null) {
+        window.clearTimeout(maxRuntimeTimer);
+        maxRuntimeTimer = null;
+      }
+    };
+
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimers();
+      unsubscribe();
+      resolve();
+    };
+
+    const ensureMaxRuntimeTimer = () => {
+      if (maxRuntimeTimer !== null) return;
+      maxRuntimeTimer = window.setTimeout(finish, maxRuntimeMs);
+    };
+
+    function checkRunningState() {
+      const running = terminalHasRunningSubprocess(input.threadId, input.terminalId);
+      if (running) {
+        observedRunning = true;
+        if (observeStartTimer !== null) {
+          window.clearTimeout(observeStartTimer);
+          observeStartTimer = null;
+        }
+        ensureMaxRuntimeTimer();
+        return;
+      }
+      if (observedRunning) {
+        finish();
+      }
+    }
+
+    checkRunningState();
+    if (!observedRunning) {
+      observeStartTimer = window.setTimeout(finish, observeStartTimeoutMs);
+    }
+  });
+}
 
 function waitForDraftProjectSyncDelay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -1054,6 +1145,8 @@ export default function ChatView({
   const isInactiveSplitPane = surfaceMode === "split" && !isFocusedPane;
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
+  const composerPromptHistorySavedDraft = composerDraft.promptHistorySavedDraft;
+  const composerPromptHistorySavedDraftImages = composerPromptHistorySavedDraft?.images ?? null;
   const composerImages = composerDraft.images;
   const composerFiles = composerDraft.files;
   const composerAssistantSelections = composerDraft.assistantSelections;
@@ -1096,6 +1189,12 @@ export default function ChatView({
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftPromptHistorySavedDraft = useComposerDraftStore(
+    (store) => store.setPromptHistorySavedDraft,
+  );
+  const restoreComposerDraftPromptHistorySavedDraft = useComposerDraftStore(
+    (store) => store.restorePromptHistorySavedDraft,
+  );
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftProviderModelOptions = useComposerDraftStore(
     (store) => store.setProviderModelOptions,
@@ -1143,6 +1242,9 @@ export default function ChatView({
   );
   const syncComposerDraftPersistedAttachments = useComposerDraftStore(
     (store) => store.syncPersistedAttachments,
+  );
+  const syncComposerDraftPromptHistorySavedDraftPersistedAttachments = useComposerDraftStore(
+    (store) => store.syncPromptHistorySavedDraftPersistedAttachments,
   );
   const setComposerDraftRestoredSourceProposedPlan = useComposerDraftStore(
     (store) => store.setRestoredSourceProposedPlan,
@@ -1327,6 +1429,10 @@ export default function ChatView({
   const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
   const composerFormRef = useRef<HTMLFormElement>(null);
   const pendingComposerFocusRef = useRef(false);
+  const promptHistoryNavigationRef = useRef<PromptHistoryNavigationState | null>(null);
+  const applyingPromptHistoryNavigationRef = useRef(false);
+  const expectedPromptHistoryPromptRef = useRef<string | null>(null);
+  const promptHistoryAppliedPromptRef = useRef<string | null>(null);
   const composerFormHeightRef = useRef(0);
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerFilesRef = useRef<ComposerFileAttachment[]>([]);
@@ -1353,6 +1459,28 @@ export default function ChatView({
   const dragDepthRef = useRef(0);
   const terminalOpenByThreadRef = useRef<Record<string, boolean>>({});
   const activatedThreadIdRef = useRef<ThreadId | null>(null);
+  useEffect(() => {
+    promptHistoryNavigationRef.current = null;
+    applyingPromptHistoryNavigationRef.current = false;
+    expectedPromptHistoryPromptRef.current = null;
+    promptHistoryAppliedPromptRef.current = null;
+  }, [threadId]);
+  // While a history browse is active the persisted draft prompt holds a
+  // recalled entry and the user's real draft snapshot sits in promptHistorySavedDraft.
+  // A non-null saved draft with no live navigation state means the browse was
+  // interrupted (thread switch, reload, unmount) — put the real draft back.
+  useEffect(() => {
+    if (promptHistoryNavigationRef.current !== null || composerPromptHistorySavedDraft === null) {
+      return;
+    }
+    restoreComposerDraftPromptHistorySavedDraft(threadId);
+    setComposerCursor(
+      collapseExpandedComposerCursor(
+        composerPromptHistorySavedDraft.prompt,
+        composerPromptHistorySavedDraft.prompt.length,
+      ),
+    );
+  }, [composerPromptHistorySavedDraft, restoreComposerDraftPromptHistorySavedDraft, threadId]);
   const setRestoredQueuedSourceProposedPlan = useCallback(
     (targetThreadId: ThreadId, source: RestoredComposerSourceProposedPlan | null) => {
       restoredQueuedSourceProposedPlanRef.current = source;
@@ -1400,61 +1528,92 @@ export default function ChatView({
     },
     [setComposerDraftPrompt, threadId],
   );
+  const discardPromptHistoryNavigationForComposerMutation = useCallback(() => {
+    if (promptHistoryNavigationRef.current === null) {
+      return;
+    }
+    // Attachment edits mean the recalled prompt is now the user's draft; do not restore the old one.
+    promptHistoryNavigationRef.current = null;
+    applyingPromptHistoryNavigationRef.current = false;
+    expectedPromptHistoryPromptRef.current = null;
+    promptHistoryAppliedPromptRef.current = null;
+    setComposerDraftPromptHistorySavedDraft(threadId, null);
+  }, [setComposerDraftPromptHistorySavedDraft, threadId]);
   const addComposerImage = useCallback(
     (image: ComposerImageAttachment) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftImage(threadId, image);
     },
-    [addComposerDraftImage, threadId],
+    [addComposerDraftImage, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerImagesToDraft = useCallback(
     (images: ComposerImageAttachment[]) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftImages(threadId, images);
     },
-    [addComposerDraftImages, threadId],
+    [addComposerDraftImages, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerFilesToDraft = useCallback(
     (files: ComposerFileAttachment[]) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftFiles(threadId, files);
     },
-    [addComposerDraftFiles, threadId],
+    [addComposerDraftFiles, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerAssistantSelectionToDraft = useCallback(
-    (selection: ComposerAssistantSelectionAttachment) =>
-      addComposerDraftAssistantSelection(threadId, selection),
-    [addComposerDraftAssistantSelection, threadId],
+    (selection: ComposerAssistantSelectionAttachment) => {
+      discardPromptHistoryNavigationForComposerMutation();
+      return addComposerDraftAssistantSelection(threadId, selection);
+    },
+    [
+      addComposerDraftAssistantSelection,
+      discardPromptHistoryNavigationForComposerMutation,
+      threadId,
+    ],
   );
   const addComposerTerminalContextsToDraft = useCallback(
     (contexts: TerminalContextDraft[]) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftTerminalContexts(threadId, contexts);
     },
-    [addComposerDraftTerminalContexts, threadId],
+    [addComposerDraftTerminalContexts, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerPastedTextsToDraft = useCallback(
     (pastedTexts: PastedTextDraft[]) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftPastedTexts(threadId, pastedTexts);
     },
-    [addComposerDraftPastedTexts, threadId],
+    [addComposerDraftPastedTexts, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const addComposerFileCommentToDraft = useCallback(
     (comment: FileCommentDraft) => {
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftFileComment(threadId, comment);
     },
-    [addComposerDraftFileComment, threadId],
+    [addComposerDraftFileComment, discardPromptHistoryNavigationForComposerMutation, threadId],
   );
   const removeComposerImageFromDraft = useCallback(
     (imageId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
       removeComposerDraftImage(threadId, imageId);
     },
-    [removeComposerDraftImage, threadId],
+    [discardPromptHistoryNavigationForComposerMutation, removeComposerDraftImage, threadId],
   );
   const clearComposerAssistantSelectionsFromDraft = useCallback(() => {
+    discardPromptHistoryNavigationForComposerMutation();
     clearComposerDraftAssistantSelections(threadId);
-  }, [clearComposerDraftAssistantSelections, threadId]);
+  }, [
+    clearComposerDraftAssistantSelections,
+    discardPromptHistoryNavigationForComposerMutation,
+    threadId,
+  ]);
   const clearComposerFileCommentsFromDraft = useCallback(() => {
+    discardPromptHistoryNavigationForComposerMutation();
     clearComposerDraftFileComments(threadId);
-  }, [clearComposerDraftFileComments, threadId]);
+  }, [clearComposerDraftFileComments, discardPromptHistoryNavigationForComposerMutation, threadId]);
   const removeComposerTerminalContextFromDraft = useCallback(
     (contextId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
       const contextIndex = composerTerminalContexts.findIndex(
         (context) => context.id === contextId,
       );
@@ -1473,13 +1632,20 @@ export default function ChatView({
         ),
       );
     },
-    [composerTerminalContexts, removeComposerDraftTerminalContext, setPrompt, threadId],
+    [
+      composerTerminalContexts,
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerDraftTerminalContext,
+      setPrompt,
+      threadId,
+    ],
   );
   const removeComposerPastedTextFromDraft = useCallback(
     (pastedTextId: string) => {
+      discardPromptHistoryNavigationForComposerMutation();
       removeComposerDraftPastedText(threadId, pastedTextId);
     },
-    [removeComposerDraftPastedText, threadId],
+    [discardPromptHistoryNavigationForComposerMutation, removeComposerDraftPastedText, threadId],
   );
   // "Show in text field": drop the full pasted text back into the editor (appended
   // to the current prompt) and discard the card so it can be edited as normal text.
@@ -1489,6 +1655,7 @@ export default function ChatView({
       if (!pasted) {
         return;
       }
+      discardPromptHistoryNavigationForComposerMutation();
       const current = promptRef.current;
       const separator = current.length > 0 && !current.endsWith("\n") ? "\n" : "";
       const nextPrompt = `${current}${separator}${pasted.text}`;
@@ -1501,7 +1668,13 @@ export default function ChatView({
         composerEditorRef.current?.focusAtEnd();
       });
     },
-    [composerPastedTexts, removeComposerDraftPastedText, setPrompt, threadId],
+    [
+      composerPastedTexts,
+      discardPromptHistoryNavigationForComposerMutation,
+      removeComposerDraftPastedText,
+      setPrompt,
+      threadId,
+    ],
   );
 
   const localDraftError = serverThread ? null : (localDraftErrorsByThreadId[threadId] ?? null);
@@ -1660,15 +1833,22 @@ export default function ChatView({
   const setProjectInstructions = useProjectInstructionsStore((state) => state.setInstructions);
   const homeDir = useWorkspaceStore((state) => state.homeDir);
   const chatWorkspaceRoot = useWorkspaceStore((state) => state.chatWorkspaceRoot);
+  const studioWorkspaceRoot = useWorkspaceStore((state) => state.studioWorkspaceRoot);
   const [renameDialogOpen, setRenameDialogOpen] = useState(false);
   const isHomeChatContainer = isHomeChatContainerProject(activeProject, {
     homeDir,
     chatWorkspaceRoot,
   });
+  const isStudioContainer = isStudioContainerProject(activeProject, {
+    homeDir,
+    chatWorkspaceRoot,
+    studioWorkspaceRoot,
+  });
+  const isContainerLandingProject = isHomeChatContainer || isStudioContainer;
   const activeProjectDisplayName = isHomeChatContainer
     ? activeProject?.folderName
     : activeProject?.name;
-  const isChatProject = isHomeChatContainer;
+  const isChatProject = isContainerLandingProject;
   const activeProjectScripts =
     activeProject?.kind === "project" ? activeProject.scripts : undefined;
   const threadLineageThreads = useStore(
@@ -1951,27 +2131,14 @@ export default function ChatView({
     if (sessionInstanceId) {
       candidateInstanceId = sessionInstanceId;
     }
-    if (
-      candidateInstanceId === undefined &&
-      selectedProviderByThreadId === selectedProvider &&
-      selectedProviderInstanceByThreadId
-    ) {
-      candidateInstanceId = selectedProviderInstanceByThreadId;
-    }
-
-    const draftSelection =
-      candidateInstanceId === undefined
-        ? undefined
-        : composerDraft.modelSelectionByProvider[
-            providerInstanceModelSelectionKey(selectedProvider, candidateInstanceId)
-          ];
-    if (
-      candidateInstanceId === undefined &&
-      draftSelection !== undefined &&
-      resolveProviderForModelSelection(draftSelection) === selectedProvider &&
-      draftSelection.instanceId
-    ) {
-      candidateInstanceId = draftSelection.instanceId;
+    if (candidateInstanceId === undefined) {
+      candidateInstanceId = resolveDraftProviderInstanceId({
+        selectedProvider,
+        activeProviderInstanceId: selectedProviderInstanceByThreadId,
+        activeProvider: selectedProviderByThreadId,
+        modelSelections: Object.values(composerDraft.modelSelectionByProvider),
+        resolveProviderForModelSelection,
+      });
     }
 
     if (
@@ -3082,6 +3249,14 @@ export default function ChatView({
     pendingAutomationConversation,
     threadId,
   ]);
+  const promptHistory = useMemo(() => {
+    const activeMessages = activeThread?.messages ?? EMPTY_MESSAGES;
+    const activeMessageIds = new Set(activeMessages.map((message) => message.id));
+    const pendingOptimisticMessages = optimisticUserMessages.filter(
+      (message) => !activeMessageIds.has(message.id),
+    );
+    return derivePromptHistoryFromMessages([...activeMessages, ...pendingOptimisticMessages]);
+  }, [activeThread?.messages, optimisticUserMessages]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(
@@ -3232,9 +3407,7 @@ export default function ChatView({
   const isCenteredEmptyLanding =
     timelineEntries.length === 0 && !activeThread?.parentThreadId && !isEditorRail;
   const isEmptyChatLanding =
-    isCenteredEmptyLanding &&
-    Boolean(homeDir) &&
-    isHomeChatContainerProject(activeProject, { homeDir, chatWorkspaceRoot });
+    isCenteredEmptyLanding && Boolean(homeDir) && isContainerLandingProject;
   const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
     useTurnDiffSummaries(activeThread);
   const turnDiffSummaryByAssistantMessageId = useMemo(() => {
@@ -3296,7 +3469,7 @@ export default function ChatView({
       })
     : null;
   const gitCwd = threadWorkspaceCwd;
-  const showGitActions = !isHomeChatContainer || Boolean(resolvedThreadWorktreePath);
+  const showGitActions = !isContainerLandingProject || Boolean(resolvedThreadWorktreePath);
   const gitBranchSourceCwd = activeProject
     ? resolveThreadBranchSourceCwd({
         projectCwd: activeProject.cwd,
@@ -4096,10 +4269,12 @@ export default function ChatView({
       if (!activeThread) {
         return;
       }
+      discardPromptHistoryNavigationForComposerMutation();
       const snapshot = composerEditorRef.current?.readSnapshot() ?? {
         value: promptRef.current,
         cursor: composerCursor,
         expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+        selectionCollapsed: true,
         terminalContextIds: composerTerminalContexts.map((context) => context.id),
       };
       const insertion = insertInlineTerminalContextPlaceholder(
@@ -4131,7 +4306,13 @@ export default function ChatView({
         composerEditorRef.current?.focusAt(nextCollapsedCursor);
       });
     },
-    [activeThread, composerCursor, composerTerminalContexts, insertComposerDraftTerminalContext],
+    [
+      activeThread,
+      composerCursor,
+      composerTerminalContexts,
+      discardPromptHistoryNavigationForComposerMutation,
+      insertComposerDraftTerminalContext,
+    ],
   );
   // Collapse an oversized paste into an attachment card above the composer instead
   // of flooding the editor with raw text. The card holds the full content until the
@@ -4141,6 +4322,7 @@ export default function ChatView({
       if (!activeThread) {
         return;
       }
+      discardPromptHistoryNavigationForComposerMutation();
       addComposerDraftPastedTexts(activeThread.id, [
         createPastedTextDraft({
           id: randomUUID(),
@@ -4149,7 +4331,7 @@ export default function ChatView({
         }),
       ]);
     },
-    [activeThread, addComposerDraftPastedTexts],
+    [activeThread, addComposerDraftPastedTexts, discardPromptHistoryNavigationForComposerMutation],
   );
   const setTerminalOpen = useCallback(
     (open: boolean) => {
@@ -4452,18 +4634,13 @@ export default function ChatView({
     isTerminalPrimarySurface,
     isConstrainedChatLayout: environmentUsesFloatingOverlay,
   });
+  // Every close (header toggle or panel action click) stores the cross-chat preference,
+  // so a dismissed panel stays closed when switching threads until it is toggled back on.
   const [environmentPanelPreferenceOpen, setEnvironmentPanelPreferenceOpen] = useState<
     boolean | null
   >(null);
-  const [environmentPanelActionDismissedThreadId, setEnvironmentPanelActionDismissedThreadId] =
-    useState<ThreadId | null>(null);
-  // Action clicks close the current panel, but only the header toggle owns cross-chat preference.
-  useEffect(() => {
-    setEnvironmentPanelActionDismissedThreadId(null);
-  }, [threadId]);
   const environmentPanelOpen = resolveEnvironmentPanelOpen({
     defaultOpen: environmentDefaultOpen,
-    actionDismissed: environmentPanelActionDismissedThreadId === threadId,
     userPreferenceOpen: environmentPanelPreferenceOpen,
   });
   const environmentPanelVisible = resolveEnvironmentPanelVisible({
@@ -4590,16 +4767,10 @@ export default function ChatView({
   const runProjectScript = useCallback(
     async (
       script: ProjectScript,
-      options?: {
-        cwd?: string;
-        env?: Record<string, string>;
-        worktreePath?: string | null;
-        preferNewTerminal?: boolean;
-        rememberAsLastInvoked?: boolean;
-      },
-    ) => {
+      options?: ProjectScriptRunOptions,
+    ): Promise<ProjectScriptRunResult | null> => {
       const api = readNativeApi();
-      if (!api || !activeThreadId || !activeProject || !activeThread) return;
+      if (!api || !activeThreadId || !activeProject || !activeThread) return null;
       if (options?.rememberAsLastInvoked !== false) {
         setLastInvokedScriptByProjectId((current) => {
           if (current[activeProject.id] === script.id) return current;
@@ -4647,11 +4818,18 @@ export default function ChatView({
             label: metadata.label,
           });
         }
+        return { terminalId: targetTerminalId };
       } catch (error) {
         setThreadError(
           activeThreadId,
           error instanceof Error ? error.message : `Failed to run script "${script.name}".`,
         );
+        if (options?.throwOnError) {
+          throw error instanceof Error
+            ? error
+            : new Error(`Failed to run script "${script.name}".`);
+        }
+        return null;
       }
     },
     [
@@ -5466,8 +5644,20 @@ export default function ChatView({
 
   useEffect(() => {
     promptRef.current = prompt;
+    if (
+      promptHistoryNavigationRef.current !== null &&
+      prompt !== promptHistoryAppliedPromptRef.current
+    ) {
+      // Another writer (queued-turn restore, automation restore, insertion)
+      // replaced the prompt while a history browse was active. The new prompt
+      // is authoritative: end the browse and drop the saved pre-browse draft
+      // so it cannot clobber this prompt later.
+      promptHistoryNavigationRef.current = null;
+      expectedPromptHistoryPromptRef.current = null;
+      setComposerDraftPromptHistorySavedDraft(threadId, null);
+    }
     setComposerCursor((existing) => clampCollapsedComposerCursor(prompt, existing));
-  }, [prompt]);
+  }, [prompt, setComposerDraftPromptHistorySavedDraft, threadId]);
 
   useLayoutEffect(() => {
     updateSelectedComposerSkills(composerSkills);
@@ -5628,6 +5818,72 @@ export default function ChatView({
     threadId,
   ]);
 
+  useEffect(() => {
+    if (
+      !composerPromptHistorySavedDraftImages ||
+      composerPromptHistorySavedDraftImages.length === 0
+    ) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const getPersistedAttachmentsForThread = () =>
+        useComposerDraftStore.getState().draftsByThreadId[threadId]?.promptHistorySavedDraft
+          ?.persistedAttachments ?? [];
+      try {
+        const currentPersistedAttachments = getPersistedAttachmentsForThread();
+        const existingPersistedById = new Map(
+          currentPersistedAttachments.map((attachment) => [attachment.id, attachment]),
+        );
+        const stagedAttachmentById = new Map<string, PersistedComposerImageAttachment>();
+        await Promise.all(
+          composerPromptHistorySavedDraftImages.map(async (image) => {
+            try {
+              const dataUrl = await readFileAsDataUrl(image.file);
+              stagedAttachmentById.set(image.id, {
+                id: image.id,
+                name: image.name,
+                mimeType: image.mimeType,
+                sizeBytes: image.sizeBytes,
+                dataUrl,
+              });
+            } catch {
+              const existingPersisted = existingPersistedById.get(image.id);
+              if (existingPersisted) {
+                stagedAttachmentById.set(image.id, existingPersisted);
+              }
+            }
+          }),
+        );
+        if (cancelled) {
+          return;
+        }
+        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(
+          threadId,
+          Array.from(stagedAttachmentById.values()),
+        );
+      } catch {
+        const currentImageIds = new Set(
+          composerPromptHistorySavedDraftImages.map((image) => image.id),
+        );
+        const fallbackAttachments = getPersistedAttachmentsForThread().filter((attachment) =>
+          currentImageIds.has(attachment.id),
+        );
+        if (cancelled) {
+          return;
+        }
+        syncComposerDraftPromptHistorySavedDraftPersistedAttachments(threadId, fallbackAttachments);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    composerPromptHistorySavedDraftImages,
+    syncComposerDraftPromptHistorySavedDraftPersistedAttachments,
+    threadId,
+  ]);
+
   const closeExpandedImage = useCallback(() => {
     setExpandedImage(null);
   }, []);
@@ -5710,7 +5966,7 @@ export default function ChatView({
   });
 
   const beginLocalDispatch = useCallback(
-    (options?: { worktreeSetupStepId?: WorktreeSetupStepId }) => {
+    (options?: WorktreeSetupDispatchOptions) => {
       setLocalDispatch((current) => {
         const next = resolveNextLocalDispatchSnapshot(
           options ? { current, activeThread, options } : { current, activeThread },
@@ -6366,6 +6622,7 @@ export default function ChatView({
   );
 
   const removeComposerFile = (fileId: string) => {
+    discardPromptHistoryNavigationForComposerMutation();
     removeComposerDraftFile(threadId, fileId);
   };
 
@@ -6452,6 +6709,9 @@ export default function ChatView({
 
   const clearComposerInput = useCallback(
     (threadId: ThreadId) => {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       setRestoredQueuedSourceProposedPlan(threadId, null);
       clearComposerDraftContent(threadId);
@@ -7449,8 +7709,11 @@ export default function ChatView({
       createdAt: firstSendCreatedAt,
       isFirstMessage,
       isHomeChatContainer,
+      isStudioContainer,
       projects: useStore.getState().projects,
-      selectedWorkspaceRoot: isHomeChatContainer ? (resolvedThreadWorktreePath ?? null) : null,
+      selectedWorkspaceRoot: isContainerLandingProject
+        ? (resolvedThreadWorktreePath ?? null)
+        : null,
       title,
       titleSeed,
     });
@@ -7474,7 +7737,7 @@ export default function ChatView({
     let nextThreadBranch = activeThread.branch;
     let nextThreadWorktreePath = activeThread.worktreePath;
 
-    if (isFirstMessage && isHomeChatContainer && firstSendTarget.kind !== "current") {
+    if (isFirstMessage && isContainerLandingProject && firstSendTarget.kind !== "current") {
       if (firstSendTarget.kind === "create-project") {
         const projectId = newProjectId();
         const createdAt = firstSendCreatedAt.toISOString();
@@ -7557,9 +7820,16 @@ export default function ChatView({
       return false;
     }
 
+    const setupScriptForWorktree = baseBranchForWorktree
+      ? setupProjectScript(targetProjectScriptsForSend)
+      : null;
+    const worktreeSetupScriptName = setupScriptForWorktree?.name ?? null;
+
     sendInFlightRef.current = true;
     beginLocalDispatch(
-      baseBranchForWorktree ? { worktreeSetupStepId: "create-worktree" } : undefined,
+      baseBranchForWorktree
+        ? { worktreeSetupStepId: "create-worktree", setupScriptName: worktreeSetupScriptName }
+        : undefined,
     );
 
     const composerImagesSnapshot = [...composerImagesForSend];
@@ -7668,6 +7938,9 @@ export default function ChatView({
     // Queued turns are dispatched from their captured snapshot, so this send path
     // must not clear a separate live draft the user may already be editing.
     if (queuedChatTurn === null) {
+      promptHistoryNavigationRef.current = null;
+      applyingPromptHistoryNavigationRef.current = false;
+      expectedPromptHistoryPromptRef.current = null;
       promptRef.current = "";
       clearComposerDraftContent(threadIdForSend, { preservePreviewUrls: true });
       if (isLivePlanFollowUpSubmission) {
@@ -7691,7 +7964,10 @@ export default function ChatView({
           branch: baseBranchForWorktree,
           newBranch: buildTemporaryWorktreeBranchName(),
         });
-        beginLocalDispatch({ worktreeSetupStepId: "prepare-thread" });
+        beginLocalDispatch({
+          worktreeSetupStepId: "prepare-thread",
+          setupScriptName: worktreeSetupScriptName,
+        });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
         const nextAssociatedWorktree = deriveAssociatedWorktreeMetadata({
@@ -7780,10 +8056,7 @@ export default function ChatView({
         createdServerThreadForLocalDraft = true;
       }
 
-      let setupScript: ProjectScript | null = null;
-      if (baseBranchForWorktree) {
-        setupScript = setupProjectScript(targetProjectScriptsForSend);
-      }
+      const setupScript = setupScriptForWorktree;
       if (setupScript) {
         let shouldRunSetupScript = false;
         if (isServerThread) {
@@ -7794,14 +8067,25 @@ export default function ChatView({
           }
         }
         if (shouldRunSetupScript) {
+          beginLocalDispatch({
+            worktreeSetupStepId: "run-setup-action",
+            setupScriptName: setupScript.name,
+          });
           const setupScriptOptions: Parameters<typeof runProjectScript>[1] = {
             worktreePath: nextThreadWorktreePath,
             rememberAsLastInvoked: false,
+            throwOnError: true,
           };
           if (nextThreadWorktreePath) {
             setupScriptOptions.cwd = nextThreadWorktreePath;
           }
-          await runProjectScript(setupScript, setupScriptOptions);
+          const setupTerminal = await runProjectScript(setupScript, setupScriptOptions);
+          if (setupTerminal) {
+            await waitForSetupScriptTerminalActivity({
+              threadId: threadIdForSend,
+              terminalId: setupTerminal.terminalId,
+            });
+          }
         }
       }
 
@@ -7816,7 +8100,9 @@ export default function ChatView({
       }
 
       beginLocalDispatch(
-        baseBranchForWorktree ? { worktreeSetupStepId: "start-session" } : undefined,
+        baseBranchForWorktree
+          ? { worktreeSetupStepId: "start-session", setupScriptName: worktreeSetupScriptName }
+          : undefined,
       );
       const turnAttachments = await turnAttachmentsPromise;
       rememberCustomBinaryPathForDispatch({
@@ -9000,6 +9286,33 @@ export default function ChatView({
 
   const handleResetWorkspaceToHome = useCallback(() => {
     if (isLocalDraftThread) {
+      if (isStudioContainer) {
+        return (async () => {
+          const studioProjectId = await ensureStudioProject({
+            homeDir,
+            chatWorkspaceRoot,
+            studioWorkspaceRoot,
+          });
+          if (!studioProjectId) {
+            throw new Error("Unable to prepare Studio.");
+          }
+          const api = readNativeApi();
+          if (!api) {
+            throw new Error("App is still connecting. Try again in a moment.");
+          }
+          const hasStudioProjectInStore = useStore
+            .getState()
+            .projects.some((project) => project.id === studioProjectId);
+          if (!hasStudioProjectInStore) {
+            const { project, snapshot } = await waitForShellProjectById(api, studioProjectId);
+            if (!project || !snapshot) {
+              throw new Error(PROJECT_CREATE_SYNC_ERROR);
+            }
+            syncServerShellSnapshot(snapshot);
+          }
+          moveEmptyDraftToLocalProject(studioProjectId);
+        })();
+      }
       if (!isHomeChatContainer) {
         return (async () => {
           if (!homeDir) {
@@ -9060,10 +9373,12 @@ export default function ChatView({
     homeDir,
     isHomeChatContainer,
     isLocalDraftThread,
+    isStudioContainer,
     moveEmptyDraftToLocalProject,
     scheduleComposerFocus,
     setDraftThreadContext,
     setStoreThreadWorkspace,
+    studioWorkspaceRoot,
     syncServerShellSnapshot,
     threadId,
   ]);
@@ -9230,6 +9545,7 @@ export default function ChatView({
     value: string;
     cursor: number;
     expandedCursor: number;
+    selectionCollapsed: boolean;
     terminalContextIds: string[];
   } => {
     const editorSnapshot = composerEditorRef.current?.readSnapshot();
@@ -9240,12 +9556,18 @@ export default function ChatView({
       value: promptRef.current,
       cursor: composerCursor,
       expandedCursor: expandCollapsedComposerCursor(promptRef.current, composerCursor),
+      selectionCollapsed: true,
       terminalContextIds: composerTerminalContexts.map((context) => context.id),
     };
   }, [composerCursor, composerTerminalContexts]);
 
   const resolveActiveComposerTrigger = useCallback((): {
-    snapshot: { value: string; cursor: number; expandedCursor: number };
+    snapshot: {
+      value: string;
+      cursor: number;
+      expandedCursor: number;
+      selectionCollapsed: boolean;
+    };
     trigger: ComposerTrigger | null;
   } => {
     const snapshot = readComposerSnapshot();
@@ -9611,6 +9933,16 @@ export default function ChatView({
       terminalContextIds: string[],
     ) => {
       if (activePendingProgress?.activeQuestion && activePendingUserInput) {
+        const interruptedNavigation = promptHistoryNavigationRef.current;
+        if (interruptedNavigation !== null) {
+          // An active question ended the history browse while the persisted
+          // prompt still held a recalled entry; put the real draft back.
+          promptHistoryNavigationRef.current = null;
+          restoreComposerDraftPromptHistorySavedDraft(threadId);
+          promptRef.current = interruptedNavigation.draft;
+          setPrompt(interruptedNavigation.draft);
+        }
+        expectedPromptHistoryPromptRef.current = null;
         onChangeActivePendingUserInputCustomAnswer(
           activePendingProgress.activeQuestion.id,
           nextPrompt,
@@ -9619,6 +9951,32 @@ export default function ChatView({
           cursorAdjacentToMention,
         );
         return;
+      }
+      const expectedPromptHistoryPrompt = expectedPromptHistoryPromptRef.current;
+      if (expectedPromptHistoryPrompt !== null) {
+        if (nextPrompt === expectedPromptHistoryPrompt) {
+          expectedPromptHistoryPromptRef.current = null;
+        } else {
+          // The user edited past the recalled entry: the edited text is the
+          // draft now, so the saved pre-browse draft must not be restored.
+          promptHistoryNavigationRef.current = null;
+          expectedPromptHistoryPromptRef.current = null;
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        }
+      } else if (!applyingPromptHistoryNavigationRef.current) {
+        const activePromptHistoryNavigation = promptHistoryNavigationRef.current;
+        if (
+          activePromptHistoryNavigation !== null &&
+          !promptStillMatchesActiveHistoryBrowse({
+            state: activePromptHistoryNavigation,
+            history: promptHistory,
+            nextPrompt,
+            appliedPrompt: promptHistoryAppliedPromptRef.current,
+          })
+        ) {
+          promptHistoryNavigationRef.current = null;
+          setComposerDraftPromptHistorySavedDraft(threadId, null);
+        }
       }
       const restoredQueuedSource = restoredQueuedSourceProposedPlanRef.current;
       if (
@@ -9652,7 +10010,10 @@ export default function ChatView({
       composerTerminalContexts,
       composerCommandPicker,
       onChangeActivePendingUserInputCustomAnswer,
+      promptHistory,
+      restoreComposerDraftPromptHistorySavedDraft,
       setPrompt,
+      setComposerDraftPromptHistorySavedDraft,
       setComposerDraftTerminalContexts,
       setComposerCommandPicker,
       setRestoredQueuedSourceProposedPlan,
@@ -9735,7 +10096,71 @@ export default function ChatView({
       }
     }
 
+    if (
+      shouldHandlePromptHistoryNavigationKey({
+        key,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        menuIsActive,
+        hasActivePendingProgress: Boolean(activePendingProgress),
+        isComposerApprovalState,
+        pendingUserInputCount: pendingUserInputs.length,
+      })
+    ) {
+      const direction = key === "ArrowUp" ? "older" : "newer";
+      const previousNavigationState = promptHistoryNavigationRef.current;
+      const result = resolvePromptHistoryNavigation({
+        direction,
+        history: promptHistory,
+        currentPrompt: snapshot.value,
+        // Line-boundary math needs raw string offsets; the collapsed cursor
+        // undercounts inline token chips (mentions, links, slash commands).
+        currentExpandedCursor: snapshot.expandedCursor,
+        selectionCollapsed: snapshot.selectionCollapsed,
+        state: previousNavigationState,
+      });
+      if (result.handled) {
+        promptHistoryNavigationRef.current = result.state;
+        if (result.state === null) {
+          restoreComposerDraftPromptHistorySavedDraft(threadId);
+        } else if (previousNavigationState === null) {
+          setComposerDraftPromptHistorySavedDraft(
+            threadId,
+            captureComposerPromptHistorySavedDraft({
+              threadId,
+              draft: composerDraft,
+              prompt: result.state.draft,
+            }),
+          );
+        }
+        applyingPromptHistoryNavigationRef.current = true;
+        expectedPromptHistoryPromptRef.current = result.prompt;
+        promptHistoryAppliedPromptRef.current = result.prompt;
+        promptRef.current = result.prompt;
+        setPrompt(result.prompt);
+        setComposerCursor(collapseExpandedComposerCursor(result.prompt, result.expandedCursor));
+        // Recalled text replaces the whole prompt; suppress trigger detection
+        // so an entry ending in a mention/slash token cannot pop a menu that
+        // would capture the next arrow keypress.
+        setComposerTrigger(null);
+        window.requestAnimationFrame(() => {
+          applyingPromptHistoryNavigationRef.current = false;
+        });
+        return true;
+      }
+    }
+
     if (key === "Enter" && !event.shiftKey) {
+      if (promptHistoryNavigationRef.current !== null) {
+        // Sending commits the recalled text as the prompt; drop the saved
+        // draft here (not just in the send path) so it cannot linger and
+        // resurrect a stale draft if the send is rejected.
+        promptHistoryNavigationRef.current = null;
+        setComposerDraftPromptHistorySavedDraft(threadId, null);
+      }
+      expectedPromptHistoryPromptRef.current = null;
       void onSend(undefined, event.metaKey || event.ctrlKey ? "steer" : "queue");
       return true;
     }
@@ -10176,7 +10601,7 @@ export default function ChatView({
     onRenameThreadMarker: handleRenameThreadMarker,
     onNotesChange: handleNotesChange,
     onOpenEditorView: viewModeAction?.onClick ?? null,
-    onClose: () => setEnvironmentPanelActionDismissedThreadId(threadId),
+    onClose: () => setEnvironmentPanelPreferenceOpen(false),
   };
   // Full-width single chat: overlay plus transcript/composer inset. Floating overlay when the
   // column is already narrow — right dock open or a split pane (same as header compact mode).
@@ -10186,10 +10611,7 @@ export default function ChatView({
   const environmentHeaderState = environmentEnabled
     ? {
         open: environmentPanelVisible,
-        onOpenChange: (open: boolean) => {
-          setEnvironmentPanelActionDismissedThreadId(null);
-          setEnvironmentPanelPreferenceOpen(open);
-        },
+        onOpenChange: setEnvironmentPanelPreferenceOpen,
       }
     : null;
 

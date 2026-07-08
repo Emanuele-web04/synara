@@ -190,17 +190,17 @@ export const AppSettingsSchema = Schema.Struct({
   diffWordWrap: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences for hiding sidebar surfaces a user doesn't want.
   // `showChatsSection` controls the standalone "Chats" list in the sidebar footer
-  // (rootless chats not tied to a project). `showWorkspaceSection` controls the
-  // "Workspace" tab in the section switcher. The "Threads"/Projects tab is always
-  // shown, so the switcher is hidden by default and only appears when Workspace is
-  // enabled in Settings (see the sidebar segmented picker).
+  // (rootless chats not tied to a project). `showStudioSection` and
+  // `showWorkspaceSection` control optional tabs in the section switcher.
   showChatsSection: Schema.Boolean.pipe(withDefaults(() => true)),
+  showStudioSection: Schema.Boolean.pipe(withDefaults(() => true)),
   showWorkspaceSection: Schema.Boolean.pipe(withDefaults(() => false)),
   // Local-only UI preferences: which optional sections of the chat Environment panel are
   // shown. The git block (Changes/Worktree/branch/Commit and Push) is always visible; these
   // toggle the sections beneath it via the panel header's gear menu.
   showEnvironmentUsage: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRepository: Schema.Boolean.pipe(withDefaults(() => true)),
+  showEnvironmentPullRequest: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentEditor: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentRecap: Schema.Boolean.pipe(withDefaults(() => true)),
   showEnvironmentPinned: Schema.Boolean.pipe(withDefaults(() => true)),
@@ -678,6 +678,22 @@ export function getUnsupportedProviderInstanceOptions(
       } satisfies UnsupportedProviderInstanceOption;
     })
     .toSorted((left, right) => left.label.localeCompare(right.label));
+}
+
+// Removes every setting keyed by an explicit instance id so a later instance
+// that reuses the id cannot inherit the deleted account's model preferences.
+export function removeProviderInstancePreferences(
+  settings: Pick<AppSettings, "providerInstances" | "favorites">,
+  instanceId: string,
+): Pick<AppSettings, "providerInstances" | "favorites"> {
+  const providerInstances: Record<string, ProviderInstanceConfig> = {
+    ...settings.providerInstances,
+  };
+  delete providerInstances[instanceId];
+  return {
+    providerInstances: providerInstances as ProviderInstanceConfigMap,
+    favorites: settings.favorites.filter((favorite) => favorite.provider !== instanceId),
+  };
 }
 
 export function resolveDefaultProviderInstanceId(
@@ -1251,9 +1267,16 @@ export function redactProviderInstanceSecretsForClient(
 
 function redactAppSettingsSecretsForClient(settings: AppSettings): AppSettings {
   const redactedInstances = redactProviderInstanceSecretsForClient(settings.providerInstances);
-  return redactedInstances === settings.providerInstances
+  const hasLegacyServerPasswords =
+    settings.kiloServerPassword.length > 0 || settings.openCodeServerPassword.length > 0;
+  return redactedInstances === settings.providerInstances && !hasLegacyServerPasswords
     ? settings
-    : { ...settings, providerInstances: redactedInstances };
+    : {
+        ...settings,
+        providerInstances: redactedInstances,
+        kiloServerPassword: "",
+        openCodeServerPassword: "",
+      };
 }
 
 export function normalizeStoredAppSettings(settings: AppSettings): AppSettings {
@@ -2009,8 +2032,8 @@ export function useAppSettings() {
         pendingServerSettingsMigrationPatchRef.current =
           buildInitialServerSettingsMigrationPatch(normalized);
       }
-      // Legacy localStorage may be the only remaining plaintext source until
-      // the server confirms migration; redact it immediately after that write.
+      // Legacy localStorage may be the only durable plaintext source, so keep it
+      // until the server confirms migration; the success path redacts it below.
       return normalizeInitialStoredAppSettingsForServerMigration(normalized, migrationCompleted);
     });
   }, [setSettings]);

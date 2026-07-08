@@ -63,6 +63,7 @@ import {
   normalizeTerminalFontFamily,
   normalizeTerminalFontSizePx,
   patchCustomModelsForProviderInstance,
+  removeProviderInstancePreferences,
   TERMINAL_FONT_FAMILY_SUGGESTIONS,
   useAppSettings,
 } from "../appSettings";
@@ -1124,6 +1125,7 @@ function SettingsRouteView() {
       ? ["Thread sort order"]
       : []),
     ...(settings.showChatsSection !== defaults.showChatsSection ? ["Chats section"] : []),
+    ...(settings.showStudioSection !== defaults.showStudioSection ? ["Studio section"] : []),
     ...(settings.showWorkspaceSection !== defaults.showWorkspaceSection
       ? ["Workspace section"]
       : []),
@@ -1294,7 +1296,12 @@ function SettingsRouteView() {
       }
       const config =
         provider === "codex"
-          ? { binaryPath: codexBinaryPath }
+          ? {
+              binaryPath: codexBinaryPath,
+              // Keep a newly enabled instance on its own managed overlay even
+              // before the user assigns a dedicated or shadow home.
+              accountId: instanceId,
+            }
           : provider === "claudeAgent"
             ? { binaryPath: claudeBinaryPath, homePath: claudeHomePath }
             : provider === "cursor"
@@ -1377,13 +1384,9 @@ function SettingsRouteView() {
 
   const removeProviderInstance = useCallback(
     (instanceId: string) => {
-      const nextInstances: Record<string, ProviderInstanceConfig> = {
-        ...settings.providerInstances,
-      };
-      delete nextInstances[instanceId];
-      updateSettings({ providerInstances: nextInstances as ProviderInstanceConfigMap });
+      updateSettings(removeProviderInstancePreferences(settings, instanceId));
     },
-    [settings.providerInstances, updateSettings],
+    [settings, updateSettings],
   );
 
   const handleProviderOrderDragEnd = useCallback(
@@ -1976,6 +1979,14 @@ function SettingsRouteView() {
         })}
 
         {renderBooleanSettingRow({
+          settingKey: "showStudioSection",
+          title: "Studio",
+          description: "Show the Studio tab in the sidebar switcher.",
+          resetLabel: "studio section",
+          ariaLabel: "Show the Studio section in the sidebar",
+        })}
+
+        {renderBooleanSettingRow({
           settingKey: "showWorkspaceSection",
           title: "Workspace",
           description:
@@ -2002,6 +2013,15 @@ function SettingsRouteView() {
               "Show the GitHub repository link in the chat Environment panel. The git block (Changes, Worktree, branch, Commit and Push) always stays visible.",
             resetLabel: "repository section",
             ariaLabel: "Show the Repository section in the Environment panel",
+          })}
+
+          {renderBooleanSettingRow({
+            settingKey: "showEnvironmentPullRequest",
+            title: "Pull request",
+            description:
+              "Show the open pull request (CI checks and review comments) for the current branch in the chat Environment panel.",
+            resetLabel: "pull request section",
+            ariaLabel: "Show the Pull request section in the Environment panel",
           })}
 
           {renderBooleanSettingRow({

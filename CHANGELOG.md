@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.4.0 - 2026-07-06
+
+### Added
+
+- Added richer pull request snapshot data in the Environment panel, including review/check preview handling and merged-state awareness.
+- Added prompt-history navigation support that preserves the current draft's file/image attachments while browsing previous prompts.
+- Added graceful Claude usage/rate-limit handling so provider usage limits show as a recoverable user-facing state instead of a generic failure.
+- Added focused release coverage around PR snapshot edge cases, prompt-history navigation, provider usage parsing, and desktop restart stderr handling.
+
+### Changed
+
+- Bumped Synara release package versions to `0.4.0` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+- Refined prompt history navigation so stale navigation state resets cleanly and optimistic prompt-history entries do not duplicate after sends.
+- Refined PR snapshot loading to dedupe GitHub field lists, format merge-head details more consistently, and keep long review previews readable.
+- Refined provider usage type handling around Claude summaries and rate-limit responses.
+
+### Fixed
+
+- Fixed prompt-history browsing losing draft attachments while moving through previous prompts.
+- Fixed duplicate optimistic prompt-history entries and stale prompt-history navigation state after related sends.
+- Fixed desktop restart handling for broken stderr pipes, including the EPIPE path from restarted child processes.
+- Fixed PR snapshot follow-up issues around merged PR state, truncated review previews, and merge-head formatting.
+- Fixed automation migration lineage assertions and provider usage summary type narrowing uncovered by the recent release work.
+
+### Verification
+
+- `bun run fmt:check` passed across 1535 files.
+- `bun run lint` passed with 168 warnings, 0 errors.
+- `bun run typecheck` passed across all 8 packages in 18.277s with the existing TS44 informational JSON/schema-preference messages.
+- `bun run release:smoke` passed and refreshed install/lockfile state. It noted an available newer `@pierre/diffs@1.2.12` while keeping the current dependency range unchanged.
+- `bun run build` passed: 6 tasks successful in 16.479s. The build still reports existing Astro `transformWithEsbuild`, tsdown/plugin timing, desktop typeless-module, Rolldown/Babel plugin timing, and large Vite chunk warnings.
+- Full `bun run test` passed: 10 tasks successful in 6m35.477s. `@t3tools/web` passed 194 files / 2352 tests, and `t3` passed 145 files with 1 skipped file, 1593 passed tests, and 6 skipped tests.
+- `bun install` refreshed `bun.lock` after the package-version bump and reported no dependency changes.
+- Website changelog mirror checks passed in `/Users/emanueledipietro/Developer/dpcode-website`: `npm run build` prerendered `/changelog/v0.4.0`, and `npm run lint` passed.
+
 ## 0.3.9 - 2026-07-05
 
 ### Added

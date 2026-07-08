@@ -6,9 +6,9 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import nodePath from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { claudeUsageFetcher } from "./claude";
+import { __resetClaudeUsageRateLimitState, claudeUsageFetcher } from "./claude";
 
 const NOW_MS = 1_780_000_000_000;
 
@@ -19,6 +19,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function rateLimitedResponse(retryAfterSeconds?: number): Response {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (retryAfterSeconds !== undefined) {
+    headers["Retry-After"] = String(retryAfterSeconds);
+  }
+  return new Response(JSON.stringify({ error: "rate_limited" }), { status: 429, headers });
 }
 
 function makeClaudeHome(creds: Record<string, unknown>) {
@@ -45,8 +53,13 @@ function readSavedOauth(credentialsPath: string) {
   };
 }
 
+beforeEach(() => {
+  __resetClaudeUsageRateLimitState();
+});
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  __resetClaudeUsageRateLimitState();
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -179,5 +192,126 @@ describe("claudeUsageFetcher", () => {
     expect(snapshot.planName).toBe("Max (5x)");
     expect(snapshot.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(56);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps serving the last good usage when Anthropic rate-limits the usage endpoint", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "rate-limit-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+      subscriptionType: "pro",
+    });
+
+    let throttle = false;
+    const fetchMock = vi.fn(async () =>
+      throttle
+        ? rateLimitedResponse(120)
+        : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
+
+    const first = await claudeUsageFetcher.fetch(ctx);
+    expect(first.status).toBe("ok");
+    expect(first.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+
+    // Next poll is throttled: keep the last values, mark them stale, and honor Retry-After (~2m).
+    throttle = true;
+    const throttled = await claudeUsageFetcher.fetch(ctx);
+    expect(throttled.status).toBe("ok");
+    expect(throttled.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+    expect(throttled.detail).toContain("rate-limiting");
+    expect(throttled.detail).toContain("~2m");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // While the cooldown is active, subsequent polls serve the cache without re-hitting Anthropic.
+    const cached = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
+    expect(cached.status).toBe("ok");
+    expect(cached.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not serve cached cooldown usage after Claude credentials switch", async () => {
+    const { homeDir, credentialsPath } = makeClaudeHome({
+      accessToken: "first-rate-limit-access-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+      subscriptionType: "pro",
+    });
+
+    let throttle = false;
+    const authorizations: string[] = [];
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const authorization = (init?.headers as Record<string, string> | undefined)?.Authorization;
+      if (authorization === undefined) {
+        throw new Error("Claude usage request did not include an Authorization header");
+      }
+      authorizations.push(authorization);
+      return throttle
+        ? rateLimitedResponse(120)
+        : jsonResponse({ five_hour: { utilization: 33, resets_at: "2026-06-09T12:00:00Z" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
+
+    const first = await claudeUsageFetcher.fetch(ctx);
+    expect(first.status).toBe("ok");
+    expect(first.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+
+    throttle = true;
+    const throttled = await claudeUsageFetcher.fetch(ctx);
+    expect(throttled.status).toBe("ok");
+    expect(throttled.limits.find((limit) => limit.window === "5h")?.usedPercent).toBe(33);
+
+    writeFileSync(
+      credentialsPath,
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "second-rate-limit-access-token",
+          expiresAt: NOW_MS + 60 * 60 * 1000,
+          scopes: ["user:profile"],
+          subscriptionType: "pro",
+        },
+      }),
+      "utf8",
+    );
+
+    const afterSwitch = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
+    expect(afterSwitch.status).toBe("error");
+    expect(afterSwitch.limits).toHaveLength(0);
+    expect(afterSwitch.detail).toContain("rate-limiting");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(authorizations).toEqual([
+      "Bearer first-rate-limit-access-token",
+      "Bearer first-rate-limit-access-token",
+      "Bearer second-rate-limit-access-token",
+    ]);
+  });
+
+  it("surfaces a rate-limit error when throttled before any successful fetch", async () => {
+    const { homeDir } = makeClaudeHome({
+      accessToken: "cold-rate-limit-token",
+      expiresAt: NOW_MS + 60 * 60 * 1000,
+      scopes: ["user:profile"],
+    });
+
+    const fetchMock = vi.fn(async () => rateLimitedResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const ctx = { homeDir, env: {}, platform: "linux" as const, nowMs: NOW_MS };
+    const snapshot = await claudeUsageFetcher.fetch(ctx);
+
+    expect(snapshot.status).toBe("error");
+    expect(snapshot.detail).toContain("rate-limiting");
+    expect(snapshot.limits).toHaveLength(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Even with no cached usage to show, the cooldown must stop us from hammering the throttled
+    // endpoint on every poll.
+    const duringCooldown = await claudeUsageFetcher.fetch({ ...ctx, nowMs: NOW_MS + 30_000 });
+    expect(duringCooldown.status).toBe("error");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

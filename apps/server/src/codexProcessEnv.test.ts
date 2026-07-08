@@ -17,8 +17,13 @@ import {
 import OS from "node:os";
 import path from "node:path";
 import { afterEach, assert, describe, it } from "@effect/vitest";
+import { expect, vi } from "vitest";
 
-import { buildCodexProcessEnv } from "./codexProcessEnv.ts";
+import {
+  buildCodexProcessEnv,
+  linkOrCopyCodexOverlayEntry,
+  prioritizeCodexOverlayEntries,
+} from "./codexProcessEnv.ts";
 
 describe("buildCodexProcessEnv account overlays", () => {
   const tempRoots: string[] = [];
@@ -57,6 +62,13 @@ describe("buildCodexProcessEnv account overlays", () => {
       SYNARA_HOME: path.join(root, "synara-runtime"),
     };
     return { env, homePath, shadowHomePath };
+  }
+
+  function aliasHomeThroughParent(homePath: string): string {
+    const aliasRoot = makeTempRoot();
+    const parentAlias = path.join(aliasRoot, "parent-alias");
+    symlinkSync(path.dirname(homePath), parentAlias, "dir");
+    return path.join(parentAlias, path.basename(homePath));
   }
 
   it("links account-private auth from the shadow home instead of the shared home", () => {
@@ -175,6 +187,41 @@ describe("buildCodexProcessEnv account overlays", () => {
     assert.throws(() => lstatSync(path.join(overlayHomePath, "auth.json")));
   });
 
+  it("treats an explicit ambient Codex home as shared in overlay mode", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+
+    const env = buildCodexProcessEnv({
+      env: sharedEnv,
+      homePath: fixture.homePath,
+      accountId: "work",
+      platform: "win32",
+    });
+
+    const overlayHomePath = env.CODEX_HOME;
+    assert.ok(overlayHomePath);
+    assert.notStrictEqual(path.resolve(overlayHomePath), path.resolve(fixture.homePath));
+    assert.throws(() => lstatSync(path.join(overlayHomePath, "auth.json")));
+  });
+
+  it("treats a parent-symlink alias of the ambient home as shared in overlay mode", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const sharedEnv = { ...fixture.env, CODEX_HOME: fixture.homePath };
+    const aliasedHomePath = aliasHomeThroughParent(fixture.homePath);
+
+    const env = buildCodexProcessEnv({
+      env: sharedEnv,
+      homePath: aliasedHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+
+    const overlayHomePath = env.CODEX_HOME;
+    assert.ok(overlayHomePath);
+    assert.notStrictEqual(path.resolve(overlayHomePath), path.resolve(aliasedHomePath));
+    assert.throws(() => lstatSync(path.join(overlayHomePath, "auth.json")));
+  });
+
   it("keeps account-id-only instances isolated when the browser plugin is enabled", () => {
     const fixture = makeAccountFixture({ shadowAuth: "missing" });
     const pluginEnabledEnv = {
@@ -230,6 +277,28 @@ describe("buildCodexProcessEnv account overlays", () => {
       readFileSync(path.join(accountHomePath, "config.toml"), "utf8"),
       'model = "gpt-5.4"\n',
     );
+  });
+
+  it("keeps parent-symlink aliases of the shared home isolated with the plugin enabled", () => {
+    const fixture = makeAccountFixture({ shadowAuth: "missing" });
+    const aliasedHomePath = aliasHomeThroughParent(fixture.homePath);
+    const pluginEnabledEnv = {
+      ...fixture.env,
+      CODEX_HOME: fixture.homePath,
+      DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+    };
+
+    const env = buildCodexProcessEnv({
+      env: pluginEnabledEnv,
+      homePath: aliasedHomePath,
+      accountId: "work",
+      platform: "win32",
+    });
+
+    const accountHomePath = env.CODEX_HOME;
+    assert.ok(accountHomePath);
+    assert.notStrictEqual(path.resolve(accountHomePath), path.resolve(aliasedHomePath));
+    assert.throws(() => lstatSync(path.join(accountHomePath, "auth.json")));
   });
 
   it("keeps dedicated explicit account homes direct when the browser plugin is enabled", () => {
@@ -404,5 +473,62 @@ describe("buildCodexProcessEnv account overlays", () => {
     });
     assert.strictEqual(thirdEnv.CODEX_HOME, overlayHomePath);
     assert.ok(lstatSync(path.join(overlayHomePath, "auth.json")).isFile());
+  });
+});
+
+describe("linkOrCopyCodexOverlayEntry", () => {
+  it("copies auth.json when symlink creation is unavailable", () => {
+    const symlink = vi.fn(() => {
+      throw new Error("symlinks unavailable");
+    });
+    const copyFile = vi.fn();
+
+    linkOrCopyCodexOverlayEntry(
+      {
+        entryName: "auth.json",
+        sourcePath: "C:\\Users\\test\\.codex\\auth.json",
+        targetPath: "C:\\Users\\test\\.synara\\codex-home-overlay\\auth.json",
+        type: "file",
+      },
+      { symlink, copyFile },
+    );
+
+    expect(symlink).toHaveBeenCalledWith(
+      "C:\\Users\\test\\.codex\\auth.json",
+      "C:\\Users\\test\\.synara\\codex-home-overlay\\auth.json",
+      "file",
+    );
+    expect(copyFile).toHaveBeenCalledWith(
+      "C:\\Users\\test\\.codex\\auth.json",
+      "C:\\Users\\test\\.synara\\codex-home-overlay\\auth.json",
+    );
+  });
+
+  it("keeps symlink failures visible for other overlay entries", () => {
+    const symlink = vi.fn(() => {
+      throw new Error("symlinks unavailable");
+    });
+
+    expect(() =>
+      linkOrCopyCodexOverlayEntry(
+        {
+          entryName: "sessions",
+          sourcePath: "C:\\Users\\test\\.codex\\sessions",
+          targetPath: "C:\\Users\\test\\.synara\\codex-home-overlay\\sessions",
+          type: "dir",
+        },
+        { symlink, copyFile: vi.fn() },
+      ),
+    ).toThrow("symlinks unavailable");
+  });
+});
+
+describe("prioritizeCodexOverlayEntries", () => {
+  it("prepares auth.json before entries whose symlinks may fail first", () => {
+    expect(prioritizeCodexOverlayEntries(["sessions", "auth.json", "config.toml"])).toEqual([
+      "auth.json",
+      "sessions",
+      "config.toml",
+    ]);
   });
 });

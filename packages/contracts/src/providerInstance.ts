@@ -10,6 +10,7 @@ const PROVIDER_SLUG_MAX_CHARS = 64;
 const PROVIDER_SLUG_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
 const ENVIRONMENT_VARIABLE_NAME_MAX_CHARS = 128;
 const ENVIRONMENT_VARIABLE_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const PROVIDER_SECRET_REFERENCE_MAX_CHARS = 128;
 
 const ProviderSlug = TrimmedNonEmptyString.check(
   Schema.isMaxLength(PROVIDER_SLUG_MAX_CHARS),
@@ -40,11 +41,19 @@ export const ProviderInstanceEnvironmentVariableName = TrimmedNonEmptyString.che
 export type ProviderInstanceEnvironmentVariableName =
   typeof ProviderInstanceEnvironmentVariableName.Type;
 
+// Opaque server-owned reference persisted beside redaction markers. Clients
+// may decode it for compatibility, but the server strips it from API output.
+export const ProviderSecretReference = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(PROVIDER_SECRET_REFERENCE_MAX_CHARS),
+);
+export type ProviderSecretReference = typeof ProviderSecretReference.Type;
+
 export const ProviderInstanceEnvironmentVariable = Schema.Struct({
   name: ProviderInstanceEnvironmentVariableName,
   value: Schema.optional(Schema.String).pipe(Schema.withDecodingDefault(() => "")),
   sensitive: Schema.optional(Schema.Boolean).pipe(Schema.withDecodingDefault(() => false)),
   valueRedacted: Schema.optionalKey(Schema.Boolean),
+  valueSecretRef: Schema.optionalKey(ProviderSecretReference),
 });
 export type ProviderInstanceEnvironmentVariable = typeof ProviderInstanceEnvironmentVariable.Type;
 

@@ -21,6 +21,7 @@ describe("ServerLifecycleEvents", () => {
             cwd: "/one",
             homeDir: "/home/tester",
             chatWorkspaceRoot: "/home/tester/.t3tools/chats",
+            studioWorkspaceRoot: "/home/tester/.t3tools/chats/Studio",
             projectName: "one",
           },
         });
@@ -36,6 +37,7 @@ describe("ServerLifecycleEvents", () => {
             cwd: "/two",
             homeDir: "/home/tester",
             chatWorkspaceRoot: "/home/tester/.t3tools/chats",
+            studioWorkspaceRoot: "/home/tester/.t3tools/chats/Studio",
             projectName: "two",
           },
         });

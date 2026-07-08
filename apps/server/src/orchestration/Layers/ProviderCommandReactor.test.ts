@@ -107,6 +107,7 @@ describe("ProviderCommandReactor", () => {
     readonly sessionModelSwitch?: "unsupported" | "in-session" | "restart-session";
     readonly serverSettings?: Parameters<typeof ServerSettingsService.layerTest>[0];
     readonly checkpointStore?: Partial<CheckpointStoreShape>;
+    readonly sessionBindingMatchesLaunchOptions?: boolean;
   }) {
     const now = new Date().toISOString();
     const baseDir = input?.baseDir ?? fs.mkdtempSync(path.join(os.tmpdir(), "t3code-reactor-"));
@@ -283,6 +284,9 @@ describe("ProviderCommandReactor", () => {
         }
       }),
     );
+    const sessionBindingMatchesLaunchOptions = vi.fn(() =>
+      Effect.succeed(input?.sessionBindingMatchesLaunchOptions ?? false),
+    );
     const renameBranch = vi.fn((input: unknown) =>
       Effect.succeed({
         branch:
@@ -329,6 +333,14 @@ describe("ProviderCommandReactor", () => {
       clearSessionResumeCursor: clearSessionResumeCursor as NonNullable<
         ProviderServiceShape["clearSessionResumeCursor"]
       >,
+      ...(input?.sessionBindingMatchesLaunchOptions !== undefined
+        ? {
+            sessionBindingMatchesLaunchOptions:
+              sessionBindingMatchesLaunchOptions as NonNullable<
+                ProviderServiceShape["sessionBindingMatchesLaunchOptions"]
+              >,
+          }
+        : {}),
       listSessions: () => Effect.succeed(runtimeSessions),
       getCapabilities: (_provider) =>
         Effect.succeed({
@@ -418,6 +430,7 @@ describe("ProviderCommandReactor", () => {
       stopSession,
       stopRuntimeSession,
       clearSessionResumeCursor,
+      sessionBindingMatchesLaunchOptions,
       renameBranch,
       publishBranch,
       generateBranchName,
@@ -3202,6 +3215,79 @@ describe("ProviderCommandReactor", () => {
       },
     });
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
+  });
+
+  it("adopts a recovered live session when its persisted launch options still match", async () => {
+    const modelSelection: ModelSelection = {
+      instanceId: "opencode_work",
+      model: "opencode/nemotron-3-super-free",
+    };
+    const harness = await createHarness({
+      threadModelSelection: modelSelection,
+      sessionBindingMatchesLaunchOptions: true,
+      serverSettings: {
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            enabled: true,
+            environment: [{ name: "OPENCODE_API_KEY", value: "server-secret", sensitive: true }],
+            config: {
+              serverUrl: "http://127.0.0.1:4096",
+              serverPassword: "server-password",
+            },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-recovered-launch-options"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "opencode",
+          providerInstanceId: "opencode_work",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-recovered-launch-options"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-recovered-launch-options"),
+          role: "user",
+          text: "reuse the recovered server session",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sessionBindingMatchesLaunchOptions).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        provider: "opencode",
+        providerInstanceId: "opencode_work",
+      }),
+    );
+    expect(harness.startSession.mock.calls.length).toBe(0);
   });
 
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {

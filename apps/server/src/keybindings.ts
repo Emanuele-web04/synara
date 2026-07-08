@@ -457,7 +457,64 @@ function encodeWhenAst(node: KeybindingWhenNode): string {
 
 const DEFAULT_RESOLVED_KEYBINDINGS = compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS);
 
-const RawKeybindingsEntries = Schema.fromJsonString(Schema.Array(Schema.Unknown));
+/**
+ * Result of normalizing the raw on-disk keybindings config into a list of entries.
+ *
+ * `migratedShape: true` marks tolerated non-canonical top-level shapes (empty file,
+ * `null`, `{}`, `{"keybindings": [...]}`, or a single rule object) so callers can
+ * rewrite the file into the canonical JSON-array form instead of surfacing an error
+ * on every startup.
+ */
+type RawKeybindingsEntriesResult =
+  | {
+      readonly _tag: "success";
+      readonly entries: ReadonlyArray<unknown>;
+      readonly migratedShape: boolean;
+    }
+  | { readonly _tag: "failure"; readonly detail: string };
+
+function describeJsonValueShape(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function decodeRawKeybindingsEntries(rawConfig: string): RawKeybindingsEntriesResult {
+  if (rawConfig.trim().length === 0) {
+    return { _tag: "success", entries: [], migratedShape: true };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawConfig);
+  } catch (error) {
+    return { _tag: "failure", detail: `expected JSON array (${String(error)})` };
+  }
+
+  if (Array.isArray(parsed)) {
+    return { _tag: "success", entries: parsed, migratedShape: false };
+  }
+  if (parsed === null) {
+    return { _tag: "success", entries: [], migratedShape: true };
+  }
+  if (typeof parsed === "object") {
+    const record = parsed as Record<string, unknown>;
+    if (Array.isArray(record.keybindings)) {
+      return { _tag: "success", entries: record.keybindings, migratedShape: true };
+    }
+    if (Object.keys(record).length === 0) {
+      return { _tag: "success", entries: [], migratedShape: true };
+    }
+    if (typeof record.key === "string" && typeof record.command === "string") {
+      return { _tag: "success", entries: [record], migratedShape: true };
+    }
+  }
+  return {
+    _tag: "failure",
+    detail: `expected JSON array, got ${describeJsonValueShape(parsed)}`,
+  };
+}
+
 const KeybindingsConfigJson = Schema.fromJsonString(KeybindingsConfig);
 const PrettyJsonString = SchemaGetter.parseJson<string>().compose(
   SchemaGetter.stringifyJson({ space: 2 }),
@@ -747,19 +804,16 @@ const makeKeybindings = Effect.gen(function* () {
       return [];
     }
 
-    const rawConfig = yield* readRawConfig.pipe(
-      Effect.flatMap(Schema.decodeEffect(RawKeybindingsEntries)),
-      Effect.mapError(
-        (cause) =>
-          new KeybindingsConfigError({
-            configPath: keybindingsConfigPath,
-            detail: "expected JSON array",
-            cause,
-          }),
-      ),
-    );
+    const rawConfig = yield* readRawConfig;
+    const decodedEntries = decodeRawKeybindingsEntries(rawConfig);
+    if (decodedEntries._tag === "failure") {
+      return yield* new KeybindingsConfigError({
+        configPath: keybindingsConfigPath,
+        detail: decodedEntries.detail,
+      });
+    }
 
-    return yield* Effect.forEach(rawConfig, (entry) =>
+    return yield* Effect.forEach(decodedEntries.entries, (entry) =>
       Effect.gen(function* () {
         const command = readKeybindingEntryCommand(entry);
         if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
@@ -796,6 +850,7 @@ const makeKeybindings = Effect.gen(function* () {
       readonly issues: readonly ServerConfigIssue[];
       readonly migratedLegacyCommandCount: number;
       readonly migratedDefaultRuleCount: number;
+      readonly migratedConfigShape: boolean;
     },
     KeybindingsConfigError
   > {
@@ -805,26 +860,32 @@ const makeKeybindings = Effect.gen(function* () {
         issues: [],
         migratedLegacyCommandCount: 0,
         migratedDefaultRuleCount: 0,
+        migratedConfigShape: false,
       };
     }
 
     const rawConfig = yield* readRawConfig;
-    const decodedEntries = Schema.decodeUnknownExit(RawKeybindingsEntries)(rawConfig);
-    if (decodedEntries._tag === "Failure") {
-      const detail = `expected JSON array (${Cause.pretty(decodedEntries.cause)})`;
+    const decodedEntries = decodeRawKeybindingsEntries(rawConfig);
+    if (decodedEntries._tag === "failure") {
       return {
         keybindings: [],
-        issues: [malformedConfigIssue(detail)],
+        issues: [malformedConfigIssue(decodedEntries.detail)],
         migratedLegacyCommandCount: 0,
         migratedDefaultRuleCount: 0,
+        migratedConfigShape: false,
       };
+    }
+    if (decodedEntries.migratedShape) {
+      yield* Effect.logWarning("migrating keybindings config with non-array top-level shape", {
+        path: keybindingsConfigPath,
+      });
     }
 
     const keybindings: KeybindingRule[] = [];
     const issues: ServerConfigIssue[] = [];
     let migratedLegacyCommandCount = 0;
     let migratedDefaultRuleCount = 0;
-    for (const [index, entry] of decodedEntries.value.entries()) {
+    for (const [index, entry] of decodedEntries.entries.entries()) {
       const command = readKeybindingEntryCommand(entry);
       if (command !== null && isRetiredLegacyKeybindingCommand(command)) {
         migratedLegacyCommandCount += 1;
@@ -875,6 +936,7 @@ const makeKeybindings = Effect.gen(function* () {
       issues,
       migratedLegacyCommandCount,
       migratedDefaultRuleCount,
+      migratedConfigShape: decodedEntries.migratedShape,
     };
   });
 
@@ -984,7 +1046,8 @@ const makeKeybindings = Effect.gen(function* () {
       if (missingDefaults.length === 0) {
         if (
           runtimeConfig.migratedLegacyCommandCount > 0 ||
-          runtimeConfig.migratedDefaultRuleCount > 0
+          runtimeConfig.migratedDefaultRuleCount > 0 ||
+          runtimeConfig.migratedConfigShape
         ) {
           yield* writeConfigAtomically(customConfig);
         }

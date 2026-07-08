@@ -13,7 +13,12 @@ import { HttpRouter } from "effect/unstable/http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { ServerAuth, type ServerAuthShape } from "./auth/Services/ServerAuth";
-import { resolveDefaultChatWorkspaceRoot, ServerConfig, type ServerConfigShape } from "./config";
+import {
+  resolveDefaultChatWorkspaceRoot,
+  resolveDefaultStudioWorkspaceRoot,
+  ServerConfig,
+  type ServerConfigShape,
+} from "./config";
 import { attachmentsEffectRouteLayer, localImageEffectRouteLayer } from "./http";
 import { createLocalPreviewGrant } from "./localImageFiles";
 import type { CodexGeneratedImageHomeCandidate } from "./codexGeneratedImages.ts";
@@ -44,6 +49,7 @@ function makeServerConfig(overrides: Partial<ServerConfigShape> = {}): ServerCon
     cwd: baseDir,
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
+    studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     keybindingsConfigPath: path.join(baseDir, "keybindings.json"),
     serverRuntimeStatePath: path.join(baseDir, "runtime.json"),

@@ -32,23 +32,16 @@ import { ServerConfig } from "../../config.ts";
 const COMMIT_TIMEOUT_MS = 10 * 60_000;
 const MAX_PROGRESS_TEXT_LENGTH = 500;
 const OPEN_PR_LOOKUP_LIMIT = 10;
+// Any-state lookups scan more PRs so the newest merged/closed PR still surfaces.
+const PR_LOOKUP_ALL_STATES_LIMIT = 20;
 type StripProgressContext<T> = T extends any ? Omit<T, "actionId" | "cwd" | "action"> : never;
 type GitActionProgressPayload = StripProgressContext<GitActionProgressEvent>;
 
-interface OpenPrInfo {
-  number: number;
-  title: string;
-  url: string;
-  baseRefName: string;
-  headRefName: string;
-  isCrossRepository?: boolean;
-  headRepositoryNameWithOwner?: string | null;
-  headRepositoryOwnerLogin?: string | null;
-}
-
-interface PullRequestInfo extends OpenPrInfo {
-  state: "open" | "closed" | "merged";
-  updatedAt: string | null;
+// GitManager's working PR shape: a GitHubPullRequestSummary whose state/updatedAt are
+// always resolved. Derived from the service summary so the shapes cannot drift field by field.
+interface PullRequestInfo extends Omit<GitHubPullRequestSummary, "state" | "updatedAt"> {
+  readonly state: NonNullable<GitHubPullRequestSummary["state"]>;
+  readonly updatedAt: string | null;
 }
 
 interface ResolvedPullRequest {
@@ -58,6 +51,11 @@ interface ResolvedPullRequest {
   baseBranch: string;
   headBranch: string;
   state: "open" | "closed" | "merged";
+  isDraft: boolean;
+  mergeability: "mergeable" | "conflicting" | "unknown";
+  additions: number | null;
+  deletions: number | null;
+  changedFiles: number | null;
 }
 
 interface PullRequestHeadRemoteInfo {
@@ -105,11 +103,27 @@ interface FailedWorktreeTransferRecovery extends FailedWorktreeHandoffRecovery {
   worktreeRemoved: boolean;
 }
 
+// Host + owner/repo extraction from a PR web URL. Used to query the repository that owns
+// the PR even when the local checkout's remotes point at a fork or a GitHub Enterprise host.
+function parsePullRequestRepositoryFromUrl(
+  url: string,
+): { host: string; owner: string; repo: string } | null {
+  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(url.trim());
+  const host = match?.[1]?.trim() ?? "";
+  const owner = match?.[2]?.trim() ?? "";
+  const repo = match?.[3]?.trim() ?? "";
+  return host.length > 0 && owner.length > 0 && repo.length > 0 ? { host, owner, repo } : null;
+}
+
+// github.com-only on purpose: callers use it to reconstruct `owner/repo` for fork heads,
+// which is only well-defined for PRs hosted on github.com.
 function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   const trimmed = url.trim();
-  const match = /^https:\/\/github\.com\/[^/]+\/([^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
-  const repositoryName = match?.[1]?.trim() ?? "";
-  return repositoryName.length > 0 ? repositoryName : null;
+  if (!/^https:\/\//i.test(trimmed)) {
+    return null;
+  }
+  const repository = parsePullRequestRepositoryFromUrl(trimmed);
+  return repository && repository.host.toLowerCase() === "github.com" ? repository.repo : null;
 }
 
 function resolveHeadRepositoryNameWithOwner(
@@ -257,25 +271,12 @@ function matchesBranchHeadContext(
   return true;
 }
 
-// Normalizes `gh pr view` service output into the richer internal PR shape.
+// Normalizes `gh pr view/list` service output into the richer internal PR shape.
 function toPullRequestInfo(pullRequest: GitHubPullRequestSummary): PullRequestInfo {
   return {
-    number: pullRequest.number,
-    title: pullRequest.title,
-    url: pullRequest.url,
-    baseRefName: pullRequest.baseRefName,
-    headRefName: pullRequest.headRefName,
+    ...pullRequest,
     state: pullRequest.state ?? "open",
-    updatedAt: null,
-    ...(pullRequest.isCrossRepository !== undefined
-      ? { isCrossRepository: pullRequest.isCrossRepository }
-      : {}),
-    ...(pullRequest.headRepositoryNameWithOwner !== undefined
-      ? { headRepositoryNameWithOwner: pullRequest.headRepositoryNameWithOwner }
-      : {}),
-    ...(pullRequest.headRepositoryOwnerLogin !== undefined
-      ? { headRepositoryOwnerLogin: pullRequest.headRepositoryOwnerLogin }
-      : {}),
+    updatedAt: pullRequest.updatedAt ?? null,
   };
 }
 
@@ -299,76 +300,6 @@ function extractPullRequestUrlFromError(error: unknown): string | null {
   }
   const match = /https:\/\/github\.com\/[^\s)]+\/pull\/\d+/i.exec(error.message);
   return match?.[0] ?? null;
-}
-
-function parsePullRequestList(raw: unknown): PullRequestInfo[] {
-  if (!Array.isArray(raw)) return [];
-
-  const parsed: PullRequestInfo[] = [];
-  for (const entry of raw) {
-    if (!entry || typeof entry !== "object") continue;
-    const record = entry as Record<string, unknown>;
-    const number = record.number;
-    const title = record.title;
-    const url = record.url;
-    const baseRefName = record.baseRefName;
-    const headRefName = record.headRefName;
-    const state = record.state;
-    const mergedAt = record.mergedAt;
-    const updatedAt = record.updatedAt;
-    const isCrossRepository = record.isCrossRepository;
-    const headRepository = record.headRepository;
-    const headRepositoryOwner = record.headRepositoryOwner;
-    if (typeof number !== "number" || !Number.isInteger(number) || number <= 0) {
-      continue;
-    }
-    if (
-      typeof title !== "string" ||
-      typeof url !== "string" ||
-      typeof baseRefName !== "string" ||
-      typeof headRefName !== "string"
-    ) {
-      continue;
-    }
-
-    let normalizedState: "open" | "closed" | "merged";
-    if ((typeof mergedAt === "string" && mergedAt.trim().length > 0) || state === "MERGED") {
-      normalizedState = "merged";
-    } else if (state === "OPEN" || state === undefined || state === null) {
-      normalizedState = "open";
-    } else if (state === "CLOSED") {
-      normalizedState = "closed";
-    } else {
-      continue;
-    }
-
-    parsed.push({
-      number,
-      title,
-      url,
-      baseRefName,
-      headRefName,
-      state: normalizedState,
-      updatedAt: typeof updatedAt === "string" && updatedAt.trim().length > 0 ? updatedAt : null,
-      ...(typeof isCrossRepository === "boolean" ? { isCrossRepository } : {}),
-      ...(headRepository &&
-      typeof headRepository === "object" &&
-      typeof (headRepository as { nameWithOwner?: unknown }).nameWithOwner === "string"
-        ? {
-            headRepositoryNameWithOwner: (headRepository as { nameWithOwner: string })
-              .nameWithOwner,
-          }
-        : {}),
-      ...(headRepositoryOwner &&
-      typeof headRepositoryOwner === "object" &&
-      typeof (headRepositoryOwner as { login?: unknown }).login === "string"
-        ? {
-            headRepositoryOwnerLogin: (headRepositoryOwner as { login: string }).login,
-          }
-        : {}),
-    });
-  }
-  return parsed;
 }
 
 function gitManagerError(operation: string, detail: string, cause?: unknown): GitManagerError {
@@ -636,24 +567,6 @@ function appendUnique(values: string[], next: string | null | undefined): void {
   values.push(trimmed);
 }
 
-function toStatusPr(pr: PullRequestInfo): {
-  number: number;
-  title: string;
-  url: string;
-  baseBranch: string;
-  headBranch: string;
-  state: "open" | "closed" | "merged";
-} {
-  return {
-    number: pr.number,
-    title: pr.title,
-    url: pr.url,
-    baseBranch: pr.baseRefName,
-    headBranch: pr.headRefName,
-    state: pr.state,
-  };
-}
-
 function normalizePullRequestReference(reference: string): string {
   const trimmed = reference.trim();
   const hashNumber = /^#(\d+)$/.exec(trimmed);
@@ -683,6 +596,11 @@ function toResolvedPullRequest(pr: {
   baseRefName: string;
   headRefName: string;
   state?: "open" | "closed" | "merged";
+  isDraft?: boolean;
+  mergeability?: "mergeable" | "conflicting" | "unknown";
+  additions?: number | null;
+  deletions?: number | null;
+  changedFiles?: number | null;
 }): ResolvedPullRequest {
   return {
     number: pr.number,
@@ -691,6 +609,11 @@ function toResolvedPullRequest(pr: {
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     state: pr.state ?? "open",
+    isDraft: pr.isDraft ?? false,
+    mergeability: pr.mergeability ?? "unknown",
+    additions: pr.additions ?? null,
+    deletions: pr.deletions ?? null,
+    changedFiles: pr.changedFiles ?? null,
   };
 }
 
@@ -714,6 +637,20 @@ function toPullRequestHeadRemoteInfo(pr: {
       ? { headRepositoryOwnerLogin: pr.headRepositoryOwnerLogin }
       : {}),
   };
+}
+
+// Older gh versions omit the head-repository fields from `pr list` JSON; fall back to what
+// the head selector implies so cross-repo matching still works. Shared by the open-PR and
+// any-state PR lookups.
+function withInferredHeadRemoteInfo(
+  pr: PullRequestInfo,
+  inferred: PullRequestHeadRemoteInfo,
+): PullRequestInfo {
+  const reportedByGh =
+    pr.isCrossRepository !== undefined ||
+    pr.headRepositoryNameWithOwner !== undefined ||
+    pr.headRepositoryOwnerLogin !== undefined;
+  return reportedByGh ? pr : { ...pr, ...toPullRequestHeadRemoteInfo(inferred) };
 }
 
 function inferPullRequestHeadRemoteInfoFromSelector(
@@ -1009,36 +946,15 @@ export const makeGitManager = Effect.gen(function* () {
         );
 
         for (const pullRequest of pullRequests) {
-          const candidate: PullRequestInfo = {
-            number: pullRequest.number,
-            title: pullRequest.title,
-            url: pullRequest.url,
-            baseRefName: pullRequest.baseRefName,
-            headRefName: pullRequest.headRefName,
-            state: pullRequest.state ?? "open",
-            updatedAt: null,
-            ...(pullRequest.isCrossRepository !== undefined
-              ? { isCrossRepository: pullRequest.isCrossRepository }
-              : {}),
-            ...(pullRequest.headRepositoryNameWithOwner !== undefined
-              ? { headRepositoryNameWithOwner: pullRequest.headRepositoryNameWithOwner }
-              : {}),
-            ...(pullRequest.headRepositoryOwnerLogin !== undefined
-              ? { headRepositoryOwnerLogin: pullRequest.headRepositoryOwnerLogin }
-              : {}),
-            ...(pullRequest.isCrossRepository === undefined &&
-            pullRequest.headRepositoryNameWithOwner === undefined &&
-            pullRequest.headRepositoryOwnerLogin === undefined
-              ? toPullRequestHeadRemoteInfo(inferredHeadInfo)
-              : {}),
-          };
+          const candidate = withInferredHeadRemoteInfo(
+            toPullRequestInfo(pullRequest),
+            inferredHeadInfo,
+          );
           if (!matchesBranchHeadContext(candidate, headContext)) {
             continue;
           }
 
-          return {
-            ...candidate,
-          } satisfies PullRequestInfo;
+          return candidate;
         }
       }
 
@@ -1055,45 +971,17 @@ export const makeGitManager = Effect.gen(function* () {
           headSelector,
           headContext,
         );
-        const stdout = yield* gitHubCli
-          .execute({
-            cwd,
-            args: [
-              "pr",
-              "list",
-              "--head",
-              headSelector,
-              "--state",
-              "all",
-              "--limit",
-              "20",
-              "--json",
-              "number,title,url,baseRefName,headRefName,state,mergedAt,updatedAt,isCrossRepository,headRepository,headRepositoryOwner",
-            ],
-          })
-          .pipe(Effect.map((result) => result.stdout));
-
-        const raw = stdout.trim();
-        if (raw.length === 0) {
-          continue;
-        }
-
-        const parsedJson = yield* Effect.try({
-          try: () => JSON.parse(raw) as unknown,
-          catch: (cause) =>
-            gitManagerError("findLatestPr", "GitHub CLI returned invalid PR list JSON.", cause),
+        const pullRequests = yield* gitHubCli.listPullRequests({
+          cwd,
+          headSelector,
+          limit: PR_LOOKUP_ALL_STATES_LIMIT,
         });
 
-        for (const pr of parsePullRequestList(parsedJson)) {
-          const candidate =
-            pr.isCrossRepository === undefined &&
-            pr.headRepositoryNameWithOwner === undefined &&
-            pr.headRepositoryOwnerLogin === undefined
-              ? ({
-                  ...pr,
-                  ...toPullRequestHeadRemoteInfo(inferredHeadInfo),
-                } satisfies PullRequestInfo)
-              : pr;
+        for (const pullRequest of pullRequests) {
+          const candidate = withInferredHeadRemoteInfo(
+            toPullRequestInfo(pullRequest),
+            inferredHeadInfo,
+          );
           if (!matchesBranchHeadContext(candidate, headContext)) {
             continue;
           }
@@ -1463,7 +1351,8 @@ export const makeGitManager = Effect.gen(function* () {
             branch: details.branch,
             upstreamRef: details.upstreamRef,
           }).pipe(
-            Effect.map((latest) => (latest ? toStatusPr(latest) : null)),
+            // Status and PR-resolution surfaces share one mapper so their shapes cannot drift.
+            Effect.map((latest) => (latest ? toResolvedPullRequest(latest) : null)),
             Effect.catch(() => Effect.succeed(null)),
           )
         : null;
@@ -1529,6 +1418,58 @@ export const makeGitManager = Effect.gen(function* () {
         .pipe(Effect.map((resolved) => toResolvedPullRequest(resolved)));
 
       return { pullRequest };
+    },
+  );
+
+  const pullRequestSnapshot: GitManagerShape["pullRequestSnapshot"] = Effect.fnUntraced(
+    function* (input) {
+      const reference = normalizePullRequestReference(input.reference);
+      // Summary + checks ride one `gh pr view` call: one process/API round trip per poll,
+      // and no separate checks failure mode that could discard an otherwise-usable snapshot.
+      const { summary, checks } = yield* gitHubCli.getPullRequestWithChecks({
+        cwd: input.cwd,
+        reference,
+      });
+      const pullRequest = toResolvedPullRequest(summary);
+
+      const repository = parsePullRequestRepositoryFromUrl(pullRequest.url);
+      if (!repository) {
+        return yield* gitManagerError(
+          "pullRequestSnapshot",
+          `Could not determine the repository from the pull request URL: ${pullRequest.url}`,
+        );
+      }
+
+      const commentsResult = yield* gitHubCli
+        .getPullRequestReviewComments({
+          cwd: input.cwd,
+          host: repository.host,
+          owner: repository.owner,
+          repo: repository.repo,
+          number: pullRequest.number,
+        })
+        .pipe(
+          Effect.map((result) => ({
+            comments: result.comments,
+            commentsTruncated: result.truncated,
+            commentsError: null,
+          })),
+          Effect.catch((error) =>
+            Effect.succeed({
+              comments: [],
+              commentsTruncated: false,
+              commentsError: error.message,
+            }),
+          ),
+        );
+
+      return {
+        pullRequest,
+        checks,
+        comments: commentsResult.comments,
+        commentsTruncated: commentsResult.commentsTruncated,
+        commentsError: commentsResult.commentsError,
+      };
     },
   );
 
@@ -2779,6 +2720,7 @@ The local stash entry was kept for recovery.`,
     readWorkingTreeDiff,
     summarizeDiff,
     resolvePullRequest,
+    pullRequestSnapshot,
     preparePullRequestThread,
     handoffThread,
     runStackedAction,

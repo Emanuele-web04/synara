@@ -278,18 +278,27 @@ describe("ServerSettingsService", () => {
           ...DEFAULT_SERVER_SETTINGS.providers.kilo,
           serverUrl: "http://127.0.0.1:4097",
           serverPassword: "kilo-secret",
+          serverPasswordSecretRef: "provider-secret-v2-internal-kilo",
         },
         opencode: {
           ...DEFAULT_SERVER_SETTINGS.providers.opencode,
           serverUrl: "http://127.0.0.1:4098",
           serverPassword: "legacy-opencode-secret",
+          serverPasswordSecretRef: "provider-secret-v2-internal-opencode",
         },
       },
       providerInstances: {
         grok_work: {
           driver: "grok",
           enabled: true,
-          environment: [{ name: "XAI_API_KEY", value: "secret-token", sensitive: true }],
+          environment: [
+            {
+              name: "XAI_API_KEY",
+              value: "secret-token",
+              sensitive: true,
+              valueSecretRef: "provider-secret-v2-internal-environment",
+            },
+          ],
           config: { binaryPath: "/opt/grok" },
         },
         opencode_work: {
@@ -298,6 +307,7 @@ describe("ServerSettingsService", () => {
           config: {
             serverUrl: "http://127.0.0.1:4096",
             serverPassword: "opencode-secret",
+            serverPasswordSecretRef: "provider-secret-v2-internal-config",
           },
         },
       },
@@ -321,6 +331,8 @@ describe("ServerSettingsService", () => {
       serverPassword: "",
       serverPasswordRedacted: true,
     });
+    expect(settings.providers.kilo.serverPasswordSecretRef).toBeUndefined();
+    expect(settings.providers.opencode.serverPasswordSecretRef).toBeUndefined();
   });
 
   it("preserves redacted legacy server passwords on writeback", async () => {
@@ -430,7 +442,13 @@ describe("ServerSettingsService", () => {
       { name: "XAI_API_KEY", value: "secret-token", sensitive: true },
     ]);
     expect(result.parsed.providerInstances.grok_work.environment).toEqual([
-      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+      {
+        name: "XAI_API_KEY",
+        value: "",
+        sensitive: true,
+        valueRedacted: true,
+        valueSecretRef: expect.stringMatching(/^provider-secret-v2-/),
+      },
     ]);
   });
 
@@ -467,11 +485,13 @@ describe("ServerSettingsService", () => {
       serverUrl: "http://127.0.0.1:4097",
       serverPassword: "",
       serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
     });
     expect(result.parsed.providers.opencode).toMatchObject({
       serverUrl: "http://127.0.0.1:4098",
       serverPassword: "",
       serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
     });
   });
 
@@ -555,7 +575,291 @@ describe("ServerSettingsService", () => {
       serverUrl: "http://127.0.0.1:4096",
       serverPassword: "",
       serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
     });
+  });
+
+  it("materializes versioned secret references from disk", async () => {
+    const settings = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { secretsDir, settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const legacyRef = "provider-secret-v2-fixture-legacy";
+        const environmentRef = "provider-secret-v2-fixture-environment";
+        const configRef = "provider-secret-v2-fixture-config";
+
+        yield* fs.makeDirectory(secretsDir, { recursive: true });
+        yield* fs.writeFileString(`${secretsDir}/${legacyRef}.bin`, "legacy-secret");
+        yield* fs.writeFileString(`${secretsDir}/${environmentRef}.bin`, "environment-secret");
+        yield* fs.writeFileString(`${secretsDir}/${configRef}.bin`, "config-secret");
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            ...DEFAULT_SERVER_SETTINGS,
+            providers: {
+              ...DEFAULT_SERVER_SETTINGS.providers,
+              opencode: {
+                ...DEFAULT_SERVER_SETTINGS.providers.opencode,
+                serverPassword: "",
+                serverPasswordRedacted: true,
+                serverPasswordSecretRef: legacyRef,
+              },
+            },
+            providerInstances: {
+              grok_work: {
+                driver: "grok",
+                enabled: true,
+                environment: [
+                  {
+                    name: "XAI_API_KEY",
+                    value: "",
+                    sensitive: true,
+                    valueRedacted: true,
+                    valueSecretRef: environmentRef,
+                  },
+                ],
+              },
+              opencode_work: {
+                driver: "opencode",
+                enabled: true,
+                config: {
+                  serverPassword: "",
+                  serverPasswordRedacted: true,
+                  serverPasswordSecretRef: configRef,
+                },
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        return yield* service.getSettings;
+      }),
+    );
+
+    expect(settings.providers.opencode.serverPassword).toBe("legacy-secret");
+    expect(settings.providerInstances.grok_work?.environment).toEqual([
+      { name: "XAI_API_KEY", value: "environment-secret", sensitive: true },
+    ]);
+    expect(settings.providerInstances.opencode_work?.config).toEqual({
+      serverPassword: "config-secret",
+    });
+  });
+
+  it("preserves redacted secrets while migrating neighboring plaintext", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { secretsDir, settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const stableConfigRef = [
+          "provider-config",
+          Buffer.from("opencode_work", "utf8").toString("base64url"),
+          Buffer.from("serverPassword", "utf8").toString("base64url"),
+        ].join("-");
+
+        yield* fs.makeDirectory(secretsDir, { recursive: true });
+        yield* fs.writeFileString(`${secretsDir}/${stableConfigRef}.bin`, "preserved-secret");
+        yield* fs.writeFileString(
+          settingsPath,
+          JSON.stringify({
+            ...DEFAULT_SERVER_SETTINGS,
+            providerInstances: {
+              grok_work: {
+                driver: "grok",
+                enabled: true,
+                environment: [
+                  { name: "XAI_API_KEY", value: "plaintext-trigger", sensitive: true },
+                ],
+              },
+              opencode_work: {
+                driver: "opencode",
+                enabled: true,
+                config: {
+                  serverPassword: "",
+                  serverPasswordRedacted: true,
+                },
+              },
+            },
+          }),
+        );
+
+        yield* service.start;
+        const settings = yield* service.getSettings;
+        const parsed = JSON.parse(yield* fs.readFileString(settingsPath)) as any;
+        const stableSecretStillExists = yield* fs.exists(`${secretsDir}/${stableConfigRef}.bin`);
+        return { parsed, settings, stableSecretStillExists };
+      }),
+    );
+
+    expect(result.settings.providerInstances.opencode_work?.config).toEqual({
+      serverPassword: "preserved-secret",
+    });
+    expect(result.parsed.providerInstances.opencode_work.config).toMatchObject({
+      serverPassword: "",
+      serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
+    });
+    expect(result.stableSecretStillExists).toBe(false);
+  });
+
+  it("keeps old referenced secrets intact when the settings commit fails", async () => {
+    const patchFor = (suffix: "old" | "new") => ({
+      providers: {
+        opencode: {
+          serverPassword: `legacy-${suffix}`,
+        },
+      },
+      providerInstances: {
+        grok_work: {
+          driver: "grok" as const,
+          enabled: true,
+          environment: [
+            {
+              name: "XAI_API_KEY",
+              value: `environment-${suffix}`,
+              sensitive: true,
+            },
+          ],
+        },
+        opencode_work: {
+          driver: "opencode" as const,
+          enabled: true,
+          config: {
+            serverPassword: `config-${suffix}`,
+          },
+        },
+      },
+    });
+
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { secretsDir, settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+        const stateDir = settingsPath.slice(0, settingsPath.lastIndexOf("/"));
+        const readSecretFiles = () =>
+          Effect.gen(function* () {
+            const files = yield* fs.readDirectory(secretsDir);
+            const values: Record<string, string> = {};
+            for (const file of files) {
+              if (!file.endsWith(".bin")) continue;
+              values[file.slice(0, -4)] = yield* fs.readFileString(`${secretsDir}/${file}`);
+            }
+            return values;
+          });
+
+        yield* service.start;
+        yield* service.updateSettings(patchFor("old"));
+        const rawBefore = yield* fs.readFileString(settingsPath);
+        const parsedBefore = JSON.parse(rawBefore) as any;
+        const oldRefs = [
+          parsedBefore.providers.opencode.serverPasswordSecretRef,
+          parsedBefore.providerInstances.grok_work.environment[0].valueSecretRef,
+          parsedBefore.providerInstances.opencode_work.config.serverPasswordSecretRef,
+        ] as string[];
+
+        yield* fs.chmod(stateDir, 0o500);
+        const failedExit = yield* Effect.exit(service.updateSettings(patchFor("new"))).pipe(
+          Effect.ensuring(fs.chmod(stateDir, 0o700).pipe(Effect.orDie)),
+        );
+        const rawAfterFailedWrite = yield* fs.readFileString(settingsPath);
+        const settingsAfterFailedWrite = yield* service.getSettings;
+        const secretsAfterFailedWrite = yield* readSecretFiles();
+
+        yield* service.updateSettings(patchFor("new"));
+        const parsedAfterRetry = JSON.parse(yield* fs.readFileString(settingsPath)) as any;
+        const secretsAfterRetry = yield* readSecretFiles();
+
+        return {
+          failedExit,
+          oldRefs,
+          parsedAfterRetry,
+          rawAfterFailedWrite,
+          rawBefore,
+          secretsAfterFailedWrite,
+          secretsAfterRetry,
+          settingsAfterFailedWrite,
+        };
+      }),
+    );
+
+    expect(result.failedExit._tag).toBe("Failure");
+    expect(result.rawAfterFailedWrite).toBe(result.rawBefore);
+    expect(result.settingsAfterFailedWrite.providers.opencode.serverPassword).toBe("legacy-old");
+    expect(result.settingsAfterFailedWrite.providerInstances.grok_work?.environment?.[0]?.value).toBe(
+      "environment-old",
+    );
+    expect(result.settingsAfterFailedWrite.providerInstances.opencode_work?.config).toMatchObject({
+      serverPassword: "config-old",
+    });
+
+    const failedValues = Object.values(result.secretsAfterFailedWrite);
+    expect(failedValues).toEqual(
+      expect.arrayContaining(["legacy-old", "environment-old", "config-old"]),
+    );
+    expect(failedValues).not.toContain("legacy-new");
+    expect(failedValues).not.toContain("environment-new");
+    expect(failedValues).not.toContain("config-new");
+    expect(result.secretsAfterFailedWrite[result.oldRefs[0]!]).toBe("legacy-old");
+    expect(result.secretsAfterFailedWrite[result.oldRefs[1]!]).toBe("environment-old");
+    expect(result.secretsAfterFailedWrite[result.oldRefs[2]!]).toBe("config-old");
+
+    const newRefs = [
+      result.parsedAfterRetry.providers.opencode.serverPasswordSecretRef,
+      result.parsedAfterRetry.providerInstances.grok_work.environment[0].valueSecretRef,
+      result.parsedAfterRetry.providerInstances.opencode_work.config.serverPasswordSecretRef,
+    ] as string[];
+    expect(newRefs[0]).not.toBe(result.oldRefs[0]);
+    expect(newRefs[1]).not.toBe(result.oldRefs[1]);
+    expect(newRefs[2]).not.toBe(result.oldRefs[2]);
+    expect(result.secretsAfterRetry[result.oldRefs[0]!]).toBeUndefined();
+    expect(result.secretsAfterRetry[result.oldRefs[1]!]).toBeUndefined();
+    expect(result.secretsAfterRetry[result.oldRefs[2]!]).toBeUndefined();
+    expect(result.secretsAfterRetry[newRefs[0]!]).toBe("legacy-new");
+    expect(result.secretsAfterRetry[newRefs[1]!]).toBe("environment-new");
+    expect(result.secretsAfterRetry[newRefs[2]!]).toBe("config-new");
+  });
+
+  it("retries obsolete versioned secret cleanup after a transient removal failure", async () => {
+    const result = await runWithSettings(
+      Effect.gen(function* () {
+        const service = yield* ServerSettingsService;
+        const { secretsDir, settingsPath } = yield* ServerConfig;
+        const fs = yield* FileSystem.FileSystem;
+
+        yield* service.start;
+        yield* service.updateSettings({
+          providers: { opencode: { serverPassword: "old-secret" } },
+        });
+        const parsed = JSON.parse(yield* fs.readFileString(settingsPath)) as any;
+        const oldReference = parsed.providers.opencode.serverPasswordSecretRef as string;
+        const oldPath = `${secretsDir}/${oldReference}.bin`;
+        const blockerPath = `${oldPath}/blocker`;
+
+        yield* fs.remove(oldPath);
+        yield* fs.makeDirectory(oldPath);
+        yield* fs.writeFileString(blockerPath, "block cleanup");
+
+        const updated = yield* service.updateSettings({
+          providers: { opencode: { serverPassword: "new-secret" } },
+        });
+        const blockedPathSurvived = yield* fs.exists(oldPath);
+
+        yield* fs.remove(blockerPath);
+        yield* fs.remove(oldPath, { recursive: true });
+        yield* fs.writeFileString(oldPath, "stale-secret");
+        yield* service.updateSettings({ enableAssistantStreaming: false });
+        const stalePathSurvivedRetry = yield* fs.exists(oldPath);
+
+        return { blockedPathSurvived, stalePathSurvivedRetry, updated };
+      }),
+    );
+
+    expect(result.updated.providers.opencode.serverPassword).toBe("new-secret");
+    expect(result.blockedPathSurvived).toBe(true);
+    expect(result.stalePathSurvivedRetry).toBe(false);
   });
 
   it("migrates plaintext provider-instance secrets from disk into redacted settings", async () => {
@@ -619,17 +923,25 @@ describe("ServerSettingsService", () => {
     expect(result.raw).not.toContain("opencode-secret");
     expect(result.raw).not.toContain("kilo-secret");
     expect(result.parsed.providerInstances.grok_work.environment).toEqual([
-      { name: "XAI_API_KEY", value: "", sensitive: true, valueRedacted: true },
+      {
+        name: "XAI_API_KEY",
+        value: "",
+        sensitive: true,
+        valueRedacted: true,
+        valueSecretRef: expect.stringMatching(/^provider-secret-v2-/),
+      },
     ]);
     expect(result.parsed.providerInstances.opencode_work.config).toEqual({
       serverUrl: "http://127.0.0.1:4096",
       serverPassword: "",
       serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
     });
     expect(result.parsed.providers.kilo).toMatchObject({
       serverUrl: "http://127.0.0.1:4097",
       serverPassword: "",
       serverPasswordRedacted: true,
+      serverPasswordSecretRef: expect.stringMatching(/^provider-secret-v2-/),
     });
   });
 });

@@ -2423,27 +2423,23 @@ diffs-container {
   -webkit-backdrop-filter: none !important;
 }
 
-/* Light mode: the active segment matches the composer input fill so the two
-   selected surfaces read identically. Dark keeps the secondary-hover token. */
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
-  background: var(--composer-surface) !important;
-  background-color: var(--composer-surface) !important;
-  background-image: none !important;
-  box-shadow: none !important;
-  opacity: 1 !important;
-  filter: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
+/* macOS-style sliding pill. Light mode matches the composer input fill so the two
+   selected surfaces read identically; dark keeps the secondary-hover token. The soft
+   shadow + hairline border give it the raised, segmented-control look. */
+.sidebar-segmented-thumb {
+  background: var(--composer-surface);
+  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.08),
+    0 1px 1px rgba(0, 0, 0, 0.04);
 }
 
-.dark .sidebar-segmented-picker [data-sidebar-segmented-active="true"] {
-  background: var(--color-background-button-secondary-hover) !important;
-  background-color: var(--color-background-button-secondary-hover) !important;
-}
-
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"]::before,
-.sidebar-segmented-picker [data-sidebar-segmented-active="true"]::after {
-  display: none !important;
+.dark .sidebar-segmented-thumb {
+  background: var(--color-background-button-secondary-hover);
+  border-color: color-mix(in oklab, var(--color-text-foreground) 12%, transparent);
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 1px 1px rgba(0, 0, 0, 0.28);
 }
 
 /* Frosted translucent shell shared by floating menus & pickers (dropdown menus,

@@ -1457,6 +1457,40 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         } as const;
       });
 
+    // Lets the command reactor seed its in-memory option cache from the durable
+    // binding without exposing persisted credential fingerprints or secrets.
+    const sessionBindingMatchesLaunchOptions: NonNullable<
+      ProviderServiceShape["sessionBindingMatchesLaunchOptions"]
+    > = (input) =>
+      Effect.gen(function* () {
+        const binding = Option.getOrUndefined(yield* directory.getBinding(input.threadId));
+        if (
+          !binding ||
+          binding.provider !== input.provider ||
+          providerInstanceIdFromBinding(binding) !== input.providerInstanceId
+        ) {
+          return false;
+        }
+
+        const resolved = yield* resolveLaunchProviderInstance({
+          operation: "ProviderService.sessionBindingMatchesLaunchOptions",
+          provider: input.provider,
+          providerInstanceId: input.providerInstanceId,
+          ...(input.providerOptions !== undefined
+            ? { providerOptions: input.providerOptions }
+            : {}),
+        });
+        return providerStartOptionsEqualForProvider(
+          resolved.instance.driver,
+          credentialsFingerprintKey,
+          {
+            options: readPersistedProviderOptions(binding.runtimePayload),
+            credentialsFingerprint: readPersistedCredentialsFingerprint(binding.runtimePayload),
+          },
+          resolved.providerOptions,
+        );
+      });
+
     const startSession: ProviderServiceShape["startSession"] = (threadId, rawInput) =>
       Effect.gen(function* () {
         const parsed = yield* decodeInputOrValidationError({
@@ -1479,7 +1513,9 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           providerInstanceId:
             input.providerInstanceId ??
             input.modelSelection?.instanceId ??
-            persistedBinding?.providerInstanceId,
+            (persistedBinding?.provider === input.provider
+              ? persistedBinding.providerInstanceId
+              : undefined),
           ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
           ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
         });
@@ -2423,6 +2459,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       stopRuntimeSession,
       clearSessionResumeCursor,
+      sessionBindingMatchesLaunchOptions,
       listSessions,
       getCapabilities,
       rollbackConversation,

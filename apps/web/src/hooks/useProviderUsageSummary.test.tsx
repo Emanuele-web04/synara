@@ -143,6 +143,40 @@ describe("useProviderUsageSummary", () => {
     expect(summary.rateLimits[0]?.limits?.[0]?.usedPercent).toBe(12);
   });
 
+  it("surfaces the throttle notice from an ok snapshot that carries a detail", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({
+        status: "ok",
+        detail: "Anthropic is rate-limiting usage checks — showing your last values.",
+        limits: [
+          {
+            window: "Weekly",
+            usedPercent: 64,
+            resetsAt: "2026-06-15T12:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        ],
+      }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.rateLimits).toHaveLength(1);
+    expect(summary.usageNotice).toContain("rate-limiting");
+  });
+
+  it("has no notice when the live snapshot is non-ok", () => {
+    const queryClient = createQueryClient();
+    queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), [
+      snapshot({ status: "error", detail: "Usage is currently unavailable." }),
+    ]);
+
+    const summary = readProviderUsageSummary({ queryClient });
+
+    expect(summary.usageNotice).toBeUndefined();
+  });
+
   it("does not show fallback rows when an explicit provider card snapshot is non-ok", () => {
     const queryClient = createQueryClient();
     queryClient.setQueryData(serverQueryKeys.allProviderUsage("claudeAgent"), []);

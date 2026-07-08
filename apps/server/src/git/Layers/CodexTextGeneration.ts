@@ -1,3 +1,7 @@
+// FILE: CodexTextGeneration.ts
+// Purpose: Runs schema-constrained Codex CLI text generation in an isolated, account-safe home.
+// Layer: Git and orchestration text-generation service.
+
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 
@@ -6,12 +10,12 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { sanitizeGeneratedThreadTitle } from "@t3tools/shared/chatThreads";
-import { resolveCodexHome } from "@t3tools/shared/codexConfig";
 import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import {
+  resolveBaseCodexHomePath,
   resolveCodexHomeOverlayAccountSegment,
   resolveDpCodeCodexHomeOverlayPath,
 } from "../../codexHomePaths.ts";
@@ -19,6 +23,7 @@ import {
   buildCodexProcessEnv,
   disableDpCodeBrowserPluginInCodexConfig,
 } from "../../codexProcessEnv.ts";
+import { codexPathsReferenceSameLocation } from "../../codexPathIdentity.ts";
 import { ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "../Errors.ts";
 import {
@@ -178,16 +183,35 @@ const makeCodexTextGeneration = Effect.gen(function* () {
   const safeRemoveDirectory = (directoryPath: string): Effect.Effect<void, never> =>
     fileSystem.remove(directoryPath, { recursive: true }).pipe(Effect.catch(() => Effect.void));
 
-  const readRealAuthFile = (authFilePath: string): Effect.Effect<string | null, never> =>
+  const readRealAuthFile = (
+    authFilePath: string,
+    forbiddenHomePaths: readonly string[] = [],
+  ): Effect.Effect<string | null, never> =>
     Effect.gen(function* () {
-      const fileInfo = yield* Effect.promise(async () => {
+      const authHomePath = path.dirname(authFilePath);
+      if (
+        forbiddenHomePaths.some((forbidden) =>
+          codexPathsReferenceSameLocation(authHomePath, forbidden),
+        )
+      ) {
+        return null;
+      }
+      const [homeInfo, fileInfo] = yield* Effect.promise(async () => {
         try {
-          return await lstat(authFilePath);
+          return await Promise.all([lstat(path.dirname(authFilePath)), lstat(authFilePath)]);
         } catch {
-          return null;
+          return [null, null] as const;
         }
       });
-      if (!fileInfo || fileInfo.isSymbolicLink() || !fileInfo.isFile()) {
+      // Checking the immediate auth home closes the parent-directory symlink
+      // bypass where `<shadow> -> <default>` makes auth.json itself look real.
+      if (
+        !homeInfo ||
+        homeInfo.isSymbolicLink() ||
+        !fileInfo ||
+        fileInfo.isSymbolicLink() ||
+        !fileInfo.isFile()
+      ) {
         return null;
       }
       return yield* fileSystem
@@ -206,13 +230,19 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     launchEnv: NodeJS.ProcessEnv = process.env,
   ): Effect.Effect<{ readonly homePath: string }, TextGenerationError> =>
     Effect.gen(function* () {
-      const sourceCodexHome = sourceHomePath?.trim() || resolveCodexHome(launchEnv);
-      const sourceAuthHome = authHomePath?.trim();
+      const sourceCodexHome = resolveBaseCodexHomePath(launchEnv, sourceHomePath);
+      const sourceAuthHome = authHomePath?.trim()
+        ? resolveBaseCodexHomePath(launchEnv, authHomePath)
+        : undefined;
       // Accounts read auth from their shadow home or their own dedicated home;
       // accounts routed at the shared env-derived home keep their login inside
       // Synara's account overlay, so copy from there instead of the default
       // account's credentials.
-      const hasDedicatedAccountHome = Boolean(sourceHomePath?.trim());
+      const defaultCodexHome = resolveBaseCodexHomePath(launchEnv);
+      const hasDedicatedAccountHome = Boolean(
+        sourceHomePath?.trim() &&
+        !codexPathsReferenceSameLocation(sourceCodexHome, defaultCodexHome),
+      );
       const trimmedAccountId = accountId?.trim();
       const accountOverlayAuthHome = (() => {
         if (!trimmedAccountId || sourceAuthHome) {
@@ -226,11 +256,6 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           ? resolveDpCodeCodexHomeOverlayPath(launchEnv, sourceCodexHome, accountSegment)
           : undefined;
       })();
-      const shouldCopyAuth =
-        !trimmedAccountId ||
-        Boolean(sourceAuthHome) ||
-        hasDedicatedAccountHome ||
-        Boolean(accountOverlayAuthHome);
       const isolatedHomePath = path.join(
         tempDir,
         `t3code-codex-home-${process.pid}-${randomUUID()}`,
@@ -270,18 +295,34 @@ const makeCodexTextGeneration = Effect.gen(function* () {
           );
       }
 
-      if (shouldCopyAuth) {
-        // Auth precedence: explicit shadow home, then the account's own home,
-        // then the Synara account overlay (where in-app logins land when the
-        // account home has no credentials of its own).
-        const authHomeCandidates = [
-          ...(sourceAuthHome ? [sourceAuthHome] : []),
-          ...(!trimmedAccountId || hasDedicatedAccountHome ? [sourceCodexHome] : []),
-          ...(accountOverlayAuthHome ? [accountOverlayAuthHome] : []),
-        ];
+      {
+        // A shadow auth home is authoritative: missing or rejected auth there
+        // must never fall back to the shared/default account. Without a shadow,
+        // use only the selected account's dedicated home or managed overlay.
+        const authHomeCandidates: ReadonlyArray<{
+          readonly homePath: string;
+          readonly forbiddenHomePaths?: readonly string[];
+        }> = sourceAuthHome
+          ? [
+              {
+                homePath: sourceAuthHome,
+                forbiddenHomePaths: [sourceCodexHome, defaultCodexHome],
+              },
+            ]
+          : trimmedAccountId
+            ? [
+                ...(hasDedicatedAccountHome ? [{ homePath: sourceCodexHome }] : []),
+                ...(accountOverlayAuthHome
+                  ? [{ homePath: accountOverlayAuthHome, forbiddenHomePaths: [defaultCodexHome] }]
+                  : []),
+              ]
+            : [{ homePath: sourceCodexHome }];
         const sourceAuth = yield* Effect.gen(function* () {
           for (const authHome of authHomeCandidates) {
-            const content = yield* readRealAuthFile(path.join(authHome, "auth.json"));
+            const content = yield* readRealAuthFile(
+              path.join(authHome.homePath, "auth.json"),
+              authHome.forbiddenHomePaths,
+            );
             if (content !== null) {
               return content;
             }

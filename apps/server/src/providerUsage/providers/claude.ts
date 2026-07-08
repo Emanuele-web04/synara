@@ -4,6 +4,7 @@
 // hex-encoded) read-only, and calls the OAuth usage endpoint, mapping the 5h/weekly/sonnet
 // utilization windows + extra-usage credits. Reference: openusage plugins/claude/plugin.js.
 
+import { createHash } from "node:crypto";
 import nodePath from "node:path";
 
 import type {
@@ -18,7 +19,7 @@ import {
   readKeychainPassword,
   refreshOAuthAccessToken,
 } from "../credentials";
-import { fetchJson, isAuthFailureStatus } from "../http";
+import { fetchJson, isAuthFailureStatus, isRateLimitStatus, parseRetryAfterMs } from "../http";
 import {
   asFiniteNumber,
   asRecord,
@@ -31,6 +32,7 @@ import {
   needsAuthSnapshot,
   titleCase,
 } from "../parse";
+import { createRateLimitResilience } from "../rateLimitResilience";
 import type { ProviderUsageContext, ProviderUsageFetcher } from "../types";
 
 const SOURCE = "claude-oauth-usage";
@@ -137,6 +139,13 @@ function claudePlanName(creds: ClaudeCreds): string | undefined {
   return name;
 }
 
+// Builds a non-secret cooldown key tied to the credential currently resolved from disk/keychain.
+function claudeCredentialCacheKey(ctx: ProviderUsageContext, creds: ClaudeCreds): string {
+  const stableSecret = creds.refreshToken ?? creds.accessToken;
+  const digest = createHash("sha256").update(stableSecret).digest("base64url").slice(0, 18);
+  return `${ctx.homeDir}:${digest}`;
+}
+
 function applyRefreshedClaudeCreds(
   creds: ClaudeCreds,
   refreshed: { accessToken: string; refreshToken?: string; expiresAtMs?: number },
@@ -215,6 +224,23 @@ export function parseClaudeUsage(input: { json: unknown; nowMs: number; planName
   });
 }
 
+// --- Rate-limit resilience (mirrors OpenUsage's ClaudeProvider, PR #849) --------------------------
+// Anthropic throttles the usage endpoint for heavy Claude Code users; a bare 429 (or a transient
+// blip) must not blank the usage panel. The shared helper remembers the last clean fetch per account
+// and keeps serving it — with a staleness note — while backing off. Keyed by a credential fingerprint
+// so a removed or switched Claude login can't be served another account's cached numbers.
+const claudeRateLimit = createRateLimitResilience({
+  provider: "claudeAgent",
+  source: SOURCE,
+  detail: (retryMins) =>
+    `Anthropic is rate-limiting usage checks — showing your last values, retrying in ~${retryMins}m. Manual refreshes only extend the limit.`,
+});
+
+/** Test-only: clear the cross-call last-good/cooldown memory so cases start from a cold state. */
+export function __resetClaudeUsageRateLimitState(): void {
+  claudeRateLimit.reset();
+}
+
 export const claudeUsageFetcher: ProviderUsageFetcher = {
   provider: "claudeAgent",
   async fetch(ctx) {
@@ -239,6 +265,7 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         continue;
       }
 
+      const rateLimitKey = claudeCredentialCacheKey(ctx, creds);
       let activeCreds = creds;
       if (shouldRefreshClaudeCreds(activeCreds, ctx.nowMs)) {
         const refreshed = await refreshClaudeCreds(activeCreds);
@@ -247,6 +274,12 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         } else if (activeCreds.expiresAtMs !== undefined && activeCreds.expiresAtMs <= ctx.nowMs) {
           continue;
         }
+      }
+
+      // Inside an active rate-limit cooldown, skip only for the credential that originally hit it.
+      const cooldownSnapshot = claudeRateLimit.serveDuringCooldown(rateLimitKey, ctx.nowMs);
+      if (cooldownSnapshot) {
+        return cooldownSnapshot;
       }
 
       try {
@@ -261,6 +294,15 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
         if (isAuthFailureStatus(result.status)) {
           continue;
         }
+        if (isRateLimitStatus(result.status)) {
+          // Account/IP-level throttle: back off (respecting Retry-After) and keep the last values
+          // instead of blanking. Trying the next credential would only earn more 429s.
+          return claudeRateLimit.enterCooldown(
+            rateLimitKey,
+            ctx.nowMs,
+            parseRetryAfterMs(result.headers, ctx.nowMs),
+          );
+        }
         if (!result.ok) {
           lastErrorSnapshot = errorSnapshot(
             "claudeAgent",
@@ -271,11 +313,13 @@ export const claudeUsageFetcher: ProviderUsageFetcher = {
           continue;
         }
         const planName = claudePlanName(activeCreds);
-        return parseClaudeUsage({
+        const snapshot = parseClaudeUsage({
           json: result.json,
           nowMs: ctx.nowMs,
           ...(planName ? { planName } : {}),
         });
+        claudeRateLimit.rememberLastGood(rateLimitKey, snapshot);
+        return snapshot;
       } catch {
         lastErrorSnapshot = errorSnapshot(
           "claudeAgent",

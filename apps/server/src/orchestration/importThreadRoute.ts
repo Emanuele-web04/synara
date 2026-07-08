@@ -148,13 +148,14 @@ export function claudeHistoricalSessionEnvironment(
   input?: { readonly homeDir?: string | undefined },
 ): NodeJS.ProcessEnv | undefined {
   const claudeOptions = providerOptions?.claudeAgent;
-  if (!claudeOptions) {
+  if (!claudeOptions && !input?.homeDir) {
     return undefined;
   }
-  const homePath = claudeOptions.homePath?.trim();
-  const environment = claudeOptions.environment ?? {};
+  const homePath = claudeOptions?.homePath?.trim();
+  const environment = claudeOptions?.environment ?? {};
   if (!homePath && Object.keys(environment).length === 0) {
-    return undefined;
+    // Default Claude imports still belong to the configured Synara home, not the server process HOME.
+    return buildClaudeProcessEnv({ homeDir: input?.homeDir });
   }
   return buildClaudeProcessEnv({ homePath, environment, homeDir: input?.homeDir });
 }
@@ -489,6 +490,7 @@ export function makeImportThreadHandler(options: ImportThreadHandlerOptions) {
         ? [
             {
               id: project.id,
+              kind: project.kind,
               workspaceRoot: project.workspaceRoot,
             },
           ]

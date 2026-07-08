@@ -38,6 +38,14 @@ describe("claudeHistoricalSessionEnvironment", () => {
     expect(environment?.SYNARA_CLAUDE_IMPORT_TEST).toBe("1");
   });
 
+  it("scopes default Claude imports to the configured Synara home", () => {
+    const environment = claudeHistoricalSessionEnvironment(undefined, {
+      homeDir: "/synara/home",
+    });
+
+    expect(environment?.HOME).toBe("/synara/home");
+  });
+
   it("passes the sanitized historical environment to child queries without remerging process env", () => {
     const original = process.env.ANTHROPIC_API_KEY;
     process.env.ANTHROPIC_API_KEY = "ambient-key";

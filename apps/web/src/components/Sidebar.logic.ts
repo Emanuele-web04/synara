@@ -264,29 +264,6 @@ export type SettingsBackTarget =
       kind: "home";
     };
 
-export function buildSettingsBackAvailableThreadIds(input: {
-  sidebarThreadSummaryById: Readonly<Record<string, unknown>>;
-  draftThreadsByThreadId: Readonly<Record<string, unknown>>;
-}): ReadonlySet<string> {
-  const availableThreadIds = new Set<string>();
-
-  for (const threadId of Object.keys(input.sidebarThreadSummaryById)) {
-    if (threadId.length > 0) {
-      availableThreadIds.add(threadId);
-    }
-  }
-
-  // Settings can be opened from a fresh unsent chat, which has a route id but
-  // no persisted sidebar summary yet. Keep that draft route as a valid return target.
-  for (const threadId of Object.keys(input.draftThreadsByThreadId)) {
-    if (threadId.length > 0) {
-      availableThreadIds.add(threadId);
-    }
-  }
-
-  return availableThreadIds;
-}
-
 export function resolveSettingsBackTarget(input: {
   lastThreadRoute: LastThreadRoute | null;
   availableThreadIds: ReadonlySet<string>;
@@ -1292,6 +1269,27 @@ export function groupSidebarThreadsByProjectId(
   return byProjectId;
 }
 
+export function partitionSidebarThreadsByProjectIds<
+  T extends Pick<SidebarThreadSummary, "projectId">,
+>(
+  threads: readonly T[],
+  studioProjectIds: ReadonlySet<ProjectId>,
+): {
+  readonly studioThreads: T[];
+  readonly nonStudioThreads: T[];
+} {
+  const studioThreads: T[] = [];
+  const nonStudioThreads: T[] = [];
+  for (const thread of threads) {
+    if (studioProjectIds.has(thread.projectId)) {
+      studioThreads.push(thread);
+    } else {
+      nonStudioThreads.push(thread);
+    }
+  }
+  return { studioThreads, nonStudioThreads };
+}
+
 // Centralizes the expensive per-project row derivation so Sidebar.tsx can mostly orchestrate UI state.
 export function deriveSidebarProjectData(input: {
   projects: readonly Pick<Project, "id" | "cwd" | "expanded">[];
@@ -1420,15 +1418,37 @@ export function deriveSidebarProjectData(input: {
 
 /** Shared PR-state presentation so sidebar badges and kanban cards color PRs identically. */
 export interface PrStatePresentation {
-  label: "PR open" | "PR closed" | "PR merged";
+  label: "PR open" | "PR closed" | "PR merged" | "PR draft" | "PR has conflicts";
   colorClass: string;
   iconKind: "pull-request" | "merged-simple";
 }
 
-export function resolvePrStatePresentation(
-  state: "open" | "closed" | "merged",
-): PrStatePresentation {
-  if (state === "open") {
+/**
+ * Draft and mergeability are optional because persisted `lastKnownPr` entries written
+ * before those fields existed lack them; absence falls back to the plain state badge.
+ * Precedence for open PRs: conflicts (actionable) over draft (informational).
+ */
+export function resolvePrStatePresentation(pr: {
+  state: "open" | "closed" | "merged";
+  isDraft?: boolean | undefined;
+  mergeability?: "mergeable" | "conflicting" | "unknown" | undefined;
+}): PrStatePresentation {
+  if (pr.state === "open") {
+    if (pr.mergeability === "conflicting") {
+      return {
+        label: "PR has conflicts",
+        colorClass: "text-amber-600 dark:text-amber-300/90",
+        iconKind: "pull-request",
+      };
+    }
+    if (pr.isDraft === true) {
+      return {
+        label: "PR draft",
+        // GitHub renders drafts gray; reuse the closed treatment so draft reads as "not live yet".
+        colorClass: "text-zinc-500 dark:text-zinc-400/80",
+        iconKind: "pull-request",
+      };
+    }
     return {
       label: "PR open",
       // Match the diff "+" green so an opened PR reads as the same positive signal.
@@ -1436,7 +1456,7 @@ export function resolvePrStatePresentation(
       iconKind: "pull-request",
     };
   }
-  if (state === "closed") {
+  if (pr.state === "closed") {
     return {
       label: "PR closed",
       colorClass: "text-zinc-500 dark:text-zinc-400/80",

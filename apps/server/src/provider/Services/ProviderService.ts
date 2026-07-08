@@ -16,6 +16,7 @@ import type {
   ProviderForkThreadResult,
   ProviderInterruptTurnInput,
   ProviderInstanceId,
+  ProviderKind,
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderRuntimeEvent,
@@ -24,6 +25,7 @@ import type {
   ProviderSteerTurnInput,
   ProviderSession,
   ProviderSessionStartInput,
+  ProviderStartOptions,
   ProviderStopSessionInput,
   ThreadId,
   ProviderTurnStartResult,
@@ -120,6 +122,18 @@ export interface ProviderServiceShape {
   readonly clearSessionResumeCursor?: (input: {
     readonly threadId: ThreadId;
   }) => Effect.Effect<void, ProviderServiceError>;
+
+  /**
+   * Check whether a persisted session binding was launched with the current
+   * effective options. Returns only a boolean; credential fingerprints remain
+   * inside ProviderService and are never exposed to orchestration callers.
+   */
+  readonly sessionBindingMatchesLaunchOptions?: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderKind;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly providerOptions?: ProviderStartOptions;
+  }) => Effect.Effect<boolean, ProviderServiceError>;
 
   /**
    * List active provider sessions.

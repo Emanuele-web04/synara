@@ -1,4 +1,10 @@
+// FILE: codexGeneratedImages.test.ts
+// Purpose: Covers generated-image prediction and exact Codex-home allowlisting.
+// Layer: Server provider utility tests.
+
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "vitest";
 
@@ -199,6 +205,36 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
     );
   });
 
+  it("does not allowlist a parent-symlink alias of the default home as dedicated", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "synara-codex-image-alias-"));
+    try {
+      const defaultParent = path.join(root, "real-parent");
+      const defaultHome = path.join(defaultParent, "codex-home");
+      const parentAlias = path.join(root, "parent-alias");
+      mkdirSync(defaultHome, { recursive: true });
+      symlinkSync(defaultParent, parentAlias, "dir");
+      const aliasedHome = path.join(parentAlias, "codex-home");
+      const runtimeHome = path.join(root, "runtime");
+
+      const roots = resolveCodexGeneratedImagesRoots({
+        homePath: aliasedHome,
+        accountId: "work",
+        environment: {
+          CODEX_HOME: defaultHome,
+          SYNARA_HOME: runtimeHome,
+          DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN: "0",
+        },
+      });
+
+      assert.equal(roots.length, 1);
+      assert.ok(roots[0]?.includes(path.join("codex-home-overlay", "accounts")));
+      assert.ok(!roots.includes(path.join(aliasedHome, "generated_images")));
+      assert.ok(!roots.includes(path.join(runtimeHome, "codex-home-overlay", "generated_images")));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("collapses to a single root when overlay equals source", () => {
     delete process.env.SYNARA_HOME;
     delete process.env.DPCODE_HOME;
@@ -217,6 +253,7 @@ describe("resolveCodexGeneratedImagesRoot(s)", () => {
 describe("codexConfiguredHomePathsFromSettings", () => {
   const previousDisableFlag = process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN;
   const previousSynaraHome = process.env.SYNARA_HOME;
+  const previousCodexHome = process.env.CODEX_HOME;
 
   afterEach(() => {
     if (previousDisableFlag === undefined)
@@ -224,6 +261,22 @@ describe("codexConfiguredHomePathsFromSettings", () => {
     else process.env.DPCODE_DISABLE_CODEX_DPCODE_BROWSER_PLUGIN = previousDisableFlag;
     if (previousSynaraHome === undefined) delete process.env.SYNARA_HOME;
     else process.env.SYNARA_HOME = previousSynaraHome;
+    if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = previousCodexHome;
+  });
+
+  it("includes ambient roots for an enabled default Codex instance", () => {
+    process.env.CODEX_HOME = "/codex-test/.codex-default";
+    process.env.SYNARA_HOME = "/synara-default/runtime";
+
+    const roots = codexConfiguredHomePathsFromSettings(DEFAULT_SERVER_SETTINGS).flatMap((home) =>
+      resolveCodexGeneratedImagesRoots(home),
+    );
+
+    assert.deepEqual(roots, [
+      path.join("/codex-test/.codex-default", "generated_images"),
+      path.join("/synara-default/runtime", "codex-home-overlay", "generated_images"),
+    ]);
   });
 
   it("includes the env-scoped write home for instances relocating the overlay root", () => {

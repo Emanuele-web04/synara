@@ -2,7 +2,7 @@ import { KeybindingCommand, KeybindingRule, KeybindingsConfig } from "@t3tools/c
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { assertFailure } from "@effect/vitest/utils";
-import { Effect, FileSystem, Layer, Logger, Path, Schema } from "effect";
+import { Effect, FileSystem, Layer, Logger, Path, Result, Schema } from "effect";
 import { ServerConfig } from "./config";
 
 import {
@@ -187,6 +187,142 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         },
       ]);
       assert.equal(yield* fs.readFileString(keybindingsConfigPath), "{ not-json");
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("treats empty object config as empty and heals file on startup sync", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(keybindingsConfigPath, "{}\n");
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(configState.issues, []);
+      assert.deepEqual(
+        configState.keybindings,
+        compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.deepEqual(persisted, DEFAULT_KEYBINDINGS);
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("treats a whitespace-only config file as empty config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(keybindingsConfigPath, "  \n");
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(configState.issues, []);
+      assert.deepEqual(
+        configState.keybindings,
+        compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("treats a null config file as empty config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(keybindingsConfigPath, "null");
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(configState.issues, []);
+      assert.deepEqual(
+        configState.keybindings,
+        compileResolvedKeybindingsConfig(DEFAULT_KEYBINDINGS),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("unwraps object config with a keybindings array and heals file on startup sync", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        JSON.stringify({ keybindings: [{ key: "mod+9", command: "terminal.toggle" }] }),
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "terminal.toggle" && entry.shortcut.key === "9",
+        ),
+      );
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isTrue(
+        persisted.some((entry) => entry.key === "mod+9" && entry.command === "terminal.toggle"),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("wraps a single keybinding rule object into a one-entry config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(
+        keybindingsConfigPath,
+        '{"key":"mod+9","command":"terminal.toggle"}',
+      );
+
+      const configState = yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        return yield* keybindings.loadConfigState;
+      });
+      assert.deepEqual(configState.issues, []);
+      assert.isTrue(
+        configState.keybindings.some(
+          (entry) => entry.command === "terminal.toggle" && entry.shortcut.key === "9",
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
+  );
+
+  it.effect("upserts keybindings on top of an empty object config", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const { keybindingsConfigPath } = yield* ServerConfig;
+      yield* fs.writeFileString(keybindingsConfigPath, "{}");
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings;
+        yield* keybindings.upsertKeybindingRule({
+          key: "mod+shift+r",
+          command: "script.run-tests.run",
+        });
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      const persistedView = persisted.map(({ key, command }) => ({ key, command }));
+      assert.deepEqual(persistedView, [{ key: "mod+shift+r", command: "script.run-tests.run" }]);
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
@@ -639,7 +775,8 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           command: "script.run-tests.run",
         });
       }).pipe(toDetailResult);
-      assertFailure(result, "expected JSON array");
+      assert.isTrue(Result.isFailure(result));
+      assert.match(Result.isFailure(result) ? result.failure : "", /^expected JSON array/);
 
       const persistedRaw = yield* fs.readFileString(keybindingsConfigPath);
       assert.equal(persistedRaw, "{ not-json");
@@ -650,10 +787,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
       const { keybindingsConfigPath } = yield* ServerConfig;
-      yield* fs.writeFileString(
-        keybindingsConfigPath,
-        '{"key":"mod+j","command":"terminal.toggle"}',
-      );
+      yield* fs.writeFileString(keybindingsConfigPath, '{"keybindings":{"key":"mod+j"}}');
 
       const firstResult = yield* Effect.gen(function* () {
         const keybindings = yield* Keybindings;
@@ -662,7 +796,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           command: "script.run-tests.run",
         });
       }).pipe(toDetailResult);
-      assertFailure(firstResult, "expected JSON array");
+      assertFailure(firstResult, "expected JSON array, got object");
 
       const secondResult = yield* Effect.gen(function* () {
         const keybindings = yield* Keybindings;
@@ -671,7 +805,7 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
           command: "script.run-tests.run",
         });
       }).pipe(toDetailResult);
-      assertFailure(secondResult, "expected JSON array");
+      assertFailure(secondResult, "expected JSON array, got object");
     }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 

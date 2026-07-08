@@ -767,6 +767,66 @@ deletedRouting.layer("ProviderServiceLive deleted provider instances", (it) => {
       assert.equal(Option.isNone(binding), true);
     }),
   );
+
+  it.effect("stops sessions after their provider instance is disabled", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-disabled-instance-cleanup");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_cleanup: {
+            driver: "codex",
+            enabled: true,
+          },
+        },
+      });
+      yield* provider.startSession(threadId, {
+        provider: "codex",
+        providerInstanceId: "codex_cleanup",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          codex_cleanup: {
+            driver: "codex",
+            enabled: false,
+          },
+        },
+      });
+      deletedRouting.codex.stopSession.mockClear();
+
+      yield* provider.stopSession({ threadId });
+
+      assert.equal(deletedRouting.codex.stopSession.mock.calls.length, 1);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
+
+  it.effect("removes stopped bindings even when no live adapter session remains", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = asThreadId("thread-stopped-binding-cleanup");
+
+      yield* directory.upsert({
+        threadId,
+        provider: "codex",
+        providerInstanceId: "codex",
+        runtimeMode: "full-access",
+        status: "stopped",
+      });
+      deletedRouting.codex.stopSession.mockClear();
+
+      yield* provider.stopSession({ threadId });
+
+      assert.equal(deletedRouting.codex.stopSession.mock.calls.length, 0);
+      assert.equal(Option.isNone(yield* directory.getBinding(threadId)), true);
+    }),
+  );
 });
 
 it.effect(
@@ -943,6 +1003,104 @@ routing.layer("ProviderServiceLive routing", (it) => {
       );
       assert.equal(routing.codex.startSession.mock.calls.length, 0);
       assert.equal(routing.claude.startSession.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("does not reuse a persisted instance id when starting another provider", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-cross-provider-default-instance");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      });
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        providerInstanceId: "claude_work",
+        threadId,
+        runtimeMode: "full-access",
+      });
+      routing.codex.startSession.mockClear();
+
+      const session = yield* provider.startSession(threadId, {
+        provider: "codex",
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(session.provider, "codex");
+      assert.equal(session.providerInstanceId, "codex");
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      assert.equal(routing.codex.startSession.mock.calls[0]?.[0].providerInstanceId, "codex");
+    }),
+  );
+
+  it.effect("matches persisted launch options including server-only credentials", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService;
+      const serverSettings = yield* ServerSettingsService;
+      const threadId = asThreadId("thread-launch-options-match");
+      const providerInstanceId = asProviderInstanceId("claude_match");
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          claude_match: {
+            driver: "claudeAgent",
+            enabled: true,
+            environment: [{ name: "ANTHROPIC_API_KEY", value: "env-v1", sensitive: true }],
+            config: {
+              homePath: "/tmp/claude-match",
+            },
+          },
+        },
+      });
+      yield* provider.startSession(threadId, {
+        provider: "claudeAgent",
+        providerInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      assert.equal(typeof provider.sessionBindingMatchesLaunchOptions, "function");
+      if (!provider.sessionBindingMatchesLaunchOptions) {
+        assert.fail("sessionBindingMatchesLaunchOptions unavailable");
+      }
+
+      assert.equal(
+        yield* provider.sessionBindingMatchesLaunchOptions({
+          threadId,
+          provider: "claudeAgent",
+          providerInstanceId,
+        }),
+        true,
+      );
+
+      yield* serverSettings.updateSettings({
+        providerInstances: {
+          claude_match: {
+            driver: "claudeAgent",
+            enabled: true,
+            environment: [{ name: "ANTHROPIC_API_KEY", value: "env-v2", sensitive: true }],
+            config: {
+              homePath: "/tmp/claude-match",
+            },
+          },
+        },
+      });
+
+      assert.equal(
+        yield* provider.sessionBindingMatchesLaunchOptions({
+          threadId,
+          provider: "claudeAgent",
+          providerInstanceId,
+        }),
+        false,
+      );
     }),
   );
 

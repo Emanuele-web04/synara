@@ -97,7 +97,7 @@ function KanbanCardPrChip({
 }: {
   pr: NonNullable<NonNullable<KanbanCard["thread"]>["lastKnownPr"]>;
 }) {
-  const presentation = resolvePrStatePresentation(pr.state);
+  const presentation = resolvePrStatePresentation(pr);
   const PrIcon =
     presentation.iconKind === "merged-simple" ? GitMergedSimpleIcon : GitPullRequestIcon;
   return (

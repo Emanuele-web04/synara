@@ -123,6 +123,7 @@ import {
   resolveLegacyDesktopUserDataPaths,
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
+import { isBrokenPipeError } from "./desktopProcessErrors";
 
 syncShellEnvironment();
 
@@ -313,6 +314,16 @@ function writeBackendSessionBoundary(phase: "START" | "END", details: string): v
   backendLogSink.write(
     `[${logTimestamp()}] ---- APP SESSION ${phase} run=${APP_RUN_ID} ${normalizedDetails} ----\n`,
   );
+}
+
+function safeConsoleError(...args: Parameters<typeof console.error>): void {
+  try {
+    console.error(...args);
+  } catch (error: unknown) {
+    if (!isBrokenPipeError(error)) {
+      throw error;
+    }
+  }
 }
 
 function formatErrorMessage(error: unknown): string {
@@ -1960,7 +1971,7 @@ function scheduleBackendRestart(reason: string): void {
 
   const delayMs = Math.min(500 * 2 ** restartAttempt, 10_000);
   restartAttempt += 1;
-  console.error(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
+  safeConsoleError(`[desktop] backend exited unexpectedly (${reason}); restarting in ${delayMs}ms`);
 
   restartTimer = setTimeout(() => {
     restartTimer = null;
@@ -2834,6 +2845,15 @@ app.on("window-all-closed", () => {
 });
 
 if (process.platform !== "win32") {
+  process.on("uncaughtException", (error: unknown) => {
+    if (!isBrokenPipeError(error)) {
+      throw error;
+    }
+    if (desktopShutdownPromise) return;
+    writeDesktopLogHeader("EPIPE received");
+    requestGracefulAppQuit("EPIPE");
+  });
+
   process.on("SIGINT", () => {
     if (desktopShutdownPromise) return;
     writeDesktopLogHeader("SIGINT received");

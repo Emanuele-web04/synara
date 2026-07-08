@@ -1,4 +1,9 @@
-import { symlinkSync } from "node:fs";
+// FILE: CodexTextGeneration.test.ts
+// Purpose: Verifies isolated Codex text generation, account auth selection, and CLI safety.
+// Layer: Server text-generation integration tests.
+
+import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { homedir } from "node:os";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { it } from "@effect/vitest";
@@ -807,6 +812,40 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
     ),
   );
 
+  it.effect("prefers the routed instance home over a legacy Codex home", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        codexHomeConfigMustContain: 'model = "gpt-5.4-instance"',
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const legacyHome = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-legacy-codex-" });
+        const instanceHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-instance-codex-",
+        });
+        yield* fs.writeFileString(path.join(legacyHome, "config.toml"), 'model = "legacy"');
+        yield* fs.writeFileString(
+          path.join(instanceHome, "config.toml"),
+          'model = "gpt-5.4-instance"',
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          codexHomePath: legacyHome,
+          providerOptions: { codex: { homePath: instanceHome, accountId: "work" } },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
   it.effect("copies auth from an account's own dedicated text-generation home", () =>
     withFakeCodexEnv(
       {
@@ -889,6 +928,209 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGenerationLive", (it) => {
             codex: {
               accountId: "work",
             },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not treat an explicit ambient Codex home as dedicated account auth", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-explicit-shared-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+        const previousCodexHome = process.env.CODEX_HOME;
+        process.env.CODEX_HOME = sharedCodexHome;
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => {
+            if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+            else process.env.CODEX_HOME = previousCodexHome;
+          }),
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: { homePath: sharedCodexHome, accountId: "work" },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("expands a tilde shadow home before copying account auth", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        requireAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const shadowHome = mkdtempSync(path.join(homedir(), ".synara-codex-shadow-test-"));
+        yield* Effect.addFinalizer(() =>
+          Effect.sync(() => rmSync(shadowHome, { recursive: true, force: true })),
+        );
+        yield* fs.writeFileString(
+          path.join(shadowHome, "auth.json"),
+          '{"access_token":"work-account"}',
+        );
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: { shadowHomePath: `~/${path.relative(homedir(), shadowHome)}` },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not fall back to shared auth when shadow auth is a symlink", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shared-codex-",
+        });
+        const shadowHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shadow-codex-",
+        });
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+        symlinkSync(path.join(sharedCodexHome, "auth.json"), path.join(shadowHome, "auth.json"));
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: { homePath: sharedCodexHome, shadowHomePath: shadowHome },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not copy auth through a symlinked shadow-home directory", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sharedCodexHome = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shared-codex-",
+        });
+        const shadowTarget = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shadow-target-codex-",
+        });
+        const shadowAliasRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shadow-alias-codex-",
+        });
+        const shadowAlias = path.join(shadowAliasRoot, "shadow");
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+        yield* fs.writeFileString(
+          path.join(shadowTarget, "auth.json"),
+          '{"access_token":"work-account"}',
+        );
+        symlinkSync(shadowTarget, shadowAlias);
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: { homePath: sharedCodexHome, shadowHomePath: shadowAlias },
+          },
+        });
+
+        expect(generated.subject).toBe("Add important change");
+      }),
+    ),
+  );
+
+  it.effect("does not copy auth through a symlinked shadow-home parent", () =>
+    withFakeCodexEnv(
+      {
+        output: JSON.stringify({ subject: "Add important change", body: "" }),
+        requireCodexHome: true,
+        forbidAuthJson: true,
+      },
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const defaultParent = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-default-parent-codex-",
+        });
+        const sharedCodexHome = path.join(defaultParent, "codex-home");
+        const aliasRoot = yield* fs.makeTempDirectoryScoped({
+          prefix: "t3code-shadow-parent-alias-codex-",
+        });
+        const parentAlias = path.join(aliasRoot, "parent-alias");
+        const aliasedShadowHome = path.join(parentAlias, "codex-home");
+        yield* fs.makeDirectory(sharedCodexHome, { recursive: true });
+        yield* fs.writeFileString(
+          path.join(sharedCodexHome, "auth.json"),
+          '{"access_token":"default-account"}',
+        );
+        symlinkSync(defaultParent, parentAlias, "dir");
+
+        const textGeneration = yield* TextGeneration;
+        const generated = yield* textGeneration.generateCommitMessage({
+          cwd: process.cwd(),
+          branch: "feature/codex-account",
+          stagedSummary: "M README.md",
+          stagedPatch: "diff --git a/README.md b/README.md",
+          providerOptions: {
+            codex: { homePath: sharedCodexHome, shadowHomePath: aliasedShadowHome },
           },
         });
 

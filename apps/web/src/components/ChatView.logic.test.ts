@@ -4,10 +4,16 @@ import { describe, expect, it } from "vitest";
 import {
   appendVoiceTranscriptToPrompt,
   buildComposerMenuSelectionKey,
+  createLocalDispatchSnapshot,
   createWorktreeSetupSnapshot,
+  derivePromptHistoryFromMessages,
   failWorktreeSetupSnapshot,
   filterSidechatTranscriptMessages,
+  isComposerCursorOnFirstLine,
+  isComposerCursorOnLastLine,
   type LocalDispatchSnapshot,
+  promptStillMatchesActiveHistoryBrowse,
+  resolvePromptHistoryNavigation,
   resolveNextLocalDispatchSnapshot,
   deriveComposerSendState,
   deriveComposerVoiceState,
@@ -18,6 +24,7 @@ import {
   resolveActiveTurnLiveDiffState,
   resolveCommittedProviderModel,
   resolveDefaultEnvironmentPanelOpen,
+  resolveDraftProviderInstanceId,
   resolveEnvironmentPanelOpen,
   resolveEnvironmentPanelVisible,
   resolveProjectScriptTerminalTarget,
@@ -29,12 +36,50 @@ import {
   shouldAutoDeleteTerminalThreadOnLastClose,
   shouldConsumePendingCustomBinaryConfirmation,
   shouldEnableComposerPastedTextCollapse,
+  shouldHandlePromptHistoryNavigationKey,
   shouldRenderProviderHealthBanner,
   shouldShowComposerModelBootstrapSkeleton,
   shouldStartActiveTurnLayoutGrace,
   shouldRenderTerminalWorkspace,
   worktreeSetupHasError,
 } from "./ChatView.logic";
+
+describe("draft provider instance selection", () => {
+  const resolveProvider = (selection: { instanceId: string }) =>
+    selection.instanceId.startsWith("claude_") || selection.instanceId === "claudeAgent"
+      ? ("claudeAgent" as const)
+      : ("codex" as const);
+
+  it("prefers the exact active instance over an older same-provider draft selection", () => {
+    expect(
+      resolveDraftProviderInstanceId({
+        selectedProvider: "claudeAgent",
+        activeProviderInstanceId: "claude_work",
+        activeProvider: "claudeAgent",
+        modelSelections: [
+          { instanceId: "claude_personal", model: "claude-sonnet-4-6" },
+          { instanceId: "claude_work", model: "claude-opus-4-6" },
+        ],
+        resolveProviderForModelSelection: resolveProvider,
+      }),
+    ).toBe("claude_work");
+  });
+
+  it("recovers a matching instance from legacy drafts missing the active pointer", () => {
+    expect(
+      resolveDraftProviderInstanceId({
+        selectedProvider: "claudeAgent",
+        activeProviderInstanceId: null,
+        activeProvider: null,
+        modelSelections: [
+          { instanceId: "codex", model: "gpt-5.4" },
+          { instanceId: "claude_work", model: "claude-sonnet-4-6" },
+        ],
+        resolveProviderForModelSelection: resolveProvider,
+      }),
+    ).toBe("claude_work");
+  });
+});
 
 describe("composer menu selection", () => {
   const items = [{ id: "skill:check-code" }, { id: "skill:sanity-check" }] as const;
@@ -87,6 +132,343 @@ describe("composer menu selection", () => {
         items,
       }),
     ).toBeNull();
+  });
+});
+
+describe("prompt history navigation", () => {
+  it("derives newest-first native user prompts and skips imported or internal-only entries", () => {
+    const messages = [
+      {
+        role: "user",
+        text: "Imported prompt",
+        source: "fork-import",
+      },
+      {
+        role: "assistant",
+        text: "Assistant response",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "First prompt\n\n<terminal_context>\n# Terminal\noutput\n</terminal_context>",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]",
+        source: "native",
+      },
+      {
+        role: "user",
+        text: "Second prompt",
+        source: "native",
+      },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages)).toEqual(["Second prompt", "First prompt"]);
+  });
+
+  it("limits prompt history without deduping repeated prompts", () => {
+    const messages = [
+      { role: "user", text: "one", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+      { role: "user", text: "repeat", source: "native" },
+    ] as const;
+
+    expect(derivePromptHistoryFromMessages(messages, 2)).toEqual(["repeat", "repeat"]);
+  });
+
+  it("keeps history browse state for cursor-only movement inside the recalled prompt", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 3, draft: "draft in progress" },
+        history: ["different prompt"],
+        nextPrompt: "recalled prompt",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(true);
+  });
+
+  it("ends history browse state when the recalled prompt text is edited", () => {
+    expect(
+      promptStillMatchesActiveHistoryBrowse({
+        state: { index: 0, draft: "draft in progress" },
+        history: ["recalled prompt"],
+        nextPrompt: "recalled prompt edited",
+        appliedPrompt: "recalled prompt",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not start prompt history navigation while a composer menu trigger is active", () => {
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: true,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldHandlePromptHistoryNavigationKey({
+        key: "ArrowUp",
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        shiftKey: false,
+        menuIsActive: false,
+        hasActivePendingProgress: false,
+        isComposerApprovalState: false,
+        pendingUserInputCount: 0,
+      }),
+    ).toBe(true);
+  });
+
+  it("detects first and last line cursor positions", () => {
+    const prompt = "first\nmiddle\nlast";
+
+    expect(isComposerCursorOnFirstLine(prompt, 0)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 5)).toBe(true);
+    expect(isComposerCursorOnFirstLine(prompt, 6)).toBe(false);
+
+    expect(isComposerCursorOnLastLine(prompt, 13)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, prompt.length)).toBe(true);
+    expect(isComposerCursorOnLastLine(prompt, 12)).toBe(false);
+  });
+
+  it("navigates older prompts from a non-empty draft and restores the draft at the end", () => {
+    const history = ["third prompt", "second prompt", "first prompt"];
+    const first = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "draft in progress",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(first).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      expandedCursor: "third prompt".length,
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const second = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: first.prompt,
+      currentExpandedCursor: first.expandedCursor,
+      selectionCollapsed: true,
+      state: first.state,
+    });
+
+    expect(second).toMatchObject({
+      handled: true,
+      prompt: "second prompt",
+      expandedCursor: "second prompt".length,
+      state: { index: 1, draft: "draft in progress" },
+    });
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: second.prompt,
+      currentExpandedCursor: second.prompt.length,
+      selectionCollapsed: true,
+      state: second.state,
+    });
+
+    expect(newer).toMatchObject({
+      handled: true,
+      prompt: "third prompt",
+      state: { index: 0, draft: "draft in progress" },
+    });
+
+    const restored = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: newer.prompt,
+      currentExpandedCursor: newer.prompt.length,
+      selectionCollapsed: true,
+      state: newer.state,
+    });
+
+    expect(restored).toEqual({
+      handled: true,
+      prompt: "draft in progress",
+      expandedCursor: "draft in progress".length,
+      state: null,
+    });
+  });
+
+  it("places recalled multiline prompts on the eligible line for repeated navigation", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["first line\nsecond line"],
+      currentPrompt: "",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(older.expandedCursor).toBe("first line".length);
+
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["first line\nsecond line", "older"],
+      currentPrompt: "older",
+      currentExpandedCursor: "older".length,
+      selectionCollapsed: true,
+      state: { index: 1, draft: "" },
+    });
+
+    expect(newer.prompt).toBe("first line\nsecond line");
+    expect(newer.expandedCursor).toBe("first line\nsecond line".length);
+  });
+
+  it("can navigate newer immediately after recalling a multiline prompt with ArrowUp", () => {
+    const history = ["newer line one\nnewer line two", "older prompt"];
+    const recalled = resolvePromptHistoryNavigation({
+      direction: "older",
+      history,
+      currentPrompt: "",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: null,
+    });
+
+    expect(recalled.prompt).toBe("newer line one\nnewer line two");
+    expect(recalled.expandedCursor).toBe("newer line one".length);
+
+    const restoredDraft = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history,
+      currentPrompt: recalled.prompt,
+      currentExpandedCursor: recalled.expandedCursor,
+      selectionCollapsed: true,
+      state: recalled.state,
+    });
+
+    expect(restoredDraft).toEqual({
+      handled: true,
+      prompt: "",
+      expandedCursor: 0,
+      state: null,
+    });
+  });
+
+  it("does not navigate when cursor position or selection should belong to text editing", () => {
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "first\nsecond",
+        currentExpandedCursor: "first\ns".length,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: "draft",
+        currentExpandedCursor: 0,
+        selectionCollapsed: false,
+        state: null,
+      }).handled,
+    ).toBe(false);
+  });
+
+  it("does not navigate from lower lines even when the first line is long", () => {
+    // Cursor offsets are expanded (raw string indices). A collapsed cursor —
+    // where an inline chip like "@apps/web/src/components/ChatView.tsx" counts
+    // as one unit — would sit below the first line's raw end and wrongly hijack
+    // ArrowUp from the second line; expanded offsets must be used instead.
+    const prompt = "@apps/web/src/components/ChatView.tsx fix this\nplease keep the draft";
+    const secondLineCursor = prompt.indexOf("please") + "plea".length;
+
+    expect(
+      resolvePromptHistoryNavigation({
+        direction: "older",
+        history: ["previous"],
+        currentPrompt: prompt,
+        currentExpandedCursor: secondLineCursor,
+        selectionCollapsed: true,
+        state: null,
+      }).handled,
+    ).toBe(false);
+  });
+
+  it("restarts from the newest entry when older navigation loses its place", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(older).toEqual({
+      handled: true,
+      prompt: "new prompt",
+      expandedCursor: "new prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restarts from the newest entry when the stored index falls outside history", () => {
+    const older = resolvePromptHistoryNavigation({
+      direction: "older",
+      history: ["only prompt"],
+      currentPrompt: "recalled from longer history",
+      currentExpandedCursor: 0,
+      selectionCollapsed: true,
+      state: { index: 5, draft: "draft" },
+    });
+
+    expect(older).toEqual({
+      handled: true,
+      prompt: "only prompt",
+      expandedCursor: "only prompt".length,
+      state: { index: 0, draft: "draft" },
+    });
+  });
+
+  it("restores the draft when newer navigation loses its place", () => {
+    const newer = resolvePromptHistoryNavigation({
+      direction: "newer",
+      history: ["new prompt"],
+      currentPrompt: "old prompt",
+      currentExpandedCursor: "old prompt".length,
+      selectionCollapsed: true,
+      state: { index: 0, draft: "draft" },
+    });
+
+    expect(newer).toEqual({
+      handled: true,
+      prompt: "draft",
+      expandedCursor: "draft".length,
+      state: null,
+    });
   });
 });
 
@@ -300,48 +682,21 @@ describe("environment panel visibility", () => {
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: null,
       }),
     ).toBe(true);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: true,
-        actionDismissed: false,
         userPreferenceOpen: false,
       }),
     ).toBe(false);
     expect(
       resolveEnvironmentPanelOpen({
         defaultOpen: false,
-        actionDismissed: false,
         userPreferenceOpen: true,
       }),
     ).toBe(true);
-  });
-
-  it("treats action dismissals as transient closes instead of stored preferences", () => {
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: true,
-        userPreferenceOpen: null,
-      }),
-    ).toBe(false);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: true,
-        actionDismissed: false,
-        userPreferenceOpen: null,
-      }),
-    ).toBe(true);
-    expect(
-      resolveEnvironmentPanelOpen({
-        defaultOpen: false,
-        actionDismissed: true,
-        userPreferenceOpen: true,
-      }),
-    ).toBe(false);
   });
 
   it("renders the panel when the user toggles it open on empty landing", () => {
@@ -926,6 +1281,45 @@ describe("worktree setup snapshots", () => {
       "done",
       "done",
       "active",
+    ]);
+  });
+
+  it("inserts the setup action step when a worktree setup script is present", () => {
+    expect(
+      createWorktreeSetupSnapshot("run-setup-action", { setupScriptName: "Setup" }).steps,
+    ).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
+    ]);
+  });
+
+  it("keeps the setup action step done when the session starts afterward", () => {
+    expect(
+      createWorktreeSetupSnapshot("start-session", { setupScriptName: "Setup" }).steps.map(
+        (step) => step.status,
+      ),
+    ).toEqual(["done", "done", "done", "active"]);
+  });
+
+  it("preserves setup action metadata while advancing local worktree setup", () => {
+    const current = createLocalDispatchSnapshot(undefined, {
+      worktreeSetupStepId: "create-worktree",
+      setupScriptName: "Setup",
+    });
+
+    const next = resolveNextLocalDispatchSnapshot({
+      current,
+      activeThread: undefined,
+      options: { worktreeSetupStepId: "run-setup-action", setupScriptName: "Setup" },
+    });
+
+    expect(next.worktreeSetup?.steps).toEqual([
+      { id: "create-worktree", label: "Creating branch and worktree", status: "done" },
+      { id: "prepare-thread", label: "Linking thread workspace", status: "done" },
+      { id: "run-setup-action", label: "Running setup action: Setup", status: "active" },
+      { id: "start-session", label: "Starting session", status: "pending" },
     ]);
   });
 

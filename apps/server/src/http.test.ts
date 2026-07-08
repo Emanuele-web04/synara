@@ -14,6 +14,7 @@ import type { ServerAuthShape } from "./auth/Services/ServerAuth";
 import {
   deriveServerPaths,
   resolveDefaultChatWorkspaceRoot,
+  resolveDefaultStudioWorkspaceRoot,
   type ServerConfigShape,
 } from "./config";
 import type { ProjectFaviconResolverShape } from "./project/Services/ProjectFaviconResolver";
@@ -62,6 +63,7 @@ async function makeConfig(overrides: Partial<ServerConfigShape> = {}): Promise<S
     cwd: baseDir,
     homeDir: os.homedir(),
     chatWorkspaceRoot: resolveDefaultChatWorkspaceRoot({ homeDir: os.homedir() }),
+    studioWorkspaceRoot: resolveDefaultStudioWorkspaceRoot({ homeDir: os.homedir() }),
     baseDir,
     ...derivedPaths,
     staticDir: undefined,

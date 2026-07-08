@@ -22,8 +22,10 @@ import {
 import {
   type CodexHomePathsInput,
   resolveActiveCodexHomeWritePath,
+  resolveBaseCodexHomePath,
   resolveCodexHomeAllowlistCandidates,
 } from "./codexHomePaths.ts";
+import { codexPathsReferenceSameLocation } from "./codexPathIdentity.ts";
 
 export { CODEX_GENERATED_IMAGE_ARTIFACT_KIND };
 
@@ -105,13 +107,23 @@ function codexHomePathsInputFromContext(
 ): CodexHomePathsInput {
   const context: CodexGeneratedImageHomeContext =
     typeof codexHome === "string" ? { homePath: codexHome } : (codexHome ?? {});
+  const env = context.environment ? { ...process.env, ...context.environment } : process.env;
+  const explicitHomePath = context.homePath?.trim();
+  const accountSourceHomeIsDedicated = Boolean(
+    explicitHomePath &&
+    !codexPathsReferenceSameLocation(
+      resolveBaseCodexHomePath(env, explicitHomePath),
+      resolveBaseCodexHomePath(env),
+    ),
+  );
   return {
-    ...(context.homePath?.trim() ? { homePath: context.homePath } : {}),
+    ...(explicitHomePath ? { homePath: explicitHomePath } : {}),
     ...(context.shadowHomePath?.trim() ? { shadowHomePath: context.shadowHomePath } : {}),
     ...(context.accountId?.trim() ? { accountId: context.accountId } : {}),
     // The child runs with the instance environment layered over the server's,
     // so the write-home decision must see the same merged view.
-    ...(context.environment ? { env: { ...process.env, ...context.environment } } : {}),
+    ...(context.environment ? { env } : {}),
+    ...(explicitHomePath ? { accountSourceHomeIsDedicated } : {}),
   };
 }
 
@@ -175,7 +187,9 @@ export function codexConfiguredHomePathsFromSettings(
     // plain home path loses the historical account overlay roots needed after
     // plugin/direct-home mode changes.
     const codexOptions = providerStartOptionsFromInstance(instance)?.codex;
-    addCandidate(codexOptions);
+    // The enabled default instance normally has no explicit launch options;
+    // an empty context intentionally resolves its ambient/default Codex roots.
+    addCandidate(codexOptions ?? (instance.isDefault ? {} : undefined));
   }
   return [...candidates.values()];
 }

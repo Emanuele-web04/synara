@@ -22,6 +22,52 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.4.0",
+    date: "Jul 6",
+    features: [
+      {
+        id: "prompt-history-attachments",
+        title: "Prompt history keeps drafts and attachments together",
+        description:
+          "Browsing your previous prompts no longer strips the attachments from the draft you are building, so history navigation is safer for image- and file-heavy follow-ups.",
+        details:
+          "Composer draft history now preserves attachment state while you move through previous prompts, resets stale navigation state more carefully, and avoids duplicate optimistic history entries after sends.",
+      },
+      {
+        id: "pr-environment-panel",
+        title: "Pull request context is clearer in the Environment panel",
+        description:
+          "Threads attached to GitHub pull requests now surface richer PR context, including merged-state handling and more readable review/check previews.",
+        details:
+          "The PR snapshot path now captures pull request data for the Environment panel, handles merged PRs more predictably, trims long review previews, dedupes GitHub field requests, and tightens merge-head formatting.",
+      },
+      {
+        id: "claude-rate-limits",
+        title: "Claude rate limits fail more gracefully",
+        description:
+          "When Claude reports usage or rate-limit trouble, Synara now presents the condition more calmly instead of turning it into a generic provider failure.",
+        details:
+          "Provider usage handling now narrows usage summary types more safely and treats Claude usage limit responses as a recoverable, user-facing state with focused parser and resilience coverage.",
+      },
+      {
+        id: "desktop-stderr-resilience",
+        title: "Desktop restarts handle broken stderr pipes",
+        description:
+          "The desktop app is less likely to crash or get noisy when a restarted child process loses its stderr pipe during shutdown or relaunch.",
+        details:
+          "Desktop process restart handling now tolerates broken stderr writes, including the EPIPE path that could appear while the app was restarting provider or server processes.",
+      },
+      {
+        id: "release-polish",
+        title: "Small reliability fixes across agents and PR flows",
+        description:
+          "This release rounds off recent agent-session and pull-request work with tighter assertions, safer formatting, and cleaner edge-case behavior.",
+        details:
+          "The release includes automation migration lineage assertion fixes, PR snapshot review follow-up fixes, provider usage type narrowing, and general cleanup from the prompt-history and PR environment-panel review loops.",
+      },
+    ],
+  },
+  {
     version: "0.3.9",
     date: "Jul 5",
     features: [

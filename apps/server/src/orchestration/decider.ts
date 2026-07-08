@@ -2,6 +2,7 @@ import type {
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationReadModel,
+  ProjectKind,
   ThreadMarker,
 } from "@t3tools/contracts";
 import {
@@ -40,6 +41,10 @@ import {
 
 const nowIso = () => new Date().toISOString();
 const DEFAULT_ASSISTANT_DELIVERY_MODE = "buffered" as const;
+const STUDIO_PROJECT_KIND_SET = new Set<ProjectKind>(["studio"]);
+// Kinds that claim exclusive ownership of a workspace root. Chat containers are excluded: they
+// use placeholder roots (e.g. the home dir) that legitimately coexist with real projects.
+const WORKSPACE_OWNING_PROJECT_KIND_SET = new Set<ProjectKind>(["project", "studio"]);
 
 const defaultMetadata: Omit<OrchestrationEvent, "sequence" | "type" | "payload"> = {
   eventId: crypto.randomUUID() as OrchestrationEvent["eventId"],
@@ -100,22 +105,26 @@ function validateProjectPinLimit(input: {
   >;
   readonly readModel: OrchestrationReadModel;
   readonly projectId: OrchestrationEvent["aggregateId"];
-  readonly nextKind: "project" | "chat";
+  readonly nextKind: ProjectKind;
   readonly nextDeletedAt?: string | null;
   readonly wasPinned?: boolean;
   readonly staleProjectIds?: ReadonlySet<string>;
 }): Effect.Effect<void, OrchestrationCommandInvariantError> {
-  if (input.command.isPinned !== true) {
-    return Effect.void;
-  }
-
-  if (input.nextKind !== "project") {
+  // The kind invariant must hold for the EFFECTIVE pin state, not only when the command sets
+  // isPinned: a kind-only update (e.g. project -> studio) would otherwise carry an existing pin
+  // onto a kind that can never be pinned.
+  const nextIsPinned = input.command.isPinned ?? input.wasPinned ?? false;
+  if (nextIsPinned && input.nextKind !== "project") {
     return Effect.fail(
       new OrchestrationCommandInvariantError({
         commandType: input.command.type,
         detail: `Only projects can be pinned.`,
       }),
     );
+  }
+
+  if (input.command.isPinned !== true) {
+    return Effect.void;
   }
 
   if (input.nextDeletedAt !== undefined && input.nextDeletedAt !== null) {
@@ -226,7 +235,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       });
       const events: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const staleProjects: Array<OrchestrationReadModel["projects"][number]> = [];
-      if ((command.kind ?? "project") === "project") {
+      const nextProjectKind = command.kind ?? "project";
+      if (nextProjectKind === "project") {
+        // The app-managed Studio container owns its root exclusively and is never retired here:
+        // silently deleting it would orphan Studio threads, so adding its folder as a project
+        // is rejected outright.
+        const existingStudioProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: STUDIO_PROJECT_KIND_SET },
+        )[0];
+        if (existingStudioProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingStudioProject.id}' already uses workspace root '${existingStudioProject.workspaceRoot}'.`,
+          });
+        }
         const existingProjects = listActiveProjectsByWorkspaceRoot(
           readModel,
           command.workspaceRoot,
@@ -262,11 +286,27 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           });
         }
       }
+      if (nextProjectKind === "studio") {
+        // Cross-kind on purpose: a regular project already using this root would otherwise
+        // coexist with the Studio container, breaking workspace-root-to-project uniqueness
+        // that shell snapshot mapping and duplicate recovery rely on.
+        const existingOwningProject = listActiveProjectsByWorkspaceRoot(
+          readModel,
+          command.workspaceRoot,
+          { kinds: WORKSPACE_OWNING_PROJECT_KIND_SET },
+        )[0];
+        if (existingOwningProject) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Project '${existingOwningProject.id}' already uses workspace root '${existingOwningProject.workspaceRoot}'.`,
+          });
+        }
+      }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? "project",
+        nextKind: nextProjectKind,
         staleProjectIds: new Set(staleProjects.map((project) => project.id)),
       });
 
@@ -280,7 +320,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "project.created",
         payload: {
           projectId: command.projectId,
-          kind: command.kind ?? "project",
+          kind: nextProjectKind,
           title: command.title,
           workspaceRoot: command.workspaceRoot,
           defaultModelSelection: command.defaultModelSelection ?? null,
@@ -299,19 +339,28 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         projectId: command.projectId,
       });
-      if (command.workspaceRoot !== undefined && command.kind !== "chat") {
+      const nextProjectKind = command.kind ?? existingProject.kind ?? "project";
+      // Ownership must hold for the project's *effective* root, not only when the root field is
+      // present on the command: a kind-only update (e.g. chat -> studio) would otherwise slip a
+      // second workspace-owning project onto a root that a project- or studio-kind row already
+      // claims, bypassing the same cross-kind rule project.create enforces.
+      const ownershipMayChange =
+        command.workspaceRoot !== undefined ||
+        (command.kind !== undefined && command.kind !== (existingProject.kind ?? "project"));
+      if (ownershipMayChange && nextProjectKind !== "chat") {
         yield* requireProjectWorkspaceRootAvailable({
           readModel,
           command,
-          workspaceRoot: command.workspaceRoot,
+          workspaceRoot: command.workspaceRoot ?? existingProject.workspaceRoot,
           excludeProjectId: command.projectId,
+          kinds: WORKSPACE_OWNING_PROJECT_KIND_SET,
         });
       }
       yield* validateProjectPinLimit({
         command,
         readModel,
         projectId: command.projectId,
-        nextKind: command.kind ?? existingProject.kind ?? "project",
+        nextKind: nextProjectKind,
         nextDeletedAt: existingProject.deletedAt,
         wasPinned: existingProject.isPinned === true,
       });

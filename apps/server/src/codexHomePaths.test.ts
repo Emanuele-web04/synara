@@ -1,3 +1,7 @@
+// FILE: codexHomePaths.test.ts
+// Purpose: Verifies Codex source, overlay, account, and image-allowlist path isolation.
+// Layer: Server path utility tests.
+
 import assert from "node:assert/strict";
 import path from "node:path";
 import { describe, it } from "vitest";
@@ -216,26 +220,40 @@ describe("resolveCodexHomeAllowlistCandidates", () => {
       shadowHomePath: "/users/me/.codex_work",
     });
     assert.deepEqual(candidates, [
-      "/users/me/.codex",
-      path.join("/synara/runtime", "codex-home-overlay"),
       path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
       "/users/me/.codex_work",
     ]);
   });
 
-  it("includes account-scoped overlays for account-id-only Codex homes", () => {
+  it("excludes default roots from account-id-only Codex homes", () => {
     const segment = resolveCodexHomeOverlayAccountSegment({
       accountId: "work",
       homePath: "/users/me/.codex",
     });
     const candidates = resolveCodexHomeAllowlistCandidates({
-      env: { SYNARA_HOME: "/synara/runtime" },
+      env: { SYNARA_HOME: "/synara/runtime", CODEX_HOME: "/users/me/.codex" },
       homePath: "/users/me/.codex",
       accountId: "work",
+      accountSourceHomeIsDedicated: false,
     });
     assert.deepEqual(candidates, [
-      "/users/me/.codex",
-      path.join("/synara/runtime", "codex-home-overlay"),
+      path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
+    ]);
+  });
+
+  it("keeps a dedicated account home alongside its account overlay", () => {
+    const segment = resolveCodexHomeOverlayAccountSegment({
+      accountId: "work",
+      homePath: "/users/me/.codex-work",
+    });
+    const candidates = resolveCodexHomeAllowlistCandidates({
+      env: { SYNARA_HOME: "/synara/runtime", CODEX_HOME: "/users/me/.codex" },
+      homePath: "/users/me/.codex-work",
+      accountId: "work",
+      accountSourceHomeIsDedicated: true,
+    });
+    assert.deepEqual(candidates, [
+      "/users/me/.codex-work",
       path.join("/synara/runtime", "codex-home-overlay", "accounts", segment ?? ""),
     ]);
   });

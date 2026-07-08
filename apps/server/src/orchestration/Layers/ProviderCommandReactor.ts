@@ -969,11 +969,25 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         !isDeepStrictEqual(previousModelSelection, requestedModelSelection);
       const previousProviderOptions = threadProviderOptions.get(threadId);
-      const providerOptionsChanged = shouldRestartForProviderOptionsChange({
-        requestedProvider: desiredProvider,
-        previousProviderOptions,
-        requestedProviderOptions: desiredEffectiveProviderOptions,
-      });
+      const persistedLaunchOptionsMatch =
+        previousProviderOptions === undefined &&
+        providerService.sessionBindingMatchesLaunchOptions !== undefined
+          ? yield* providerService.sessionBindingMatchesLaunchOptions({
+              threadId,
+              provider: desiredProvider,
+              providerInstanceId: desiredProviderInstanceId,
+              ...(desiredEffectiveProviderOptions !== undefined
+                ? { providerOptions: desiredEffectiveProviderOptions }
+                : {}),
+            })
+          : false;
+      const providerOptionsChanged = persistedLaunchOptionsMatch
+        ? false
+        : shouldRestartForProviderOptionsChange({
+            requestedProvider: desiredProvider,
+            previousProviderOptions,
+            requestedProviderOptions: desiredEffectiveProviderOptions,
+          });
 
       if (
         !runtimeModeChanged &&
