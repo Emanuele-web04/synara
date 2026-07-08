@@ -6,6 +6,7 @@ import {
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
+  type ProviderInstanceId,
   type ProviderSession,
   type ProviderStartOptions,
   type ProviderTurnStartResult,

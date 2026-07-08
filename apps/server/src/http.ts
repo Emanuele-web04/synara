@@ -9,6 +9,7 @@ import {
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
   SERVER_VOICE_TRANSCRIPTION_MAX_AUDIO_BYTES,
+  type ProviderInstanceId,
   ThreadId,
 } from "@synara/contracts";
 import {
@@ -826,7 +827,7 @@ export const localImageEffectRouteLayer = HttpRouter.add(
           Effect.catch(() =>
             Effect.succeed({
               configuredHomePaths: [] as readonly CodexGeneratedImageHomeCandidate[],
-              enabledProviderInstanceIds: new Set(),
+              enabledProviderInstanceIds: new Set<ProviderInstanceId>(),
             }),
           ),
         )
