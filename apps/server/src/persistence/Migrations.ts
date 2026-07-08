@@ -135,6 +135,7 @@ import Migration0116 from "./Migrations/116_ProjectAgentWorkerRecovery.ts";
 import Migration0117 from "./Migrations/117_WorkerMonitoringLiveness.ts";
 import Migration0118 from "./Migrations/118_ProjectionThreadSessionProviderInstance.ts";
 import Migration0119 from "./Migrations/119_ProviderSessionRuntimeInstanceId.ts";
+import Migration0120 from "./Migrations/120_ProfileStatsDeletedProviderInstances.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -270,6 +271,7 @@ export const migrationEntries = [
   [117, "WorkerMonitoringLiveness", Migration0117],
   [118, "ProjectionThreadSessionProviderInstance", Migration0118],
   [119, "ProviderSessionRuntimeInstanceId", Migration0119],
+  [120, "ProfileStatsDeletedProviderInstances", Migration0120],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
