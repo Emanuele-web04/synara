@@ -612,6 +612,13 @@ describe("ProfileStatsQuery", () => {
         });
         expect(tokenStats.topProvider).toBe("pi");
         expect(tokenStats.providers).toEqual(["pi"]);
+        expect(tokenStats.models).toContainEqual(
+          expect.objectContaining({
+            provider: "pi",
+            instanceId: "pi_work",
+            model: "openai/gpt-5",
+          }),
+        );
       }),
     );
   });
@@ -759,8 +766,20 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.providers).toEqual(["claudeAgent", "codex"]);
         // Token-based model mix mirrors the token ranking, not the turn counts.
         expect(tokenStats.models).toEqual([
-          { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
-          { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-sonnet-4-6",
+            tokens: 5000,
+            percent: 83.3,
+          },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 1000,
+            percent: 16.7,
+          },
         ]);
         // Turn-based provider/model mix is unchanged by the token ranking.
         expect(stats.providerModels[0]).toMatchObject({ provider: "codex", turnCount: 2 });
@@ -973,9 +992,27 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(11000);
         expect(tokenStats.topProvider).toBe("codex");
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 6000, percent: 54.5 },
-          { provider: "claudeAgent", model: "claude-fable-5", tokens: 3000, percent: 27.3 },
-          { provider: "claudeAgent", model: "claude-opus-4-8", tokens: 2000, percent: 18.2 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 6000,
+            percent: 54.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-fable-5",
+            tokens: 3000,
+            percent: 27.3,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-opus-4-8",
+            tokens: 2000,
+            percent: 18.2,
+          },
         ]);
       }),
     );
@@ -1186,8 +1223,20 @@ describe("ProfileStatsQuery", () => {
 
         expect(tokenStats.lifetimeTotalTokens).toBe(4200);
         expect(tokenStats.models).toEqual([
-          { provider: "codex", model: "gpt-5-codex", tokens: 2500, percent: 59.5 },
-          { provider: "claudeAgent", model: "claude-haiku-4-5", tokens: 1700, percent: 40.5 },
+          {
+            provider: "codex",
+            instanceId: "codex",
+            model: "gpt-5-codex",
+            tokens: 2500,
+            percent: 59.5,
+          },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "claude-haiku-4-5",
+            tokens: 1700,
+            percent: 40.5,
+          },
         ]);
       }),
     );
@@ -1991,7 +2040,13 @@ describe("ProfileStatsQuery", () => {
         expect(tokenStats.lifetimeTotalTokens).toBe(1500);
         expect(tokenStats.providers).toEqual(["claudeAgent"]);
         expect(tokenStats.models).toEqual([
-          { provider: "claudeAgent", model: "unknown", tokens: 1500, percent: 100 },
+          {
+            provider: "claudeAgent",
+            instanceId: "claudeAgent",
+            model: "unknown",
+            tokens: 1500,
+            percent: 100,
+          },
         ]);
       }),
     );

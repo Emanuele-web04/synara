@@ -90,6 +90,7 @@ interface MostWorkedProjectRow {
 interface TokenDayRow {
   readonly day: string | null;
   readonly provider: string | null;
+  readonly instanceId: string | null;
   readonly model: string | null;
   readonly tokens: number;
 }
@@ -463,6 +464,7 @@ function normalizeProviderInstanceId(value: unknown): ProviderInstanceId | "unkn
 
 interface TokenModelUsageCount {
   readonly provider: ProviderKind | "unknown";
+  readonly instanceId: ProviderInstanceId | "unknown";
   readonly model: string;
   tokens: number;
 }
@@ -491,13 +493,14 @@ function aggregateTokenActivity(rows: ReadonlyArray<TokenDayRow>): TokenActivity
     if (provider !== "unknown") {
       tokensByProvider.set(provider, (tokensByProvider.get(provider) ?? 0) + tokens);
     }
+    const instanceId = normalizeProviderInstanceId(row.instanceId);
     const model = nonEmptyString(row.model) ?? "unknown";
-    const providerModelKey = `${provider}\u0000${model}`;
+    const providerModelKey = `${provider}\u0000${instanceId}\u0000${model}`;
     const existing = tokensByProviderModel.get(providerModelKey);
     if (existing) {
       existing.tokens += tokens;
     } else {
-      tokensByProviderModel.set(providerModelKey, { provider, model, tokens });
+      tokensByProviderModel.set(providerModelKey, { provider, instanceId, model, tokens });
     }
   }
   return { tokensByDay, tokensByProvider, tokensByProviderModel, lifetime };
@@ -622,7 +625,10 @@ export function turnModelSelectionCte(
       pt.thread_id AS thread_id,
       pt.turn_id AS turn_id,
       MAX(json_extract(e.payload_json, '$.modelSelection.provider')) AS provider,
-      MAX(json_extract(e.payload_json, '$.modelSelection.instanceId')) AS instanceId,
+      MAX(COALESCE(
+        json_extract(e.payload_json, '$.modelSelection.instanceId'),
+        json_extract(e.payload_json, '$.modelSelection.provider')
+      )) AS instanceId,
       MAX(json_extract(e.payload_json, '$.modelSelection.model')) AS model
     FROM orchestration_events e
     JOIN projection_turns pt
@@ -744,19 +750,42 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             COALESCE(
               tm.provider,
-              tm.instanceId,
+              CASE
+                WHEN tm.instanceId = s.provider_instance_id THEN s.provider_name
+                ELSE tm.instanceId
+              END,
               json_extract(a.payload_json, '$.provider'),
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
                 THEN json_extract(th.model_selection_json, '$.provider')
               END,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN CASE
+                  WHEN json_extract(th.model_selection_json, '$.instanceId')
+                    = s.provider_instance_id
+                  THEN s.provider_name
+                  ELSE json_extract(th.model_selection_json, '$.instanceId')
+                END
+              END,
               s.provider_name,
+              'unknown'
+            ) AS provider,
+            COALESCE(
+              tm.instanceId,
               CASE
                 WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
                 THEN json_extract(th.model_selection_json, '$.instanceId')
               END,
+              s.provider_instance_id,
+              tm.provider,
+              CASE
+                WHEN th.model_selection_json IS NOT NULL AND json_valid(th.model_selection_json)
+                THEN json_extract(th.model_selection_json, '$.provider')
+              END,
+              s.provider_name,
               'unknown'
-            ) AS provider,
+            ) AS instanceId,
             COALESCE(
               tm.model,
               CASE
@@ -802,14 +831,20 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT * FROM token_activity WHERE provider != 'claudeAgent'
         ),
         provider_model_scale AS (
-          SELECT thread_id, provider, model, MAX(tp IS NOT NULL) AS has_cumulative
+          SELECT
+            thread_id,
+            provider,
+            instanceId,
+            model,
+            MAX(tp IS NOT NULL) AS has_cumulative
           FROM ev
-          GROUP BY thread_id, provider, model
+          GROUP BY thread_id, provider, instanceId, model
         ),
         cumulative_kept AS (
           SELECT
             day,
             provider,
+            instanceId,
             model,
             thread_id,
             tp AS tot,
@@ -824,6 +859,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             day,
             provider,
+            instanceId,
             model,
             dispatch_origin,
             CASE
@@ -834,6 +870,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             SELECT
               day,
               provider,
+              instanceId,
               model,
               dispatch_origin,
               tot,
@@ -852,6 +889,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             ev.day AS day,
             ev.provider AS provider,
+            ev.instanceId AS instanceId,
             ev.model AS model,
             ev.thread_id AS thread_id,
             ev.ut AS tot,
@@ -863,6 +901,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           JOIN provider_model_scale pms
             ON pms.thread_id = ev.thread_id
            AND pms.provider = ev.provider
+           AND pms.instanceId = ev.instanceId
            AND pms.model = ev.model
           WHERE ev.tp IS NULL
             AND ev.ut IS NOT NULL
@@ -872,12 +911,17 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           SELECT
             day,
             provider,
+            instanceId,
             model,
             dispatch_origin,
             CASE
               WHEN previous_tot IS NULL THEN tot
               WHEN tot < previous_tot
-                AND (provider != previous_provider OR model != previous_model)
+                AND (
+                  provider != previous_provider
+                  OR instanceId != previous_instance_id
+                  OR model != previous_model
+                )
               THEN tot
               ELSE MAX(0, tot - previous_tot)
             END AS d
@@ -885,6 +929,7 @@ const makeProfileStatsQuery = Effect.gen(function* () {
             SELECT
               day,
               provider,
+              instanceId,
               model,
               dispatch_origin,
               tot,
@@ -904,6 +949,14 @@ const makeProfileStatsQuery = Effect.gen(function* () {
                   created_at ASC,
                   activity_id ASC
               ) AS previous_provider,
+              LAG(instanceId) OVER (
+                PARTITION BY thread_id
+                ORDER BY
+                  CASE WHEN sequence IS NULL THEN 0 ELSE 1 END ASC,
+                  sequence ASC,
+                  created_at ASC,
+                  activity_id ASC
+              ) AS previous_instance_id,
               LAG(model) OVER (
                 PARTITION BY thread_id
                 ORDER BY
@@ -916,27 +969,36 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           )
         ),
         all_tokens AS (
-          SELECT day, provider, model, d FROM cumulative_delta
+          SELECT day, provider, instanceId, model, d FROM cumulative_delta
           WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
           UNION ALL
-          SELECT day, provider, model, d FROM used_only_delta
+          SELECT day, provider, instanceId, model, d FROM used_only_delta
           WHERE dispatch_origin IS NULL OR dispatch_origin = 'user'
           UNION ALL
-          SELECT STRFTIME('%Y-%m-%d', DATETIME(created_at, ${tz})),
-            'claudeAgent', model, tokens
-          FROM claude_token_rows
+          SELECT
+            STRFTIME('%Y-%m-%d', DATETIME(c.created_at, ${tz})) AS day,
+            'claudeAgent' AS provider,
+            COALESCE(tm.instanceId, s.provider_instance_id, 'claudeAgent') AS instanceId,
+            c.model AS model,
+            c.tokens AS d
+          FROM claude_token_rows c
+          LEFT JOIN turn_model tm
+            ON tm.thread_id = c.thread_id
+           AND tm.turn_id = c.turn_id
+          LEFT JOIN projection_thread_sessions s ON s.thread_id = c.thread_id
           UNION ALL
           SELECT
             STRFTIME('%Y-%m-%d', DATETIME(a.created_at, ${tz})) AS day,
             COALESCE(a.provider, 'unknown') AS provider,
+            COALESCE(a.provider_instance_id, a.provider, 'unknown') AS instanceId,
             COALESCE(a.model, 'unknown') AS model,
             a.tokens AS d
           FROM profile_stats_deleted_tokens a
           WHERE COALESCE(a.provider, 'unknown') != 'claudeAgent' OR a.token_accounting_version = 1
         )
-        SELECT day, provider, model, SUM(d) AS tokens
+        SELECT day, provider, instanceId, model, SUM(d) AS tokens
         FROM all_tokens
-        GROUP BY day, provider, model
+        GROUP BY day, provider, instanceId, model
       `,
     );
 
@@ -1067,7 +1129,8 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           FROM per_turn
           GROUP BY provider, instanceId, model, reasoning
           UNION ALL
-          SELECT provider, provider AS instanceId, model, reasoning, turn_count AS count
+          SELECT provider, COALESCE(provider_instance_id, provider) AS instanceId,
+            model, reasoning, turn_count AS count
           FROM profile_stats_deleted_turns
         )
         SELECT provider, instanceId, model, reasoning, SUM(count) AS count
@@ -1446,11 +1509,13 @@ const makeProfileStatsQuery = Effect.gen(function* () {
           (left, right) =>
             right.tokens - left.tokens ||
             compareNullableText(left.provider, right.provider) ||
+            compareNullableText(left.instanceId, right.instanceId) ||
             compareNullableText(left.model, right.model),
         )
         .slice(0, 8)
         .map((row) => ({
           provider: row.provider,
+          instanceId: row.instanceId,
           model: row.model,
           tokens: row.tokens,
           percent: percent1(row.tokens, lifetime),

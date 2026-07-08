@@ -81,8 +81,20 @@ const tokenStats = {
   topProvider: "claudeAgent",
   topProviderPercent: 83.3,
   models: [
-    { provider: "claudeAgent", model: "claude-sonnet-4-6", tokens: 5000, percent: 83.3 },
-    { provider: "codex", model: "gpt-5-codex", tokens: 1000, percent: 16.7 },
+    {
+      provider: "claudeAgent",
+      instanceId: "claude-personal",
+      model: "claude-sonnet-4-6",
+      tokens: 5000,
+      percent: 83.3,
+    },
+    {
+      provider: "codex",
+      instanceId: "codex-work",
+      model: "gpt-5-codex",
+      tokens: 1000,
+      percent: 16.7,
+    },
   ],
   heatmapMetric: "tokens",
   heatmap: [tokenHeatmapCell],

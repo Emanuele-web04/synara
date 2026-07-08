@@ -50,6 +50,7 @@ export type ProfileProviderUsage = typeof ProfileProviderUsage.Type;
 // so switching models mid-thread keeps each model's share accurate.
 export const ProfileTokenModelUsage = Schema.Struct({
   provider: Schema.Union([ProviderKind, Schema.Literal("unknown")]),
+  instanceId: Schema.Union([ProviderInstanceId, Schema.Literal("unknown")]),
   model: TrimmedNonEmptyString,
   tokens: NonNegativeInt,
   percent: Schema.Number,
