@@ -211,6 +211,7 @@ export async function readFactoryPlugin(input: {
   readonly homeDir: string;
   readonly marketplacePath: string;
   readonly pluginName: string;
+  readonly cwd?: string;
 }): Promise<ProviderReadPluginResult | null> {
   const factoryDir = nodePath.join(input.homeDir, ".factory");
   const registration = (await marketplaceRegistrations(factoryDir)).find(
@@ -224,7 +225,7 @@ export async function readFactoryPlugin(input: {
   if (!entry || !source) return null;
   const path = resolvePluginPath(registration.path, source);
   if (!path) return null;
-  const enabledPlugins = await factoryEnabledPlugins(factoryDir);
+  const enabledPlugins = await factoryEnabledPlugins(factoryDir, input.cwd);
   const summary = await pluginDescriptor({
     marketplaceName: registration.name,
     marketplacePath: registration.path,

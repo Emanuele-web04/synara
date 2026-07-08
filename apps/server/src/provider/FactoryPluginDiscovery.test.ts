@@ -97,6 +97,16 @@ describe("Factory plugin discovery", () => {
       installed: true,
       enabled: false,
     });
+    const detail = await readFactoryPlugin({
+      homeDir: fixture.homeDir,
+      marketplacePath: fixture.marketplacePath,
+      pluginName: "reviewer",
+      cwd,
+    });
+    expect(detail?.plugin.summary).toMatchObject({
+      installed: true,
+      enabled: false,
+    });
   });
 
   it("reads bundled Factory skills for plugin detail", async () => {

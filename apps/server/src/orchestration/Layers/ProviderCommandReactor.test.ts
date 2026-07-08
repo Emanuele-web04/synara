@@ -597,6 +597,169 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Continue here");
   });
 
+  it("keeps a Droid fork bootstrap pending until transcript context exists", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Empty Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-first-turn"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        message: {
+          messageId: asMessageId("empty-droid-fork-first-user"),
+          role: "user",
+          text: "First message without prior context",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const firstInput = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(firstInput?.input).not.toContain("<thread_context>");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-empty-droid-fork-second-turn"),
+        threadId: ThreadId.makeUnsafe("thread-empty-droid-fork"),
+        message: {
+          messageId: asMessageId("empty-droid-fork-second-user"),
+          role: "user",
+          text: "Second message can carry the retained context",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const secondInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(secondInput?.input).toContain("<thread_context>");
+    expect(secondInput?.input).toContain("First message without prior context");
+    expect(secondInput?.input).toContain("Second message can carry the retained context");
+  });
+
+  it("retries a pending Droid fork bootstrap on an existing session", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+    harness.sendTurn.mockImplementationOnce(() =>
+      Effect.fail(
+        new ProviderAdapterRequestError({
+          provider: "droid",
+          method: "session/prompt",
+          detail: "simulated Droid prompt failure",
+        }),
+      ),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-create"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Retry Droid fork",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("retry-droid-fork-imported-user"),
+            role: "user",
+            text: "Retained context for retry",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-failed-turn"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        message: {
+          messageId: asMessageId("retry-droid-fork-failed-user"),
+          role: "user",
+          text: "Failed attempt",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === "thread-retry-droid-fork")?.session
+          ?.status === "error"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-retry-droid-fork-success-turn"),
+        threadId: ThreadId.makeUnsafe("thread-retry-droid-fork"),
+        message: {
+          messageId: asMessageId("retry-droid-fork-success-user"),
+          role: "user",
+          text: "Retry now",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    const retryInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(retryInput?.input).toContain("<thread_context>");
+    expect(retryInput?.input).toContain("Retained context for retry");
+    expect(retryInput?.input).toContain("Retry now");
+  });
+
   it("rolls back provider conversation state for message edits", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
@@ -2469,6 +2632,61 @@ describe("ProviderCommandReactor", () => {
         options: {
           contextWindow: "1m",
         },
+      },
+    });
+  });
+
+  it("restarts an idle Droid session when its reasoning effort changes", async () => {
+    const harness = await createHarness({
+      threadModelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "medium" },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-droid-bootstrap"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-droid-bootstrap"),
+          role: "user",
+          text: "bootstrap droid session",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    harness.startSession.mockClear();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+          options: { reasoningEffort: "high" },
+        },
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      resumeCursor: { opaque: "resume-1" },
+      modelSelection: {
+        provider: "droid",
+        model: "claude-sonnet-4-6",
+        options: { reasoningEffort: "high" },
       },
     });
   });

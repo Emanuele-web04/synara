@@ -62,8 +62,12 @@ export const providerDiscoveryQueryKeys = {
   skillsCatalog: (cwd: string | null) => ["provider-discovery", "skills-catalog", cwd] as const,
   plugins: (provider: ProviderKind, cwd: string | null) =>
     ["provider-discovery", "plugins", provider, cwd] as const,
-  plugin: (provider: ProviderKind, marketplacePath: string, pluginName: string) =>
-    ["provider-discovery", "plugin", provider, marketplacePath, pluginName] as const,
+  plugin: (
+    provider: ProviderKind,
+    marketplacePath: string,
+    pluginName: string,
+    cwd: string | null,
+  ) => ["provider-discovery", "plugin", provider, marketplacePath, pluginName, cwd] as const,
   models: (
     provider: ProviderKind,
     binaryPath: string | null,
@@ -266,6 +270,7 @@ export function providerReadPluginQueryOptions(input: {
   provider: ProviderKind;
   marketplacePath: string;
   pluginName: string;
+  cwd?: string | null;
   enabled?: boolean;
 }) {
   return queryOptions({
@@ -273,6 +278,7 @@ export function providerReadPluginQueryOptions(input: {
       input.provider,
       input.marketplacePath,
       input.pluginName,
+      input.cwd ?? null,
     ),
     queryFn: async (): Promise<ProviderReadPluginResult> => {
       const api = ensureNativeApi();
@@ -280,6 +286,7 @@ export function providerReadPluginQueryOptions(input: {
         provider: input.provider,
         marketplacePath: input.marketplacePath,
         pluginName: input.pluginName,
+        ...(input.cwd ? { cwd: input.cwd } : {}),
       });
     },
     enabled: input.enabled ?? true,

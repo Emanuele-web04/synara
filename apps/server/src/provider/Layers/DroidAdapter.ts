@@ -1809,6 +1809,7 @@ export function makeDroidAdapter(
             homeDir: serverConfig.homeDir,
             marketplacePath: input.marketplacePath,
             pluginName: input.pluginName,
+            ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
           }),
         catch: (cause) =>
           new ProviderAdapterRequestError({

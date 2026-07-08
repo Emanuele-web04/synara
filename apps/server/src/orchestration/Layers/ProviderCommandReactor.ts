@@ -774,7 +774,9 @@ const make = Effect.gen(function* () {
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "restart-session";
       const previousModelSelection = threadModelSelections.get(threadId);
       const shouldRestartForModelSelectionChange =
-        (currentProvider === "claudeAgent" || currentProvider === "grok") &&
+        (currentProvider === "claudeAgent" ||
+          currentProvider === "droid" ||
+          currentProvider === "grok") &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
 
@@ -920,11 +922,13 @@ const make = Effect.gen(function* () {
       threadModelSelections.get(input.threadId)?.provider ??
       thread.session?.providerName ??
       thread.modelSelection.provider;
+    const hasPendingPriorTranscriptBootstrap =
+      forkContextBootstrapThreadIds.has(input.threadId) ||
+      rollbackContextBootstrapThreadIds.has(input.threadId);
     const shouldBootstrapPriorTranscriptContext =
-      ((selectedProvider === "kilo" || selectedProvider === "opencode") ||
-        forkContextBootstrapThreadIds.has(input.threadId) ||
-        rollbackContextBootstrapThreadIds.has(input.threadId)) &&
-      activeSessionBeforeEnsure === undefined &&
+      (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
+        activeSessionBeforeEnsure === undefined) ||
+        hasPendingPriorTranscriptBootstrap) &&
       !handoffBootstrapText &&
       !sidechatBootstrapText;
     const priorTranscriptBootstrapText =
@@ -1130,7 +1134,7 @@ const make = Effect.gen(function* () {
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
-    if (shouldBootstrapPriorTranscriptContext) {
+    if (priorTranscriptBootstrapText && input.reviewTarget === undefined) {
       forkContextBootstrapThreadIds.delete(input.threadId);
       rollbackContextBootstrapThreadIds.delete(input.threadId);
     }
