@@ -8,6 +8,7 @@ import type * as EffectAcpSchema from "effect-acp/schema";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  applyDroidAcpModelSelection,
   buildDroidAcpSpawnInput,
   resolveDroidAcpAuthMethodId,
   resolveDroidCliBinaryPath,
@@ -66,6 +67,69 @@ describe("buildDroidAcpSpawnInput", () => {
       ],
       cwd: "/tmp/project",
     });
+  });
+});
+
+describe("applyDroidAcpModelSelection", () => {
+  function recordingRuntime(failFor?: string) {
+    const calls: Array<{ configId: string; value: string | boolean }> = [];
+    return {
+      calls,
+      runtime: {
+        setConfigOption: (configId: string, value: string | boolean) => {
+          if (configId === failFor) {
+            return Effect.fail(
+              new EffectAcpErrors.AcpRequestError({
+                code: -32602,
+                errorMessage: `Unknown config option: ${configId}`,
+              }),
+            );
+          }
+          calls.push({ configId, value });
+          return Effect.succeed({ configOptions: [] });
+        },
+      },
+    };
+  }
+
+  it("sets the model before the reasoning effort", async () => {
+    const { calls, runtime } = recordingRuntime();
+    await Effect.runPromise(
+      applyDroidAcpModelSelection({
+        runtime,
+        model: "minimax-m3",
+        reasoningEffort: "high",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+    expect(calls).toEqual([
+      { configId: "model", value: "minimax-m3" },
+      { configId: "reasoning_effort", value: "high" },
+    ]);
+  });
+
+  it("skips the reasoning effort RPC when no effort is requested", async () => {
+    const { calls, runtime } = recordingRuntime();
+    await Effect.runPromise(
+      applyDroidAcpModelSelection({
+        runtime,
+        model: "claude-opus-4-8",
+        mapError: ({ cause }) => cause,
+      }),
+    );
+    expect(calls).toEqual([{ configId: "model", value: "claude-opus-4-8" }]);
+  });
+
+  it("maps set_config_option failures through mapError", async () => {
+    const { runtime } = recordingRuntime("model");
+    const error = await Effect.runPromise(
+      applyDroidAcpModelSelection({
+        runtime,
+        model: "claude-opus-4-8",
+        mapError: ({ method }) => new Error(`failed:${method}`),
+      }).pipe(Effect.flip),
+    );
+    expect(error.message).toBe("failed:session/set_config_option");
   });
 });
 

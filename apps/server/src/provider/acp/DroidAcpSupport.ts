@@ -36,6 +36,14 @@ export interface DroidAcpRuntimeInput extends Omit<
   readonly droidSettings: DroidAcpRuntimeSettings | null | undefined;
 }
 
+export interface DroidAcpModelSelectionErrorContext {
+  readonly cause: EffectAcpErrors.AcpError;
+  readonly method: "session/set_config_option";
+}
+
+const DROID_MODEL_CONFIG_ID = "model";
+const DROID_REASONING_EFFORT_CONFIG_ID = "reasoning_effort";
+
 const DROID_API_KEY_AUTH_METHOD_ID = "factory-api-key";
 const DROID_DEVICE_PAIRING_AUTH_METHOD_ID = "device-pairing";
 const DROID_API_KEY_ENV_KEYS = ["FACTORY_API_KEY"] as const;
@@ -149,4 +157,37 @@ export const makeDroidAcpRuntime = (
     );
     return ServiceMap.getUnsafe(acpContext, AcpSessionRuntime);
   });
+
+/**
+ * Applies the requested model and reasoning effort over ACP. `droid exec`
+ * ignores `-m`/`-r` when running in ACP mode (the session inherits the user's
+ * `~/.factory` settings defaults), so `session/set_config_option` is the only
+ * mechanism that actually switches the session's model. The model is applied
+ * first because it determines which reasoning-effort values are valid. The
+ * shared runtime validates values against the advertised options and skips
+ * the RPC when the current value already matches.
+ */
+export function applyDroidAcpModelSelection<E>(input: {
+  readonly runtime: Pick<AcpSessionRuntimeShape, "setConfigOption">;
+  readonly model: string;
+  readonly reasoningEffort?: string | null | undefined;
+  readonly mapError: (context: DroidAcpModelSelectionErrorContext) => E;
+}): Effect.Effect<void, E> {
+  return Effect.gen(function* () {
+    const mapError = (cause: EffectAcpErrors.AcpError) =>
+      input.mapError({ cause, method: "session/set_config_option" });
+    const model = input.model.trim();
+    if (model) {
+      yield* input.runtime
+        .setConfigOption(DROID_MODEL_CONFIG_ID, model)
+        .pipe(Effect.mapError(mapError));
+    }
+    const reasoningEffort = input.reasoningEffort?.trim();
+    if (reasoningEffort) {
+      yield* input.runtime
+        .setConfigOption(DROID_REASONING_EFFORT_CONFIG_ID, reasoningEffort)
+        .pipe(Effect.mapError(mapError));
+    }
+  });
+}
 

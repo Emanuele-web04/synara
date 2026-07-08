@@ -74,6 +74,7 @@ import {
   resolveAcpTurnIdleTimeoutMs,
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
+  applyDroidAcpModelSelection,
   getDroidApiKeyEnv,
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
@@ -793,10 +794,10 @@ export function makeDroidAdapter(
             ),
           );
 
-          // Model and reasoning effort are applied via `droid exec` spawn flags (`-m`/`-r`)
-          // and mode/autonomy via `--auto`/`--skip-permissions-unsafe`; Factory Droid ACP
-          // rejects `session/set_config_option` for id `mode` ("Unknown config option: mode").
-          // Selection changes restart the session (sessionModelSwitch: "restart-session").
+          // Model and reasoning effort are applied via `session/set_config_option`
+          // after start (droid ignores the `-m`/`-r` spawn flags in ACP mode);
+          // autonomy rides `--skip-permissions-unsafe`. Selection changes restart
+          // the session (sessionModelSwitch: "restart-session").
           const resumeReplayReady =
             resumeSessionId !== undefined ? yield* Deferred.make<void>() : undefined;
           const now = yield* nowIso;
@@ -993,39 +994,60 @@ export function makeDroidAdapter(
           sessions.set(input.threadId, ctx);
           sessionScopeTransferred = true;
 
-          if (resumeReplayReady !== undefined) {
-            // Settle the replay in the background: suppression stays active until
-            // the stream is genuinely quiet, while startup only blocks briefly so
-            // a long replay cannot hold session startup hostage. sendTurn awaits
-            // the deferred, so the first turn stays gated until the replay has
-            // actually finished.
-            yield* settleDroidResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
-            yield* Deferred.await(resumeReplayReady).pipe(
-              Effect.timeoutOption(DROID_RESUME_REPLAY_MAX_WAIT_MS),
-            );
-          }
+          // Config RPCs run after the consumer fork so replay emitted while they
+          // are in flight keeps draining. The session is already registered and
+          // the start-scope finalizer no longer owns the session scope, so any
+          // failure OR interruption of the remaining startup steps must tear the
+          // session down explicitly instead of leaking a live child.
+          yield* Effect.gen(function* () {
+            if (droidModelSelection?.model) {
+              yield* applyDroidAcpModelSelection({
+                runtime: acp,
+                model: droidModelSelection.model,
+                reasoningEffort: droidModelSelection.options?.reasoningEffort,
+                mapError: ({ cause, method }) =>
+                  mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+              });
+            }
 
-          yield* offerRuntimeEvent({
-            type: "session.started",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { resume: started.initializeResult },
-          });
-          yield* offerRuntimeEvent({
-            type: "session.state.changed",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { state: "ready", reason: "Droid ACP session ready" },
-          });
-          yield* offerRuntimeEvent({
-            type: "thread.started",
-            ...(yield* makeEventStamp()),
-            provider: PROVIDER,
-            threadId: input.threadId,
-            payload: { providerThreadId: started.sessionId },
-          });
+            if (resumeReplayReady !== undefined) {
+              // Settle the replay in the background: suppression stays active until
+              // the stream is genuinely quiet, while startup only blocks briefly so
+              // a long replay cannot hold session startup hostage. sendTurn awaits
+              // the deferred, so the first turn stays gated until the replay has
+              // actually finished.
+              yield* settleDroidResumeReplayWhenQuiet(ctx).pipe(Effect.forkIn(ctx.scope));
+              yield* Deferred.await(resumeReplayReady).pipe(
+                Effect.timeoutOption(DROID_RESUME_REPLAY_MAX_WAIT_MS),
+              );
+            }
+
+            yield* offerRuntimeEvent({
+              type: "session.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { resume: started.initializeResult },
+            });
+            yield* offerRuntimeEvent({
+              type: "session.state.changed",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { state: "ready", reason: "Droid ACP session ready" },
+            });
+            yield* offerRuntimeEvent({
+              type: "thread.started",
+              ...(yield* makeEventStamp()),
+              provider: PROVIDER,
+              threadId: input.threadId,
+              payload: { providerThreadId: started.sessionId },
+            });
+          }).pipe(
+            Effect.onExit((exit) =>
+              Exit.isSuccess(exit) ? Effect.void : Effect.ignore(stopSessionInternal(ctx)),
+            ),
+          );
 
           return session;
         }).pipe(Effect.scoped),
@@ -1123,6 +1145,18 @@ export function makeDroidAdapter(
         const turnModelSelection =
           input.modelSelection?.provider === PROVIDER ? input.modelSelection : undefined;
         const model = turnModelSelection?.model ?? ctx.session.model;
+        // Selection changes normally arrive via a session restart, but a turn
+        // can still carry an explicit selection; re-assert it over ACP (the
+        // shared runtime skips the RPC when the value already matches).
+        if (model !== undefined) {
+          yield* applyDroidAcpModelSelection({
+            runtime: ctx.acp,
+            model,
+            reasoningEffort: turnModelSelection?.options?.reasoningEffort,
+            mapError: ({ cause, method }) =>
+              mapAcpToAdapterError(PROVIDER, input.threadId, method, cause),
+          });
+        }
         const promptParts: Array<EffectAcpSchema.ContentBlock> = [];
         const promptText = appendFileAttachmentsPromptBlock({
           text: input.input?.trim()

@@ -337,12 +337,6 @@ const DROID_CORE_HIGH_ONLY_CAPABILITIES: ModelCapabilities = {
   contextWindowOptions: [],
 };
 
-const DROID_CORE_MINIMAX_M2_5_CAPABILITIES = droidCapabilities([
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High", isDefault: true },
-]);
-
 // Shared Claude building blocks. Capability shapes repeat across Claude
 // generations, so declare them once and let each model entry override only the
 // fields that genuinely differ (mirrors the CODEX_GPT_5_* pattern above).
@@ -786,11 +780,6 @@ export const MODEL_OPTIONS_BY_PROVIDER = {
       slug: "minimax-m2.7",
       name: "MiniMax M2.7",
       capabilities: DROID_CORE_HIGH_ONLY_CAPABILITIES,
-    },
-    {
-      slug: "minimax-m2.5",
-      name: "MiniMax M2.5",
-      capabilities: DROID_CORE_MINIMAX_M2_5_CAPABILITIES,
     },
   ],
   opencode: [
