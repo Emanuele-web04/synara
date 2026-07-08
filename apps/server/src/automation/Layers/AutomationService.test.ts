@@ -21,6 +21,7 @@ import {
 } from "@t3tools/contracts";
 import { Duration, Effect, Layer, Option, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import {
   GitCore,
@@ -661,7 +662,20 @@ layer("AutomationService", (it) => {
         },
       });
 
-      yield* service.runNow({ automationId: created.id });
+      const { run: createdRun } = yield* service.runNow({ automationId: created.id });
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`
+        UPDATE automation_runs
+        SET permission_snapshot_json = ${JSON.stringify({
+          ...createdRun.permissionSnapshot,
+          providerOptions: {
+            codex: {
+              environment: { HISTORICAL_RUN_SECRET: "must-not-list-or-publish" },
+            },
+          },
+        })}
+        WHERE run_id = ${createdRun.id}
+      `;
 
       const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
       assert.strictEqual(turnStart?.type, "thread.turn.start");
@@ -682,6 +696,7 @@ layer("AutomationService", (it) => {
       const run = listed.runs.find((entry) => entry.automationId === created.id);
       assert.strictEqual(run?.permissionSnapshot.providerOptions, undefined);
       assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("super-secret"));
+      assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("must-not-list-or-publish"));
     }),
   );
 

@@ -376,6 +376,33 @@ function withoutAutomationProviderOptions<T extends { readonly providerOptions?:
   return withoutProviderOptions;
 }
 
+function withoutAutomationRunProviderOptions(run: AutomationRun): AutomationRun {
+  const { providerOptions: _providerOptions, ...permissionSnapshot } = run.permissionSnapshot;
+  return { ...run, permissionSnapshot };
+}
+
+function sanitizeAutomationStreamEvent(event: AutomationStreamEvent): AutomationStreamEvent {
+  switch (event.type) {
+    case "snapshot":
+      return {
+        ...event,
+        definitions: event.definitions.map((definition) =>
+          withoutAutomationProviderOptions(definition),
+        ),
+        runs: event.runs.map(withoutAutomationRunProviderOptions),
+      };
+    case "definition-upserted":
+      return {
+        ...event,
+        definition: withoutAutomationProviderOptions(event.definition),
+      };
+    case "run-upserted":
+      return { ...event, run: withoutAutomationRunProviderOptions(event.run) };
+    case "definition-deleted":
+      return event;
+  }
+}
+
 function allowedCapabilitiesFor(definition: AutomationDefinition): AutomationAllowedCapability[] {
   const capabilities: AutomationAllowedCapability[] = ["send-turn"];
   if (definition.worktreeMode !== "local") {
@@ -642,7 +669,7 @@ export const AutomationServiceLive = Layer.effect(
     const queuedCompletionEvaluationRunIds = new Set<string>();
 
     const publish = (event: AutomationStreamEvent) =>
-      PubSub.publish(events, event).pipe(Effect.asVoid);
+      PubSub.publish(events, sanitizeAutomationStreamEvent(event)).pipe(Effect.asVoid);
 
     const cleanupUnattachedWorktree = (input: {
       readonly definition: AutomationDefinition;
@@ -2011,6 +2038,7 @@ export const AutomationServiceLive = Layer.effect(
         Effect.map((result) => ({
           ...result,
           definitions: result.definitions.map(withoutAutomationProviderOptions),
+          runs: result.runs.map(withoutAutomationRunProviderOptions),
         })),
         Effect.mapError(toServiceError("Failed to list automations.")),
       );
