@@ -10545,6 +10545,94 @@ describe("ProviderCommandReactor", () => {
     expect(harness.startSession.mock.calls[1]?.[1]).not.toHaveProperty("resumeCursor");
   });
 
+  it("rejects a live session after its provider instance is disabled", async () => {
+    const modelSelection: ModelSelection = {
+      provider: "codex",
+      instanceId: "codex_work",
+      model: "gpt-5.4",
+    };
+    const harness = await createHarness({
+      threadModelSelection: modelSelection,
+      serverSettings: {
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: true,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      },
+    });
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-enabled-instance"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-enabled-instance"),
+          role: "user",
+          text: "start on the enabled work account",
+          attachments: [],
+        },
+        modelSelection,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.serverSettings.updateSettings({
+        providerInstances: {
+          codex_work: {
+            driver: "codex",
+            enabled: false,
+            config: { homePath: "/tmp/codex-work" },
+          },
+        },
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-disabled-live-instance"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-disabled-live-instance"),
+          role: "user",
+          text: "do not reuse the disabled work account",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return (
+        thread?.activities.some(
+          (activity) =>
+            activity.kind === "provider.turn.start.failed" &&
+            activity.payload.detail.includes("disabled"),
+        ) ?? false
+      );
+    });
+
+    expect(harness.startSession.mock.calls.length).toBe(1);
+    expect(harness.sendTurn.mock.calls.length).toBe(1);
+  });
+
   it("does not inject derived model options when restarting claude on runtime mode changes", async () => {
     const harness = await createHarness({
       threadModelSelection: { provider: "claudeAgent", model: "claude-opus-4-6" },
@@ -10591,7 +10679,16 @@ describe("ProviderCommandReactor", () => {
   });
 
   it("starts an unbound thread on the requested provider instance", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({
+      serverSettings: {
+        providerInstances: {
+          claude_work: {
+            driver: "claudeAgent",
+            enabled: true,
+          },
+        },
+      },
+    });
     const now = new Date().toISOString();
 
     await Effect.runPromise(
@@ -10635,6 +10732,53 @@ describe("ProviderCommandReactor", () => {
         instanceId: "claude_work",
         model: "claude-opus-4-6",
       },
+    });
+  });
+
+  it("rejects and preserves an unknown explicit provider instance before session start", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-missing-instance"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-missing-instance"),
+          role: "user",
+          text: "start on the removed account",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "codex",
+          instanceId: "codex_removed",
+          model: "gpt-5.4",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      const thread = readModel.threads.find(
+        (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+      );
+      return thread?.session?.status === "error";
+    });
+
+    const readModel = await Effect.runPromise(harness.engine.getReadModel());
+    const thread = readModel.threads.find(
+      (entry) => entry.id === ThreadId.makeUnsafe("thread-1"),
+    );
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect(thread?.session).toMatchObject({
+      status: "error",
+      providerName: null,
+      providerInstanceId: "codex_removed",
+      lastError: expect.stringContaining("Unknown provider instance 'codex_removed'."),
     });
   });
 

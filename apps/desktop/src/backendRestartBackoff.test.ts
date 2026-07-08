@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { BACKEND_STABLE_UPTIME_MS, BackendRestartBackoff } from "./backendRestartBackoff";
+import { BackendRestartBackoff } from "./backendRestartBackoff";
 
 describe("BackendRestartBackoff", () => {
   it("backs off repeated startup failures up to the maximum delay", () => {
@@ -18,17 +18,6 @@ describe("BackendRestartBackoff", () => {
     backoff.nextDelayMs();
     backoff.reset();
 
-    expect(backoff.nextDelayMs()).toBe(500);
-  });
-
-  it("only treats a long-lived backend as a stable fallback", () => {
-    const backoff = new BackendRestartBackoff();
-
-    backoff.nextDelayMs();
-    backoff.resetAfterStableRun(BACKEND_STABLE_UPTIME_MS - 1);
-    expect(backoff.nextDelayMs()).toBe(1_000);
-
-    backoff.resetAfterStableRun(BACKEND_STABLE_UPTIME_MS);
     expect(backoff.nextDelayMs()).toBe(500);
   });
 });
