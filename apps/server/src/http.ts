@@ -34,6 +34,7 @@ import { deriveAuthClientMetadata } from "./auth/utils";
 import {
   codexConfiguredHomePathsFromSettings,
   type CodexGeneratedImageHomeCandidate,
+  enabledCodexProviderInstanceIdsFromSettings,
 } from "./codexGeneratedImages.ts";
 import { ServerConfig, type ServerConfigShape } from "./config";
 import { resolveCachedEditorIcon } from "./editorAppIcons";
@@ -816,25 +817,39 @@ export const localImageEffectRouteLayer = HttpRouter.add(
     // resolve them from settings when the service is available so those images
     // stay servable. The route keeps working without settings (e.g. tests).
     const settingsService = yield* Effect.serviceOption(ServerSettingsService);
-    const configuredCodexHomePaths = Option.isSome(settingsService)
+    const codexSettingsScope = Option.isSome(settingsService)
       ? yield* settingsService.value.getSettings.pipe(
-          Effect.map(codexConfiguredHomePathsFromSettings),
-          Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
+          Effect.map((settings) => ({
+            configuredHomePaths: codexConfiguredHomePathsFromSettings(settings),
+            enabledProviderInstanceIds: enabledCodexProviderInstanceIdsFromSettings(settings),
+          })),
+          Effect.catch(() =>
+            Effect.succeed({
+              configuredHomePaths: [] as readonly CodexGeneratedImageHomeCandidate[],
+              enabledProviderInstanceIds: new Set(),
+            }),
+          ),
         )
-      : [];
+      : null;
     const adapterRegistry = yield* Effect.serviceOption(ProviderAdapterRegistry);
     const liveCodexHomePaths = Option.isSome(adapterRegistry)
       ? yield* adapterRegistry.value.getByProvider("codex").pipe(
           Effect.flatMap((adapter) =>
             adapter.listGeneratedImageHomePaths
-              ? adapter.listGeneratedImageHomePaths()
+              ? adapter.listGeneratedImageHomePaths(
+                  codexSettingsScope
+                    ? {
+                        enabledProviderInstanceIds: codexSettingsScope.enabledProviderInstanceIds,
+                      }
+                    : undefined,
+                )
               : Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([]),
           ),
           Effect.catch(() => Effect.succeed<readonly CodexGeneratedImageHomeCandidate[]>([])),
         )
       : [];
     const codexHomePaths: readonly CodexGeneratedImageHomeCandidate[] = [
-      ...configuredCodexHomePaths,
+      ...(codexSettingsScope?.configuredHomePaths ?? []),
       ...liveCodexHomePaths,
     ];
 

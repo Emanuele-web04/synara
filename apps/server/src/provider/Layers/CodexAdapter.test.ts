@@ -330,9 +330,19 @@ validationLayer("CodexAdapterLive validation", (it) => {
       validationManager.sessionSnapshots = [
         {
           provider: "codex",
+          providerInstanceId: "codex_work" as ProviderInstanceId,
           status: "ready",
           runtimeMode: "full-access",
           threadId: asThreadId("thread-live-work"),
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          provider: "codex",
+          providerInstanceId: "codex_disabled" as ProviderInstanceId,
+          status: "ready",
+          runtimeMode: "full-access",
+          threadId: asThreadId("thread-live-disabled"),
           createdAt: now,
           updatedAt: now,
         },
@@ -350,6 +360,10 @@ validationLayer("CodexAdapterLive validation", (it) => {
         homePath: "/tmp/codex-live-work",
         accountId: "work",
       });
+      validationManager.codexOptionsByThreadId.set(asThreadId("thread-live-disabled"), {
+        homePath: "/tmp/codex-live-disabled",
+        accountId: "disabled",
+      });
       const adapter = yield* CodexAdapter;
       const listGeneratedImageHomePaths = adapter.listGeneratedImageHomePaths;
       if (!listGeneratedImageHomePaths) {
@@ -357,7 +371,9 @@ validationLayer("CodexAdapterLive validation", (it) => {
       }
 
       try {
-        const homes = yield* listGeneratedImageHomePaths();
+        const homes = yield* listGeneratedImageHomePaths({
+          enabledProviderInstanceIds: new Set(["codex_work" as ProviderInstanceId]),
+        });
 
         assert.deepStrictEqual(homes, [
           {

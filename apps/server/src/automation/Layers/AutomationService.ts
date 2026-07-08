@@ -870,12 +870,14 @@ export const AutomationServiceLive = Layer.effect(
           Option.match(definitionOption, {
             onNone: () =>
               Effect.fail(new AutomationServiceError({ message: "Automation was not found." })),
-            onSome: (definition) =>
-              definition.archivedAt
+            onSome: (definition) => {
+              const sanitizedDefinition = withoutAutomationProviderOptions(definition);
+              return sanitizedDefinition.archivedAt
                 ? Effect.fail(
                     new AutomationServiceError({ message: "Automation has been deleted." }),
                   )
-                : Effect.succeed(definition),
+                : Effect.succeed(sanitizedDefinition);
+            },
           }),
         ),
       );
@@ -886,7 +888,11 @@ export const AutomationServiceLive = Layer.effect(
         Effect.flatMap((definitionOption) =>
           Option.match(definitionOption, {
             onNone: () => Effect.void,
-            onSome: (definition) => publish({ type: "definition-upserted", definition }),
+            onSome: (definition) =>
+              publish({
+                type: "definition-upserted",
+                definition: withoutAutomationProviderOptions(definition),
+              }),
           }),
         ),
       );
@@ -2544,9 +2550,13 @@ export const AutomationServiceLive = Layer.effect(
     };
 
     const list: AutomationServiceShape["list"] = (input = {}) =>
-      automationRepository
-        .list(input)
-        .pipe(Effect.mapError(toServiceError("Failed to list automations.")));
+      automationRepository.list(input).pipe(
+        Effect.map((result) => ({
+          ...result,
+          definitions: result.definitions.map(withoutAutomationProviderOptions),
+        })),
+        Effect.mapError(toServiceError("Failed to list automations.")),
+      );
 
     // Resolves the automation run that dispatched the caller's active turn, if any.
     // This is the only authority a standalone run has over its own automation: its

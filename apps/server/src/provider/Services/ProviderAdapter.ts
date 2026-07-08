@@ -26,6 +26,7 @@ import type {
   ProviderReadPluginResult,
   ProviderListSkillsResult,
   ProviderListSkillsInput,
+  ProviderInstanceId,
   ProviderStartReviewInput,
   ProviderUserInputAnswers,
   ProviderRuntimeEvent,
@@ -94,6 +95,11 @@ export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
   readonly cwd?: string | null;
+}
+
+export interface ProviderGeneratedImageHomePathsInput {
+  /** When present, live sessions outside this current settings scope are ignored. */
+  readonly enabledProviderInstanceIds?: ReadonlySet<ProviderInstanceId>;
 }
 
 export interface ProviderAdapterShape<TError> {
@@ -207,10 +213,9 @@ export interface ProviderAdapterShape<TError> {
   /**
    * List provider home roots that can contain generated image artifacts for live sessions.
    */
-  readonly listGeneratedImageHomePaths?: () => Effect.Effect<
-    ReadonlyArray<CodexGeneratedImageHomeCandidate>,
-    TError
-  >;
+  readonly listGeneratedImageHomePaths?: (
+    input?: ProviderGeneratedImageHomePathsInput,
+  ) => Effect.Effect<ReadonlyArray<CodexGeneratedImageHomeCandidate>, TError>;
 
   /**
    * Check whether this adapter owns an active session id.

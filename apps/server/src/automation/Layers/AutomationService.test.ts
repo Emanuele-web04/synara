@@ -1306,6 +1306,18 @@ layer("AutomationService", (it) => {
       assert.strictEqual(updated.providerOptions, undefined);
       assert.ok(!JSON.stringify(updated).includes("must-not-persist"));
 
+      // Simulate a historical row written before definition sanitization. Public
+      // reads and run-time publication must still keep it out of API payloads.
+      const repository = yield* AutomationRepository;
+      yield* repository.saveDefinition({
+        ...updated,
+        providerOptions: {
+          codex: {
+            environment: { HISTORICAL_STALE_SECRET: "must-not-be-published" },
+          },
+        },
+      });
+
       yield* service.runNow({ automationId: created.id });
 
       const turnStart = dispatchedCommands.find((command) => command.type === "thread.turn.start");
@@ -1323,6 +1335,7 @@ layer("AutomationService", (it) => {
       const listedDefinition = listed.definitions.find((entry) => entry.id === created.id);
       assert.strictEqual(listedDefinition?.providerOptions, undefined);
       assert.ok(!JSON.stringify(listedDefinition).includes("must-not-persist"));
+      assert.ok(!JSON.stringify(listedDefinition).includes("must-not-be-published"));
       const run = listed.runs.find((entry) => entry.automationId === created.id);
       assert.strictEqual(run?.permissionSnapshot.providerOptions, undefined);
       assert.ok(!JSON.stringify(run?.permissionSnapshot).includes("super-secret"));
