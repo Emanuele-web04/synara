@@ -784,6 +784,8 @@ function getProviderStartOptionsCustomBinaryPath(
       return normalizeCustomBinaryPath(providerOptions?.gemini?.binaryPath);
     case "grok":
       return normalizeCustomBinaryPath(providerOptions?.grok?.binaryPath);
+    case "droid":
+      return normalizeCustomBinaryPath(providerOptions?.droid?.binaryPath);
     case "kilo":
       return normalizeCustomBinaryPath(providerOptions?.kilo?.binaryPath);
     case "opencode":
@@ -1960,6 +1962,7 @@ export default function ChatView({
       cursor: resolveHint("cursor"),
       gemini: resolveHint("gemini"),
       grok: resolveHint("grok"),
+      droid: resolveHint("droid"),
       kilo: resolveHint("kilo"),
       opencode: resolveHint("opencode"),
       pi: resolveHint("pi"),
@@ -2118,6 +2121,11 @@ export default function ChatView({
         customModelsByProvider.grok,
         composerModelHintByProvider.grok,
       ),
+      droid: getAppModelOptions(
+        "droid",
+        customModelsByProvider.droid,
+        composerModelHintByProvider.droid,
+      ),
       kilo: getAppModelOptions(
         "kilo",
         customModelsByProvider.kilo,
@@ -2144,6 +2152,7 @@ export default function ChatView({
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      droid: undefined,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -2198,6 +2207,7 @@ export default function ChatView({
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      droid: [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],
@@ -2219,6 +2229,7 @@ export default function ChatView({
     cursor: cursorDynamicModelsQuery,
     gemini: geminiModelsQuery,
     grok: grokDynamicModelsQuery,
+    droid: undefined,
     kilo: kiloDynamicModelsQuery,
     opencode: openCodeDynamicModelsQuery,
     pi: piDynamicModelsQuery,

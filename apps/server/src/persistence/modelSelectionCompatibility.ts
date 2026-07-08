@@ -9,6 +9,7 @@ type ModelProviderKind =
   | "cursor"
   | "gemini"
   | "grok"
+  | "droid"
   | "kilo"
   | "opencode"
   | "pi";
@@ -50,6 +51,9 @@ function inferProviderFromLabel(label: string): ModelProviderKind | undefined {
   if (lowerLabel.includes("grok") || lowerLabel.includes("xai") || lowerLabel.includes("x.ai")) {
     return "grok";
   }
+  if (lowerLabel.includes("droid") || lowerLabel.includes("factory")) {
+    return "droid";
+  }
   if (lowerLabel.includes("codex")) {
     return "codex";
   }
@@ -63,6 +67,7 @@ function inferLegacyModelProvider(provider: unknown, model: string): ModelProvid
     provider === "cursor" ||
     provider === "gemini" ||
     provider === "grok" ||
+    provider === "droid" ||
     provider === "kilo" ||
     provider === "opencode" ||
     provider === "pi"

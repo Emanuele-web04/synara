@@ -62,6 +62,7 @@ import {
   DEFAULT_CURSOR_AGENT_BINARY,
   resolveCursorAgentBinaryPath,
 } from "../acp/CursorAcpCommand";
+import { hasDroidApiKeyEnv, resolveDroidCliBinaryPath } from "../acp/DroidAcpSupport";
 import { hasGrokApiKeyEnv } from "../acp/GrokAcpSupport";
 import {
   claudeAuthMetadata,
@@ -111,6 +112,7 @@ const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
 const CURSOR_PROVIDER = "cursor" as const;
 const GEMINI_PROVIDER = "gemini" as const;
 const GROK_PROVIDER = "grok" as const;
+const DROID_PROVIDER = "droid" as const;
 const KILO_PROVIDER = "kilo" as const;
 const OPENCODE_PROVIDER = "opencode" as const;
 const PI_PROVIDER = "pi" as const;
@@ -123,6 +125,7 @@ const PROVIDERS = [
   CURSOR_PROVIDER,
   GEMINI_PROVIDER,
   GROK_PROVIDER,
+  DROID_PROVIDER,
   KILO_PROVIDER,
   OPENCODE_PROVIDER,
   PI_PROVIDER,
@@ -177,6 +180,18 @@ const PACKAGE_MANAGED_PROVIDER_UPDATES: Partial<
     npmPackageName: "@google/gemini-cli",
     homebrew: { name: "gemini-cli", kind: "formula" },
     nativeUpdate: null,
+  },
+  droid: {
+    provider: DROID_PROVIDER,
+    binaryName: "droid",
+    npmPackageName: "@factory/cli",
+    homebrew: null,
+    nativeUpdate: {
+      executable: "droid",
+      args: () => ["update"],
+      lockKey: "droid-native",
+      strategy: "always",
+    },
   },
   kilo: {
     provider: KILO_PROVIDER,
@@ -1311,6 +1326,83 @@ export const makeCheckGrokProviderStatus = (
 
 export const checkGrokProviderStatus = makeCheckGrokProviderStatus();
 
+// ── Droid health check ─────────────────────────────────────────────
+
+const runDroidCommand = (args: ReadonlyArray<string>, executable = "droid") =>
+  runProviderCommand(executable, args);
+
+export const makeCheckDroidProviderStatus = (
+  binaryPath?: string,
+): Effect.Effect<ServerProviderStatus, never, ChildProcessSpawner.ChildProcessSpawner> =>
+  Effect.gen(function* () {
+    const checkedAt = new Date().toISOString();
+    const executable = resolveDroidCliBinaryPath(nonEmptyTrimmed(binaryPath) ?? undefined);
+
+    const versionProbe = yield* runDroidCommand(["--version"], executable).pipe(
+      Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+      Effect.result,
+    );
+
+    if (Result.isFailure(versionProbe)) {
+      const error = versionProbe.failure;
+      return {
+        provider: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: isCommandMissingCause(error)
+          ? "Droid CLI (`droid`) is not installed or not on PATH."
+          : `Failed to execute Droid CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+      } satisfies ServerProviderStatus;
+    }
+
+    if (Option.isNone(versionProbe.success)) {
+      return {
+        provider: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: "Droid CLI is installed but failed to run. Timed out while running command.",
+      } satisfies ServerProviderStatus;
+    }
+
+    const version = versionProbe.success.value;
+    if (version.code !== 0) {
+      const detail = detailFromResult(version);
+      return {
+        provider: DROID_PROVIDER,
+        status: "error" as const,
+        available: false,
+        authStatus: "unknown" as const,
+        checkedAt,
+        message: detail
+          ? `Droid CLI is installed but failed to run. ${detail}`
+          : "Droid CLI is installed but failed to run.",
+      } satisfies ServerProviderStatus;
+    }
+    const parsedVersion = parseGenericCliVersion(`${version.stdout}\n${version.stderr}`);
+    const hasApiKey = hasDroidApiKeyEnv();
+
+    return {
+      provider: DROID_PROVIDER,
+      status: "ready" as const,
+      available: true,
+      authStatus: hasApiKey ? ("authenticated" as const) : ("unknown" as const),
+      version: parsedVersion,
+      checkedAt,
+      ...(hasApiKey
+        ? { authType: "apiKey", authLabel: "Factory API Key" }
+        : {
+            message:
+              "Droid CLI is installed. Synara can use the CLI's cached device-pairing login; run `droid` to authenticate locally if needed, or set FACTORY_API_KEY.",
+          }),
+    } satisfies ServerProviderStatus;
+  });
+
+export const checkDroidProviderStatus = makeCheckDroidProviderStatus();
+
 // ── OpenCode health check ───────────────────────────────────────────
 
 export const makeCheckOpenCodeProviderStatus = (
@@ -1988,6 +2080,8 @@ export const ProviderHealthLive = Layer.effect(
           return settings.providers.gemini.binaryPath;
         case "grok":
           return settings.providers.grok.binaryPath;
+        case "droid":
+          return settings.providers.droid.binaryPath;
         case "kilo":
           return settings.providers.kilo.binaryPath;
         case "opencode":
@@ -2183,6 +2277,11 @@ export const ProviderHealthLive = Layer.effect(
                 settings,
                 GROK_PROVIDER,
                 makeCheckGrokProviderStatus(settings.providers.grok.binaryPath),
+              ),
+              checkProviderWhenEnabled(
+                settings,
+                DROID_PROVIDER,
+                makeCheckDroidProviderStatus(settings.providers.droid.binaryPath),
               ),
               checkProviderWhenEnabled(
                 settings,

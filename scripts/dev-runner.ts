@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { homedir } from "node:os";
+import { delimiter as pathDelimiter, join as pathJoin } from "node:path";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
@@ -164,6 +165,18 @@ export function createDevRunnerEnv({
       DPCODE_HOME: resolvedBaseDir,
       T3CODE_HOME: resolvedBaseDir,
     };
+
+    const pathKey = process.platform === "win32" ? "Path" : "PATH";
+    const existingPath = output[pathKey] ?? output.PATH ?? "";
+    const localBin = pathJoin(homedir(), ".local", "bin");
+    if (localBin.length > 0 && !existingPath.split(pathDelimiter).includes(localBin)) {
+      const augmentedPath =
+        existingPath.length > 0 ? `${localBin}${pathDelimiter}${existingPath}` : localBin;
+      output[pathKey] = augmentedPath;
+      if (pathKey === "Path") {
+        output.PATH = augmentedPath;
+      }
+    }
 
     if (host !== undefined) {
       output.T3CODE_HOST = host;

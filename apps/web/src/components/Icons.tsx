@@ -432,6 +432,18 @@ export const OpenCodeIcon: Icon = (props) => (
   </svg>
 );
 
+export const DroidIcon: Icon = (props) => (
+  <svg {...props} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path
+      fill="currentColor"
+      fillRule="evenodd"
+      d="M4 4h6v6H4V4Zm10 0h6v6h-6V4ZM4 14h6v6H4v-6Zm10 0h6v6h-6v-6ZM7 7h2v2H7V7Zm8 0h2v2h-2V7ZM7 17h2v2H7v-2Zm8 0h2v2h-2v-2Z"
+      clipRule="evenodd"
+    />
+    <path fill="currentColor" d="M11 10h2v4h-2v-4Z" />
+  </svg>
+);
+
 export const KiloIcon: Icon = (props) => (
   <svg {...props} viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <path

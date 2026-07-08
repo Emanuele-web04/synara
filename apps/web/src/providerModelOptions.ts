@@ -13,6 +13,8 @@ import type {
   CursorModelSelection,
   GeminiModelOptions,
   GeminiModelSelection,
+  DroidModelOptions,
+  DroidModelSelection,
   GrokModelOptions,
   GrokModelSelection,
   KiloModelSelection,
@@ -286,6 +288,12 @@ export function buildNextProviderOptions(
       ...patch,
     } as GrokModelOptions;
   }
+  if (provider === "droid") {
+    return {
+      ...(modelOptions as DroidModelOptions | undefined),
+      ...patch,
+    } as DroidModelOptions;
+  }
   if (provider === "opencode") {
     return {
       ...(modelOptions as OpenCodeModelOptions | undefined),
@@ -338,6 +346,11 @@ export function buildModelSelection(
   model: string,
   options?: GrokModelOptions | null | undefined,
 ): GrokModelSelection;
+export function buildModelSelection(
+  provider: "droid",
+  model: string,
+  options?: DroidModelOptions | null | undefined,
+): DroidModelSelection;
 export function buildModelSelection(
   provider: "opencode",
   model: string,
@@ -402,6 +415,14 @@ export function buildModelSelection(
             provider,
             model,
             options: options as GrokModelOptions,
+          }
+        : { provider, model };
+    case "droid":
+      return options
+        ? {
+            provider,
+            model,
+            options: options as DroidModelOptions,
           }
         : { provider, model };
     case "kilo":

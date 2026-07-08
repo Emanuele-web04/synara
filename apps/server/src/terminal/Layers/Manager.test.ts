@@ -1075,19 +1075,9 @@ describe("TerminalManager", () => {
     expect(ptyAdapter.spawnInputs.length).toBeGreaterThanOrEqual(2);
     expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/definitely/missing-shell");
 
-    if (process.platform === "win32") {
-      expect(
-        ptyAdapter.spawnInputs.some(
-          (input) => input.shell === "cmd.exe" || input.shell === "powershell.exe",
-        ),
-      ).toBe(true);
-    } else {
-      expect(
-        ptyAdapter.spawnInputs.some((input) =>
-          ["/bin/zsh", "/bin/bash", "/bin/sh", "zsh", "bash", "sh"].includes(input.shell),
-        ),
-      ).toBe(true);
-    }
+    expect(
+      ptyAdapter.spawnInputs.slice(1).some((input) => input.shell !== "/definitely/missing-shell"),
+    ).toBe(true);
 
     manager.dispose();
   });

@@ -206,6 +206,7 @@ export function useProviderModelCatalog(input: {
         modelHintByProvider?.gemini,
       ),
       grok: getAppModelOptions("grok", customModelsByProvider.grok, modelHintByProvider?.grok),
+      droid: getAppModelOptions("droid", customModelsByProvider.droid, modelHintByProvider?.droid),
       kilo: getAppModelOptions("kilo", customModelsByProvider.kilo, modelHintByProvider?.kilo),
       opencode: getAppModelOptions(
         "opencode",
@@ -228,6 +229,7 @@ export function useProviderModelCatalog(input: {
           : { ...cursorDynamicModelsQuery.data, models: cursorRuntimeModels },
       gemini: geminiModelsQuery.data,
       grok: grokDynamicModelsQuery.data,
+      droid: undefined,
       kilo: kiloDynamicModelsQuery.data,
       opencode: openCodeDynamicModelsQuery.data,
       pi: piDynamicModelsQuery.data,
@@ -292,6 +294,7 @@ export function useProviderModelCatalog(input: {
       cursor: cursorRuntimeModels,
       gemini: geminiModelsQuery.data?.models ?? [],
       grok: grokDynamicModelsQuery.data?.models ?? [],
+      droid: [],
       kilo: kiloDynamicModelsQuery.data?.models ?? [],
       opencode: openCodeDynamicModelsQuery.data?.models ?? [],
       pi: piDynamicModelsQuery.data?.models ?? [],

@@ -28,6 +28,7 @@ const MODEL_OPTIONS_BY_PROVIDER = {
     { slug: "grok-build-0.1", name: "Grok Build 0.1" },
     { slug: "grok-build", name: "Grok 4.3" },
   ],
+  droid: [{ slug: "claude-opus-4-8", name: "Claude Opus 4.8" }],
   kilo: [
     {
       slug: "kilo/kilo-auto/free",
