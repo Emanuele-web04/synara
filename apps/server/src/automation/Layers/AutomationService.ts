@@ -424,9 +424,9 @@ function hasOwn<T extends object, K extends PropertyKey>(
 // Instance-backed automations resolve launch options from current server settings.
 // Client-supplied snapshots can be stale or contain secrets, so they never belong
 // in the persisted definition or any definition event sent back to clients.
-function withoutAutomationProviderOptions<
-  T extends { readonly providerOptions?: ProviderStartOptions },
->(value: T): Omit<T, "providerOptions"> {
+function withoutAutomationProviderOptions<T extends { readonly providerOptions?: unknown }>(
+  value: T,
+): Omit<T, "providerOptions"> {
   const { providerOptions: _providerOptions, ...withoutProviderOptions } = value;
   return withoutProviderOptions;
 }
