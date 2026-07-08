@@ -433,6 +433,13 @@ export interface AppModelOption extends ProviderModelOption {
   isCustom: boolean;
 }
 
+export interface GitTextGenerationModelPickerOption {
+  readonly key: string;
+  readonly value: string;
+  readonly instance: ProviderInstanceOption;
+  readonly option: AppModelOption;
+}
+
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 let serverSettingsMigrationInFlight = false;
 
@@ -1699,6 +1706,84 @@ export function getGitTextGenerationModelOptions(
   }
 
   return deduped;
+}
+
+export function getGitTextGenerationPickerOptions(
+  settings: Pick<
+    AppSettings,
+    | CustomModelSettingsKey
+    | "codexAccounts"
+    | "codexHomePath"
+    | "providerInstances"
+    | "selectedCodexAccountId"
+    | "textGenerationModel"
+    | "textGenerationProvider"
+    | "textGenerationProviderInstanceId"
+  >,
+  discoveredOptionsByProviderInstance?: Partial<
+    Record<ProviderInstanceId, ReadonlyArray<ProviderModelOption & { isCustom?: boolean }>>
+  >,
+): GitTextGenerationModelPickerOption[] {
+  const selectedModel = settings.textGenerationModel?.trim();
+  const selectedProvider =
+    settings.textGenerationProvider ??
+    resolveTextGenerationProvider(selectedModel !== undefined ? { model: selectedModel } : {});
+  const selectedInstanceId = ProviderInstanceId.makeUnsafe(
+    settings.textGenerationProviderInstanceId?.trim() || selectedProvider,
+  );
+  const entries: GitTextGenerationModelPickerOption[] = [];
+  const seen = new Set<string>();
+
+  for (const instance of getProviderInstanceOptions(settings)) {
+    if (
+      !instance.enabled ||
+      !GIT_TEXT_GENERATION_PROVIDERS.includes(instance.provider as GitTextGenerationProvider)
+    ) {
+      continue;
+    }
+    const selectedModelForInstance =
+      selectedModel &&
+      instance.provider === selectedProvider &&
+      instance.instanceId === selectedInstanceId
+        ? selectedModel
+        : undefined;
+    const selectedModelOption = selectedModelForInstance
+      ? getAppModelOptions(instance.provider, [], selectedModelForInstance).find(
+          (option) =>
+            option.slug === normalizeModelSlug(selectedModelForInstance, instance.provider),
+        )
+      : undefined;
+    const discoveredOptions = discoveredOptionsByProviderInstance?.[instance.instanceId];
+    const catalogOptions = discoveredOptions
+      ? mapCatalogModelOptionsToAppModelOptions(
+          instance.provider as GitTextGenerationProvider,
+          discoveredOptions,
+        )
+      : null;
+    const options = catalogOptions
+      ? [
+          ...catalogOptions,
+          ...(selectedModelOption &&
+          !catalogOptions.some((option) => option.slug === selectedModelOption.slug)
+            ? [selectedModelOption]
+            : []),
+        ]
+      : getAppModelOptions(
+          instance.provider,
+          getCustomModelsForProviderInstance(settings, instance),
+          selectedModelForInstance,
+        );
+    for (const option of options) {
+      const key = `${instance.instanceId}:${option.provider}:${option.slug}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      entries.push({ key, value: key, instance, option });
+    }
+  }
+
+  return entries;
 }
 
 export function resolveAppModelSelection(

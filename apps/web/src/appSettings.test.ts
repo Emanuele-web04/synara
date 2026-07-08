@@ -36,6 +36,7 @@ import {
   getCustomModelsForProviderInstance,
   getDefaultCustomModelsForProvider,
   getGitTextGenerationModelOptions,
+  getGitTextGenerationPickerOptions,
   getProviderInstanceOptions,
   getUnsupportedProviderInstanceOptions,
   getServerDisabledProviders,
@@ -434,6 +435,51 @@ describe("environment panel defaults", () => {
       showEnvironmentInstructions: true,
       showEnvironmentNotepad: true,
     });
+  });
+
+  it("keeps runtime-discovered git-writing models isolated by provider instance", () => {
+    const options = getGitTextGenerationPickerOptions(
+      {
+        customCodexModels: [],
+        customClaudeModels: [],
+        customCursorModels: [],
+        customAntigravityModels: [],
+        customGrokModels: [],
+        customDroidModels: [],
+        customDevinModels: [],
+        customOpenCodeModels: [],
+        customPiModels: [],
+        codexAccounts: [],
+        codexHomePath: "",
+        selectedCodexAccountId: "default",
+        textGenerationModel: "openrouter/work-model",
+        textGenerationProvider: "opencode",
+        textGenerationProviderInstanceId: "opencode_work",
+        providerInstances: {
+          opencode_work: {
+            driver: "opencode",
+            enabled: true,
+            displayName: "OpenCode Work",
+          },
+        },
+      },
+      {
+        opencode: [{ slug: "openrouter/personal-model", name: "Personal Model" }],
+        opencode_work: [{ slug: "openrouter/work-model", name: "Work Model" }],
+      },
+    );
+
+    const defaultModels = options
+      .filter((entry) => entry.instance.instanceId === "opencode")
+      .map((entry) => entry.option.slug);
+    const workModels = options
+      .filter((entry) => entry.instance.instanceId === "opencode_work")
+      .map((entry) => entry.option.slug);
+
+    expect(defaultModels).toContain("openrouter/personal-model");
+    expect(defaultModels).not.toContain("openrouter/work-model");
+    expect(workModels).toContain("openrouter/work-model");
+    expect(workModels).not.toContain("openrouter/personal-model");
   });
 });
 

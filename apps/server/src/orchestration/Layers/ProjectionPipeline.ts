@@ -797,11 +797,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             messages,
           });
           const requestedModelSelection = event.payload.modelSelection;
+          const requestedInstanceId =
+            requestedModelSelection === undefined
+              ? null
+              : resolveModelSelectionInstanceId(requestedModelSelection);
           const canAdoptRequestedInstance =
             requestedModelSelection === undefined ||
-            resolveModelSelectionInstanceId(requestedModelSelection) ===
-              resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
-            canAdoptFirstTurnSelection;
+            (Option.isSome(session)
+              ? session.value.status === "stopped" ||
+                session.value.status === "error" ||
+                (session.value.providerInstanceId ?? session.value.providerName) === null ||
+                requestedInstanceId ===
+                  (session.value.providerInstanceId ?? session.value.providerName)
+              : requestedInstanceId ===
+                  resolveModelSelectionInstanceId(existingRow.value.modelSelection) ||
+                canAdoptFirstTurnSelection);
           const projectedModelSelection = deriveTurnStartModelSelection({
             currentModelSelection: existingRow.value.modelSelection,
             requestedModelSelection: canAdoptRequestedInstance
