@@ -66,7 +66,7 @@ function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): o
   return option.available;
 }
 
-function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
+export function resolveLiveProviderAvailability(provider: ServerProviderStatus | undefined): {
   disabled: boolean;
   label: string | null;
 } {
@@ -167,7 +167,7 @@ function defaultProviderInstance(provider: ProviderKind): ProviderModelPickerIns
   };
 }
 
-function findProviderStatusForInstance(input: {
+export function findProviderStatusForInstance(input: {
   providers: ReadonlyArray<ServerProviderStatus> | undefined;
   provider: ProviderKind;
   instanceId: ProviderInstanceId;
@@ -452,61 +452,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
     onAfterSelection?.();
   };
 
-  const handleInstanceChange = (provider: ProviderKind, instanceId: ProviderInstanceId) => {
-    if (props.disabled || !instanceId) return;
-    const providerOptions = getModelOptionsForProviderInstance(provider, instanceId);
-    const model = activeProvider === provider ? props.model : (providerOptions[0]?.slug ?? "");
-    if (!model) return;
-    const resolvedModel = resolveSelectableModel(provider, model, providerOptions);
-    props.onProviderModelChange(
-      provider,
-      resolvedModel ?? providerOptions[0]?.slug ?? model,
-      instanceId,
-    );
-    onAfterSelection?.();
-  };
-
-  const renderProviderInstanceRadioGroup = (provider: ProviderKind) => {
-    const instances = getProviderInstances(provider);
-    if (instances.length <= 1) {
-      return null;
-    }
-    return (
-      <>
-        <div className="px-2.5 pb-1 pt-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-[0.08em]">
-          Instance
-        </div>
-        <MenuRadioGroup
-          value={getSelectedInstanceIdForProvider(provider)}
-          onValueChange={(value) => {
-            if (props.disabled || !value) {
-              return;
-            }
-            handleInstanceChange(provider, value);
-          }}
-        >
-          {instances.map((instance) => {
-            const availability = resolveInstanceAvailability(instance);
-            return (
-              <MenuRadioItem
-                key={instance.instanceId}
-                value={instance.instanceId}
-                disabled={availability.disabled}
-              >
-                <span className="truncate">{instance.label}</span>
-                {availability.label ? (
-                  <span className="ms-auto text-[11px] text-muted-foreground/80 uppercase tracking-[0.08em]">
-                    {availability.label}
-                  </span>
-                ) : null}
-              </MenuRadioItem>
-            );
-          })}
-        </MenuRadioGroup>
-        <MenuSeparator />
-      </>
-    );
-  };
   const toggleFavoriteModel = (
     provider: FavoriteModelProvider,
     instanceId: ProviderInstanceId,
@@ -651,12 +596,7 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
   };
 
   if (props.lockedProvider !== null) {
-    return (
-      <>
-        {renderProviderInstanceRadioGroup(props.lockedProvider)}
-        {renderModelRadioGroup(props.lockedProvider)}
-      </>
-    );
+    return renderModelRadioGroup(props.lockedProvider);
   }
 
   return (
@@ -697,7 +637,6 @@ export const ProviderModelMenuItems = function ProviderModelMenuItems(
               fixedWidth
               className={COMPOSER_PICKER_MODEL_SUBMENU_HEIGHT_CLASS_NAME}
             >
-              {renderProviderInstanceRadioGroup(option.value)}
               {renderModelRadioGroup(option.value)}
             </ComposerPickerMenuSubPopup>
           </MenuSub>
@@ -753,25 +692,6 @@ export function resolveProviderModelLabel(input: {
   });
 }
 
-export function resolveProviderInstanceLabel(input: {
-  provider: ProviderKind;
-  selectedProviderInstanceId?: ProviderInstanceId | undefined;
-  providerInstances?: ReadonlyArray<ProviderModelPickerInstance> | undefined;
-}): string | null {
-  const instances =
-    input.providerInstances?.filter((instance) => instance.provider === input.provider) ?? [];
-  if (instances.length <= 1) {
-    return null;
-  }
-  const selectedInstanceId = input.selectedProviderInstanceId ?? input.provider;
-  return (
-    instances.find((instance) => instance.instanceId === selectedInstanceId)?.label ??
-    instances.find((instance) => instance.isDefault)?.label ??
-    instances[0]?.label ??
-    null
-  );
-}
-
 export function getProviderIconClassName(
   provider: ProviderKind | ProviderPickerKind,
   fallbackClassName: string = "text-muted-foreground/70",
@@ -822,14 +742,7 @@ export const ProviderModelPicker = function ProviderModelPicker(props: ProviderM
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
-  const selectedInstanceLabel = resolveProviderInstanceLabel({
-    provider: activeProvider,
-    selectedProviderInstanceId: props.selectedProviderInstanceId,
-    providerInstances: props.providerInstances,
-  });
-  const triggerLabel = selectedInstanceLabel
-    ? `${selectedInstanceLabel} · ${selectedModelLabel}`
-    : selectedModelLabel;
+  const triggerLabel = selectedModelLabel;
   const ProviderIcon = PROVIDER_ICON_COMPONENT_BY_PROVIDER[activeProvider];
 
   const setMenuOpen = (nextOpen: boolean) => {

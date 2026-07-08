@@ -1,10 +1,19 @@
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
+import {
+  type ModelSlug,
+  type ProviderInstanceId,
+  type ProviderKind,
+  type ServerProviderStatus,
+} from "@synara/contracts";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { page } from "vitest/browser";
 import { render } from "vitest-browser-react";
 
-import { ProviderModelPicker } from "./ProviderModelPicker";
+import {
+  ProviderModelPicker,
+  type ProviderModelOptionsByProviderInstance,
+  type ProviderModelPickerInstance,
+} from "./ProviderModelPicker";
 import { mergeDynamicModelOptions, type ProviderModelOption } from "../../providerModelOptions";
 import { FAVORITE_MODEL_STORAGE_KEYS } from "../../lib/modelFavorites";
 
@@ -186,6 +195,9 @@ async function mountPicker(props: {
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
   providers?: ReadonlyArray<ServerProviderStatus>;
+  providerInstances?: ReadonlyArray<ProviderModelPickerInstance>;
+  selectedProviderInstanceId?: ProviderInstanceId;
+  modelOptionsByProviderInstance?: ProviderModelOptionsByProviderInstance;
   loadingModelProviders?: Partial<Record<ProviderKind, boolean>>;
   onSelectionCommitted?: () => void;
   modelOptionsByProvider?: Record<
@@ -202,6 +214,13 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       modelOptionsByProvider={props.modelOptionsByProvider ?? MODEL_OPTIONS_BY_PROVIDER}
+      {...(props.providerInstances ? { providerInstances: props.providerInstances } : {})}
+      {...(props.selectedProviderInstanceId
+        ? { selectedProviderInstanceId: props.selectedProviderInstanceId }
+        : {})}
+      {...(props.modelOptionsByProviderInstance
+        ? { modelOptionsByProviderInstance: props.modelOptionsByProviderInstance }
+        : {})}
       {...(props.loadingModelProviders
         ? { loadingModelProviders: props.loadingModelProviders }
         : {})}
@@ -299,6 +318,45 @@ describe("ProviderModelPicker", () => {
         "work/opencode-model",
         "opencode_work",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps account choices out of the model picker", async () => {
+    const mounted = await mountPicker({
+      provider: "codex",
+      model: "gpt-5-codex",
+      lockedProvider: "codex",
+      selectedProviderInstanceId: "codex",
+      providerInstances: [
+        {
+          instanceId: "codex",
+          provider: "codex",
+          label: "Personal",
+          enabled: true,
+          isDefault: true,
+        },
+        {
+          instanceId: "codex_work",
+          provider: "codex",
+          label: "Work",
+          enabled: true,
+          isDefault: false,
+        },
+      ],
+      providers: [
+        providerStatus("codex"),
+        providerStatus("codex", { instanceId: "codex_work", displayName: "Work" }),
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+      await vi.waitFor(() => {
+        expect(document.body.textContent ?? "").not.toContain("Work");
+        expect(document.body.textContent ?? "").toContain("GPT-5 Codex");
+      });
     } finally {
       await mounted.cleanup();
     }

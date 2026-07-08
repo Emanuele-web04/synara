@@ -186,6 +186,7 @@ import { useTemporaryThreadStore } from "../temporaryThreadStore";
 import { useTerminalStateStore } from "../terminalStateStore";
 import { getThreadFromState } from "../threadDerivation";
 import { buildThreadSubscribeInput } from "../threadDetailResumeCursors";
+import { SETTINGS_TARGETS } from "../settingsNavigation";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -253,6 +254,7 @@ import {
   type ComposerLocalDirectoryMenuHandle,
 } from "./chat/ComposerLocalDirectoryMenu";
 import { ComposerModelEffortPicker } from "./chat/ComposerModelEffortPicker";
+import { ProviderInstancePicker } from "./chat/ProviderInstancePicker";
 import { ComposerPendingApprovalPanel } from "./chat/ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPanel";
 import { ComposerQueuedHeader } from "./chat/ComposerQueuedHeader";
@@ -1238,6 +1240,19 @@ export default function ChatView({
     isModelPickerOpen,
     resolvedThreadWorktreePath,
   });
+  const selectedProviderInstances = useMemo(
+    () => providerInstances.filter((instance) => instance.provider === selectedProvider),
+    [providerInstances, selectedProvider],
+  );
+  const selectedProviderInstanceLabel =
+    selectedProviderInstances.find((instance) => instance.instanceId === selectedProviderInstanceId)
+      ?.label ??
+    selectedProviderInstances[0]?.label ??
+    "Default";
+  const showProviderInstancePicker =
+    selectedProvider === "codex" ||
+    selectedProvider === "claudeAgent" ||
+    selectedProviderInstances.length > 1;
   const {
     selectedComposerSkills,
     selectedComposerMentions,
@@ -3362,6 +3377,27 @@ export default function ChatView({
     ],
   );
 
+  const onProviderInstanceSelect = useCallback(
+    (instanceId: ProviderInstanceId) => {
+      void onProviderModelSelect(
+        selectedProvider,
+        selectedModelForPickerWithCustomFallback,
+        instanceId,
+      );
+    },
+    [onProviderModelSelect, selectedModelForPickerWithCustomFallback, selectedProvider],
+  );
+  const openProviderAccountSettings = useCallback(() => {
+    void navigate({
+      to: "/settings",
+      search: {
+        section: "providers",
+        target: SETTINGS_TARGETS.providerInstalls,
+        provider: selectedProvider,
+      },
+    });
+  }, [navigate, selectedProvider]);
+
   const copyThreadIdToClipboard = useCopyThreadIdToClipboard();
 
   useChatKeyboardShortcuts({
@@ -4028,6 +4064,7 @@ export default function ChatView({
     runtimeAgents: dynamicAgents,
   });
   const composerFooterPlanInputsKey = [
+    selectedProviderInstanceLabel,
     composerFooterModelLabel,
     composerFooterTraitsSummary.summaryText,
     Boolean(runtimeUsageContextWindow),
@@ -4065,7 +4102,7 @@ export default function ChatView({
     },
     [setIsModelPickerOpen, setIsTraitsPickerOpen, handleModelPickerOpenChange],
   );
-  const composerPickerControls = showComposerModelBootstrapSkeleton ? (
+  const composerModelAndTraitsControls = showComposerModelBootstrapSkeleton ? (
     useSplitComposerPickerControls ? (
       <>
         {selectedProviderRuntimeModelDiscoveryPending ? (
@@ -4152,6 +4189,28 @@ export default function ChatView({
       onOpenChange={handleComposerModelEffortPickerOpenChange}
       shortcutLabel={modelPickerShortcutLabel}
     />
+  );
+  const composerPickerControls = (
+    <>
+      {showProviderInstancePicker ? (
+        showComposerModelBootstrapSkeleton ? (
+          <ComposerControlSkeleton widthClassName={isComposerFooterCompact ? "w-10" : "w-32"} />
+        ) : (
+          <ProviderInstancePicker
+            provider={selectedProvider}
+            providerInstances={providerInstances}
+            providers={providerStatuses}
+            selectedProviderInstanceId={selectedProviderInstanceId}
+            selectionLocked={lockedProvider !== null}
+            compact={isComposerFooterCompact}
+            hideLabel={!composerFooterControlsPlan.showModelLabel}
+            onProviderInstanceChange={onProviderInstanceSelect}
+            onManageAccounts={openProviderAccountSettings}
+          />
+        )
+      ) : null}
+      {composerModelAndTraitsControls}
+    </>
   );
   const toggleFastMode = useCallback(() => {
     if (!composerTraitSelection.caps.supportsFastMode) {

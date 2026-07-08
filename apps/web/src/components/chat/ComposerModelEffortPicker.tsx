@@ -42,7 +42,6 @@ import {
   ProviderModelMenuItems,
   type ProviderModelOptionsByProviderInstance,
   type ProviderModelPickerInstance,
-  resolveProviderInstanceLabel,
   resolveProviderModelLabel,
 } from "./ProviderModelPicker";
 import { hasComposerAgentControls, TraitsMenuContent } from "./TraitsPicker";
@@ -121,14 +120,7 @@ export function ComposerModelEffortPicker(props: ComposerModelEffortPickerProps)
     modelOptionsByProviderInstance: props.modelOptionsByProviderInstance,
     selectedProviderInstanceId: props.selectedProviderInstanceId,
   });
-  const selectedInstanceLabel = resolveProviderInstanceLabel({
-    provider: activeProvider,
-    selectedProviderInstanceId: props.selectedProviderInstanceId,
-    providerInstances: props.providerInstances,
-  });
-  const triggerModelLabel = selectedInstanceLabel
-    ? `${selectedInstanceLabel} · ${modelLabel}`
-    : modelLabel;
+  const triggerModelLabel = modelLabel;
 
   const traitSelection = getComposerTraitSelection(
     props.provider,

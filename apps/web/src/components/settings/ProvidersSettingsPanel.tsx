@@ -32,7 +32,15 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type MouseEvent, type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import {
+  type MouseEvent,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import {
   getCodexAccountOptions,
@@ -1019,12 +1027,20 @@ function ProviderInstancesControl(props: {
     if (!config || typeof config !== "object" || Array.isArray(config)) return false;
     return (config as Record<string, unknown>)[key] === true;
   };
+  const instanceSectionLabel =
+    provider === "codex"
+      ? "Codex accounts"
+      : provider === "claudeAgent"
+        ? "Claude accounts"
+        : "Provider profiles";
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <span className="block text-xs font-medium text-foreground">Provider instances</span>
+          <span className="block text-xs font-medium text-foreground">
+            {instanceSectionLabel}
+          </span>
           <span className="mt-1 block text-xs text-muted-foreground">
             {provider === "codex"
               ? "Add a separately routed Codex instance with its own home or shadow auth home."
@@ -1360,6 +1376,7 @@ function ProviderToolRow(props: {
 
 export type ProvidersSettingsPanelProps = AppSettingsBinding & {
   readonly active: boolean;
+  readonly providerTarget?: ProviderKind | null;
   readonly resetEpoch: number;
   readonly updateSettingsAndWait: (patch: Partial<AppSettings>) => Promise<void>;
 };
@@ -1370,6 +1387,7 @@ export function ProvidersSettingsPanel({
   updateSettings,
   updateSettingsAndWait,
   active,
+  providerTarget = null,
   resetEpoch,
 }: ProvidersSettingsPanelProps) {
   const queryClient = useQueryClient();
@@ -1378,7 +1396,10 @@ export function ProvidersSettingsPanel({
   const providerStatusesReconciled = hasReconciledServerProviderStatuses(queryClient);
   const serverSettingsQuery = useQuery(serverSettingsQueryOptions());
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>(
-    () => createProviderInstallDisclosureState(settings),
+    () => ({
+      ...createProviderInstallDisclosureState(settings),
+      ...(providerTarget ? { [providerTarget]: true } : {}),
+    }),
   );
   const [updatingProviders, setUpdatingProviders] = useState<ReadonlySet<ProviderInstanceId>>(
     () => new Set(),
@@ -1483,6 +1504,11 @@ export function ProvidersSettingsPanel({
   useSettingsRestoreSignal(resetEpoch, () => {
     setOpenInstallProviders(createClosedProviderInstallDisclosureState());
   });
+
+  useEffect(() => {
+    if (!active || !providerTarget) return;
+    setOpenInstallProviders((current) => ({ ...current, [providerTarget]: true }));
+  }, [active, providerTarget]);
 
   const handleProviderOrderDragEnd = useCallback(
     (event: DragEndEvent) => {
@@ -1761,7 +1787,7 @@ export function ProvidersSettingsPanel({
         </SettingsSection>
       </div>
 
-      <div>
+      <div id={SETTINGS_TARGETS.providerInstalls}>
         <SettingsSection title="Provider tools">
           <SettingsRow
             title="Installed CLIs"
