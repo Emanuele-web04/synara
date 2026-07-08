@@ -15,11 +15,9 @@ import {
   type ProviderSession,
   type ProviderUserInputAnswers,
   RuntimeRequestId,
-  type RuntimeMode,
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { prepareWindowsSafeProcess } from "@t3tools/shared/windowsProcess";
 import {
   Cause,
   DateTime,
@@ -37,7 +35,7 @@ import {
   Stream,
   SynchronizedRef,
 } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpSchema from "effect-acp/schema";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -75,7 +73,6 @@ import {
 } from "../acp/AcpTurnIdleWatchdog.ts";
 import {
   applyDroidAcpModelSelection,
-  getDroidApiKeyEnv,
   makeDroidAcpRuntime,
   type DroidAcpRuntimeSettings,
 } from "../acp/DroidAcpSupport.ts";
