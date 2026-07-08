@@ -1,7 +1,38 @@
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
-import { resolveProjectCwdForKind, resolveThreadWorkspaceCwd } from "./Utils.ts";
+import {
+  checkpointRefForThreadTurn,
+  isManagedCheckpointRefForThread,
+  parseManagedCheckpointRef,
+  resolveProjectCwdForKind,
+  resolveThreadWorkspaceCwd,
+} from "./Utils.ts";
+
+describe("managed checkpoint refs", () => {
+  const threadId = ThreadId.makeUnsafe("thread-1");
+
+  it("creates canonical Synara refs", () => {
+    expect(checkpointRefForThreadTurn(threadId, 4)).toMatch(/^refs\/synara\/checkpoints\//);
+  });
+
+  it("recognizes a structurally valid persisted ref for the same thread", () => {
+    const canonical = checkpointRefForThreadTurn(threadId, 4);
+    const historical = canonical.replace("refs/synara/", "refs/historical/");
+    expect(parseManagedCheckpointRef(historical)?.namespace).toBe("historical");
+    expect(isManagedCheckpointRefForThread(historical, threadId)).toBe(true);
+  });
+
+  it("rejects malformed refs and refs belonging to a different thread", () => {
+    expect(parseManagedCheckpointRef("refs/heads/feature")).toBeNull();
+    expect(
+      isManagedCheckpointRefForThread(
+        checkpointRefForThreadTurn(ThreadId.makeUnsafe("thread-2"), 4),
+        threadId,
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("resolveProjectCwdForKind", () => {
   it("suppresses the workspace root for a chat-kind project with no materialized worktree", () => {

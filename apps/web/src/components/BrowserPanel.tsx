@@ -332,11 +332,7 @@ function isBrowserPerfLoggingEnabled(): boolean {
   }
 
   try {
-    return (
-      window.localStorage.getItem("synara:browser-perf") === "1" ||
-      window.localStorage.getItem("dpcode:browser-perf") === "1" ||
-      window.localStorage.getItem("t3code:browser-perf") === "1"
-    );
+    return window.localStorage.getItem("synara:browser-perf") === "1";
   } catch {
     return false;
   }

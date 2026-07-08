@@ -328,6 +328,12 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export interface SynaraStorageSnapshot {
+  readonly version: 1;
+  readonly exportedAt: string;
+  readonly entries: Readonly<Record<string, string>>;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
   pickFolder: () => Promise<string | null>;
@@ -369,6 +375,11 @@ export interface DesktopBridge {
   notifications: {
     isSupported: () => Promise<boolean>;
     show: (input: DesktopNotificationInput) => Promise<boolean>;
+  };
+  storageMigration: {
+    saveSnapshot: (snapshot: SynaraStorageSnapshot) => Promise<boolean>;
+    readSnapshot: () => SynaraStorageSnapshot | null;
+    acknowledgeSnapshot: () => Promise<void>;
   };
   server?: {
     transcribeVoice: (

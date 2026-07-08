@@ -9,7 +9,38 @@ import {
 } from "@t3tools/contracts";
 import { resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
 
-export const CHECKPOINT_REFS_PREFIX = "refs/t3/checkpoints";
+export const CHECKPOINT_REFS_PREFIX = "refs/synara/checkpoints";
+
+const MANAGED_CHECKPOINT_REF_PATTERN =
+  /^refs\/([A-Za-z0-9._-]+)\/checkpoints\/([A-Za-z0-9_-]+)\/(turn|message-start|turn-start|turn-live)\/([A-Za-z0-9_-]+)$/;
+
+export interface ManagedCheckpointRefParts {
+  readonly namespace: string;
+  readonly threadToken: string;
+  readonly kind: "turn" | "message-start" | "turn-start" | "turn-live";
+  readonly valueToken: string;
+  readonly familyPrefix: string;
+}
+
+export function parseManagedCheckpointRef(value: string): ManagedCheckpointRefParts | null {
+  const match = MANAGED_CHECKPOINT_REF_PATTERN.exec(value);
+  if (!match) return null;
+  const [, namespace, threadToken, kind, valueToken] = match;
+  if (!namespace || !threadToken || !kind || !valueToken) return null;
+  if (kind === "turn" && !/^\d+$/.test(valueToken)) return null;
+  return {
+    namespace,
+    threadToken,
+    kind: kind as ManagedCheckpointRefParts["kind"],
+    valueToken,
+    familyPrefix: `refs/${namespace}/checkpoints/${threadToken}`,
+  };
+}
+
+export function isManagedCheckpointRefForThread(value: string, threadId: ThreadId): boolean {
+  const parsed = parseManagedCheckpointRef(value);
+  return parsed?.threadToken === Encoding.encodeBase64Url(threadId);
+}
 
 export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number): CheckpointRef {
   return CheckpointRef.makeUnsafe(

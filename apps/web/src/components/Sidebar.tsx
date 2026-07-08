@@ -101,6 +101,7 @@ import {
   reconcileDeletedThreadsFromClient,
 } from "../lib/deletedThreadClientReconciliation";
 import { persistAppStateNow, useStore } from "../store";
+import { flushSynaraStorageSnapshot } from "../storageKeyMigration";
 import { getThreadFromState, getThreadsFromState } from "../threadDerivation";
 import {
   resolveShortcutCommand,
@@ -6419,8 +6420,8 @@ export default function Sidebar() {
     if (desktopUpdateButtonAction === "install") {
       setInstallingDesktopUpdate(true);
       persistAppStateNow();
-      void bridge
-        .installUpdate()
+      void flushSynaraStorageSnapshot()
+        .then(() => bridge.installUpdate())
         .then((result) => {
           setDesktopUpdateState(result.state);
           setInstallingDesktopUpdate(false);

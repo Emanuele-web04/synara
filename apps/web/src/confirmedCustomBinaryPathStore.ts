@@ -8,7 +8,7 @@
 import type { ProviderKind } from "@t3tools/contracts";
 import { isPlainObject } from "./persistedRecord";
 
-const STORAGE_KEY = "dpcode:confirmed-custom-binary-paths:v1";
+const STORAGE_KEY = "synara:confirmed-custom-binary-paths:v1";
 
 // Mirror of the ProviderKind literal union; the explicit annotation makes the
 // compiler reject this list if a new provider is added without updating it.

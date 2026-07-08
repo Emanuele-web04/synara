@@ -124,6 +124,13 @@ import {
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
+import {
+  acknowledgeSynaraStorageSnapshot,
+  readSynaraStorageSnapshot,
+  resolveSynaraStorageSnapshotPath,
+  saveSynaraStorageSnapshot,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
 
 syncShellEnvironment();
 
@@ -2205,6 +2212,23 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
+  const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
+  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+    event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
+    saveSynaraStorageSnapshot(storageSnapshotPath, snapshot),
+  );
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+    await acknowledgeSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
   ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
   ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the
