@@ -6,6 +6,43 @@ export interface WaitForBackendStartupReadyOptions {
   readonly cancelHttpWait: () => void;
 }
 
+export interface MonitorBackendStartupHealthOptions {
+  readonly waitUntilReady: (signal: AbortSignal) => Promise<void>;
+  readonly isCurrent: () => boolean;
+  readonly onReady: () => void;
+}
+
+export async function isBackendStartupReadyResponse(response: Response): Promise<boolean> {
+  if (!response.ok) {
+    return false;
+  }
+  try {
+    const payload = (await response.json()) as {
+      startupReady?: unknown;
+    };
+    return payload.startupReady === true;
+  } catch {
+    return false;
+  }
+}
+
+export function monitorBackendStartupHealth(
+  options: MonitorBackendStartupHealthOptions,
+): AbortController {
+  const controller = new AbortController();
+
+  void options.waitUntilReady(controller.signal).then(
+    () => {
+      if (!controller.signal.aborted && options.isCurrent()) {
+        options.onReady();
+      }
+    },
+    () => undefined,
+  );
+
+  return controller;
+}
+
 export async function waitForBackendStartupReady(
   options: WaitForBackendStartupReadyOptions,
 ): Promise<"listening" | "http"> {
