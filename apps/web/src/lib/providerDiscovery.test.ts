@@ -3,7 +3,7 @@
 // Layer: Web lib tests
 // Exports: Vitest cases for composer/plugin discovery helpers.
 
-import type { ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { buildSkillSearchFields, rankProviderDiscoveryItems } from "./providerDiscovery";
 

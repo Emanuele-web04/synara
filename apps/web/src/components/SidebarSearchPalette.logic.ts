@@ -1,7 +1,7 @@
 // Purpose: Scores sidebar palette results for actions, themes, projects, and chat threads.
 // Keeps search local and deterministic so the palette can rank title hits above
 // message-content hits while still surfacing a useful snippet for chat matches.
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import { basenameOfPath } from "../file-icons";
 import type { ThemeMode, ThemeVariant } from "../theme/theme.logic";
 

@@ -1,4 +1,4 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
@@ -82,26 +82,26 @@ describe("getOrphanedWorktreePathForThread", () => {
 describe("formatWorktreePathForDisplay", () => {
   it("shows only the last path segment for unix-like paths", () => {
     const result = formatWorktreePathForDisplay(
-      "/Users/julius/.dpcode/worktrees/t3code-mvp/t3code-4e609bb8",
+      "/Users/julius/.synara/worktrees/synara-mvp/synara-4e609bb8",
     );
-    expect(result).toBe("t3code-4e609bb8");
+    expect(result).toBe("synara-4e609bb8");
   });
 
-  it("keeps legacy .t3 worktree paths readable after migration", () => {
+  it("keeps legacy .synara worktree paths readable after migration", () => {
     const result = formatWorktreePathForDisplay(
-      "/Users/julius/.t3/worktrees/t3code-mvp/t3code-legacy123",
+      "/Users/julius/.synara/worktrees/synara-mvp/synara-legacy123",
     );
-    expect(result).toBe("t3code-legacy123");
+    expect(result).toBe("synara-legacy123");
   });
 
   it("normalizes windows separators before selecting the final segment", () => {
     const result = formatWorktreePathForDisplay(
-      "C:\\Users\\julius\\.dpcode\\worktrees\\t3code-mvp\\t3code-4e609bb8",
+      "C:\\Users\\julius\\.synara\\worktrees\\synara-mvp\\synara-4e609bb8",
     );
-    expect(result).toBe("t3code-4e609bb8");
+    expect(result).toBe("synara-4e609bb8");
   });
 
-  it("uses the final segment even when outside ~/.dpcode/worktrees", () => {
+  it("uses the final segment even when outside ~/.synara/worktrees", () => {
     const result = formatWorktreePathForDisplay("/tmp/custom-worktrees/my-worktree");
     expect(result).toBe("my-worktree");
   });

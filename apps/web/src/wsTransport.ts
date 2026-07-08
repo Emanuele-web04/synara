@@ -24,7 +24,7 @@ import {
   type WsPush,
   type WsPushChannel,
   type WsPushMessage,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";

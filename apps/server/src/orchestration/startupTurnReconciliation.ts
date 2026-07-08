@@ -34,13 +34,13 @@ import type {
   OrchestrationSession,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
-import { CommandId, EventId } from "@t3tools/contracts";
+} from "@synara/contracts";
+import { CommandId, EventId } from "@synara/contracts";
 import {
   buildStalePendingRequestFailureDetail,
   derivePendingThreadRequestIds,
   type PendingThreadRequestKind,
-} from "@t3tools/shared/threadSummary";
+} from "@synara/shared/threadSummary";
 import { Effect, Option } from "effect";
 
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";

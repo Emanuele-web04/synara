@@ -6,7 +6,7 @@ import {
   THREAD_MARKER_LABEL_MAX_CHARS,
   type ThreadMarker,
   type ThreadMarkerId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 function keepExistingMarkers(markers: readonly ThreadMarker[]): ThreadMarker[] {
   return markers as ThreadMarker[];

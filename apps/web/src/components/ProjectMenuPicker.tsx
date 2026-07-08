@@ -4,7 +4,7 @@
 //          editor top-bar project switcher.
 // Layer: Web UI component
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import type { ReactElement, ReactNode } from "react";
 
 import { ComposerPickerMenuPopup } from "~/components/chat/ComposerPickerMenuPopup";

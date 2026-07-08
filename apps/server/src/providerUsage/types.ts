@@ -4,7 +4,7 @@
 // never throw — they resolve to a snapshot whose `status` describes the outcome. Providers
 // with short-lived OAuth tokens may refresh through their own token endpoint.
 
-import type { ProviderKind, ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ProviderKind, ServerProviderUsageSnapshot } from "@synara/contracts";
 
 export interface ProviderUsageContext {
   /** Resolved user home directory (ServerConfig.homeDir). */

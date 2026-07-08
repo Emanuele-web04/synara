@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckpointStoreLive } from "./CheckpointStore.ts";
 import { CheckpointStore } from "../Services/CheckpointStore.ts";
 import { GitCore, type GitCoreShape } from "../../git/Services/GitCore.ts";
-import { CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@synara/contracts";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1_000): Promise<void> {
   const started = Date.now();

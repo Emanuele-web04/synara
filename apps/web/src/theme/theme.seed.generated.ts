@@ -126,7 +126,7 @@ export const THEME_SEED_CATALOG: Record<string, Partial<Record<ThemeVariant, Chr
       surface: "#ffffff",
     },
   },
-  "dp-code": {
+  synara: {
     dark: {
       accent: "#6073cc",
       contrast: 75,

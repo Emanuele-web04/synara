@@ -6,7 +6,7 @@
 // Layer: web profile feature.
 
 import { forwardRef, type ReactNode } from "react";
-import type { ProfileStats, ProfileTokenStats } from "@t3tools/contracts";
+import type { ProfileStats, ProfileTokenStats } from "@synara/contracts";
 import { ProviderIcon } from "~/components/ProviderIcon";
 import { SynaraLogo } from "~/components/SynaraLogo";
 import { ActivityHeatmap, CARD_HEATMAP_INTENSITY_CLASSES } from "./ActivityHeatmap";

@@ -1,4 +1,4 @@
-import { type AutomationStreamEvent } from "@t3tools/contracts";
+import { type AutomationStreamEvent } from "@synara/contracts";
 import { Cause, Duration, Effect, Layer, Queue, Stream } from "effect";
 
 import { AutomationRepository } from "../../persistence/Services/AutomationRepository.ts";

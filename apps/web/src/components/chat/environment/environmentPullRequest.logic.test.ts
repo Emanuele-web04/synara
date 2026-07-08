@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { GitPullRequestComment } from "@t3tools/contracts";
+import type { GitPullRequestComment } from "@synara/contracts";
 
 import {
   buildFixReviewCommentsPrompt,
@@ -141,7 +141,7 @@ describe("buildResolveConflictsPrompt", () => {
   });
 
   it("points at the current checkout instead of asserting the local branch name", () => {
-    // Fork threads check the PR out under `t3code/pr-N/<branch>`, so the prompt must not
+    // Fork threads check the PR out under `synara/pr-N/<branch>`, so the prompt must not
     // claim the local branch is named after the GitHub head branch.
     const prompt = buildResolveConflictsPrompt({
       prNumber: 488,

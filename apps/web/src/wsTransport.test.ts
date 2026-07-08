@@ -4,7 +4,7 @@
 // Depends on: the global WebSocket constructor shim and desktop bridge URL contract.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WS_CHANNELS } from "@t3tools/contracts";
+import { WS_CHANNELS } from "@synara/contracts";
 
 import { shouldKeepServerLifecycleStream, WsTransport } from "./wsTransport";
 

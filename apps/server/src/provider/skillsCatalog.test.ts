@@ -9,7 +9,7 @@ import { access } from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ProviderSkillDescriptor } from "@t3tools/contracts";
+import type { ProviderSkillDescriptor } from "@synara/contracts";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {

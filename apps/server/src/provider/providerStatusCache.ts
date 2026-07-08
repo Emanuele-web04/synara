@@ -6,7 +6,7 @@
  *
  * @module providerStatusCache
  */
-import { ServerProviderStatus } from "@t3tools/contracts";
+import { ServerProviderStatus } from "@synara/contracts";
 import { Cause, Effect, FileSystem, Path, Schema } from "effect";
 
 const PROVIDER_STATUS_CACHE_IDS = [

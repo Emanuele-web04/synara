@@ -4,7 +4,7 @@
 // Layer: Settings UI components
 // Depends on: shared shortcut-sheet builder/filter, server keybindings config, and the Kbd pill.
 
-import type { ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { ResolvedKeybindingsConfig } from "@synara/contracts";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 

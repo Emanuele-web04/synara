@@ -3,7 +3,7 @@
 // Layer: UI state helpers test
 // Targets: tree traversal, immutable replace, leaf removal/collapse, depth-cap rule, legacy migration.
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

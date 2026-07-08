@@ -2,8 +2,8 @@
 // Purpose: Centralizes duplicate `project.create` error parsing and recovery helpers.
 // Exports: duplicate-create error guards plus snapshot matching for import recovery.
 
-import type { OrchestrationReadModel } from "@t3tools/contracts";
-import { workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import type { OrchestrationReadModel } from "@synara/contracts";
+import { workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 
 const DUPLICATE_PROJECT_CREATE_ERROR_PREFIX =
   "Orchestration command invariant failed (project.create): Project '";

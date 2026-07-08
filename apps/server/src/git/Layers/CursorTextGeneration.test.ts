@@ -51,7 +51,7 @@ function withFakeAcpAgent<A, E, R>(
 ): Effect.Effect<A, E, R> {
   return Effect.acquireUseRelease(
     Effect.sync(() => {
-      const tempDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-acp-"));
+      const tempDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-acp-"));
       return {
         tempDir,
         agentPath: makeAcpAgentWrapper(tempDir, env),
@@ -83,13 +83,13 @@ function waitForFileContent(filePath: string): Effect.Effect<string> {
 
 it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("uses ACP model config options instead of raw CLI model ids", () => {
-    const requestLogDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-log-"));
+    const requestLogDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-log-"));
     const requestLogPath = path.join(requestLogDir, "requests.ndjson");
 
     return withFakeAcpAgent(
       {
-        T3_ACP_REQUEST_LOG_PATH: requestLogPath,
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_REQUEST_LOG_PATH: requestLogPath,
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           subject: "Add generated commit message",
           body: "- verify cursor acp model config path",
         }),
@@ -175,7 +175,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("accepts json objects with extra assistant text around them", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT:
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT:
           'Sure, here is the JSON:\n```json\n{\n  "subject": "Update README dummy comment with attribution and date",\n  "body": ""\n}\n```\nDone.',
       },
       (agentPath) =>
@@ -207,7 +207,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("generates diff summaries through Cursor ACP text generation", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           summary: "## Summary\n- Route git summaries through Cursor.",
         }),
       },
@@ -237,7 +237,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("falls back to raw text when Cursor replies without JSON for a thread title", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: "Sidebar Thread Row Spacing",
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: "Sidebar Thread Row Spacing",
       },
       (agentPath) =>
         Effect.gen(function* () {
@@ -265,7 +265,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("recovers a thread title from a wrong-key JSON payload", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ name: "Reconnect Backoff Fix" }),
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({ name: "Reconnect Backoff Fix" }),
       },
       (agentPath) =>
         Effect.gen(function* () {
@@ -293,7 +293,7 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   it.effect("rejects sentence-length prose instead of using it as a title", () =>
     withFakeAcpAgent(
       {
-        T3_ACP_PROMPT_RESPONSE_TEXT:
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT:
           "I'm sorry, but I cannot generate a concise title for this particular request right now.",
       },
       (agentPath) =>
@@ -333,13 +333,13 @@ it.layer(CursorTextGenerationTestLayer)("CursorTextGenerationLive", (it) => {
   );
 
   it.effect("closes the ACP child process after text generation completes", () => {
-    const exitLogDir = mkdtempSync(path.join(os.tmpdir(), "dpcode-cursor-text-exit-log-"));
+    const exitLogDir = mkdtempSync(path.join(os.tmpdir(), "synara-cursor-text-exit-log-"));
     const exitLogPath = path.join(exitLogDir, "exit.log");
 
     return withFakeAcpAgent(
       {
-        T3_ACP_EXIT_LOG_PATH: exitLogPath,
-        T3_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
+        SYNARA_ACP_EXIT_LOG_PATH: exitLogPath,
+        SYNARA_ACP_PROMPT_RESPONSE_TEXT: JSON.stringify({
           title: '"Trim reconnect spinner status after resume."',
         }),
       },

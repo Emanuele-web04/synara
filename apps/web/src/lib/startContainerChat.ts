@@ -4,7 +4,7 @@
 // Layer: Web orchestration helper
 // Exports: startContainerChat plus its result type.
 
-import type { ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@synara/contracts";
 import type { NewThreadOptions } from "./threadBootstrap";
 
 export type StartContainerChatResult = { ok: true } | { ok: false; error: string };

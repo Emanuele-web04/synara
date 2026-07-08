@@ -66,5 +66,5 @@ export interface WorkspacePathsShape {
 }
 
 export class WorkspacePaths extends ServiceMap.Service<WorkspacePaths, WorkspacePathsShape>()(
-  "t3/workspace/Services/WorkspacePaths",
+  "synara/workspace/Services/WorkspacePaths",
 ) {}

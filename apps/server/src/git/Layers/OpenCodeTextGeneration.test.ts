@@ -145,11 +145,11 @@ const DEFAULT_TEST_MODEL_SELECTION = {
 const OPENCODE_TEXT_GENERATION_IDLE_TTL_MS = 30_000;
 
 const OpenCodeTextGenerationServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3code-opencode-text-generation-test-",
+  prefix: "synara-opencode-text-generation-test-",
 });
 
 const OpenCodeTextGenerationExistingServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
-  prefix: "t3code-opencode-text-generation-existing-server-test-",
+  prefix: "synara-opencode-text-generation-existing-server-test-",
 });
 
 const OpenCodeTextGenerationTestLayer = Layer.mergeAll(

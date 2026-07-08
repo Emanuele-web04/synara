@@ -15,7 +15,7 @@ This document covers how to run desktop releases from one tag, first without sig
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
   - Only plain `X.Y.Z` releases are marked as the repository's latest release.
 - Includes Electron auto-update metadata (for example `latest*.yml` and `*.blockmap`) in release assets.
-- Publishes the CLI package (`apps/server`, npm package `t3`) with OIDC trusted publishing.
+- Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
 
 ## Desktop auto-update notes
@@ -27,7 +27,7 @@ This document covers how to run desktop releases from one tag, first without sig
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
 - Repository slug source:
-  - `T3CODE_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
+  - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
 - Required release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
@@ -51,7 +51,7 @@ the package version to the release tag version.
 
 Checklist:
 
-1. Confirm npm org/user owns package `t3` (or rename package first if needed).
+1. Confirm the npm account controls the `@synara` scope and can publish `@synara/cli`.
 2. In npm package settings, configure Trusted Publisher:
    - Provider: GitHub Actions
    - Repository: this repo
@@ -65,13 +65,13 @@ Checklist:
 
 ## Synara notes
 
-- `Synara` keeps the same release architecture as upstream `T3Code`, but publishes desktop artifacts under the Synara branding.
+- `Synara` keeps the same release architecture as upstream `Synara`, but publishes desktop artifacts under the Synara branding.
 - The desktop updater expects the GitHub Release in this repository to include the generated updater metadata files, not just the installers.
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
-  - `DPCODE_PUBLISH_CLI=1`
-  - `DPCODE_FINALIZE_RELEASE=1`
+  - `SYNARA_PUBLISH_CLI=1`
+  - `SYNARA_FINALIZE_RELEASE=1`
 
 ## 1) Dry-run release without signing
 

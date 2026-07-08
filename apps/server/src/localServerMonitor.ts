@@ -13,7 +13,7 @@ import type {
   ServerLocalServerProcess,
   ServerStopLocalServerInput,
   ServerStopLocalServerResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 const PROCESS_OUTPUT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 const STOP_SIGNAL_SETTLE_MS = 450;

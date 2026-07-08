@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import type { SplitView } from "./splitViewStore";
 import {
   resolvePreferredSplitForCommand,

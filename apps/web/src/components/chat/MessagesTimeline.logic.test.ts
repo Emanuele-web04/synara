@@ -1,4 +1,4 @@
-import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@t3tools/contracts";
+import { CheckpointRef, MessageId, OrchestrationProposedPlanId, TurnId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildTurnDiffSummaryByAssistantMessageId,

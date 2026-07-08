@@ -2,7 +2,7 @@
 // Purpose: Verifies focus-switch cleanup decisions for temporary threads.
 // Layer: Web route/domain helper tests
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import { resolveTemporaryThreadIdToDelete } from "./temporaryThread";
 

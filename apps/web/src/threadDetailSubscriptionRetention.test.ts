@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId } from "@synara/contracts";
 import { useStore } from "./store";
 import {
   getRetainedThreadDetailIdsSnapshot,

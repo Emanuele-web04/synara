@@ -3,8 +3,8 @@
 // Layer: Web orchestration helper
 // Exports: Studio project lookup, creation, and prewarm helpers.
 
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
 import type { DraftThreadState } from "../composerDraftStore";
 import { readNativeApi } from "../nativeApi";
 import {

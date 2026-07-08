@@ -86,7 +86,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("serves a well-known favicon file from the project root", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-root-");
+    const projectDir = makeTempDir("synara-favicon-route-root-");
     fs.writeFileSync(path.join(projectDir, "favicon.svg"), "<svg>favicon</svg>", "utf8");
 
     await withRouteServer(async (baseUrl) => {
@@ -99,7 +99,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("resolves icon href from source files when no well-known favicon exists", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-source-");
+    const projectDir = makeTempDir("synara-favicon-route-source-");
     const iconPath = path.join(projectDir, "public", "brand", "logo.svg");
     fs.mkdirSync(path.dirname(iconPath), { recursive: true });
     fs.writeFileSync(
@@ -118,7 +118,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("resolves icon link when href appears before rel in HTML", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-html-order-");
+    const projectDir = makeTempDir("synara-favicon-route-html-order-");
     const iconPath = path.join(projectDir, "public", "brand", "logo.svg");
     fs.mkdirSync(path.dirname(iconPath), { recursive: true });
     fs.writeFileSync(
@@ -137,7 +137,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("resolves object-style icon metadata when href appears before rel", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-obj-order-");
+    const projectDir = makeTempDir("synara-favicon-route-obj-order-");
     const iconPath = path.join(projectDir, "public", "brand", "obj.svg");
     fs.mkdirSync(path.dirname(iconPath), { recursive: true });
     fs.mkdirSync(path.join(projectDir, "src"), { recursive: true });
@@ -158,7 +158,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("serves a fallback favicon when no icon exists", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-fallback-");
+    const projectDir = makeTempDir("synara-favicon-route-fallback-");
 
     await withRouteServer(async (baseUrl) => {
       const pathname = `/api/project-favicon?cwd=${encodeURIComponent(projectDir)}`;
@@ -170,7 +170,7 @@ describe("tryHandleProjectFaviconRequest", () => {
   });
 
   it("returns 204 when fallback=none and no icon exists", async () => {
-    const projectDir = makeTempDir("t3code-favicon-route-no-fallback-");
+    const projectDir = makeTempDir("synara-favicon-route-no-fallback-");
 
     await withRouteServer(async (baseUrl) => {
       const pathname = `/api/project-favicon?cwd=${encodeURIComponent(projectDir)}&fallback=none`;

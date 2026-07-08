@@ -18,8 +18,8 @@
 // process mishandling refresh-token rotation). This keeps the Keychain token perpetually
 // fresh, so the SDK session always reads a valid token.
 //
-// Opt in:   T3CODE_CLAUDE_KEEPALIVE=1
-// Tune:     T3CODE_CLAUDE_KEEPALIVE_MINUTES=<n>   (default 30)
+// Opt in:   SYNARA_CLAUDE_KEEPALIVE=1
+// Tune:     SYNARA_CLAUDE_KEEPALIVE_MINUTES=<n>   (default 30)
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -47,7 +47,7 @@ export function isClaudeCredentialKeepaliveEnabled(
 ): boolean {
   const platform = input.platform ?? process.platform;
   const env = input.env ?? process.env;
-  return platform === "darwin" && envFlagEnabled(env.T3CODE_CLAUDE_KEEPALIVE);
+  return platform === "darwin" && envFlagEnabled(env.SYNARA_CLAUDE_KEEPALIVE);
 }
 
 // Mirrors the Claude Agent adapter default while honoring persisted custom CLI paths.
@@ -57,7 +57,7 @@ export function resolveClaudeCredentialKeepaliveBinaryPath(binaryPath: string | 
 
 // Caps the tuning knob before setInterval can overflow into Node's 1ms clamp behavior.
 export function resolveClaudeCredentialKeepaliveIntervalMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.T3CODE_CLAUDE_KEEPALIVE_MINUTES?.trim();
+  const raw = env.SYNARA_CLAUDE_KEEPALIVE_MINUTES?.trim();
   const parsed = raw ? Number.parseInt(raw, 10) : Number.NaN;
   const minutes = Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_INTERVAL_MINUTES;
   return Math.min(minutes * 60 * 1000, CLAUDE_CREDENTIAL_KEEPALIVE_MAX_INTERVAL_MS);

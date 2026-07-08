@@ -18,7 +18,7 @@ import type {
   BrowserTabInput,
   BrowserThreadInput,
   ThreadBrowserState,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
 

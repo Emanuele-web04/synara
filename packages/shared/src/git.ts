@@ -3,10 +3,7 @@
  * Strips quotes, collapses separators, limits to 64 chars.
  */
 export const WORKTREE_BRANCH_PREFIX = "synara";
-const LEGACY_WORKTREE_BRANCH_PREFIXES = ["dpcode", "t3code"] as const;
-const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(
-  `^(${[WORKTREE_BRANCH_PREFIX, ...LEGACY_WORKTREE_BRANCH_PREFIXES].join("|")})\\/[0-9a-f]{8}$`,
-);
+const TEMP_WORKTREE_BRANCH_PATTERN = new RegExp(`^${WORKTREE_BRANCH_PREFIX}\\/[0-9a-f]{8}$`);
 
 export function sanitizeBranchFragment(raw: string): string {
   const normalized = raw
@@ -68,8 +65,7 @@ export function resolveAutoFeatureBranchName(
 }
 
 export function buildSynaraBranchName(preferredBranch?: string | null): string {
-  const normalizedExisting =
-    preferredBranch?.trim().replace(/^(codex|t3code|dpcode|synara)\//i, "") ?? "";
+  const normalizedExisting = preferredBranch?.trim().replace(/^(codex|synara)\//i, "") ?? "";
   return `${WORKTREE_BRANCH_PREFIX}/${sanitizeBranchFragment(
     normalizedExisting || SYNARA_BRANCH_FALLBACK,
   )}`;

@@ -3,7 +3,7 @@
 // Layer: Web orchestration helper
 // Exports: deleteArchivedThreadFromClient, deleteArchivedThreadsFromClient
 
-import type { NativeApi, ThreadId } from "@t3tools/contracts";
+import type { NativeApi, ThreadId } from "@synara/contracts";
 
 import { reconcileDeletedThreadsFromClient } from "./deletedThreadClientReconciliation";
 import { newCommandId } from "./utils";

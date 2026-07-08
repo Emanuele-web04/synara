@@ -2,7 +2,7 @@
 // Purpose: Render per-workspace terminal layout settings with visual preset previews.
 // Layer: Workspace UI controls
 
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 import { CheckIcon } from "~/lib/icons";
 import { cn } from "~/lib/utils";
 import {

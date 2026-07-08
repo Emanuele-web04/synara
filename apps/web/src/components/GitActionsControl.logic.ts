@@ -2,8 +2,8 @@ import type {
   GitRunStackedActionResult,
   GitStackedAction,
   GitStatusResult,
-} from "@t3tools/contracts";
-import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { isTemporaryWorktreeBranch, resolveUniqueSynaraBranchName } from "@synara/shared/git";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -559,4 +559,4 @@ export function resolveLiveThreadBranchUpdate(input: {
 }
 
 // Re-export from shared for backwards compatibility in this module's exports
-export { resolveAutoFeatureBranchName } from "@t3tools/shared/git";
+export { resolveAutoFeatureBranchName } from "@synara/shared/git";

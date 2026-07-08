@@ -2,7 +2,7 @@ import type {
   NativeApi,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const storeMocks = vi.hoisted(() => ({

@@ -377,7 +377,6 @@ export interface DesktopBridge {
     show: (input: DesktopNotificationInput) => Promise<boolean>;
   };
   storageMigration: {
-    saveSnapshot: (snapshot: SynaraStorageSnapshot) => Promise<boolean>;
     readSnapshot: () => SynaraStorageSnapshot | null;
     acknowledgeSnapshot: () => Promise<void>;
   };

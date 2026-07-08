@@ -5,7 +5,7 @@
 // Layer: Web UI (sidebar)
 // Depends on: studio.listRecentOutputs WS method + shell.showInFolder.
 
-import type { StudioOutputEntry } from "@t3tools/contracts";
+import type { StudioOutputEntry } from "@synara/contracts";
 import { useCallback, useEffect, useState } from "react";
 import { FiFileText, FiRefreshCw } from "react-icons/fi";
 

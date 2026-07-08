@@ -1,6 +1,6 @@
 import * as NodeFs from "node:fs/promises";
 
-import { isLocalAbsolutePath } from "@t3tools/shared/path";
+import { isLocalAbsolutePath } from "@synara/shared/path";
 import { Effect, FileSystem, Layer, Path } from "effect";
 
 import { resolveLocalPreviewGrantRealPath } from "../../localImageFiles";

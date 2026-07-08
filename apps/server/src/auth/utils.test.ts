@@ -11,8 +11,8 @@ import {
 
 describe("auth utils", () => {
   it("resolves stable web and port-scoped desktop cookie names", () => {
-    expect(resolveSessionCookieName({ mode: "web", port: 3773 })).toBe("t3_session");
-    expect(resolveSessionCookieName({ mode: "desktop", port: 3773 })).toBe("t3_session_3773");
+    expect(resolveSessionCookieName({ mode: "web", port: 3773 })).toBe("synara_session");
+    expect(resolveSessionCookieName({ mode: "desktop", port: 3773 })).toBe("synara_session_3773");
   });
 
   it("round-trips base64url text", () => {

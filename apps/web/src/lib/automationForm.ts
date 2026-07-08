@@ -6,7 +6,7 @@
 import {
   DEFAULT_AUTOMATION_FAST_INTERVAL_MAX_ITERATIONS,
   DEFAULT_AUTOMATION_MINIMUM_INTERVAL_SECONDS,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type {
   AutomationCreateInput,
   AutomationDefinition,
@@ -19,7 +19,7 @@ import type {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import {
   completionPolicyFromStopWhen,

@@ -8,7 +8,7 @@ import * as Net from "node:net";
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import type { BrowserExecuteCdpInput, ThreadBrowserState, ThreadId } from "@t3tools/contracts";
+import type { BrowserExecuteCdpInput, ThreadBrowserState, ThreadId } from "@synara/contracts";
 
 import type { DesktopBrowserManager } from "./browserManager";
 
@@ -20,8 +20,6 @@ const BROWSER_USE_PANEL_READY_POLL_MS = 50;
 const BROWSER_USE_PIPE_DIR = "codex-browser-use";
 const BROWSER_USE_PIPE_NAME_PREFIX = "synara-iab";
 export const SYNARA_BROWSER_USE_PIPE_ENV = "SYNARA_BROWSER_USE_PIPE_PATH";
-export const DPCODE_BROWSER_USE_PIPE_ENV = "DPCODE_BROWSER_USE_PIPE_PATH";
-export const T3CODE_BROWSER_USE_PIPE_ENV = "T3CODE_BROWSER_USE_PIPE_PATH";
 
 type BrowserUseRpcId = string | number;
 
@@ -57,15 +55,11 @@ export function resolveConfiguredBrowserUsePipePath(
   env: NodeJS.ProcessEnv = process.env,
   platform = process.platform,
 ): string {
-  const configured =
-    env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim() ||
-    env[DPCODE_BROWSER_USE_PIPE_ENV]?.trim() ||
-    env[T3CODE_BROWSER_USE_PIPE_ENV]?.trim();
+  const configured = env[SYNARA_BROWSER_USE_PIPE_ENV]?.trim();
   return configured || resolveDefaultBrowserUsePipePath(platform);
 }
 
 export const SYNARA_BROWSER_USE_PIPE_PATH = resolveConfiguredBrowserUsePipePath();
-export const DPCODE_BROWSER_USE_PIPE_PATH = SYNARA_BROWSER_USE_PIPE_PATH;
 
 function asObject(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {

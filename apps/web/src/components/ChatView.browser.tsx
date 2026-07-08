@@ -16,7 +16,7 @@ import {
   type WsWelcomePayload,
   WS_METHODS,
   OrchestrationSessionStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { RouterProvider, createMemoryHistory } from "@tanstack/react-router";
 import { HttpResponse, http, ws } from "msw";
 import { setupWorker } from "msw/browser";
@@ -140,7 +140,7 @@ function createBaseServerConfig(): ServerConfig {
   return {
     cwd: "/repo/project",
     worktreesDir: "/repo/.codex/worktrees",
-    keybindingsConfigPath: "/repo/project/.t3code-keybindings.json",
+    keybindingsConfigPath: "/repo/project/.synara-keybindings.json",
     keybindings: [],
     issues: [],
     providers: [
@@ -2397,7 +2397,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/project",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
+              SYNARA_PROJECT_ROOT: "/repo/project",
             },
           });
         },
@@ -2476,8 +2476,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             threadId: THREAD_ID,
             cwd: "/repo/worktrees/feature-draft",
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
-              T3CODE_WORKTREE_PATH: "/repo/worktrees/feature-draft",
+              SYNARA_PROJECT_ROOT: "/repo/project",
+              SYNARA_WORKTREE_PATH: "/repo/worktrees/feature-draft",
             },
           });
         },
@@ -3891,8 +3891,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
             _tag: WS_METHODS.terminalOpen,
             cwd: worktreePath,
             env: {
-              T3CODE_PROJECT_ROOT: "/repo/project",
-              T3CODE_WORKTREE_PATH: worktreePath,
+              SYNARA_PROJECT_ROOT: "/repo/project",
+              SYNARA_WORKTREE_PATH: worktreePath,
             },
           });
 

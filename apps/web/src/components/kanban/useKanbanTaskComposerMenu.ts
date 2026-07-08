@@ -12,7 +12,7 @@ import type {
   ProviderSkillReference,
   ProviderStartOptions,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   useEffect,
   useMemo,

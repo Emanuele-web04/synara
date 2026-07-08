@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { DesktopUpdateState } from "@t3tools/contracts";
+import type { DesktopUpdateState } from "@synara/contracts";
 
 import { getDesktopUpdateButtonPresentation } from "./desktopUpdate.logic";
 

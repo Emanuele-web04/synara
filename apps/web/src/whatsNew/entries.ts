@@ -22,6 +22,20 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.5.0",
+    date: "Jul 9",
+    features: [
+      {
+        id: "synara-identity",
+        title: "Synara, all the way through",
+        description:
+          "The app now uses one identity everywhere, from its desktop installation and command line to packages, settings, diagnostics, and release artifacts.",
+        details:
+          "The desktop bundle is now com.emanueledipietro.synara, the CLI is @synara/cli with the synara command, and every first-party runtime identifier uses the Synara namespace. The 0.4.1 bridge preserves renderer state during the origin change.",
+      },
+    ],
+  },
+  {
     version: "0.4.1",
     date: "Jul 9",
     features: [
@@ -1399,7 +1413,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "synara-home-migration",
         title: "Synara is now the default home",
         description:
-          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.dpcode` or `~/.t3` data on first launch.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.synara` or `~/.synara` data on first launch.",
       },
       {
         id: "desktop-platform-polish",
@@ -1762,9 +1776,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "legacy-import-recovery",
-        title: "Legacy T3 imports heal themselves",
+        title: "Legacy SYNARA imports heal themselves",
         description:
-          "A new migration reconciles older imported T3 Code databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
+          "A new migration reconciles older imported Synara databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
       },
       {
         id: "runtime-idle-cleanup",

@@ -2,7 +2,7 @@
 // Purpose: Unit-covers the shared last-good/cooldown helper: serving cached usage while throttled,
 // clamping a hostile Retry-After, per-account keying, and reset.
 
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { createRateLimitResilience, MAX_RATE_LIMIT_COOLDOWN_MS } from "./rateLimitResilience";

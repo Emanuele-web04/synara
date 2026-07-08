@@ -3,7 +3,7 @@
 // Layer: Web hook
 // Depends on: server config query, app settings, and provider availability normalization.
 
-import type { ServerProviderStatus } from "@t3tools/contracts";
+import type { ServerProviderStatus } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 

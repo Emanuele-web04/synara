@@ -8,7 +8,7 @@
 // shared with WorkspaceView through useTerminalSurfaceController; only the
 // "ensure a terminal is open" policy is surface-specific (here: a single terminal-only page).
 
-import { type ProjectId, type ThreadId } from "@t3tools/contracts";
+import { type ProjectId, type ThreadId } from "@synara/contracts";
 import { useCallback, useEffect, useMemo } from "react";
 
 import { useTerminalSurfaceController } from "~/hooks/useTerminalSurfaceController";

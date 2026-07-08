@@ -11,7 +11,7 @@ import {
   type ClientOrchestrationCommand,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect } from "effect";
 import type { FileSystem, Path } from "effect";
 import { describe, expect, it } from "vitest";
@@ -220,7 +220,7 @@ describe("makeDispatchCommandNormalizer", () => {
   });
 
   it("rolls back attachment files written before a later upload fails", async () => {
-    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-dispatch-normalize-"));
+    const attachmentsDir = fs.mkdtempSync(path.join(os.tmpdir(), "synara-dispatch-normalize-"));
     const fileSystem = {
       makeDirectory: (dir: string, options?: { readonly recursive?: boolean }) =>
         Effect.sync(() => {

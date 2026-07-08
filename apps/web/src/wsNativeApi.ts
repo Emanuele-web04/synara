@@ -35,7 +35,7 @@ import {
   WS_METHODS,
   type WsWelcomePayload,
   type AutomationStreamEvent,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";

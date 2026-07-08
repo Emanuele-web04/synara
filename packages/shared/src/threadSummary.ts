@@ -3,7 +3,7 @@ import type {
   OrchestrationMessage,
   OrchestrationProposedPlan,
   OrchestrationThreadActivity,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export interface ThreadSummaryMetadata {
   latestUserMessageAt: string | null;

@@ -36,7 +36,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     const win = createDesktopPlatformBuildConfig({
       platform: "win",
       target: "nsis",
-      windowsAzureSignOptions: { publisherName: "T3 Tools" },
+      windowsAzureSignOptions: { publisherName: "Synara" },
     });
 
     assert.equal(linux.mac, undefined);
@@ -58,7 +58,7 @@ describe("createDesktopPlatformBuildConfig", () => {
     assert.deepStrictEqual(win.win, {
       target: ["nsis"],
       icon: "icon.ico",
-      azureSignOptions: { publisherName: "T3 Tools" },
+      azureSignOptions: { publisherName: "Synara" },
     });
   });
 

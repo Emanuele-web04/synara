@@ -20,8 +20,8 @@ describe("isTemporaryWorktreeBranch", () => {
   });
 
   it("keeps recognizing legacy temporary worktree branches", () => {
-    expect(isTemporaryWorktreeBranch("dpcode/deadbeef")).toBe(true);
-    expect(isTemporaryWorktreeBranch("t3code/deadbeef")).toBe(true);
+    expect(isTemporaryWorktreeBranch("synara/deadbeef")).toBe(true);
+    expect(isTemporaryWorktreeBranch("synara/deadbeef")).toBe(true);
   });
 
   it("rejects semantic branch names", () => {
@@ -71,10 +71,10 @@ describe("buildSynaraBranchName", () => {
   });
 
   it("normalizes legacy prefixes before rebuilding the branch", () => {
-    expect(buildSynaraBranchName("t3code/refine toolbar actions")).toBe(
+    expect(buildSynaraBranchName("synara/refine toolbar actions")).toBe(
       "synara/refine-toolbar-actions",
     );
-    expect(buildSynaraBranchName("dpcode/refine toolbar actions")).toBe(
+    expect(buildSynaraBranchName("synara/refine toolbar actions")).toBe(
       "synara/refine-toolbar-actions",
     );
   });

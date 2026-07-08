@@ -4,7 +4,7 @@
 // Exports: EnvironmentProjectInstructionsSection
 
 import { useCallback, useEffect, useRef, useState, type ChangeEventHandler } from "react";
-import { THREAD_NOTES_MAX_CHARS, type ProjectId } from "@t3tools/contracts";
+import { THREAD_NOTES_MAX_CHARS, type ProjectId } from "@synara/contracts";
 
 import { Textarea } from "~/components/ui/textarea";
 import { Button } from "~/components/ui/button";

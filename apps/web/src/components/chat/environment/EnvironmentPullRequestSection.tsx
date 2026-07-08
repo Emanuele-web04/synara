@@ -4,7 +4,7 @@
 // Layer: Environment panel section
 // Depends on: git status/PR-snapshot React Query helpers and the shared Environment row skin.
 
-import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@t3tools/contracts";
+import type { GitPullRequestCheck, GitPullRequestComment, ThreadId } from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 

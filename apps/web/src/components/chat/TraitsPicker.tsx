@@ -9,8 +9,8 @@ import {
   type ProviderKind,
   type ProviderModelDescriptor,
   type ThreadId,
-} from "@t3tools/contracts";
-import { applyClaudePromptEffortPrefix } from "@t3tools/shared/model";
+} from "@synara/contracts";
+import { applyClaudePromptEffortPrefix } from "@synara/shared/model";
 import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { ChevronDownIcon, FastModeIcon, SettingsIcon } from "~/lib/icons";
 import { Button } from "../ui/button";

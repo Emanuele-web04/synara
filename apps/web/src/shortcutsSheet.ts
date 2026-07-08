@@ -3,7 +3,7 @@
 // Layer: UI helper
 // Depends on: keybinding label resolution, project script command mapping, and platform helpers.
 
-import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@t3tools/contracts";
+import type { KeybindingCommand, ResolvedKeybindingsConfig } from "@synara/contracts";
 import { isMacPlatform } from "./lib/utils";
 import { shortcutLabelForCommand } from "./keybindings";
 import { commandForProjectScript } from "./projectScripts";

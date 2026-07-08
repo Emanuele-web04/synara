@@ -11,7 +11,7 @@ import {
   readWindowsPersistentEnvironment,
   type ShellEnvironmentReader,
   type WindowsEnvironmentReader,
-} from "@t3tools/shared/shell";
+} from "@synara/shared/shell";
 
 const LOGIN_SHELL_ENV_NAMES = [
   "PATH",

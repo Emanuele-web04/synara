@@ -1,7 +1,7 @@
-import type { AuthClientMetadata, AuthClientMetadataDeviceType } from "@t3tools/contracts";
+import type { AuthClientMetadata, AuthClientMetadataDeviceType } from "@synara/contracts";
 import * as Crypto from "node:crypto";
 
-const SESSION_COOKIE_NAME = "t3_session";
+const SESSION_COOKIE_NAME = "synara_session";
 
 export function resolveSessionCookieName(input: {
   readonly mode: "web" | "desktop";

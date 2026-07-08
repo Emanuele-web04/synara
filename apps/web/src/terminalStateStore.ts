@@ -5,8 +5,8 @@
  * API constrained to store actions/selectors.
  */
 
-import { type TerminalActivityState, type TerminalCliKind } from "@t3tools/shared/terminalThreads";
-import type { ThreadId } from "@t3tools/contracts";
+import { type TerminalActivityState, type TerminalCliKind } from "@synara/shared/terminalThreads";
+import type { ThreadId } from "@synara/contracts";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 import {

@@ -3,7 +3,7 @@
 // Layer: Chat composer UI
 // Exports: ActiveTaskListCard
 
-import { pluralize } from "@t3tools/shared/text";
+import { pluralize } from "@synara/shared/text";
 import { memo } from "react";
 import {
   PiArrowsInSimple,

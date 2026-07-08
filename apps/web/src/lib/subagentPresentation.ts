@@ -6,8 +6,8 @@ import {
   buildSubagentIdentityDirectory,
   extractSubagentIdentityHints as extractParsedSubagentIdentityHints,
   resolveSubagentIdentityFromDirectory,
-} from "@t3tools/shared/subagents";
-import { formatModelDisplayName } from "@t3tools/shared/model";
+} from "@synara/shared/subagents";
+import { formatModelDisplayName } from "@synara/shared/model";
 
 const SUBAGENT_ACCENT_PALETTE = [
   "#b84e44",

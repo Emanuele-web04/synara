@@ -9,6 +9,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -87,6 +89,24 @@ function writeJsonFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function verifyCanonicalIdentity(): void {
+  const serverPackage = JSON.parse(
+    readFileSync(resolve(repoRoot, "apps/server/package.json"), "utf8"),
+  ) as { name?: string; bin?: Record<string, string> };
+  if (serverPackage.name !== "@synara/cli") {
+    throw new Error(`Expected CLI package @synara/cli, got ${serverPackage.name ?? "<missing>"}.`);
+  }
+  if (
+    Object.keys(serverPackage.bin ?? {}).length !== 1 ||
+    serverPackage.bin?.synara !== "./dist/index.mjs"
+  ) {
+    throw new Error("Expected the CLI to expose only the synara binary.");
+  }
+  if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
+    throw new Error(`Unexpected production bundle ID: ${SYNARA_PRODUCTION_BUNDLE_ID}.`);
+  }
+}
+
 function verifyDesktopStageProductionInstall(targetRoot: string): void {
   const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
   mkdirSync(stageInstallRoot, { recursive: true });
@@ -118,9 +138,10 @@ function verifyDesktopStageProductionInstall(targetRoot: string): void {
   }
 }
 
-const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
+const tempRoot = mkdtempSync(join(tmpdir(), "synara-release-smoke-"));
 
 try {
+  verifyCanonicalIdentity();
   copyWorkspaceManifestFixture(tempRoot);
 
   execFileSync(

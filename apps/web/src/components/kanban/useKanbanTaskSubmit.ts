@@ -13,7 +13,7 @@ import type {
   RuntimeMode,
   ServerProviderStatus,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useRef, useState } from "react";
 

@@ -9,11 +9,11 @@ import {
   type ServerProviderStatus,
   type ThreadId,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { createFileRoute, useSearch } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { pluralize } from "@t3tools/shared/text";
+import { getModelOptions, normalizeModelSlug } from "@synara/shared/model";
+import { pluralize } from "@synara/shared/text";
 import {
   type ReactNode,
   type RefObject,

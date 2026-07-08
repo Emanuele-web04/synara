@@ -13,7 +13,7 @@ import type {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 import { useComposerDraftStore, type DraftThreadEnvMode } from "../composerDraftStore";
 import { dispatchKanbanDraftThread, type KanbanDraftDispatchResult } from "./kanbanDispatch";

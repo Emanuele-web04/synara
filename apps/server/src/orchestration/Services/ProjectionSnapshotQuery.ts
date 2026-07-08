@@ -20,7 +20,7 @@ import type {
   ProjectKind,
   ThreadId,
   ThreadEnvironmentMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { ServiceMap } from "effect";
 import type { Effect, Option } from "effect";
 
@@ -180,4 +180,4 @@ export interface ProjectionSnapshotQueryShape {
 export class ProjectionSnapshotQuery extends ServiceMap.Service<
   ProjectionSnapshotQuery,
   ProjectionSnapshotQueryShape
->()("t3/orchestration/Services/ProjectionSnapshotQuery") {}
+>()("synara/orchestration/Services/ProjectionSnapshotQuery") {}

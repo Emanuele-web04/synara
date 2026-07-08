@@ -2,7 +2,7 @@ import type {
   ProviderKind,
   ServerListProviderUsageInput,
   ServerStopLocalServerInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ensureNativeApi } from "~/nativeApi";
 

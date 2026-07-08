@@ -7,7 +7,7 @@ import {
   type KeybindingCommand,
   type ProjectId,
   type ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "../appSettings";
 import { resolveRestorableThreadRoute, type LastThreadRoute } from "../chatRouteRestore";
 import type { ChatMessage, Project, SidebarThreadSummary, Thread } from "../types";
@@ -25,8 +25,8 @@ import {
   SIDEBAR_THREAD_ROW_BASE_CLASS_NAME,
 } from "../sidebarRowStyles";
 import { isDuplicateProjectCreateError } from "../lib/projectCreateRecovery";
-import { isWorkspaceRootWithin, workspaceRootsEqual } from "@t3tools/shared/threadWorkspace";
-import { resolveThreadEnvironmentMode } from "@t3tools/shared/threadEnvironment";
+import { isWorkspaceRootWithin, workspaceRootsEqual } from "@synara/shared/threadWorkspace";
+import { resolveThreadEnvironmentMode } from "@synara/shared/threadEnvironment";
 import {
   canSessionAnswerPendingRequests,
   hasLiveLatestTurn,

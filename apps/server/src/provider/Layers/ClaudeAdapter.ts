@@ -54,7 +54,7 @@ import {
   type ProviderListAgentsResult,
   type ProviderListModelsResult,
   getAgentMentionAliases,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultContextWindow,
   hasEffortLevel,
@@ -63,8 +63,8 @@ import {
   getModelCapabilities,
   resolveApiModelId,
   trimOrNull,
-} from "@t3tools/shared/model";
-import { buildClaudeSubagentPrompt } from "@t3tools/shared/agentMentions";
+} from "@synara/shared/model";
+import { buildClaudeSubagentPrompt } from "@synara/shared/agentMentions";
 import {
   Cause,
   DateTime,

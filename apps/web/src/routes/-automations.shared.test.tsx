@@ -14,7 +14,7 @@ import {
   type AutomationDefinition,
   type AutomationRun,
   type ProviderStartOptions,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import {

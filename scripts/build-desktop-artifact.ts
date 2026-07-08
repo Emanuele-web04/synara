@@ -18,6 +18,7 @@ import {
   createDesktopPlatformBuildConfig,
   validateDesktopNativeBuildHost,
 } from "./lib/desktop-platform-build-config.ts";
+import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
@@ -191,7 +192,7 @@ interface StagePackageJson {
   readonly name: string;
   readonly version: string;
   readonly buildVersion: string;
-  readonly t3codeCommitHash: string;
+  readonly synaraCommitHash: string;
   readonly private: true;
   readonly description: string;
   readonly author: string;
@@ -219,17 +220,17 @@ const AzureTrustedSigningOptionsConfig = Config.all({
 });
 
 const BuildEnvConfig = Config.all({
-  platform: Config.schema(BuildPlatform, "T3CODE_DESKTOP_PLATFORM").pipe(Config.option),
-  target: Config.string("T3CODE_DESKTOP_TARGET").pipe(Config.option),
-  arch: Config.schema(BuildArch, "T3CODE_DESKTOP_ARCH").pipe(Config.option),
-  version: Config.string("T3CODE_DESKTOP_VERSION").pipe(Config.option),
-  outputDir: Config.string("T3CODE_DESKTOP_OUTPUT_DIR").pipe(Config.option),
-  skipBuild: Config.string("T3CODE_DESKTOP_SKIP_BUILD").pipe(Config.option),
-  keepStage: Config.string("T3CODE_DESKTOP_KEEP_STAGE").pipe(Config.option),
-  signed: Config.string("T3CODE_DESKTOP_SIGNED").pipe(Config.option),
-  verbose: Config.string("T3CODE_DESKTOP_VERBOSE").pipe(Config.option),
-  mockUpdates: Config.string("T3CODE_DESKTOP_MOCK_UPDATES").pipe(Config.option),
-  mockUpdateServerPort: Config.string("T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
+  platform: Config.schema(BuildPlatform, "SYNARA_DESKTOP_PLATFORM").pipe(Config.option),
+  target: Config.string("SYNARA_DESKTOP_TARGET").pipe(Config.option),
+  arch: Config.schema(BuildArch, "SYNARA_DESKTOP_ARCH").pipe(Config.option),
+  version: Config.string("SYNARA_DESKTOP_VERSION").pipe(Config.option),
+  outputDir: Config.string("SYNARA_DESKTOP_OUTPUT_DIR").pipe(Config.option),
+  skipBuild: Config.string("SYNARA_DESKTOP_SKIP_BUILD").pipe(Config.option),
+  keepStage: Config.string("SYNARA_DESKTOP_KEEP_STAGE").pipe(Config.option),
+  signed: Config.string("SYNARA_DESKTOP_SIGNED").pipe(Config.option),
+  verbose: Config.string("SYNARA_DESKTOP_VERBOSE").pipe(Config.option),
+  mockUpdates: Config.string("SYNARA_DESKTOP_MOCK_UPDATES").pipe(Config.option),
+  mockUpdateServerPort: Config.string("SYNARA_DESKTOP_MOCK_UPDATE_SERVER_PORT").pipe(Config.option),
 });
 
 const resolveBooleanFlag = (flag: Option.Option<boolean>, envValue: boolean) =>
@@ -272,11 +273,11 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const target = mergeOptions(input.target, env.target, PLATFORM_CONFIG[platform].defaultTarget);
   const arch = mergeOptions(input.arch, env.arch, getDefaultArch(platform));
   const version = mergeOptions(input.buildVersion, env.version, undefined);
-  const envSkipBuild = yield* resolveBooleanEnv("T3CODE_DESKTOP_SKIP_BUILD", env.skipBuild);
-  const envKeepStage = yield* resolveBooleanEnv("T3CODE_DESKTOP_KEEP_STAGE", env.keepStage);
-  const envSigned = yield* resolveBooleanEnv("T3CODE_DESKTOP_SIGNED", env.signed);
-  const envVerbose = yield* resolveBooleanEnv("T3CODE_DESKTOP_VERBOSE", env.verbose);
-  const envMockUpdates = yield* resolveBooleanEnv("T3CODE_DESKTOP_MOCK_UPDATES", env.mockUpdates);
+  const envSkipBuild = yield* resolveBooleanEnv("SYNARA_DESKTOP_SKIP_BUILD", env.skipBuild);
+  const envKeepStage = yield* resolveBooleanEnv("SYNARA_DESKTOP_KEEP_STAGE", env.keepStage);
+  const envSigned = yield* resolveBooleanEnv("SYNARA_DESKTOP_SIGNED", env.signed);
+  const envVerbose = yield* resolveBooleanEnv("SYNARA_DESKTOP_VERBOSE", env.verbose);
+  const envMockUpdates = yield* resolveBooleanEnv("SYNARA_DESKTOP_MOCK_UPDATES", env.mockUpdates);
   const releaseDir = resolveBooleanFlag(input.mockUpdates, envMockUpdates)
     ? "release-mock"
     : "release";
@@ -383,7 +384,7 @@ function stageMacIcons(stageResourcesDir: string, verbose: boolean) {
     }
 
     const tmpRoot = yield* fs.makeTempDirectoryScoped({
-      prefix: "t3code-icon-build-",
+      prefix: "synara-icon-build-",
     });
 
     const iconPngPath = path.join(stageResourcesDir, "icon.png");
@@ -500,7 +501,7 @@ function resolveGitHubPublishConfig():
     }
   | undefined {
   const rawRepo =
-    process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
+    process.env.SYNARA_DESKTOP_UPDATE_REPOSITORY?.trim() ||
     process.env.GITHUB_REPOSITORY?.trim() ||
     "";
   if (!rawRepo) return undefined;
@@ -544,7 +545,7 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   mockUpdateServerPort: string | undefined,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: "com.t3tools.synara",
+    appId: SYNARA_PRODUCTION_BUNDLE_ID,
     productName,
     artifactName: "Synara-${version}-${arch}.${ext}",
     directories: {
@@ -676,7 +677,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const commitHash = resolveGitCommitHash(repoRoot);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
-    prefix: `t3code-desktop-${options.platform}-stage-`,
+    prefix: `synara-desktop-${options.platform}-stage-`,
   });
 
   const stageAppDir = path.join(stageRoot, "app");
@@ -733,7 +734,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     name: "synara-desktop",
     version: appVersion,
     buildVersion: appVersion,
-    t3codeCommitHash: commitHash,
+    synaraCommitHash: commitHash,
     private: true,
     description: "Synara desktop build",
     author: "Emanuele Di Pietro",
@@ -872,53 +873,53 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
 const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
   platform: Flag.choice("platform", BuildPlatform.literals).pipe(
-    Flag.withDescription("Build platform (env: T3CODE_DESKTOP_PLATFORM)."),
+    Flag.withDescription("Build platform (env: SYNARA_DESKTOP_PLATFORM)."),
     Flag.optional,
   ),
   target: Flag.string("target").pipe(
     Flag.withDescription(
-      "Artifact target, for example dmg/AppImage/nsis (env: T3CODE_DESKTOP_TARGET).",
+      "Artifact target, for example dmg/AppImage/nsis (env: SYNARA_DESKTOP_TARGET).",
     ),
     Flag.optional,
   ),
   arch: Flag.choice("arch", BuildArch.literals).pipe(
-    Flag.withDescription("Build arch, for example arm64/x64/universal (env: T3CODE_DESKTOP_ARCH)."),
+    Flag.withDescription("Build arch, for example arm64/x64/universal (env: SYNARA_DESKTOP_ARCH)."),
     Flag.optional,
   ),
   buildVersion: Flag.string("build-version").pipe(
-    Flag.withDescription("Artifact version metadata (env: T3CODE_DESKTOP_VERSION)."),
+    Flag.withDescription("Artifact version metadata (env: SYNARA_DESKTOP_VERSION)."),
     Flag.optional,
   ),
   outputDir: Flag.string("output-dir").pipe(
-    Flag.withDescription("Output directory for artifacts (env: T3CODE_DESKTOP_OUTPUT_DIR)."),
+    Flag.withDescription("Output directory for artifacts (env: SYNARA_DESKTOP_OUTPUT_DIR)."),
     Flag.optional,
   ),
   skipBuild: Flag.boolean("skip-build").pipe(
     Flag.withDescription(
-      "Skip `bun run build:desktop` and use existing dist artifacts (env: T3CODE_DESKTOP_SKIP_BUILD).",
+      "Skip `bun run build:desktop` and use existing dist artifacts (env: SYNARA_DESKTOP_SKIP_BUILD).",
     ),
     Flag.optional,
   ),
   keepStage: Flag.boolean("keep-stage").pipe(
-    Flag.withDescription("Keep temporary staging files (env: T3CODE_DESKTOP_KEEP_STAGE)."),
+    Flag.withDescription("Keep temporary staging files (env: SYNARA_DESKTOP_KEEP_STAGE)."),
     Flag.optional,
   ),
   signed: Flag.boolean("signed").pipe(
     Flag.withDescription(
-      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: T3CODE_DESKTOP_SIGNED).",
+      "Enable signing/notarization discovery; Windows uses Azure Trusted Signing (env: SYNARA_DESKTOP_SIGNED).",
     ),
     Flag.optional,
   ),
   verbose: Flag.boolean("verbose").pipe(
-    Flag.withDescription("Stream subprocess stdout (env: T3CODE_DESKTOP_VERBOSE)."),
+    Flag.withDescription("Stream subprocess stdout (env: SYNARA_DESKTOP_VERBOSE)."),
     Flag.optional,
   ),
   mockUpdates: Flag.boolean("mock-updates").pipe(
-    Flag.withDescription("Enable mock updates (env: T3CODE_DESKTOP_MOCK_UPDATES)."),
+    Flag.withDescription("Enable mock updates (env: SYNARA_DESKTOP_MOCK_UPDATES)."),
     Flag.optional,
   ),
   mockUpdateServerPort: Flag.string("mock-update-server-port").pipe(
-    Flag.withDescription("Mock update server port (env: T3CODE_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
+    Flag.withDescription("Mock update server port (env: SYNARA_DESKTOP_MOCK_UPDATE_SERVER_PORT)."),
     Flag.optional,
   ),
 }).pipe(

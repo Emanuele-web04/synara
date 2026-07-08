@@ -20,8 +20,8 @@ describe("ServerLifecycleEvents", () => {
           payload: {
             cwd: "/one",
             homeDir: "/home/tester",
-            chatWorkspaceRoot: "/home/tester/.t3tools/chats",
-            studioWorkspaceRoot: "/home/tester/.t3tools/chats/Studio",
+            chatWorkspaceRoot: "/home/tester/.synara/chats",
+            studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
             projectName: "one",
           },
         });
@@ -36,8 +36,8 @@ describe("ServerLifecycleEvents", () => {
           payload: {
             cwd: "/two",
             homeDir: "/home/tester",
-            chatWorkspaceRoot: "/home/tester/.t3tools/chats",
-            studioWorkspaceRoot: "/home/tester/.t3tools/chats/Studio",
+            chatWorkspaceRoot: "/home/tester/.synara/chats",
+            studioWorkspaceRoot: "/home/tester/.synara/chats/Studio",
             projectName: "two",
           },
         });

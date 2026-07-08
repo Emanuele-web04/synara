@@ -60,7 +60,7 @@ import {
 import { parseBareComposerLink } from "~/lib/linkChips";
 import { type TerminalContextDraft } from "~/lib/terminalContext";
 import { shouldCollapsePastedText } from "~/lib/composerPastedText";
-import type { ProviderMentionReference } from "@t3tools/contracts";
+import type { ProviderMentionReference } from "@synara/contracts";
 import { cn } from "~/lib/utils";
 import {
   COMPOSER_EDITOR_CONTENT_RESET_CLASS_NAME,
@@ -1229,7 +1229,7 @@ export const ComposerPromptEditor = forwardRef<
   const initialMentionReferencesRef = useRef(normalizedMentionReferences);
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
-      namespace: "t3tools-composer-editor",
+      namespace: "synara-composer-editor",
       editable: true,
       nodes: [...COMPOSER_NODE_CLASSES],
       editorState: () => {

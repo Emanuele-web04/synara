@@ -6,7 +6,7 @@
 import {
   DESKTOP_TOP_BAR_TRAFFIC_LIGHT_GUTTER_CSS_VAR,
   resolveMacDesktopTopBarTrafficLightGutterCssPx,
-} from "@t3tools/shared/desktopChrome";
+} from "@synara/shared/desktopChrome";
 import { useLayoutEffect } from "react";
 
 import { isElectron } from "~/env";

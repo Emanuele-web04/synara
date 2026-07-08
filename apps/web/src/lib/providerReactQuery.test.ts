@@ -3,7 +3,7 @@
 // Layer: Web data fetching tests
 // Depends on: Vitest, React Query, and the native API bridge mock.
 
-import { ThreadId, type NativeApi } from "@t3tools/contracts";
+import { ThreadId, type NativeApi } from "@synara/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {

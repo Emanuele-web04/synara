@@ -4,7 +4,7 @@
 // Layer: Server workspace helper
 // Exports: rankStudioOutputEntries (pure, tested) + listRecentStudioOutputs (Effect I/O).
 
-import type { StudioOutputEntry } from "@t3tools/contracts";
+import type { StudioOutputEntry } from "@synara/contracts";
 import { Effect, FileSystem, Path } from "effect";
 
 export const DEFAULT_STUDIO_RECENT_OUTPUTS_LIMIT = 20;

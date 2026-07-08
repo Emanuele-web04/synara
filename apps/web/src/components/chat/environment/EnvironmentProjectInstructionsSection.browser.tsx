@@ -4,7 +4,7 @@
 
 import "../../../index.css";
 
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId } from "@synara/contracts";
 import { useState } from "react";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";

@@ -5,7 +5,7 @@ import type {
   ProjectReadFileResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { WorkspacePathOutsideRootError } from "./WorkspacePaths";
 
 export class WorkspaceFileSystemError extends Schema.TaggedErrorClass<WorkspaceFileSystemError>()(
@@ -41,4 +41,4 @@ export interface WorkspaceFileSystemShape {
 export class WorkspaceFileSystem extends ServiceMap.Service<
   WorkspaceFileSystem,
   WorkspaceFileSystemShape
->()("t3/workspace/Services/WorkspaceFileSystem") {}
+>()("synara/workspace/Services/WorkspaceFileSystem") {}

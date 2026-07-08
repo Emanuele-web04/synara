@@ -3,7 +3,7 @@
 // Layer: Web test utility
 // Exports: helpers for request parsing plus Exit/Chunk/Pong responses.
 
-import type { OrchestrationReadModel, OrchestrationShellSnapshot } from "@t3tools/contracts";
+import type { OrchestrationReadModel, OrchestrationShellSnapshot } from "@synara/contracts";
 
 export interface EffectRpcWebSocketClient {
   readonly send: (data: string) => void;

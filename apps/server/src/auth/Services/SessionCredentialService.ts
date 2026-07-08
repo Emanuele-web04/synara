@@ -3,7 +3,7 @@ import type {
   AuthClientSession,
   AuthSessionId,
   ServerAuthSessionMethod,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Data, DateTime, Duration, ServiceMap } from "effect";
 import type { Effect, Stream } from "effect";
 
@@ -79,4 +79,4 @@ export interface SessionCredentialServiceShape {
 export class SessionCredentialService extends ServiceMap.Service<
   SessionCredentialService,
   SessionCredentialServiceShape
->()("t3/auth/Services/SessionCredentialService") {}
+>()("synara/auth/Services/SessionCredentialService") {}

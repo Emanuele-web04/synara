@@ -3,7 +3,7 @@
 // Layer: Chat composer UI
 // Depends on: the same Command primitives used by ComposerCommandMenu so both pickers share chrome.
 
-import type { ProjectFileSystemEntry, ProjectLocalSearchEntry } from "@t3tools/contracts";
+import type { ProjectFileSystemEntry, ProjectLocalSearchEntry } from "@synara/contracts";
 import type { Ref } from "react";
 import {
   memo,

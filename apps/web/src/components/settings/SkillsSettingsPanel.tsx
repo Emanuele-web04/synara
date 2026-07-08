@@ -4,7 +4,7 @@
 // a skill comes from, and lets the user enable/disable each one. Disabled skills are
 // hidden from the composer skill picker on every provider.
 
-import type { ProviderKind, ServerSettings } from "@t3tools/contracts";
+import type { ProviderKind, ServerSettings } from "@synara/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo } from "react";
 

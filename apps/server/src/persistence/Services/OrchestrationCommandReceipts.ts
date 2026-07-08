@@ -14,7 +14,7 @@ import {
   OrchestrationCommandReceiptStatus,
   ProjectId,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -66,4 +66,6 @@ export interface OrchestrationCommandReceiptRepositoryShape {
 export class OrchestrationCommandReceiptRepository extends ServiceMap.Service<
   OrchestrationCommandReceiptRepository,
   OrchestrationCommandReceiptRepositoryShape
->()("t3/persistence/Services/OrchestrationCommandReceipts/OrchestrationCommandReceiptRepository") {}
+>()(
+  "synara/persistence/Services/OrchestrationCommandReceipts/OrchestrationCommandReceiptRepository",
+) {}

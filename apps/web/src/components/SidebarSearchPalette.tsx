@@ -13,8 +13,8 @@ import {
   SettingsIcon,
   SunIcon,
 } from "~/lib/icons";
-import { type FilesystemBrowseResult, type ProviderKind } from "@t3tools/contracts";
-import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
+import { type FilesystemBrowseResult, type ProviderKind } from "@synara/contracts";
+import { isGenericChatThreadTitle } from "@synara/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
 import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "react-icons/lu";

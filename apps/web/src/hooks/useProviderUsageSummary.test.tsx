@@ -2,7 +2,7 @@
 // Purpose: Verifies how the shared provider-usage summary hook arbitrates live,
 // local, OpenUsage, and thread-derived fallback usage signals.
 
-import type { ServerProviderUsageSnapshot } from "@t3tools/contracts";
+import type { ServerProviderUsageSnapshot } from "@synara/contracts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";

@@ -2,8 +2,8 @@
 // Purpose: Render a provider usage summary panel that can show both classic
 // rate-limit rows and archive-derived local usage lines in the same popover.
 
-import type { ProviderKind } from "@t3tools/contracts";
-import { providerUsageLabel } from "@t3tools/shared/providerUsage";
+import type { ProviderKind } from "@synara/contracts";
+import { providerUsageLabel } from "@synara/shared/providerUsage";
 import { memo, useMemo } from "react";
 
 import { ExternalLinkIcon, TriangleAlertIcon } from "~/lib/icons";

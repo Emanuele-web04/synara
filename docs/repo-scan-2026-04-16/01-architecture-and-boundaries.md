@@ -18,9 +18,9 @@ That said, several boundary layers are still too "thick", so package-level struc
 
 These files are doing too many jobs:
 
-- [`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/codexAppServerManager.ts)
-- [`apps/server/src/wsServer.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/wsServer.ts)
-- [`apps/desktop/src/main.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/desktop/src/main.ts)
+- [`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/codexAppServerManager.ts)
+- [`apps/server/src/wsServer.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/wsServer.ts)
+- [`apps/desktop/src/main.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/desktop/src/main.ts)
 
 Suggested split for `codexAppServerManager.ts`:
 
@@ -53,9 +53,9 @@ Suggested split for desktop `main.ts`:
 
 The server already uses both `Layers` and `Services`, especially under:
 
-- [`apps/server/src/orchestration`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/orchestration)
-- [`apps/server/src/provider`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/provider)
-- [`apps/server/src/persistence`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/persistence)
+- [`apps/server/src/orchestration`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/orchestration)
+- [`apps/server/src/provider`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/provider)
+- [`apps/server/src/persistence`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/persistence)
 
 This is promising, but the distinction is not self-evident to a new contributor. A short rule would help:
 
@@ -66,7 +66,7 @@ Without that shared rule, folders with the same names can drift into style rathe
 
 ## 3. Tighten contracts ownership around protocol evolution
 
-[`packages/contracts/src/orchestration.ts`](/Users/emanueledipietro/Developer/Testing/t3code/packages/contracts/src/orchestration.ts) is large enough that future protocol churn could become noisy and hard to review.
+[`packages/contracts/src/orchestration.ts`](/Users/emanueledipietro/Developer/Testing/synara/packages/contracts/src/orchestration.ts) is large enough that future protocol churn could become noisy and hard to review.
 
 Recommended split:
 

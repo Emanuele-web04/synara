@@ -3,8 +3,8 @@
 // Layer: Web lib test
 // Exports: Vitest cases for threadArchive helpers
 
-import { ThreadId } from "@t3tools/contracts";
-import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@t3tools/shared/errorMessages";
+import { ThreadId } from "@synara/contracts";
+import { THREAD_NOT_ARCHIVED_INVARIANT_MARKER } from "@synara/shared/errorMessages";
 import { assert, describe, expect, it, vi } from "vitest";
 
 import {

@@ -3,7 +3,7 @@ import {
   isUncPath,
   isWindowsAbsolutePath,
   isWindowsDrivePath,
-} from "@t3tools/shared/path";
+} from "@synara/shared/path";
 import { isWindowsPlatform } from "./utils";
 
 function isRootPath(value: string): boolean {

@@ -3,8 +3,8 @@
 // Layer: Kanban UI hook
 // Exports: useKanbanTaskScratchDraft
 
-import type { ModelSlug, ProviderKind } from "@t3tools/contracts";
-import { getDefaultModel } from "@t3tools/shared/model";
+import type { ModelSlug, ProviderKind } from "@synara/contracts";
+import { getDefaultModel } from "@synara/shared/model";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {

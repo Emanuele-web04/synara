@@ -6,7 +6,7 @@ import {
   type ProviderKind,
   type ProviderPluginDescriptor,
   type ProviderSkillDescriptor,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { type ComposerTriggerKind } from "../../composer-logic";
 import { type ComposerSlashCommand } from "../../composerSlashCommands";

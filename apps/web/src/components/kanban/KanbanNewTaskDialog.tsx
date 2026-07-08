@@ -13,7 +13,7 @@ import type {
   ProviderInteractionMode,
   ProviderKind,
   RuntimeMode,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 

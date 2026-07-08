@@ -12,10 +12,10 @@ packages/*/dist
 build/
 .logs/
 release/
-.t3
-/.dpcode/electron-dev
-/.dpcode/backups
-/.dpcode-*/
+.synara
+/.synara/electron-dev
+/.synara/backups
+/.synara-*/
 /.synara/
 /.synara-*/
 .idea/

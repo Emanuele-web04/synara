@@ -37,24 +37,24 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
-} from "@t3tools/contracts";
-import { getModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
-import { resolveTailUserMessageEditTarget } from "@t3tools/shared/conversationEdit";
-import { threadExportBlockedReason } from "@t3tools/shared/threadExport";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+} from "@synara/contracts";
+import { getModelCapabilities, normalizeModelSlug } from "@synara/shared/model";
+import { resolveTailUserMessageEditTarget } from "@synara/shared/conversationEdit";
+import { threadExportBlockedReason } from "@synara/shared/threadExport";
+import { buildTemporaryWorktreeBranchName } from "@synara/shared/git";
 import {
   buildPromptThreadTitleFallback,
   GENERIC_CHAT_THREAD_TITLE,
-} from "@t3tools/shared/chatThreads";
+} from "@synara/shared/chatThreads";
 import {
   resolveThreadWorkspaceState,
   resolveThreadBranchSourceCwd,
   resolveThreadWorkspaceCwd as resolveSharedThreadWorkspaceCwd,
-} from "@t3tools/shared/threadEnvironment";
+} from "@synara/shared/threadEnvironment";
 import {
   deriveAssociatedWorktreeMetadata,
   workspaceRootsEqual,
-} from "@t3tools/shared/threadWorkspace";
+} from "@synara/shared/threadWorkspace";
 import {
   useCallback,
   useEffect,

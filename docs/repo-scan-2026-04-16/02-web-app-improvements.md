@@ -6,17 +6,17 @@ The web package is currently the largest source area in the repo and the place w
 
 High-pressure files include:
 
-- [`apps/web/src/components/ChatView.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/components/ChatView.tsx)
-- [`apps/web/src/components/Sidebar.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/components/Sidebar.tsx)
-- [`apps/web/src/store.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/store.ts)
-- [`apps/web/src/composerDraftStore.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/composerDraftStore.ts)
-- [`apps/web/src/routes/__root.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/routes/__root.tsx)
+- [`apps/web/src/components/ChatView.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/components/ChatView.tsx)
+- [`apps/web/src/components/Sidebar.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/components/Sidebar.tsx)
+- [`apps/web/src/store.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/store.ts)
+- [`apps/web/src/composerDraftStore.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/composerDraftStore.ts)
+- [`apps/web/src/routes/__root.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/routes/__root.tsx)
 
 ## What is already going in the right direction
 
-- Normalized state is present in [`store.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/store.ts).
-- Selector extraction is happening in [`storeSelectors.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/storeSelectors.ts).
-- Thread reconstruction has started moving into [`threadDerivation.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/threadDerivation.ts).
+- Normalized state is present in [`store.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/store.ts).
+- Selector extraction is happening in [`storeSelectors.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/storeSelectors.ts).
+- Thread reconstruction has started moving into [`threadDerivation.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/threadDerivation.ts).
 
 That is exactly the direction I would keep pushing.
 
@@ -76,7 +76,7 @@ That would make browser tests and unit tests easier to target without going thro
 
 ## 4. Make event ingestion easier to reason about
 
-[`apps/web/src/routes/__root.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/routes/__root.tsx) currently participates in event routing and coalescing. That works, but the event pipeline would be easier to maintain if it became more explicit:
+[`apps/web/src/routes/__root.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/routes/__root.tsx) currently participates in event routing and coalescing. That works, but the event pipeline would be easier to maintain if it became more explicit:
 
 - WebSocket event arrives
 - event is validated/coalesced

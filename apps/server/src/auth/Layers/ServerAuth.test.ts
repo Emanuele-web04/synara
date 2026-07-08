@@ -29,7 +29,7 @@ const testLayer = ServerAuthLive.pipe(
   Layer.provide(ServerSecretStoreLive),
   Layer.provide(
     ServerConfig.layerTest(process.cwd(), {
-      prefix: "dpcode-auth-server-test-",
+      prefix: "synara-auth-server-test-",
     }),
   ),
   Layer.provide(NodeServices.layer),
@@ -46,7 +46,7 @@ function makeCookieRequest(sessionToken: string): AuthRequest {
   return {
     headers: {},
     cookies: {
-      t3_session: sessionToken,
+      synara_session: sessionToken,
     },
   };
 }

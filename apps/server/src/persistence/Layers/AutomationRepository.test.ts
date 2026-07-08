@@ -9,7 +9,7 @@ import {
   ThreadId,
   TurnId,
   type AutomationCreateInput,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Effect, Layer, Option } from "effect";
 
 import { runMigrations } from "../Migrations.ts";

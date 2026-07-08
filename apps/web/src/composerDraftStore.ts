@@ -26,7 +26,7 @@ import {
   ProviderStartOptions,
   RuntimeMode,
   ThreadId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import * as Schema from "effect/Schema";
 import * as Equal from "effect/Equal";
 import { DeepMutable } from "effect/Types";
@@ -35,7 +35,7 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
   resolveModelSlugForProvider,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { useMemo } from "react";
 import { getLocalStorageItem } from "./hooks/useLocalStorage";
 import { resolveAppModelSelection } from "./appSettings";

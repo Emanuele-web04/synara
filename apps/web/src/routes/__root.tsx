@@ -7,8 +7,8 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
-import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
+} from "@synara/contracts";
+import { defaultTerminalTitleForCliKind } from "@synara/shared/terminalThreads";
 import {
   Outlet,
   createRootRouteWithContext,

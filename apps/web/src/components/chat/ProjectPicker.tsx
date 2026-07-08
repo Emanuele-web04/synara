@@ -4,7 +4,7 @@
 // Layer: Chat / empty-state entrypoint
 
 import { memo, useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
-import { type ProjectDirectoryEntry, type ProjectId } from "@t3tools/contracts";
+import { type ProjectDirectoryEntry, type ProjectId } from "@synara/contracts";
 import { readNativeApi } from "../../nativeApi";
 import { useStore } from "../../store";
 import { createSidebarDisplayThreadsSelector } from "../../storeSelectors";

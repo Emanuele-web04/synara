@@ -1,4 +1,4 @@
-import type { ThreadEnvironmentMode } from "@t3tools/contracts";
+import type { ThreadEnvironmentMode } from "@synara/contracts";
 
 export type ResolvedThreadWorkspaceState = "local" | "worktree-pending" | "worktree-ready";
 

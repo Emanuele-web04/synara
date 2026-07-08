@@ -1,4 +1,4 @@
-import { type ProviderModelDescriptor, ThreadId } from "@t3tools/contracts";
+import { type ProviderModelDescriptor, ThreadId } from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 import {
   getComposerProviderState,

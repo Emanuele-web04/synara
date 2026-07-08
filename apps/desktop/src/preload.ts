@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DesktopBridge } from "@t3tools/contracts";
+import type { DesktopBridge } from "@synara/contracts";
 import { BROWSER_IPC_CHANNELS } from "./browserIpc";
 import {
   DESKTOP_WS_URL_CHANNEL,
@@ -121,7 +121,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     show: (input) => ipcRenderer.invoke(NOTIFICATIONS_SHOW_CHANNEL, input),
   },
   storageMigration: {
-    saveSnapshot: (snapshot) => ipcRenderer.invoke(STORAGE_MIGRATION_IPC_CHANNELS.save, snapshot),
     readSnapshot: () => ipcRenderer.sendSync(STORAGE_MIGRATION_IPC_CHANNELS.read),
     acknowledgeSnapshot: () => ipcRenderer.invoke(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge),
   },

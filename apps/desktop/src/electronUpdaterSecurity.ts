@@ -13,10 +13,7 @@ import {
 import * as OS from "node:os";
 import * as Path from "node:path";
 
-import {
-  prepareWindowsSafeProcess,
-  resolveWindowsSystemRoot,
-} from "@t3tools/shared/windowsProcess";
+import { prepareWindowsSafeProcess, resolveWindowsSystemRoot } from "@synara/shared/windowsProcess";
 
 type Logger = {
   info?(message: string): void;

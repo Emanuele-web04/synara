@@ -3,7 +3,7 @@
 // Layer: Server maintenance tests
 // Exports: Vitest coverage for threadRetention helpers.
 
-import { ProjectId, ThreadId, type OrchestrationReadModel } from "@t3tools/contracts";
+import { ProjectId, ThreadId, type OrchestrationReadModel } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { getInactiveThreadIdsForRetention, THREAD_RETENTION_UNUSED_MS } from "./threadRetention";

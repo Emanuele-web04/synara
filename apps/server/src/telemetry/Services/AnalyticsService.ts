@@ -24,7 +24,7 @@ export interface AnalyticsServiceShape {
 }
 
 export class AnalyticsService extends ServiceMap.Service<AnalyticsService, AnalyticsServiceShape>()(
-  "t3/telemetry/Services/AnalyticsService",
+  "synara/telemetry/Services/AnalyticsService",
 ) {
   static readonly layerTest = Layer.succeed(AnalyticsService, {
     record: () => Effect.void,

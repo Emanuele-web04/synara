@@ -11,8 +11,8 @@ import {
   ThreadId,
   TurnId,
   type ThreadEnvironmentMode,
-} from "@t3tools/contracts";
-import { resolveThreadWorkspaceCwd } from "@t3tools/shared/threadEnvironment";
+} from "@synara/contracts";
+import { resolveThreadWorkspaceCwd } from "@synara/shared/threadEnvironment";
 import { Cause, Effect, Layer, ServiceMap } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 

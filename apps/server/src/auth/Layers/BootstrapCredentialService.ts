@@ -1,4 +1,4 @@
-import type { AuthPairingLink } from "@t3tools/contracts";
+import type { AuthPairingLink } from "@synara/contracts";
 import * as Crypto from "node:crypto";
 import { DateTime, Duration, Effect, Layer, Option, PubSub, Ref, Stream } from "effect";
 

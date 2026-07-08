@@ -2,7 +2,7 @@ import {
   PROVIDER_DISPLAY_NAMES,
   type ProviderKind,
   type ServerProviderStatus,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 export interface ProviderSendAvailability {
   readonly provider: ProviderKind;

@@ -6,7 +6,7 @@
 
 ## Summary
 
-The goal was to investigate why DP Code could appear to consume many gigabytes of memory with only one visible chat. The diagnosis found stale provider subprocesses, especially orphaned `kilo serve` processes, and the code change makes Electron wait for backend shutdown instead of exiting immediately after sending `SIGTERM`. Desktop package tests pass.
+The goal was to investigate why Synara could appear to consume many gigabytes of memory with only one visible chat. The diagnosis found stale provider subprocesses, especially orphaned `kilo serve` processes, and the code change makes Electron wait for backend shutdown instead of exiting immediately after sending `SIGTERM`. Desktop package tests pass.
 
 ---
 
@@ -23,7 +23,7 @@ The goal was to investigate why DP Code could appear to consume many gigabytes o
 
 ### Problem
 
-DP Code launches a backend process, and the backend launches provider runtimes such as Codex app-server and OpenCode-compatible servers like Kilo. The old Electron quit path sent `SIGTERM` to the backend but let Electron continue quitting immediately, so the delayed force-kill and provider cleanup path could be cut short.
+Synara launches a backend process, and the backend launches provider runtimes such as Codex app-server and OpenCode-compatible servers like Kilo. The old Electron quit path sent `SIGTERM` to the backend but let Electron continue quitting immediately, so the delayed force-kill and provider cleanup path could be cut short.
 
 ### Approach
 
@@ -60,6 +60,6 @@ flowchart TD
 
 ## High School Explanation
 
-Think of DP Code like a teacher leaving a classroom. The teacher also has helpers doing work in side rooms. Before this change, the teacher shouted "pack up" and walked out right away, so some helpers could keep sitting in those side rooms all night.
+Think of Synara like a teacher leaving a classroom. The teacher also has helpers doing work in side rooms. Before this change, the teacher shouted "pack up" and walked out right away, so some helpers could keep sitting in those side rooms all night.
 
 Now the teacher waits at the door for a short time. The helpers get a chance to leave properly. If someone still refuses to leave, the teacher closes the room after a fixed timeout so the building does not stay open forever.

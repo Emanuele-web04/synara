@@ -11,7 +11,7 @@ Scope:
 ## What looks strong already
 
 - The monorepo boundaries are directionally good: `apps/server`, `apps/web`, `apps/desktop`, `packages/contracts`, and `packages/shared` are sensible package roles.
-- CI is not superficial. It already runs format, lint, typecheck, tests, browser tests, and desktop build verification in [`.github/workflows/ci.yml`](/Users/emanueledipietro/Developer/Testing/t3code/.github/workflows/ci.yml).
+- CI is not superficial. It already runs format, lint, typecheck, tests, browser tests, and desktop build verification in [`.github/workflows/ci.yml`](/Users/emanueledipietro/Developer/Testing/synara/.github/workflows/ci.yml).
 - The codebase has meaningful test coverage across server, web, desktop, shared, and contracts.
 - The server architecture is trying to separate `Layers` and `Services`, which is a healthy direction for long-term reliability.
 - The web app is already moving toward normalized state plus derived selectors, which is the right foundation for a chat-heavy UI.
@@ -22,13 +22,13 @@ Scope:
 
 Several files are carrying too much behavior at once:
 
-- [`apps/web/src/components/ChatView.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/components/ChatView.tsx)
-- [`apps/web/src/components/Sidebar.tsx`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/components/Sidebar.tsx)
-- [`apps/web/src/store.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/store.ts)
-- [`apps/web/src/composerDraftStore.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/web/src/composerDraftStore.ts)
-- [`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/codexAppServerManager.ts)
-- [`apps/server/src/wsServer.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/server/src/wsServer.ts)
-- [`apps/desktop/src/main.ts`](/Users/emanueledipietro/Developer/Testing/t3code/apps/desktop/src/main.ts)
+- [`apps/web/src/components/ChatView.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/components/ChatView.tsx)
+- [`apps/web/src/components/Sidebar.tsx`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/components/Sidebar.tsx)
+- [`apps/web/src/store.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/store.ts)
+- [`apps/web/src/composerDraftStore.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/web/src/composerDraftStore.ts)
+- [`apps/server/src/codexAppServerManager.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/codexAppServerManager.ts)
+- [`apps/server/src/wsServer.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/server/src/wsServer.ts)
+- [`apps/desktop/src/main.ts`](/Users/emanueledipietro/Developer/Testing/synara/apps/desktop/src/main.ts)
 
 This is not a style issue. It is the main factor that will slow down safe changes.
 
@@ -48,7 +48,7 @@ The repo clearly cares about reconnects, orchestration events, sessions, checkpo
 
 ## 4. Docs are not yet keeping up with system complexity
 
-There is useful release documentation in [`docs/release.md`](/Users/emanueledipietro/Developer/Testing/t3code/docs/release.md), but there is not yet a matching level of architecture guidance for:
+There is useful release documentation in [`docs/release.md`](/Users/emanueledipietro/Developer/Testing/synara/docs/release.md), but there is not yet a matching level of architecture guidance for:
 
 - event flow from provider runtime to UI
 - persistence and projection responsibilities

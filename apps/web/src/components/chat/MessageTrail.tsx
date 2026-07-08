@@ -9,7 +9,7 @@
 // Layer: Chat transcript shell (presentation)
 // Depends on: pure magnification math in messageTrail.logic.ts (unit-tested).
 
-import { type MessageId } from "@t3tools/contracts";
+import { type MessageId } from "@synara/contracts";
 import {
   useCallback,
   useEffect,

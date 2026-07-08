@@ -8,8 +8,8 @@ import {
   BROWSER_BLANK_URL,
   BROWSER_SEARCH_URL_PREFIX,
   normalizeBrowserUrlInput,
-} from "@t3tools/shared/browserSession";
-import type { BrowserTabState } from "@t3tools/contracts";
+} from "@synara/shared/browserSession";
+import type { BrowserTabState } from "@synara/contracts";
 import type { BrowserHistoryEntry } from "../browserStateStore";
 
 const BROWSER_SUGGESTION_LIMIT = 6;

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { MessageId, ThreadMarkerId, type ThreadMarker } from "@t3tools/contracts";
+import { MessageId, ThreadMarkerId, type ThreadMarker } from "@synara/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -19,7 +19,7 @@ vi.mock("../hooks/useTheme", () => ({
 
 async function renderMarkdown(
   text: string,
-  cwd = "C:\\Users\\LENOVO\\dpcode",
+  cwd = "C:\\Users\\LENOVO\\synara",
   markers?: readonly ThreadMarker[],
 ) {
   const { default: ChatMarkdown } = await import("./ChatMarkdown");

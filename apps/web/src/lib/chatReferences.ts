@@ -3,7 +3,7 @@
 //          thread's composer draft so panels outside ChatView can talk to the chatbox.
 // Layer: Web UI utility
 
-import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@t3tools/contracts";
+import { CHAT_ASSISTANT_SELECTION_TEXT_MAX_CHARS, type ThreadId } from "@synara/contracts";
 
 import { useComposerDraftStore } from "../composerDraftStore";
 import { requestComposerFocus } from "../composerFocusRequestStore";

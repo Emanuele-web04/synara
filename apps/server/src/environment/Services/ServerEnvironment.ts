@@ -1,4 +1,4 @@
-import type { EnvironmentId, ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import type { EnvironmentId, ExecutionEnvironmentDescriptor } from "@synara/contracts";
 import { Effect, ServiceMap } from "effect";
 
 export interface ServerEnvironmentShape {
@@ -9,4 +9,4 @@ export interface ServerEnvironmentShape {
 export class ServerEnvironment extends ServiceMap.Service<
   ServerEnvironment,
   ServerEnvironmentShape
->()("t3/environment/Services/ServerEnvironment") {}
+>()("synara/environment/Services/ServerEnvironment") {}

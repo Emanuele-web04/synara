@@ -1,4 +1,4 @@
-import type { ProviderKind } from "@t3tools/contracts";
+import type { ProviderKind } from "@synara/contracts";
 import { queryOptions } from "@tanstack/react-query";
 
 import { openUsageProviderIdForProvider } from "./openUsageRateLimits";

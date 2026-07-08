@@ -1,4 +1,4 @@
-import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@synara/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";

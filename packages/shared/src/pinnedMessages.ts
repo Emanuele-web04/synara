@@ -7,7 +7,7 @@ import {
   THREAD_NOTES_MAX_CHARS,
   type MessageId,
   type PinnedMessage,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 
 // Preserve no-op references while keeping mutation helpers typed as mutable-array outputs.
 function keepExistingPins(pins: readonly PinnedMessage[]): PinnedMessage[] {

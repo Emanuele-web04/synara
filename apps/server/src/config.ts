@@ -145,7 +145,7 @@ export const resolveCanonicalWorkspaceRoots = Effect.fn(function* (input: {
  * ServerConfig - Service tag for server runtime configuration.
  */
 export class ServerConfig extends ServiceMap.Service<ServerConfig, ServerConfigShape>()(
-  "t3/config/ServerConfig",
+  "synara/config/ServerConfig",
 ) {
   static readonly layerTest = (cwd: string, baseDirOrPrefix: string | { prefix: string }) =>
     Layer.effect(

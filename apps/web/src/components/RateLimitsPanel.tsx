@@ -3,7 +3,7 @@
 // orchestration thread activities.
 
 import { useMemo, useState } from "react";
-import type { OrchestrationThread } from "@t3tools/contracts";
+import type { OrchestrationThread } from "@synara/contracts";
 import { ChevronDownIcon, ExternalLinkIcon } from "~/lib/icons";
 import { deriveAccountRateLimits, deriveRateLimitLearnMoreHref } from "~/lib/rateLimits";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "./ui/collapsible";

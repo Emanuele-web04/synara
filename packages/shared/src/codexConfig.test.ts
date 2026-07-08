@@ -13,7 +13,7 @@ import {
 const tempDirs: string[] = [];
 
 function makeTempCodexHome(configContent?: string): string {
-  const tempDir = mkdtempSync(join(OS.tmpdir(), "t3-codex-config-"));
+  const tempDir = mkdtempSync(join(OS.tmpdir(), "synara-codex-config-"));
   tempDirs.push(tempDir);
 
   if (configContent !== undefined) {

@@ -35,7 +35,7 @@ import {
   type ExecuteGitResult,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
-import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { decodeJsonResult } from "@synara/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -477,7 +477,7 @@ const createTrace2Monitor = Effect.fn(function* (
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const traceFilePath = yield* fs.makeTempFileScoped({
-    prefix: `t3code-git-trace2-${process.pid}-`,
+    prefix: `synara-git-trace2-${process.pid}-`,
     suffix: ".json",
   });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
@@ -856,7 +856,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
           }
 
           const tempIndexDir = yield* fileSystem.makeTempDirectoryScoped({
-            prefix: `t3code-git-status-index-${process.pid}-`,
+            prefix: `synara-git-status-index-${process.pid}-`,
           });
           const tempIndexPath = nodePath.join(tempIndexDir, "index");
           yield* Effect.tryPromise(() =>

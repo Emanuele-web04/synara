@@ -15,13 +15,13 @@ import {
   type ProviderStartOptions,
   type ServerSettings,
   type ServerSettingsPatch,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import {
   getDefaultModel,
   getModelOptions,
   normalizeModelSlug,
   resolveSelectableModel,
-} from "@t3tools/shared/model";
+} from "@synara/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 import { EnvMode } from "./components/BranchToolbar.logic";
 import { formatProviderModelOptionName, type ProviderModelOption } from "./providerModelOptions";

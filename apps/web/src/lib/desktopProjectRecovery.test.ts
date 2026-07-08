@@ -6,7 +6,7 @@ import {
   ThreadId,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 
 import { hasLiveThreadsWithMissingProjects } from "./desktopProjectRecovery";

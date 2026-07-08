@@ -2,7 +2,7 @@
 // Purpose: Verifies split-pane restoration for Ctrl+Tab recent thread activation.
 // Layer: UI state logic test
 
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId } from "@synara/contracts";
 import { describe, expect, it } from "vitest";
 import type { SplitView } from "./splitViewStore";
 import { resolveRecentThreadSplitActivation } from "./recentViewActivation.logic";

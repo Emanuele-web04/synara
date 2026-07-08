@@ -11,8 +11,8 @@ import {
   type CodexGeneratedImageArtifact,
   type ProviderRuntimeEvent,
   type ThreadId,
-} from "@t3tools/contracts";
-import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@t3tools/shared/localPreviewFiles";
+} from "@synara/contracts";
+import { isSupportedLocalImagePath as isSupportedLocalImagePathShared } from "@synara/shared/localPreviewFiles";
 
 import {
   resolveActiveCodexHomeWritePath,
@@ -69,9 +69,8 @@ export const isSupportedLocalImagePath = isSupportedLocalImagePathShared;
 
 /**
  * Resolves the home directory the codex app-server child process actually
- * writes images under for the current process env. When Synara wraps Codex
- * with the dpcode-browser overlay (production default), this is the overlay
- * home — not the user's `~/.codex`.
+ * writes images under for the current process env. Synara uses its isolated
+ * Codex overlay, not the user's source `~/.codex` directory.
  */
 export function resolveCodexHomePath(homePath?: string): string {
   return resolveActiveCodexHomeWritePath(homePath?.trim() ? { homePath } : {});

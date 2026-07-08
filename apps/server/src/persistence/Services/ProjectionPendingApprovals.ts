@@ -13,7 +13,7 @@ import {
   ProjectionPendingApprovalStatus,
   ThreadId,
   TurnId,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { Option, Schema, ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -88,4 +88,4 @@ export interface ProjectionPendingApprovalRepositoryShape {
 export class ProjectionPendingApprovalRepository extends ServiceMap.Service<
   ProjectionPendingApprovalRepository,
   ProjectionPendingApprovalRepositoryShape
->()("t3/persistence/Services/ProjectionPendingApprovals/ProjectionPendingApprovalRepository") {}
+>()("synara/persistence/Services/ProjectionPendingApprovals/ProjectionPendingApprovalRepository") {}

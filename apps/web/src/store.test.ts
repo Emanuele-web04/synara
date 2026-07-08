@@ -18,7 +18,7 @@ import {
   type OrchestrationShellStreamEvent,
   type OrchestrationThreadActivity,
   type ThreadMarker,
-} from "@t3tools/contracts";
+} from "@synara/contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -373,11 +373,11 @@ describe("store pure functions", () => {
       makeState(
         makeThread({
           envMode: "worktree",
-          branch: "dpcode/tmp-working",
+          branch: "synara/tmp-working",
           worktreePath: "/tmp/project/.worktrees/tmp-working",
           associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-          associatedWorktreeBranch: "dpcode/tmp-working",
-          associatedWorktreeRef: "dpcode/tmp-working",
+          associatedWorktreeBranch: "synara/tmp-working",
+          associatedWorktreeRef: "synara/tmp-working",
         }),
       ),
       threadId,
@@ -391,11 +391,11 @@ describe("store pure functions", () => {
       makeReadModel(
         makeReadModelThread({
           envMode: "worktree",
-          branch: "dpcode/tmp-working",
+          branch: "synara/tmp-working",
           worktreePath: "/tmp/project/.worktrees/tmp-working",
           associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-          associatedWorktreeBranch: "dpcode/tmp-working",
-          associatedWorktreeRef: "dpcode/tmp-working",
+          associatedWorktreeBranch: "synara/tmp-working",
+          associatedWorktreeRef: "synara/tmp-working",
           createBranchFlowCompleted: false,
           updatedAt: "2026-02-27T00:05:00.000Z",
         }),
@@ -1039,11 +1039,11 @@ describe("store pure functions", () => {
       makeThread({
         title: "Old title",
         envMode: "worktree",
-        branch: "dpcode/tmp-working",
+        branch: "synara/tmp-working",
         worktreePath: "/tmp/project/.worktrees/tmp-working",
         associatedWorktreePath: "/tmp/project/.worktrees/tmp-working",
-        associatedWorktreeBranch: "dpcode/tmp-working",
-        associatedWorktreeRef: "dpcode/tmp-working",
+        associatedWorktreeBranch: "synara/tmp-working",
+        associatedWorktreeRef: "synara/tmp-working",
         session: {
           provider: "codex",
           status: "ready",
@@ -1058,22 +1058,22 @@ describe("store pure functions", () => {
       makeDomainEvent("thread.meta-updated", {
         threadId: ThreadId.makeUnsafe("thread-1"),
         title: "New title",
-        branch: "dpcode/app-startup-crash",
+        branch: "synara/app-startup-crash",
         worktreePath: "/tmp/project/.worktrees/app-startup-crash",
         associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
-        associatedWorktreeBranch: "dpcode/app-startup-crash",
-        associatedWorktreeRef: "dpcode/app-startup-crash",
+        associatedWorktreeBranch: "synara/app-startup-crash",
+        associatedWorktreeRef: "synara/app-startup-crash",
         updatedAt: "2026-02-27T00:01:00.000Z",
       }),
     ]);
 
     expect(next.threads[0]).toMatchObject({
       title: "New title",
-      branch: "dpcode/app-startup-crash",
+      branch: "synara/app-startup-crash",
       worktreePath: "/tmp/project/.worktrees/app-startup-crash",
       associatedWorktreePath: "/tmp/project/.worktrees/app-startup-crash",
-      associatedWorktreeBranch: "dpcode/app-startup-crash",
-      associatedWorktreeRef: "dpcode/app-startup-crash",
+      associatedWorktreeBranch: "synara/app-startup-crash",
+      associatedWorktreeRef: "synara/app-startup-crash",
       session: null,
       updatedAt: "2026-02-27T00:01:00.000Z",
     });
@@ -1883,11 +1883,11 @@ describe("store pure functions", () => {
   it("renames a project locally without changing its remote or folder names", () => {
     const state = makeState(makeThread());
 
-    const next = renameProjectLocally(state, ProjectId.makeUnsafe("project-1"), "dpcode");
+    const next = renameProjectLocally(state, ProjectId.makeUnsafe("project-1"), "synara");
 
     expect(next.projects[0]).toMatchObject({
-      name: "dpcode",
-      localName: "dpcode",
+      name: "synara",
+      localName: "synara",
       remoteName: "Project",
       folderName: "project",
     });
@@ -1898,7 +1898,7 @@ describe("store read model sync", () => {
   it("adds the desktop bridge token to server attachment preview URLs", () => {
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
     const testWindow = {
-      location: { origin: "t3://app" },
+      location: { origin: "synara://app" },
       desktopBridge: {
         getWsUrl: () => "ws://127.0.0.1:53036/?token=desktop-secret",
       },
@@ -2426,7 +2426,7 @@ describe("store read model sync", () => {
     const liveState = makeState(
       makeThread({
         id: threadId,
-        branch: "dpcode/tmp-working",
+        branch: "synara/tmp-working",
         worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
         createBranchFlowCompleted: true,
       }),
@@ -2436,7 +2436,7 @@ describe("store read model sync", () => {
       liveState,
       makeReadModelThread({
         id: threadId,
-        branch: "dpcode/tmp-working",
+        branch: "synara/tmp-working",
         worktreePath: "/tmp/worktrees/thread-hot-path-branch-flow",
         createBranchFlowCompleted: false,
       }),
@@ -3287,7 +3287,7 @@ describe("store read model sync", () => {
     const aliasedState = renameProjectLocally(
       makeState(makeThread()),
       ProjectId.makeUnsafe("project-1"),
-      "dpcode",
+      "synara",
     );
 
     const next = syncServerReadModel(
@@ -3300,8 +3300,8 @@ describe("store read model sync", () => {
     );
 
     expect(next.projects[0]).toMatchObject({
-      name: "dpcode",
-      localName: "dpcode",
+      name: "synara",
+      localName: "synara",
       remoteName: "Project",
       folderName: "project",
     });
@@ -3325,10 +3325,10 @@ describe("store read model sync", () => {
       addEventListener: vi.fn(),
     };
     storage.set(
-      "dpcode:renderer-state:v8",
+      "synara:renderer-state:v8",
       JSON.stringify({
         projectNamesByCwd: {
-          "/tmp/project": "dpcode",
+          "/tmp/project": "synara",
         },
       }),
     );
@@ -3343,8 +3343,8 @@ describe("store read model sync", () => {
         projects: [
           makeProject({
             id: projectId,
-            name: "dpcode",
-            localName: "dpcode",
+            name: "synara",
+            localName: "synara",
           }),
         ],
         threads: [makeThread()],
@@ -3410,12 +3410,12 @@ describe("store read model sync", () => {
         threadsHydrated: true,
       }));
 
-      freshStore.useStore.getState().renameProjectLocally(projectId, "dpcode");
+      freshStore.useStore.getState().renameProjectLocally(projectId, "synara");
 
       expect(setItem).toHaveBeenCalled();
       expect(JSON.parse(storage.get("synara:renderer-state:v8") ?? "{}")).toMatchObject({
         projectNamesByCwd: {
-          "/tmp/project": "dpcode",
+          "/tmp/project": "synara",
         },
       });
     } finally {
