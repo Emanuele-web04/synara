@@ -27,4 +27,13 @@ describe("ServerListeningDetector", () => {
 
     await expect(detector.promise).rejects.toThrow("backend exited");
   });
+
+  it("keeps an unwatched failure handled while preserving the rejection for late consumers", async () => {
+    const detector = new ServerListeningDetector();
+
+    detector.fail(new Error("backend exited before a watcher attached"));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(detector.promise).rejects.toThrow("backend exited before a watcher attached");
+  });
 });
