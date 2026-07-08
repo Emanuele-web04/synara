@@ -4468,6 +4468,7 @@ export default function ChatView({
       providerOrder={settings.providerOrder}
       providerInstances={providerInstances}
       selectedProviderInstanceId={selectedProviderInstanceId}
+      showProviderInstanceChoices={false}
       threadId={threadId}
       runtimeModel={selectedRuntimeModel}
       runtimeModelsByProvider={runtimeModelsByProvider}
