@@ -736,6 +736,36 @@ interface ClaudeSpawnProfile {
   readonly ultracode: boolean;
 }
 
+interface ClaudeRequestedSpawnOptions {
+  readonly effort: string | null;
+  readonly thinking: boolean | undefined;
+  readonly fastMode: boolean;
+}
+
+function claudeRequestedSpawnOptions(
+  selection: Extract<ModelSelection, { provider: "claudeAgent" }>,
+): ClaudeRequestedSpawnOptions {
+  return {
+    effort: trimOrNull(selection.options?.effort ?? null),
+    thinking:
+      typeof selection.options?.thinking === "boolean" ? selection.options.thinking : undefined,
+    fastMode: selection.options?.fastMode === true,
+  };
+}
+
+function sameClaudeRequestedSpawnOptions(
+  previous: Extract<ModelSelection, { provider: "claudeAgent" }>,
+  next: Extract<ModelSelection, { provider: "claudeAgent" }>,
+): boolean {
+  const prev = claudeRequestedSpawnOptions(previous);
+  const desired = claudeRequestedSpawnOptions(next);
+  return (
+    prev.effort === desired.effort &&
+    prev.thinking === desired.thinking &&
+    prev.fastMode === desired.fastMode
+  );
+}
+
 // Mirrors the spawn-time option derivation in the Claude adapter's startSession:
 // only these inputs are fixed at subprocess spawn (query `effort` + `settings`).
 // Model and context window switch in-session via `setModel`.
@@ -775,6 +805,13 @@ export function claudeSelectionRequiresRestart(
   }
   if (previous.provider !== "claudeAgent") {
     return true;
+  }
+  if (previous.model !== next.model && sameClaudeRequestedSpawnOptions(previous, next)) {
+    // A model switch is handled by setModel. Do not interpret the new model's
+    // different capabilities as a spawn-setting change when the requested
+    // options themselves are unchanged (for example, a stale Haiku `thinking`
+    // override or Opus `fastMode` flag carried into the next selection).
+    return false;
   }
   const prev = claudeSpawnProfile(previous);
   const desired = claudeSpawnProfile(next);

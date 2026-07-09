@@ -654,6 +654,33 @@ describe("claudeSelectionRequiresRestart", () => {
     ).toBe(false);
   });
 
+  it("does not restart when a model switch carries an unsupported thinking override", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-haiku-4-5", { thinking: false }),
+        selection("claude-opus-4-8", { thinking: false }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not restart when a model switch carries an unsupported fast-mode flag", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high", fastMode: true }),
+        selection("claude-sonnet-5", { effort: "high", fastMode: true }),
+      ),
+    ).toBe(false);
+  });
+
+  it("still restarts when spawn-fixed options change together with the model", () => {
+    expect(
+      claudeSelectionRequiresRestart(
+        selection("claude-opus-4-8", { effort: "high" }),
+        selection("claude-sonnet-5", { effort: "max" }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not restart for a context-window-only change", () => {
     expect(
       claudeSelectionRequiresRestart(
