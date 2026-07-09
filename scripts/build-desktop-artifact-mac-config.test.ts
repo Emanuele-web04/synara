@@ -79,6 +79,18 @@ describe("createDesktopPlatformBuildConfig", () => {
     });
   });
 
+  it("keeps Windows signing optional", () => {
+    const config = createDesktopPlatformBuildConfig({
+      platform: "win",
+      target: "nsis",
+    });
+
+    assert.deepStrictEqual(config.win, {
+      target: ["nsis"],
+      icon: "icon.ico",
+    });
+  });
+
   it("keeps node-pty unpacked from ASAR in generated build config", () => {
     const config = createDesktopPlatformBuildConfig({
       platform: "linux",
