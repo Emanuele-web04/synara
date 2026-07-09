@@ -75,6 +75,7 @@ type ProviderIntentEvent = Extract<
   {
     type:
       | "thread.meta-updated"
+      | "thread.session-set"
       | "thread.runtime-mode-set"
       | "thread.turn-queued"
       | "thread.turn-start-requested"
@@ -932,11 +933,14 @@ const make = Effect.gen(function* () {
         hasPendingPriorTranscriptBootstrap) &&
       !handoffBootstrapText &&
       !sidechatBootstrapText;
+    const hasPriorTranscriptBootstrapContent =
+      shouldBootstrapPriorTranscriptContext &&
+      listPriorTranscriptMessages(thread, input.messageId).length > 0;
     if (
       hasPendingPriorTranscriptBootstrap &&
       shouldBootstrapPriorTranscriptContext &&
       availableBootstrapChars === 0 &&
-      listPriorTranscriptMessages(thread, input.messageId).length > 0
+      hasPriorTranscriptBootstrapContent
     ) {
       return yield* new ProviderAdapterRequestError({
         provider: selectedProvider as ProviderKind,
@@ -1148,7 +1152,11 @@ const make = Effect.gen(function* () {
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
     }
-    if (priorTranscriptBootstrapText && input.reviewTarget === undefined) {
+    if (
+      shouldBootstrapPriorTranscriptContext &&
+      input.reviewTarget === undefined &&
+      (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent)
+    ) {
       forkContextBootstrapThreadIds.delete(input.threadId);
       rollbackContextBootstrapThreadIds.delete(input.threadId);
     }
@@ -2079,6 +2087,17 @@ const make = Effect.gen(function* () {
   const processDomainEvent = (event: ProviderIntentEvent) =>
     Effect.gen(function* () {
       switch (event.type) {
+        case "thread.session-set": {
+          const thread = yield* resolveThread(event.payload.threadId);
+          if (
+            thread &&
+            event.payload.session.status !== "stopped" &&
+            !threadModelSelections.has(event.payload.threadId)
+          ) {
+            threadModelSelections.set(event.payload.threadId, thread.modelSelection);
+          }
+          return;
+        }
         case "thread.meta-updated": {
           const thread = yield* resolveThread(event.payload.threadId);
           if (event.payload.modelSelection === undefined) {
@@ -2189,6 +2208,7 @@ const make = Effect.gen(function* () {
     Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
       if (
         event.type !== "thread.meta-updated" &&
+        event.type !== "thread.session-set" &&
         event.type !== "thread.runtime-mode-set" &&
         event.type !== "thread.turn-queued" &&
         event.type !== "thread.turn-start-requested" &&

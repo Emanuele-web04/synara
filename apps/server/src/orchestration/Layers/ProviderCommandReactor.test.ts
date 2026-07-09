@@ -629,7 +629,7 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Continue here");
   });
 
-  it("keeps a Droid fork bootstrap pending until transcript context exists", async () => {
+  it("does not rebootstrap an empty Droid fork after its first native turn", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     await Effect.runPromise(
@@ -683,7 +683,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("empty-droid-fork-second-user"),
           role: "user",
-          text: "Second message can carry the retained context",
+          text: "Second message continues the native session",
           attachments: [],
         },
         runtimeMode: "approval-required",
@@ -694,9 +694,9 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.sendTurn.mock.calls.length === 2);
     const secondInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
-    expect(secondInput?.input).toContain("<thread_context>");
-    expect(secondInput?.input).toContain("First message without prior context");
-    expect(secondInput?.input).toContain("Second message can carry the retained context");
+    expect(secondInput?.input).not.toContain("<thread_context>");
+    expect(secondInput?.input).not.toContain("First message without prior context");
+    expect(secondInput?.input).toContain("Second message continues the native session");
   });
 
   it("retries a pending Droid fork bootstrap on an existing session", async () => {
@@ -2668,7 +2668,7 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
-  it("restarts an idle Droid session when its reasoning effort changes", async () => {
+  it("seeds imported Droid selection before handling idle metadata updates", async () => {
     const harness = await createHarness({
       threadModelSelection: {
         provider: "droid",
@@ -2678,26 +2678,40 @@ describe("ProviderCommandReactor", () => {
     });
     const now = new Date().toISOString();
 
+    harness.setRuntimeSessionTurnState({ threadId: "thread-1", status: "ready" });
     await Effect.runPromise(
       harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.makeUnsafe("cmd-turn-start-droid-bootstrap"),
+        type: "thread.session.set",
+        commandId: CommandId.makeUnsafe("cmd-session-set-imported-droid"),
         threadId: ThreadId.makeUnsafe("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-droid-bootstrap"),
-          role: "user",
-          text: "bootstrap droid session",
-          attachments: [],
+        session: {
+          threadId: ThreadId.makeUnsafe("thread-1"),
+          status: "ready",
+          providerName: "droid",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: now,
         },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
         createdAt: now,
       }),
     );
+    await harness.drain();
 
-    await waitFor(() => harness.startSession.mock.calls.length === 1);
-    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
-    harness.startSession.mockClear();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.makeUnsafe("cmd-thread-meta-update-droid-same-effort"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+          options: { reasoningEffort: "medium" },
+        },
+      }),
+    );
+    await harness.drain();
+    expect(harness.startSession).not.toHaveBeenCalled();
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -2714,7 +2728,7 @@ describe("ProviderCommandReactor", () => {
 
     await waitFor(() => harness.startSession.mock.calls.length === 1);
     expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
-      resumeCursor: { opaque: "resume-1" },
+      resumeCursor: { opaque: "resume-synthetic" },
       modelSelection: {
         provider: "droid",
         model: "claude-sonnet-4-6",
