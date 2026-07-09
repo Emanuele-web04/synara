@@ -1930,7 +1930,7 @@ export function makeDroidAdapter(
     return {
       provider: PROVIDER,
       capabilities: {
-        sessionModelSwitch: "in-session",
+        sessionModelSwitch: "restart-session",
         conversationRollback: "restart-session",
       },
       startSession,
