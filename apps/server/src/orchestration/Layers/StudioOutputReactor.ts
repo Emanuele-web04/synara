@@ -25,7 +25,7 @@ import {
   type ProviderRuntimeEvent,
   type TurnId,
 } from "@t3tools/contracts";
-import { Cause, Effect, Layer, Option, Stream } from "effect";
+import { Cause, Effect, FileSystem, Layer, Option, Path, Stream } from "effect";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
@@ -69,6 +69,13 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const scanWorkspaceFiles = (workspaceRoot: string) =>
+    scanStudioWorkspaceFiles({ workspaceRoot }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+    );
   // ProviderCommandReactor writes this map before invoking sendTurn/startReview.
   // The subsequent runtime turn.started event promotes the prepared entry into
   // baselineByTurn without rescanning after provider execution has begun.
@@ -127,7 +134,7 @@ const make = Effect.gen(function* () {
     if (!workspaceRoot) {
       return;
     }
-    const files = yield* scanStudioWorkspaceFiles({ workspaceRoot });
+    const files = yield* scanWorkspaceFiles(workspaceRoot);
     makeRoomForBaseline();
     pendingBaselineByThread.set(threadId, { threadId, workspaceRoot, files });
   });
@@ -175,7 +182,7 @@ const make = Effect.gen(function* () {
     if (!workspaceRoot) {
       return;
     }
-    const files = yield* scanStudioWorkspaceFiles({ workspaceRoot });
+    const files = yield* scanWorkspaceFiles(workspaceRoot);
     makeRoomForBaseline();
     baselineByTurn.set(key, {
       threadId: event.threadId,
@@ -190,7 +197,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
   }) {
-    const after = yield* scanStudioWorkspaceFiles({ workspaceRoot: input.baseline.workspaceRoot });
+    const after = yield* scanWorkspaceFiles(input.baseline.workspaceRoot);
     const changedRelativePaths = diffStudioWorkspaceScans(input.baseline.files, after);
     if (changedRelativePaths.length === 0) {
       return;

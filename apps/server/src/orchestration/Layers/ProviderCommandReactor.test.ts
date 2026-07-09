@@ -549,6 +549,31 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Earlier answer");
     expect(input?.input).toContain("<sidechat_boundary>");
     expect(input?.input).toContain("Fresh side question");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-sidechat-second-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-sidechat"),
+        message: {
+          messageId: asMessageId("sidechat-second-user"),
+          role: "user",
+          text: "Second side question",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    const secondInput = harness.sendTurn.mock.calls[1]?.[0] as { input?: string } | undefined;
+    expect(secondInput?.input).not.toContain("<sidechat_context>");
+    expect(secondInput?.input).not.toContain("<thread_context>");
+    expect(secondInput?.input).not.toContain("Earlier question");
+    expect(secondInput?.input).not.toContain("Earlier answer");
+    expect(secondInput?.input).toContain("Second side question");
   });
 
   it("blocks an overlong Droid fork turn and bootstraps its shorter retry", async () => {
@@ -1539,9 +1564,9 @@ describe("ProviderCommandReactor", () => {
     const captureGate = new Promise<void>((resolve) => {
       releaseCapture = resolve;
     });
-    const captureBaselineBeforeTurn = vi.fn<
-      StudioOutputReactorShape["captureBaselineBeforeTurn"]
-    >(() => Effect.promise(() => captureGate));
+    const captureBaselineBeforeTurn = vi.fn<StudioOutputReactorShape["captureBaselineBeforeTurn"]>(
+      () => Effect.promise(() => captureGate),
+    );
     const harness = await createHarness({
       studioOutputReactor: { captureBaselineBeforeTurn },
     });

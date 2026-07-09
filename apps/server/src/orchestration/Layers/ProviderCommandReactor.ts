@@ -1171,6 +1171,7 @@ const make = Effect.gen(function* () {
     }
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
+      forkContextBootstrapThreadIds.delete(input.threadId);
     }
     if (
       shouldBootstrapPriorTranscriptContext &&

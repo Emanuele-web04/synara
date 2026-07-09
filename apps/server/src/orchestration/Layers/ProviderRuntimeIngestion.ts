@@ -1976,10 +1976,7 @@ const make = Effect.gen(function* () {
           ),
         );
       const imagePaths = [
-        ...new Set([
-          ...cachedImagePaths,
-          ...collectPersistedGeneratedImagePaths(persistedRecords),
-        ]),
+        ...new Set([...cachedImagePaths, ...collectPersistedGeneratedImagePaths(persistedRecords)]),
       ];
       if (imagePaths.length === 0) {
         return;
