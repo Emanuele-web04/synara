@@ -661,7 +661,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("native-droid-sidechat-overlong-user"),
           role: "user",
-          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
           attachments: [],
         },
         runtimeMode: "approval-required",
@@ -707,6 +707,7 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Imported Droid sidechat question");
     expect(input?.input).toContain("Imported Droid sidechat answer");
     expect(input?.input).toContain("Continue the native Droid sidechat");
+    expect(input?.input.length).toBeLessThanOrEqual(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
   });
 
   it("preserves pending sidechat context when the first turn is a provider review", async () => {
@@ -794,6 +795,103 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Context that must survive the review");
     expect(input?.input).toContain("Prior sidechat answer");
     expect(input?.input).toContain("Continue with the side question");
+  });
+
+  it("prefers a full transcript bootstrap when a pending sidechat session restarts", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-restarted-droid-sidechat");
+    const harness = await createHarness({
+      sessionModelSwitch: "restart-session",
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "restarted-droid-sidechat" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Restarted Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("restarted-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Retained sidechat question",
+            createdAt: now,
+            updatedAt: now,
+          },
+          {
+            messageId: asMessageId("restarted-droid-sidechat-imported-assistant"),
+            role: "assistant",
+            text: "Retained sidechat answer",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-review"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-review-user"),
+          role: "user",
+          text: "Review before restarting",
+          attachments: [],
+        },
+        reviewTarget: { type: "uncommittedChanges" },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.startReview.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-restarted-droid-sidechat-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("restarted-droid-sidechat-latest-user"),
+          role: "user",
+          text: "Continue after restarting",
+          attachments: [],
+        },
+        modelSelection: {
+          provider: "droid",
+          model: "claude-opus-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).toContain("<thread_context>");
+    expect(input?.input).not.toContain("<sidechat_context>");
+    expect(input?.input).toContain("Retained sidechat question");
+    expect(input?.input).toContain("Retained sidechat answer");
+    expect(input?.input).toContain("Continue after restarting");
   });
 
   it("blocks an overlong Droid fork turn and bootstraps its shorter retry", async () => {
@@ -4651,6 +4749,110 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.status).toBe("stopped");
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.activeTurnId).toBeNull();
+  });
+
+  it("does not restore pending sidechat context after an explicit session stop", async () => {
+    const threadId = ThreadId.makeUnsafe("thread-stopped-droid-sidechat");
+    const harness = await createHarness({
+      forkThreadResult: {
+        threadId,
+        resumeCursor: { sessionId: "stopped-droid-sidechat" },
+      },
+    });
+    const now = new Date().toISOString();
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.fork.create",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-create"),
+        threadId,
+        sourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        sidechatSourceThreadId: ThreadId.makeUnsafe("thread-1"),
+        projectId: asProjectId("project-1"),
+        title: "Stopped Droid sidechat",
+        modelSelection: {
+          provider: "droid",
+          model: "claude-sonnet-4-6",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        envMode: "local",
+        branch: null,
+        worktreePath: null,
+        importedMessages: [
+          {
+            messageId: asMessageId("stopped-droid-sidechat-imported-user"),
+            role: "user",
+            text: "Context cleared by stop",
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+        createdAt: now,
+      }),
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-overlong"),
+        threadId,
+        message: {
+          messageId: asMessageId("stopped-droid-sidechat-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 100),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "error"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.stop",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-stop"),
+        threadId,
+        createdAt: now,
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        harness.stopSession.mock.calls.length === 1 &&
+        readModel.threads.find((thread) => thread.id === threadId)?.session?.status === "stopped"
+      );
+    });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-stopped-droid-sidechat-fresh-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("stopped-droid-sidechat-fresh-user"),
+          role: "user",
+          text: "Start fresh after stop",
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const input = harness.sendTurn.mock.calls[0]?.[0] as { input?: string } | undefined;
+    expect(input?.input).not.toContain("<sidechat_context>");
+    expect(input?.input).not.toContain("<thread_context>");
+    expect(input?.input).not.toContain("Context cleared by stop");
+    expect(input?.input).toContain("Start fresh after stop");
   });
 
   it("interrupts active subagent sessions without stopping the parent provider session", async () => {
