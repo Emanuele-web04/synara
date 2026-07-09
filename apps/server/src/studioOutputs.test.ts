@@ -2,97 +2,262 @@ import { Effect, FileSystem, Layer, Path } from "effect";
 import { describe, expect, it } from "vitest";
 
 import {
-  listRecentStudioOutputs,
-  MAX_SCANNED_OUTBOX_ENTRIES,
-  rankStudioOutputEntries,
-  type StudioOutputCandidate,
+  collectFileChangeActivityPathCandidates,
+  collectThreadOutputRelativePaths,
+  diffStudioWorkspaceScans,
+  listStudioThreadOutputs,
+  MAX_SCAN_ENTRIES,
+  MAX_THREAD_OUTPUT_FILES,
+  scanStudioWorkspaceFiles,
+  STAT_CONCURRENCY,
 } from "./studioOutputs";
 
-function candidate(overrides: Partial<StudioOutputCandidate>): StudioOutputCandidate {
-  return {
-    name: "file.md",
-    relativePath: "Content/file.md",
-    fullPath: "/studio/Outbox/Content/file.md",
-    modifiedAtMs: 0,
-    ...overrides,
-  };
+function checkpoint(paths: readonly string[]) {
+  return { files: paths.map((path) => ({ path })) };
 }
 
-describe("rankStudioOutputEntries", () => {
-  it("sorts by most recently modified and applies the limit", () => {
-    const entries = rankStudioOutputEntries(
-      [
-        candidate({ name: "old.md", relativePath: "Content/old.md", modifiedAtMs: 1_000 }),
-        candidate({ name: "newest.md", relativePath: "Daily/newest.md", modifiedAtMs: 3_000 }),
-        candidate({ name: "middle.md", relativePath: "YouTube/middle.md", modifiedAtMs: 2_000 }),
-      ],
-      2,
-    );
+describe("collectThreadOutputRelativePaths", () => {
+  it("keeps files anywhere under the root except managed input/infra subtrees", () => {
+    const relativePaths = collectThreadOutputRelativePaths([
+      checkpoint([
+        "Outbox/Content/post.md",
+        "output/pdf/report.pdf",
+        "notes.md",
+        "Inbox/task.md",
+        "Context/reference.md",
+        "Skills/skill.md",
+        "tmp/scratch.py",
+        "Logs/run.log",
+        "AGENTS.md",
+        "CLAUDE.md",
+      ]),
+    ]);
 
-    expect(entries.map((entry) => entry.name)).toEqual(["newest.md", "middle.md"]);
-    expect(entries[0]?.modifiedAt).toBe(new Date(3_000).toISOString());
+    expect(relativePaths).toEqual(["Outbox/Content/post.md", "output/pdf/report.pdf", "notes.md"]);
   });
 
-  it("drops hidden files anywhere in the relative path", () => {
-    const entries = rankStudioOutputEntries(
-      [
-        candidate({ name: ".DS_Store", relativePath: "Content/.DS_Store", modifiedAtMs: 9_000 }),
-        candidate({ name: "post.md", relativePath: ".hidden/post.md", modifiedAtMs: 8_000 }),
-        candidate({ name: "kept.md", relativePath: "Content/kept.md", modifiedAtMs: 1_000 }),
-      ],
-      10,
-    );
+  it("excludes managed subtrees case-insensitively", () => {
+    const relativePaths = collectThreadOutputRelativePaths([
+      checkpoint(["TMP/scratch.py", "logs/run.log", "Output/kept.pdf"]),
+    ]);
 
-    expect(entries.map((entry) => entry.name)).toEqual(["kept.md"]);
+    expect(relativePaths).toEqual(["Output/kept.pdf"]);
   });
 
-  it("preserves relative and full paths on the returned entries", () => {
-    const entries = rankStudioOutputEntries(
-      [
-        candidate({
-          name: "post.md",
-          relativePath: "TikTok/post.md",
-          fullPath: "/studio/Outbox/TikTok/post.md",
-          modifiedAtMs: 42,
-        }),
-      ],
-      10,
+  it("deduplicates across checkpoints, preferring newest-first order", () => {
+    const relativePaths = collectThreadOutputRelativePaths([
+      checkpoint(["Outbox/Content/old.md"]),
+      checkpoint(["Outbox/Content/new.md", "Outbox/Content/old.md"]),
+    ]);
+
+    expect(relativePaths).toEqual(["Outbox/Content/new.md", "Outbox/Content/old.md"]);
+  });
+
+  it("rejects unsafe segments so no path can escape the workspace root", () => {
+    const relativePaths = collectThreadOutputRelativePaths([
+      checkpoint([
+        "../secrets.md",
+        "Outbox/../secrets.md",
+        "Outbox/./file.md",
+        "Outbox//double.md",
+        "Outbox/Content/kept.md",
+      ]),
+    ]);
+
+    expect(relativePaths).toEqual(["Outbox/Content/kept.md"]);
+  });
+
+  it("skips hidden files and node_modules anywhere under the root", () => {
+    const relativePaths = collectThreadOutputRelativePaths([
+      checkpoint([
+        "Outbox/Content/.DS_Store",
+        ".hidden/post.md",
+        "site/node_modules/pkg/index.js",
+        "Outbox/Content/kept.md",
+      ]),
+    ]);
+
+    expect(relativePaths).toEqual(["Outbox/Content/kept.md"]);
+  });
+
+  it("caps the collected paths, dropping the oldest turns' files first", () => {
+    const oldest = checkpoint(
+      Array.from({ length: 5 }, (_unused, index) => `Outbox/Content/old-${index}.md`),
+    );
+    const newest = checkpoint(
+      Array.from(
+        { length: MAX_THREAD_OUTPUT_FILES },
+        (_u, index) => `Outbox/Daily/new-${index}.md`,
+      ),
     );
 
-    expect(entries).toEqual([
+    const relativePaths = collectThreadOutputRelativePaths([oldest, newest]);
+
+    expect(relativePaths).toHaveLength(MAX_THREAD_OUTPUT_FILES);
+    expect(relativePaths[0]).toBe("Outbox/Daily/new-0.md");
+    expect(relativePaths).not.toContain("Outbox/Content/old-0.md");
+  });
+});
+
+describe("collectFileChangeActivityPathCandidates", () => {
+  it("extracts provider-specific nested path fields newest first", () => {
+    const paths = collectFileChangeActivityPathCandidates([
       {
-        name: "post.md",
-        relativePath: "TikTok/post.md",
-        fullPath: "/studio/Outbox/TikTok/post.md",
-        modifiedAt: new Date(42).toISOString(),
+        status: "completed",
+        data: { item: { changes: [{ path: "Outbox/Daily/new.md" }] } },
       },
+      {
+        status: "completed",
+        data: { input: { file_path: "Outbox/Content/post.md" } },
+      },
+    ]);
+
+    expect(paths).toEqual(["Outbox/Daily/new.md", "Outbox/Content/post.md"]);
+  });
+
+  it("ignores failed activities and deduplicates repeated path fields", () => {
+    const paths = collectFileChangeActivityPathCandidates([
+      {
+        status: "failed",
+        data: { input: { filePath: "Outbox/Content/failed.md" } },
+      },
+      {
+        status: "completed",
+        data: {
+          input: { path: "Outbox/Content/kept.md" },
+          result: { path: "Outbox/Content/kept.md" },
+        },
+      },
+    ]);
+
+    expect(paths).toEqual(["Outbox/Content/kept.md"]);
+  });
+});
+
+describe("diffStudioWorkspaceScans", () => {
+  it("reports new and changed files, ignoring deletions and unchanged files", () => {
+    const before = new Map([
+      ["Outbox/kept.md", { mtimeMs: 1, size: 10 }],
+      ["Outbox/touched.md", { mtimeMs: 1, size: 10 }],
+      ["Outbox/resized.md", { mtimeMs: 1, size: 10 }],
+      ["Outbox/deleted.md", { mtimeMs: 1, size: 10 }],
+    ]);
+    const after = new Map([
+      ["Outbox/kept.md", { mtimeMs: 1, size: 10 }],
+      ["Outbox/touched.md", { mtimeMs: 2, size: 10 }],
+      ["Outbox/resized.md", { mtimeMs: 1, size: 11 }],
+      ["output/pdf/new.pdf", { mtimeMs: 3, size: 99 }],
+    ]);
+
+    expect(diffStudioWorkspaceScans(before, after)).toEqual([
+      "Outbox/touched.md",
+      "Outbox/resized.md",
+      "output/pdf/new.pdf",
     ]);
   });
 });
 
+function fakeFileInfo(type: "Directory" | "File"): FileSystem.File.Info {
+  return {
+    type,
+    mtime: undefined,
+    atime: undefined,
+    birthtime: undefined,
+    dev: 0,
+    ino: undefined,
+    mode: 0,
+    nlink: undefined,
+    uid: undefined,
+    gid: undefined,
+    rdev: undefined,
+    size: FileSystem.Size(0),
+    blksize: undefined,
+    blocks: undefined,
+  };
+}
+
+describe("scanStudioWorkspaceFiles", () => {
+  it("bounds traversal by total directory entries, not only discovered files", async () => {
+    const workspaceRoot = "/studio";
+    const rootEntries = Array.from(
+      { length: MAX_SCAN_ENTRIES + 5 },
+      (_unused, index) => `directory-${index}`,
+    );
+    let statCallCount = 0;
+    const fileSystemLayer = FileSystem.layerNoop({
+      readDirectory: (directoryPath: string) =>
+        Effect.succeed(directoryPath === workspaceRoot ? rootEntries : []),
+      readLink: () => Effect.fail(new Error("EINVAL") as never),
+      stat: () => {
+        statCallCount += 1;
+        return Effect.succeed(fakeFileInfo("Directory"));
+      },
+    });
+
+    const result = await Effect.runPromise(
+      scanStudioWorkspaceFiles({ workspaceRoot }).pipe(
+        Effect.provide(Layer.merge(fileSystemLayer, Path.layer)),
+      ),
+    );
+
+    expect(result.size).toBe(0);
+    expect(statCallCount).toBe(MAX_SCAN_ENTRIES);
+  });
+
+  it("stats workspace entries with bounded concurrency", async () => {
+    const workspaceRoot = "/studio";
+    const outputEntries = Array.from({ length: 32 }, (_unused, index) => `file-${index}.md`);
+    const rootEntries = [...outputEntries, "AGENTS.md", "CLAUDE.md"];
+    let activeStatCount = 0;
+    let maxActiveStatCount = 0;
+    const fileSystemLayer = FileSystem.layerNoop({
+      readDirectory: (directoryPath: string) =>
+        Effect.succeed(directoryPath === workspaceRoot ? rootEntries : []),
+      stat: () =>
+        Effect.gen(function* () {
+          activeStatCount += 1;
+          maxActiveStatCount = Math.max(maxActiveStatCount, activeStatCount);
+          yield* Effect.sleep("2 millis");
+          activeStatCount -= 1;
+          return fakeFileInfo("File");
+        }),
+    });
+
+    const result = await Effect.runPromise(
+      scanStudioWorkspaceFiles({ workspaceRoot }).pipe(
+        Effect.provide(Layer.merge(fileSystemLayer, Path.layer)),
+      ),
+    );
+
+    expect(result.size).toBe(outputEntries.length);
+    expect(result.has("AGENTS.md")).toBe(false);
+    expect(result.has("CLAUDE.md")).toBe(false);
+    expect(maxActiveStatCount).toBeGreaterThan(1);
+    expect(maxActiveStatCount).toBeLessThanOrEqual(STAT_CONCURRENCY);
+  });
+});
+
 /**
- * Builds a fake `FileSystem` (+ real `Path`) layer whose `readDirectory` returns exactly the
- * given relative paths (in that order, mirroring an arbitrary directory-walk order that has no
- * relationship to mtime) and whose `stat` looks up mtimes from `mtimesByRelativePath`. This lets
- * the scan/rank flow be exercised deterministically without touching the real filesystem.
+ * Fake `FileSystem` (+ real `Path`) layer whose `stat` looks up mtimes from
+ * `mtimesByRelativePath` (relative to the workspace root); unknown paths fail like a
+ * missing file would.
  */
-function makeFakeOutboxLayer(input: {
-  readonly relativePaths: readonly string[];
+function makeFakeStudioRootLayer(input: {
   readonly mtimesByRelativePath: ReadonlyMap<string, number>;
-  readonly outboxRoot: string;
-  readonly unstattablePaths?: ReadonlySet<string>;
+  readonly workspaceRoot: string;
+  readonly directoryPaths?: ReadonlySet<string>;
 }) {
   const fileSystemLayer = FileSystem.layerNoop({
-    readDirectory: () => Effect.succeed([...input.relativePaths]),
     stat: (fullPath: string) => {
-      const relativePath = fullPath.slice(input.outboxRoot.length + 1);
-      if (input.unstattablePaths?.has(relativePath)) {
-        return Effect.fail(new Error("simulated stat failure") as never);
+      const relativePath = fullPath.slice(input.workspaceRoot.length + 1);
+      const isDirectory = input.directoryPaths?.has(relativePath) === true;
+      const modifiedAtMs = input.mtimesByRelativePath.get(relativePath);
+      if (modifiedAtMs === undefined && !isDirectory) {
+        return Effect.fail(new Error("ENOENT") as never);
       }
-      const modifiedAtMs = input.mtimesByRelativePath.get(relativePath) ?? 0;
       return Effect.succeed({
-        type: "File",
-        mtime: new Date(modifiedAtMs),
+        type: isDirectory ? ("Directory" as const) : ("File" as const),
+        mtime: new Date(modifiedAtMs ?? 0),
         atime: undefined,
         birthtime: undefined,
         dev: 0,
@@ -111,100 +276,111 @@ function makeFakeOutboxLayer(input: {
   return Layer.merge(fileSystemLayer, Path.layer);
 }
 
-describe("listRecentStudioOutputs", () => {
-  it("recurses through subdirectories and never descends into hidden ones", async () => {
-    const outboxRoot = "/studio/Outbox";
-    const listingsByDirectory = new Map<string, string[]>([
-      [outboxRoot, ["Content", ".hidden", "root.md"]],
-      [`${outboxRoot}/Content`, ["nested.md"]],
-      [`${outboxRoot}/.hidden`, ["ignored.md"]],
-    ]);
-    const directories = new Set([`${outboxRoot}/Content`, `${outboxRoot}/.hidden`]);
-    const readDirectoryCalls: string[] = [];
-    const fileSystemLayer = FileSystem.layerNoop({
-      readDirectory: (dirPath: string) => {
-        readDirectoryCalls.push(dirPath);
-        return Effect.succeed(listingsByDirectory.get(dirPath) ?? []);
-      },
-      stat: (fullPath: string) =>
-        Effect.succeed({
-          type: directories.has(fullPath) ? ("Directory" as const) : ("File" as const),
-          mtime: new Date(fullPath.endsWith("nested.md") ? 2_000 : 1_000),
-          atime: undefined,
-          birthtime: undefined,
-          dev: 0,
-          ino: undefined,
-          mode: 0,
-          nlink: undefined,
-          uid: undefined,
-          gid: undefined,
-          rdev: undefined,
-          size: FileSystem.Size(0),
-          blksize: undefined,
-          blocks: undefined,
-        } satisfies FileSystem.File.Info),
+describe("listStudioThreadOutputs", () => {
+  it("returns existing files most recently modified first, with name and full path", async () => {
+    const workspaceRoot = "/studio";
+    const layer = makeFakeStudioRootLayer({
+      workspaceRoot,
+      mtimesByRelativePath: new Map([
+        ["Outbox/Content/old.md", 1_000],
+        ["output/pdf/new.pdf", 3_000],
+      ]),
     });
-    const layer = Layer.merge(fileSystemLayer, Path.layer);
 
     const result = await Effect.runPromise(
-      listRecentStudioOutputs({ outboxRoot, limit: 10 }).pipe(Effect.provide(layer)),
+      listStudioThreadOutputs({
+        workspaceRoot,
+        checkpoints: [checkpoint(["Outbox/Content/old.md", "output/pdf/new.pdf"])],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.entries).toEqual([
+      {
+        name: "new.pdf",
+        relativePath: "output/pdf/new.pdf",
+        fullPath: "/studio/output/pdf/new.pdf",
+        modifiedAt: new Date(3_000).toISOString(),
+      },
+      {
+        name: "old.md",
+        relativePath: "Outbox/Content/old.md",
+        fullPath: "/studio/Outbox/Content/old.md",
+        modifiedAt: new Date(1_000).toISOString(),
+      },
+    ]);
+  });
+
+  it("omits files that no longer exist and non-file entries instead of failing", async () => {
+    const workspaceRoot = "/studio";
+    const layer = makeFakeStudioRootLayer({
+      workspaceRoot,
+      mtimesByRelativePath: new Map([["Outbox/Content/kept.md", 5]]),
+      directoryPaths: new Set(["Outbox/Content/folder"]),
+    });
+
+    const result = await Effect.runPromise(
+      listStudioThreadOutputs({
+        workspaceRoot,
+        checkpoints: [
+          checkpoint([
+            "Outbox/Content/deleted.md",
+            "Outbox/Content/folder",
+            "Outbox/Content/kept.md",
+          ]),
+        ],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.entries.map((entry) => entry.relativePath)).toEqual(["Outbox/Content/kept.md"]);
+  });
+
+  it("returns no entries for a thread that only touched managed input subtrees", async () => {
+    const workspaceRoot = "/studio";
+    const layer = makeFakeStudioRootLayer({ workspaceRoot, mtimesByRelativePath: new Map() });
+
+    const result = await Effect.runPromise(
+      listStudioThreadOutputs({
+        workspaceRoot,
+        checkpoints: [checkpoint(["Inbox/task.md", "tmp/scratch.py"])],
+      }).pipe(Effect.provide(layer)),
+    );
+
+    expect(result.entries).toEqual([]);
+  });
+
+  it("attributes outputs from file-change activities when no Git checkpoints exist", async () => {
+    const workspaceRoot = "/studio";
+    const layer = makeFakeStudioRootLayer({
+      workspaceRoot,
+      mtimesByRelativePath: new Map([
+        ["Outbox/Content/relative.md", 10],
+        ["output/pdf/absolute.pdf", 20],
+      ]),
+    });
+
+    const result = await Effect.runPromise(
+      listStudioThreadOutputs({
+        workspaceRoot,
+        checkpoints: [],
+        fileChangeActivityPayloads: [
+          {
+            status: "completed",
+            data: {
+              changes: [
+                { path: "/studio/output/pdf/absolute.pdf" },
+                { file_path: "Outbox/Content/relative.md" },
+                { path: "/studio/Inbox/not-an-output.md" },
+                { path: "/outside/escape.md" },
+              ],
+            },
+          },
+        ],
+      }).pipe(Effect.provide(layer)),
     );
 
     expect(result.entries.map((entry) => entry.relativePath)).toEqual([
-      "Content/nested.md",
-      "root.md",
+      "output/pdf/absolute.pdf",
+      "Outbox/Content/relative.md",
     ]);
-    // The hidden directory is pruned during the walk, not just filtered from the result.
-    expect(readDirectoryCalls).not.toContain(`${outboxRoot}/.hidden`);
-  });
-
-  it("ranks by mtime across every scanned entry instead of dropping entries past the old fixed cap position", async () => {
-    // The historical bug truncated the raw (mtime-unaware) directory listing to a fixed cap
-    // *before* stat/rank ran, so a recently modified file positioned past that cap in walk
-    // order was silently dropped. Build a listing well past the old 2,000-entry cap with the
-    // single most-recently-modified file placed near the end, and prove it still surfaces.
-    const outboxRoot = "/studio/Outbox";
-    const oldFixedCap = 2_000;
-    const entryCount = oldFixedCap + 5;
-    const relativePaths = Array.from(
-      { length: entryCount },
-      (_unused, index) => `Content/file-${index}.md`,
-    );
-    const mtimesByRelativePath = new Map<string, number>(
-      relativePaths.map((relativePath, index) => [relativePath, index]),
-    );
-    const mostRecentRelativePath = relativePaths[entryCount - 2] as string;
-    mtimesByRelativePath.set(mostRecentRelativePath, entryCount * 1_000);
-
-    const layer = makeFakeOutboxLayer({ relativePaths, mtimesByRelativePath, outboxRoot });
-
-    const result = await Effect.runPromise(
-      listRecentStudioOutputs({ outboxRoot, limit: 1 }).pipe(Effect.provide(layer)),
-    );
-
-    expect(result.entries).toHaveLength(1);
-    expect(result.entries[0]?.relativePath).toBe(mostRecentRelativePath);
-  });
-
-  it("keeps the per-file error-tolerance semantics: a failed stat is skipped, not fatal", async () => {
-    const outboxRoot = "/studio/Outbox";
-    const relativePaths = ["Content/broken.md", "Content/kept.md"];
-    const mtimesByRelativePath = new Map<string, number>([["Content/kept.md", 5]]);
-    const layer = makeFakeOutboxLayer({
-      relativePaths,
-      mtimesByRelativePath,
-      outboxRoot,
-      unstattablePaths: new Set(["Content/broken.md"]),
-    });
-
-    const result = await Effect.runPromise(
-      listRecentStudioOutputs({ outboxRoot, limit: 10 }).pipe(Effect.provide(layer)),
-    );
-
-    expect(result.entries.map((entry) => entry.relativePath)).toEqual(["Content/kept.md"]);
-  });
-
-  it("exposes the safety cap as a much larger bound than the historical fixed truncation point", () => {
-    expect(MAX_SCANNED_OUTBOX_ENTRIES).toBeGreaterThan(2_000);
   });
 });

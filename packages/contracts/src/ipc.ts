@@ -92,7 +92,7 @@ import type {
   ProjectWriteFileResult,
 } from "./project";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem";
-import type { StudioListRecentOutputsInput, StudioListRecentOutputsResult } from "./studio";
+import type { StudioListThreadOutputsInput, StudioListThreadOutputsResult } from "./studio";
 import type {
   ServerConfig,
   ServerDiagnosticsResult,
@@ -442,9 +442,9 @@ export interface NativeApi {
     browse: (input: FilesystemBrowseInput) => Promise<FilesystemBrowseResult>;
   };
   studio: {
-    listRecentOutputs: (
-      input: StudioListRecentOutputsInput,
-    ) => Promise<StudioListRecentOutputsResult>;
+    listThreadOutputs: (
+      input: StudioListThreadOutputsInput,
+    ) => Promise<StudioListThreadOutputsResult>;
   };
   shell: {
     openInEditor: (cwd: string, editor: EditorId) => Promise<void>;

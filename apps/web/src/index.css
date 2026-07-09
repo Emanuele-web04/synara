@@ -353,6 +353,33 @@
   }
 }
 
+/* One-shot entry for the sidebar's segment surface swap (Studio <-> Projects <->
+   Workspace). Keyed remounts play this on the incoming surface so the switch reads
+   as a movement instead of a hard cut. Enter-only by design: no exit or height
+   animation, so it cannot feed back into list animation or scroll behavior. */
+@keyframes sidebar-surface-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.sidebar-surface-enter {
+  animation: sidebar-surface-enter 160ms ease-out both;
+  will-change: opacity, transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-surface-enter {
+    animation: none;
+  }
+}
+
 /* Subtle send affordance for newly inserted user bubbles. Transform/opacity only,
    so the transcript can stay lightweight while the row appears less abruptly. */
 @keyframes chat-message-send-enter {
@@ -2415,31 +2442,58 @@ diffs-container {
   -webkit-backdrop-filter: var(--app-composer-backdrop-filter, none);
 }
 
+/* Recessed track: a hairline border + faint inner shadow read the base as a sunken
+   well, so the raised selected thumb appears to protrude out of it (macOS style). */
 .sidebar-segmented-picker {
   background: var(--color-background-elevated-secondary) !important;
-  box-shadow: none !important;
+  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.06) !important;
   filter: none !important;
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
 }
 
-/* macOS-style sliding pill. Light mode matches the composer input fill so the two
-   selected surfaces read identically; dark keeps the secondary-hover token. The soft
-   shadow + hairline border give it the raised, segmented-control look. */
+.dark .sidebar-segmented-picker {
+  /* Base track uses the chat view's dark background so the opaque selected chip lifts off it
+     the same way an elevated control does in the chat view — the earlier lightened elevated
+     surface sat too close to the chip and read as a hollow outline. */
+  background: var(--background) !important;
+  border-color: color-mix(in oklab, var(--color-text-foreground) 8%, transparent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25) !important;
+}
+
+/* macOS-style raised chip, kept slim and understated. The thumb overhangs the track
+   (negative inset in the markup); a single soft directional drop shadow grounds it while the
+   hairline border + inset edge highlight define the raised rim.
+
+   Fill: the same translucent composer surface the chip has always used, but stacked over its
+   own opaque backdrop (the track fill over the app background) so it renders pixel-identical
+   to the translucent version yet nothing shows through the selected segment. */
 .sidebar-segmented-thumb {
-  background: var(--composer-surface);
-  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
+  background:
+    linear-gradient(var(--composer-surface), var(--composer-surface)),
+    linear-gradient(
+      var(--color-background-elevated-secondary),
+      var(--color-background-elevated-secondary)
+    ),
+    var(--background);
+  border: 1px solid color-mix(in oklab, var(--color-text-foreground) 5%, transparent);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.08),
-    0 1px 1px rgba(0, 0, 0, 0.04);
+    0 1px 1.5px rgba(0, 0, 0, 0.04),
+    inset 0 0 0 0.5px rgba(255, 255, 255, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.5);
 }
 
 .dark .sidebar-segmented-thumb {
-  background: var(--color-background-button-secondary-hover);
-  border-color: color-mix(in oklab, var(--color-text-foreground) 12%, transparent);
+  /* In dark mode --composer-surface is already opaque (the chat view's control fill), so the
+     base rule's top layer covers on its own. The selected chip therefore reads as the same
+     solid elevated surface used across the chat view — clearly lifted off the recessed track
+     instead of the near-invisible tint it had before. Rim + shadow are kept very light so the
+     lift comes mostly from the fill contrast, not a heavy outline. */
+  border-color: color-mix(in oklab, var(--color-text-foreground) 7%, transparent);
   box-shadow:
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 1px 1px rgba(0, 0, 0, 0.28);
+    0 1px 1.5px rgba(0, 0, 0, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 /* Frosted translucent shell shared by floating menus & pickers (dropdown menus,

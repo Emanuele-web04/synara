@@ -77,6 +77,15 @@ describe("resolveThreadWorkspaceCwd", () => {
     ).toBe("/tmp/studio-root");
   });
 
+  it("resolves the materialized worktree path for a studio-kind thread", () => {
+    expect(
+      resolveThreadWorkspaceCwd({
+        thread: { projectId, envMode: "worktree", worktreePath: "/tmp/studio-worktree" },
+        projects: [{ id: projectId, kind: "studio", workspaceRoot: "/tmp/studio-root" }],
+      }),
+    ).toBe("/tmp/studio-worktree");
+  });
+
   it("resolves the materialized worktree path for a chat-kind thread once a worktree exists", () => {
     expect(
       resolveThreadWorkspaceCwd({
