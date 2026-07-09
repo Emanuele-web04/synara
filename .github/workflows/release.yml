@@ -10,6 +10,11 @@ on:
         description: "Release version (for example 1.2.3 or v1.2.3)"
         required: true
         type: string
+      publish_release:
+        description: "Publish the GitHub/npm release after successful builds"
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -29,6 +34,7 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
+      publish_release: ${{ steps.release_mode.outputs.publish_release }}
       release_lane: ${{ steps.release_meta.outputs.release_lane }}
       bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
       update_channel: ${{ steps.release_meta.outputs.update_channel }}
@@ -41,6 +47,19 @@ jobs:
         uses: actions/setup-node@v6
         with:
           node-version-file: package.json
+
+      - id: release_mode
+        name: Resolve publication mode
+        shell: bash
+        env:
+          PUBLISH_RELEASE: ${{ github.event_name == 'push' || inputs.publish_release }}
+        run: |
+          echo "publish_release=$PUBLISH_RELEASE" >> "$GITHUB_OUTPUT"
+          if [[ "$PUBLISH_RELEASE" == "true" ]]; then
+            echo "Publication enabled."
+          else
+            echo "Build-only validation enabled; no release or package will be published."
+          fi
 
       - id: release_meta
         name: Resolve release policy
@@ -59,7 +78,7 @@ jobs:
           fi
 
       - name: Verify pinned compatibility feed
-        if: ${{ steps.release_meta.outputs.release_lane == 'clean' }}
+        if: ${{ steps.release_meta.outputs.release_lane == 'clean' && steps.release_mode.outputs.publish_release == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           BRIDGE_TAG: ${{ steps.release_meta.outputs.bridge_tag }}
@@ -266,7 +285,7 @@ jobs:
 
   publish_cli:
     name: Publish CLI to npm
-    if: ${{ vars.DPCODE_PUBLISH_CLI == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_PUBLISH_CLI == '1' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -303,6 +322,7 @@ jobs:
 
   release:
     name: Publish GitHub Release
+    if: ${{ needs.preflight.outputs.publish_release == 'true' }}
     needs: [preflight, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -418,7 +438,7 @@ jobs:
 
   finalize:
     name: Finalize release
-    if: ${{ vars.DPCODE_FINALIZE_RELEASE == '1' }}
+    if: ${{ needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_FINALIZE_RELEASE == '1' }}
     needs: [preflight, release]
     runs-on: ubuntu-24.04
     timeout-minutes: 10

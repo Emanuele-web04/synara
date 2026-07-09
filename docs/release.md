@@ -1,10 +1,13 @@
 # Release Checklist
 
-This document covers how to run desktop releases from one tag, first without signing, then with signing.
+This document covers build-only native validation and publishing desktop releases from one tag.
 
 ## What the workflow does
 
-- Trigger: push tag matching `v*.*.*`.
+- Triggers:
+  - Manual dispatch defaults to build-only validation and uploads workflow artifacts without publishing anything.
+  - A pushed tag matching `v*.*.*` publishes after successful builds.
+  - Manual publication requires the explicit `publish_release=true` input.
 - Runs quality gates first: lint, typecheck, test.
 - Builds four artifacts in parallel:
   - macOS `arm64` DMG
@@ -80,17 +83,18 @@ Checklist:
   - `DPCODE_PUBLISH_CLI=1`
   - `DPCODE_FINALIZE_RELEASE=1`
 
-## 1) Dry-run release without signing
+## 1) Build-only native CI validation
 
-Use this first to validate the release pipeline.
+Use this before publication to validate the real native macOS, Linux, and Windows build matrix. Build-only mode does not create a tag, GitHub Release, npm package, updater manifest, or version-bump commit.
 
-1. Confirm no signing secrets are required for this test.
-2. Create a test tag:
-   - `git tag v0.0.0-test.1`
-   - `git push origin v0.0.0-test.1`
+1. Push the release-candidate branch so GitHub Actions can check it out.
+2. Start the workflow in build-only mode:
+   - `gh workflow run release.yml --ref BRANCH -f version=X.Y.Z -f publish_release=false`
 3. Wait for `.github/workflows/release.yml` to finish.
-4. Verify the GitHub Release contains all platform artifacts.
-5. Download each artifact and sanity-check installation on each OS.
+4. Confirm preflight and all four native matrix builds pass.
+5. Download the workflow artifacts and sanity-check installation on each OS.
+
+To publish from a manual dispatch instead of a tag push, pass `publish_release=true`. This is intentionally opt-in.
 
 ## 2) Apple signing + notarization setup (macOS)
 
@@ -151,16 +155,17 @@ Checklist:
 ## 4) Ongoing release checklist
 
 1. Ensure `main` is green in CI.
-2. Bump app version as needed.
-3. Confirm `gh api repos/OWNER/REPO/releases/latest --jq .tag_name` returns the compatibility tag configured in `scripts/release-update-policy.json`.
-4. Create release tag: `vX.Y.Z`.
-5. Push tag.
-6. Verify workflow steps:
+2. Run the build-only native CI validation for the release-candidate branch and version.
+3. Bump app version as needed.
+4. Confirm `gh api repos/OWNER/REPO/releases/latest --jq .tag_name` returns the compatibility tag configured in `scripts/release-update-policy.json`.
+5. Create release tag: `vX.Y.Z`.
+6. Push tag.
+7. Verify workflow steps:
    - preflight passes
    - all matrix builds pass
    - release job uploads expected files
-7. Confirm the new versioned release is not GitHub Latest and the pinned compatibility release contains the new payloads plus all three `synara` manifests.
-8. Smoke test downloaded artifacts.
+8. Confirm the new versioned release is not GitHub Latest and the pinned compatibility release contains the new payloads plus all three `synara` manifests.
+9. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting
 

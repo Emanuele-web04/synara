@@ -103,6 +103,41 @@ function verifyReleasePolicy(): void {
     throw new Error("Expected the compatibility release to own the pinned default feed.");
   }
 }
+
+function verifyReleaseWorkflowSafety(): void {
+  const workflow = readFileSync(resolve(repoRoot, ".github/workflows/release.yml"), "utf8");
+  assertContains(
+    workflow,
+    "publish_release:\n        description:",
+    "Expected a manual publication opt-in input.",
+  );
+  assertContains(
+    workflow,
+    "default: false\n        type: boolean",
+    "Expected manual release runs to default to build-only mode.",
+  );
+  assertContains(
+    workflow,
+    "publish_release: ${{ steps.release_mode.outputs.publish_release }}",
+    "Expected preflight to expose the resolved publication mode.",
+  );
+  assertContains(
+    workflow,
+    "if: ${{ needs.preflight.outputs.publish_release == 'true' }}",
+    "Expected GitHub publication to require explicit publication mode.",
+  );
+  assertContains(
+    workflow,
+    "needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_PUBLISH_CLI == '1'",
+    "Expected CLI publication to require explicit publication mode.",
+  );
+  assertContains(
+    workflow,
+    "needs.preflight.outputs.publish_release == 'true' && vars.DPCODE_FINALIZE_RELEASE == '1'",
+    "Expected release finalization to require explicit publication mode.",
+  );
+}
+
 function verifyDesktopStageProductionInstall(targetRoot: string): void {
   const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
   mkdirSync(stageInstallRoot, { recursive: true });
@@ -138,6 +173,7 @@ const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
 
 try {
   verifyReleasePolicy();
+  verifyReleaseWorkflowSafety();
   copyWorkspaceManifestFixture(tempRoot);
 
   execFileSync(
