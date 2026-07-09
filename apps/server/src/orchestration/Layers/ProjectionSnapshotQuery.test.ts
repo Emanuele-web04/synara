@@ -1595,6 +1595,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           envMode: "local",
           worktreePath: "/tmp/context-worktree",
           latestCheckpointTurnCount: 2,
+          baselineCheckpointRef: asCheckpointRef("checkpoint-a"),
           toCheckpointRef: asCheckpointRef("checkpoint-b"),
         });
       }

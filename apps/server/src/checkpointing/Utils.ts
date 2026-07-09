@@ -48,6 +48,16 @@ export function checkpointRefForThreadTurn(threadId: ThreadId, turnCount: number
   );
 }
 
+export function checkpointRefForThreadTurnInManagedFamily(
+  managedRef: string,
+  threadId: ThreadId,
+  turnCount: number,
+): CheckpointRef | null {
+  const parsed = parseManagedCheckpointRef(managedRef);
+  if (parsed?.threadToken !== Encoding.encodeBase64Url(threadId)) return null;
+  return CheckpointRef.makeUnsafe(`${parsed.familyPrefix}/turn/${turnCount}`);
+}
+
 export function checkpointRefForThreadMessageStart(
   threadId: ThreadId,
   messageId: MessageId,
@@ -60,6 +70,18 @@ export function checkpointRefForThreadMessageStart(
 export function checkpointRefForThreadTurnStart(threadId: ThreadId, turnId: TurnId): CheckpointRef {
   return CheckpointRef.makeUnsafe(
     `${CHECKPOINT_REFS_PREFIX}/${Encoding.encodeBase64Url(threadId)}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
+  );
+}
+
+export function checkpointRefForThreadTurnStartInManagedFamily(
+  managedRef: string,
+  threadId: ThreadId,
+  turnId: TurnId,
+): CheckpointRef | null {
+  const parsed = parseManagedCheckpointRef(managedRef);
+  if (parsed?.threadToken !== Encoding.encodeBase64Url(threadId)) return null;
+  return CheckpointRef.makeUnsafe(
+    `${parsed.familyPrefix}/turn-start/${Encoding.encodeBase64Url(turnId)}`,
   );
 }
 

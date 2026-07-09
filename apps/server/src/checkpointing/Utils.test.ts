@@ -1,8 +1,10 @@
-import { ProjectId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
   checkpointRefForThreadTurn,
+  checkpointRefForThreadTurnInManagedFamily,
+  checkpointRefForThreadTurnStartInManagedFamily,
   isManagedCheckpointRefForThread,
   parseManagedCheckpointRef,
   resolveProjectCwdForKind,
@@ -31,6 +33,24 @@ describe("managed checkpoint refs", () => {
         threadId,
       ),
     ).toBe(false);
+  });
+
+  it("reconstructs turn and turn-start refs in an existing managed family", () => {
+    const historical = checkpointRefForThreadTurn(threadId, 4).replace(
+      "refs/synara/",
+      "refs/historical/",
+    );
+
+    expect(checkpointRefForThreadTurnInManagedFamily(historical, threadId, 0)).toBe(
+      historical.replace(/\/turn\/4$/, "/turn/0"),
+    );
+    expect(
+      checkpointRefForThreadTurnStartInManagedFamily(
+        historical,
+        threadId,
+        TurnId.makeUnsafe("turn-1"),
+      ),
+    ).toMatch(/^refs\/historical\/checkpoints\/.+\/turn-start\//);
   });
 });
 

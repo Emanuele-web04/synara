@@ -4,6 +4,12 @@
 
 import type { SynaraStorageSnapshot } from "@t3tools/contracts";
 
+interface DesktopStorageMigrationBridge {
+  readonly readSnapshot: () => SynaraStorageSnapshot | null;
+  readonly saveSnapshot: (snapshot: SynaraStorageSnapshot) => Promise<boolean>;
+  readonly acknowledgeSnapshot: () => Promise<void>;
+}
+
 const STORAGE_KEY_MIGRATIONS = [
   ["dpcode:renderer-state:v8", "synara:renderer-state:v8"],
   ["t3code:renderer-state:v8", "synara:renderer-state:v8"],
@@ -52,8 +58,8 @@ const STORAGE_KEY_MIGRATIONS = [
 
 const MAX_SNAPSHOT_ENTRIES = 2_048;
 const MAX_SNAPSHOT_KEY_LENGTH = 512;
-const MAX_SNAPSHOT_VALUE_LENGTH = 1024 * 1024;
-const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
+const MAX_SNAPSHOT_VALUE_LENGTH = 16 * 1024 * 1024;
+const MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 
 function isCanonicalStorageKey(key: string): boolean {
   return key.startsWith("synara:") || key.startsWith("synara.");
@@ -156,21 +162,43 @@ export async function flushSynaraStorageSnapshot(): Promise<boolean> {
   }
 }
 
+function readLocationProtocol(): string | undefined {
+  try {
+    return globalThis.location?.protocol;
+  } catch {
+    return undefined;
+  }
+}
+
+export function importSynaraDesktopStorageSnapshot(input: {
+  readonly protocol: string | undefined;
+  readonly bridge: DesktopStorageMigrationBridge | null | undefined;
+  readonly storage?: Storage | null;
+}): boolean {
+  if (input.protocol !== "synara:" || !input.bridge) return false;
+  try {
+    const snapshot = input.bridge.readSnapshot();
+    if (!snapshot || !importSynaraStorageSnapshot(snapshot, input.storage ?? getLocalStorage())) {
+      return false;
+    }
+    void input.bridge.acknowledgeSnapshot().catch(() => undefined);
+    return true;
+  } catch {
+    // Keep the snapshot for a later retry if preload or storage is unavailable.
+    return false;
+  }
+}
+
 export function bootstrapSynaraStorageOriginMigration(): void {
   const storage = getLocalStorage();
   const bridge = globalThis.window?.desktopBridge?.storageMigration;
-  if (bridge) {
-    try {
-      const snapshot = bridge.readSnapshot();
-      if (snapshot && importSynaraStorageSnapshot(snapshot, storage)) {
-        void bridge.acknowledgeSnapshot().catch(() => undefined);
-      }
-    } catch {
-      // Keep the snapshot for a later retry if preload or storage is unavailable.
-    }
-  }
+  const protocol = readLocationProtocol();
+  const importingAtSynaraOrigin = protocol === "synara:";
+  importSynaraDesktopStorageSnapshot({ protocol, bridge, storage });
 
   migrateSynaraLocalStorageKeys(storage);
+  if (importingAtSynaraOrigin) return;
+
   void flushSynaraStorageSnapshot();
 
   if (typeof window !== "undefined") {

@@ -53,6 +53,7 @@ export interface ProjectionFullThreadDiffContext {
   readonly envMode: ThreadEnvironmentMode;
   readonly worktreePath: string | null;
   readonly latestCheckpointTurnCount: number;
+  readonly baselineCheckpointRef: CheckpointRef | null;
   readonly toCheckpointRef: CheckpointRef | null;
 }
 

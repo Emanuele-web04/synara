@@ -53,6 +53,17 @@ describe("desktopStorageMigration", () => {
     ).toBeNull();
   });
 
+  it("accepts renderer snapshots containing large composer drafts", () => {
+    const largeDraft = "x".repeat(2 * 1024 * 1024);
+
+    expect(
+      validateSynaraStorageSnapshot({
+        ...snapshot(),
+        entries: { "synara:composer-drafts:v1": largeDraft },
+      })?.entries["synara:composer-drafts:v1"],
+    ).toBe(largeDraft);
+  });
+
   it("does not replace a newer snapshot with an older export", async () => {
     const directory = FS.mkdtempSync(Path.join(OS.tmpdir(), "synara-storage-migration-"));
     const target = Path.join(directory, "snapshot.json");
