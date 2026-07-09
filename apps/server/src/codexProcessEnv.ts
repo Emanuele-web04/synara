@@ -142,7 +142,10 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
   return disableCodexConfigSections(config, [DPCODE_BROWSER_PLUGIN_CONFIG_HEADER], true);
 }
 
-function writeSynaraConfigSuppressions(markerPath: string, sectionHeaders: readonly string[]): void {
+function writeSynaraConfigSuppressions(
+  markerPath: string,
+  sectionHeaders: readonly string[],
+): void {
   const normalized = [...new Set(sectionHeaders.filter(isSafePluginSectionHeader))].slice(
     0,
     MAX_CONFIG_SUPPRESSION_SECTIONS,

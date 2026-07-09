@@ -413,7 +413,9 @@ const makeProfileStatsArchive = Effect.gen(function* () {
       const typedThreadId = ThreadId.makeUnsafe(threadId);
       const hasPersistedCheckpointRef = checkpointTurnRows.some((row) => {
         const checkpointRef = readString(row.checkpointRef);
-        return checkpointRef ? isManagedCheckpointRefForThread(checkpointRef, typedThreadId) : false;
+        return checkpointRef
+          ? isManagedCheckpointRefForThread(checkpointRef, typedThreadId)
+          : false;
       });
       const checkpointRefs =
         cwd !== null || hasPersistedCheckpointRef

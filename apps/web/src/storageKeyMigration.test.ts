@@ -138,13 +138,13 @@ describe("storageKeyMigration", () => {
     globalThis.localStorage.setItem("foreign:theme", "light");
     const { createSynaraStorageSnapshot } = await importMigrationFresh();
 
-    expect(createSynaraStorageSnapshot(globalThis.localStorage, "2026-07-09T00:00:00.000Z")).toEqual(
-      {
-        version: 1,
-        exportedAt: "2026-07-09T00:00:00.000Z",
-        entries: { "synara:theme": "dark" },
-      },
-    );
+    expect(
+      createSynaraStorageSnapshot(globalThis.localStorage, "2026-07-09T00:00:00.000Z"),
+    ).toEqual({
+      version: 1,
+      exportedAt: "2026-07-09T00:00:00.000Z",
+      entries: { "synara:theme": "dark" },
+    });
   });
 
   it("imports missing keys without overwriting current-origin state", async () => {

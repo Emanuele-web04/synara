@@ -94,7 +94,10 @@ layer("reconcileMigrationLineage", (it) => {
       const executed = yield* runMigrations();
       assert.lengthOf(executed, 0);
       const rows = yield* trackerRows(sql);
-      assert.strictEqual(rows.find((row) => row.migration_id === 32)?.name, "ReconcileImportedSchemaLineage");
+      assert.strictEqual(
+        rows.find((row) => row.migration_id === 32)?.name,
+        "ReconcileImportedSchemaLineage",
+      );
     }),
   );
 
