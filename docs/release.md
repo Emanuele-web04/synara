@@ -129,7 +129,10 @@ Notes:
 
 ## 3) Azure Trusted Signing setup (Windows)
 
-Required secrets used by the workflow:
+Windows signing is optional for both the `0.4.2` compatibility bridge and the
+clean `0.5.0` release. When any Azure signing secret is absent, the workflow
+continues and produces an unsigned NSIS installer, matching previous releases.
+Signing is enabled only when all of the following secrets are present:
 
 - `AZURE_TENANT_ID`
 - `AZURE_CLIENT_ID`
@@ -139,7 +142,7 @@ Required secrets used by the workflow:
 - `AZURE_TRUSTED_SIGNING_CERTIFICATE_PROFILE_NAME`
 - `AZURE_TRUSTED_SIGNING_PUBLISHER_NAME`
 
-Checklist:
+Optional signing checklist:
 
 1. Create Azure Trusted Signing account and certificate profile.
 2. Record ATS values:
@@ -151,7 +154,11 @@ Checklist:
 4. Grant service principal permissions required by Trusted Signing.
 5. Create a client secret for the service principal.
 6. Add Azure secrets listed above in GitHub Actions secrets.
-7. Re-run a tag release and confirm Windows installer is signed.
+7. Re-run a build-only workflow and confirm the Windows installer is signed.
+
+If Windows signing is not being configured, no placeholder or empty secrets are
+needed. Leave them absent and verify the workflow reports that it is building an
+unsigned installer.
 
 ## 4) Ongoing release checklist
 
@@ -175,5 +182,5 @@ Checklist:
 - Windows build unsigned when expected signed:
   - Check all Azure ATS and auth secrets are populated and non-empty.
 - Build fails with signing error:
-  - Retry with secrets removed to confirm unsigned path still works.
+  - Retry with all Azure signing secrets removed to use the supported unsigned path.
   - Re-check certificate/profile names and tenant/client credentials.

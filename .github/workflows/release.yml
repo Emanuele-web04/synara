@@ -216,6 +216,8 @@ jobs:
               echo "macOS signing disabled (missing one or more Apple signing secrets)."
             fi
           elif [[ "${{ matrix.platform }}" == "win" ]]; then
+            # Windows signing is optional. Keep producing the NSIS installer when
+            # Azure signing is unavailable, matching Synara's existing releases.
             if has_all \
               "$AZURE_TENANT_ID" \
               "$AZURE_CLIENT_ID" \
@@ -227,7 +229,7 @@ jobs:
               echo "Windows signing enabled (Azure Trusted Signing)."
               args+=(--signed)
             else
-              echo "Windows signing disabled (missing one or more Azure Trusted Signing secrets)."
+              echo "Windows signing is optional; building an unsigned installer because one or more Azure Trusted Signing secrets are missing."
             fi
           else
             echo "Signing disabled for ${{ matrix.platform }}."
