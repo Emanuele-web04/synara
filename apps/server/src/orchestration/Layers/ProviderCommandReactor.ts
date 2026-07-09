@@ -310,9 +310,9 @@ const make = Effect.gen(function* () {
   // turns are never promoted at once.
   const pendingQueuedDispatchThreads = new Set<string>();
   const sidechatContextBootstrapThreadIds = new Set<string>();
-  // Fresh-session fork fallbacks need one transcript bootstrap because their
-  // provider has not inherited the source thread's native conversation state.
-  const forkContextBootstrapThreadIds = new Set<string>();
+  // Fresh sessions that cannot inherit native conversation state need one
+  // transcript bootstrap (fork fallbacks and non-resumable Droid model changes).
+  const freshSessionContextBootstrapThreadIds = new Set<string>();
   // Providers without native rewind restart after rollback and receive the
   // retained projection transcript once on their next prompt.
   const rollbackContextBootstrapThreadIds = new Set<string>();
@@ -814,6 +814,9 @@ const make = Effect.gen(function* () {
       const restartedSession = yield* startProviderSession(
         resumeCursor !== undefined ? { resumeCursor } : undefined,
       );
+      if (currentProvider === "droid" && !providerChanged && resumeCursor === undefined) {
+        freshSessionContextBootstrapThreadIds.add(threadId);
+      }
       yield* Effect.logInfo("provider command reactor restarted provider session", {
         threadId,
         previousSessionId: existingSessionThreadId,
@@ -853,7 +856,7 @@ const make = Effect.gen(function* () {
         yield* bindSessionToThread(forkedSession);
         return threadId;
       }
-      forkContextBootstrapThreadIds.add(threadId);
+      freshSessionContextBootstrapThreadIds.add(threadId);
     }
 
     if (thread.sidechatSourceThreadId && thread.forkSourceThreadId) {
@@ -927,7 +930,7 @@ const make = Effect.gen(function* () {
       thread.session?.providerName ??
       thread.modelSelection.provider;
     const hasPendingPriorTranscriptBootstrap =
-      forkContextBootstrapThreadIds.has(input.threadId) ||
+      freshSessionContextBootstrapThreadIds.has(input.threadId) ||
       rollbackContextBootstrapThreadIds.has(input.threadId);
     const shouldBootstrapPriorTranscriptContext =
       (((selectedProvider === "kilo" || selectedProvider === "opencode") &&
@@ -1171,14 +1174,14 @@ const make = Effect.gen(function* () {
     }
     if (sidechatBootstrapText) {
       sidechatContextBootstrapThreadIds.delete(input.threadId);
-      forkContextBootstrapThreadIds.delete(input.threadId);
+      freshSessionContextBootstrapThreadIds.delete(input.threadId);
     }
     if (
       shouldBootstrapPriorTranscriptContext &&
       input.reviewTarget === undefined &&
       (priorTranscriptBootstrapText !== null || !hasPriorTranscriptBootstrapContent)
     ) {
-      forkContextBootstrapThreadIds.delete(input.threadId);
+      freshSessionContextBootstrapThreadIds.delete(input.threadId);
       rollbackContextBootstrapThreadIds.delete(input.threadId);
     }
   });
