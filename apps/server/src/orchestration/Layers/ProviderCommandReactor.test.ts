@@ -14,6 +14,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
   MessageId,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProjectId,
   ThreadId,
   TurnId,
@@ -530,7 +531,7 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Fresh side question");
   });
 
-  it("bootstraps an ordinary fork when Droid ACP cannot fork natively", async () => {
+  it("blocks an overlong Droid fork turn and bootstraps its shorter retry", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
     const importedAt = new Date(Date.parse(now) - 1_000).toISOString();
@@ -570,6 +571,37 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
       }),
     );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-droid-fork-overlong-turn-start"),
+        threadId: ThreadId.makeUnsafe("thread-droid-fork"),
+        message: {
+          messageId: asMessageId("droid-fork-overlong-user"),
+          role: "user",
+          text: "x".repeat(PROVIDER_SEND_TURN_MAX_INPUT_CHARS),
+          attachments: [],
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const readModel = await Effect.runPromise(harness.engine.getReadModel());
+      return (
+        readModel.threads.find((thread) => thread.id === "thread-droid-fork")?.session?.status ===
+        "error"
+      );
+    });
+    expect(harness.sendTurn).not.toHaveBeenCalled();
+    const failedReadModel = await Effect.runPromise(harness.engine.getReadModel());
+    expect(
+      failedReadModel.threads.find((thread) => thread.id === "thread-droid-fork")?.session
+        ?.lastError,
+    ).toContain("too long to include the transcript context");
 
     await Effect.runPromise(
       harness.engine.dispatch({

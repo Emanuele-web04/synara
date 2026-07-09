@@ -61,6 +61,7 @@ import {
   buildForkBootstrapText,
   buildHandoffBootstrapText,
   hasNativeAssistantMessagesBefore,
+  listPriorTranscriptMessages,
 } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -931,6 +932,19 @@ const make = Effect.gen(function* () {
         hasPendingPriorTranscriptBootstrap) &&
       !handoffBootstrapText &&
       !sidechatBootstrapText;
+    if (
+      hasPendingPriorTranscriptBootstrap &&
+      shouldBootstrapPriorTranscriptContext &&
+      availableBootstrapChars === 0 &&
+      listPriorTranscriptMessages(thread, input.messageId).length > 0
+    ) {
+      return yield* new ProviderAdapterRequestError({
+        provider: selectedProvider as ProviderKind,
+        method: "thread.turn.start",
+        detail:
+          "The latest message is too long to include the transcript context required by the restarted provider session. Shorten the message and retry.",
+      });
+    }
     const priorTranscriptBootstrapText =
       shouldBootstrapPriorTranscriptContext && availableBootstrapChars > 0
         ? buildPriorTranscriptBootstrapText(thread, input.messageId, availableBootstrapChars)
