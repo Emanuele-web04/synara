@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4.1 - 2026-07-09
+
+### Added
+
+- Added Studio: a dedicated workspace for long-running, agent-led work, with its own projects, threads, routes, sidebar entries, and empty-state entry points.
+- Added a Studio outputs surface in the Environment panel for agent-produced files, generated images, and related activity.
+- Added visible project worktree setup steps so workspace preparation and setup failures are easier to understand.
+- Added focused coverage for Studio routing, output projection, worktree setup, restore behavior, project metadata, and transcript/workspace handoffs.
+
+### Changed
+
+- Refined chat and Studio creation, routing, and restore flows to use canonical containers, wait for hydration when needed, and avoid overlapping fresh-chat creation.
+- Refined session orchestration and transcript rendering so active work, sidebar visibility, and worktree setup remain predictable across streaming, reconnects, and segment switches.
+- Refined Studio scaffolding and project ownership rules to preserve clear workspace boundaries during retries, restores, and partial creation states.
+- Bumped Synara release package versions to `0.4.1` across the server, desktop, web, and contracts packages, and refreshed `bun.lock` workspace metadata.
+
+### Fixed
+
+- Fixed cross-kind project reuse so regular chats and Studio threads cannot accidentally share an incompatible container or workspace root.
+- Fixed several restore and route edge cases involving archived threads, hidden segments, draft targets, startup hydration, and unclassifiable thread kinds.
+- Fixed Codex startup ordering by preparing the authentication overlay before dependent paths, and fixed the Codex launcher path on Windows.
+- Fixed Studio output display and projection edge cases so generated images and output activity remain discoverable in the Environment panel.
+
+### Verification
+
+- `bun run fmt:check` passed.
+- `bun run lint` passed with existing warnings and no errors.
+- `bun run typecheck` passed across all 8 packages (with existing TS44 informational JSON/schema-preference messages).
+- `bun run release:smoke` passed.
+- `bun run build` passed (with existing Astro, tsdown/plugin-timing, desktop module-type, and large Vite chunk warnings).
+- `bun run test` passed.
+
 ## 0.4.0 - 2026-07-06
 
 ### Added
