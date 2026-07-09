@@ -1491,7 +1491,7 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
         id: "synara-home-migration",
         title: "Synara is now the default home",
         description:
-          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports existing `~/.synara` or `~/.synara` data on first launch.",
+          "The app now starts from `~/.synara`, carries the Synara environment variables through the desktop and server runtime, and safely imports data from previous installations on first launch.",
       },
       {
         id: "desktop-platform-polish",
@@ -1855,9 +1855,9 @@ export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
       },
       {
         id: "legacy-import-recovery",
-        title: "Legacy SYNARA imports heal themselves",
+        title: "Legacy imports heal themselves",
         description:
-          "A new migration reconciles older imported Synara databases whose migration history skipped Synara schema changes, preventing missing-column crashes after import.",
+          "A new migration reconciles older imported databases whose migration history skipped required schema changes, preventing missing-column crashes after import.",
       },
       {
         id: "runtime-idle-cleanup",

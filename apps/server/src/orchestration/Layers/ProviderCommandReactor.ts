@@ -233,7 +233,7 @@ function buildGeneratedWorktreeBranchName(raw: string): string {
     .replace(/^refs\/heads\//, "")
     .replace(/['"`]/g, "");
 
-  const withoutPrefix = normalized.replace(/^(synara|synara|synara)\//, "");
+  const withoutPrefix = normalized.replace(/^synara\//, "");
 
   const branchFragment = withoutPrefix
     .replace(/[^a-z0-9/_-]+/g, "-")
