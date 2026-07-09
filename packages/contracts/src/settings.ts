@@ -4,9 +4,19 @@ import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
 
 const StringSetting = TrimmedString.check(Schema.isMaxLength(4096));
+const PromptEnhancerSystemPromptSetting = TrimmedString.check(Schema.isMaxLength(16_000));
 const CustomModels = Schema.Array(Schema.String.check(Schema.isMaxLength(256))).pipe(
   Schema.withDecodingDefault(() => []),
 );
+
+/** Default instructions for the composer prompt enhancer. */
+export const DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT = [
+  "You rewrite user prompts for coding agents.",
+  "Improve clarity, structure, and actionability while preserving the user's intent, language, and technical meaning.",
+  "Make the goal explicit, call out constraints and acceptance criteria when useful, and remove fluff.",
+  "Do not invent requirements the user did not imply.",
+  "Return only the enhanced prompt text.",
+].join(" ");
 
 const ProviderSettingsBase = {
   enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => true)),
@@ -95,6 +105,9 @@ export const ServerSettings = Schema.Struct({
       model: DEFAULT_GIT_TEXT_GENERATION_MODEL,
     })),
   ),
+  promptEnhancerSystemPrompt: PromptEnhancerSystemPromptSetting.pipe(
+    Schema.withDecodingDefault(() => DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT),
+  ),
   providers: Schema.Struct({
     codex: CodexServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
     claudeAgent: ClaudeServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
@@ -129,6 +142,7 @@ export const ServerSettingsPatch = Schema.Struct({
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvironmentMode),
   addProjectBaseDirectory: Schema.optionalKey(StringSetting),
   textGenerationModelSelection: Schema.optionalKey(ModelSelectionPatch),
+  promptEnhancerSystemPrompt: Schema.optionalKey(PromptEnhancerSystemPromptSetting),
   providers: Schema.optionalKey(
     Schema.Struct({
       codex: Schema.optionalKey(

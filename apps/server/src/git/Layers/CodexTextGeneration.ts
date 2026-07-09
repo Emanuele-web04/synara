@@ -20,6 +20,7 @@ import {
   type CommitMessageGenerationResult,
   type DiffSummaryGenerationResult,
   type PrContentGenerationResult,
+  type PromptEnhancementGenerationResult,
   type ThreadTitleGenerationResult,
   type ThreadRecapGenerationResult,
   type TextGenerationOperation,
@@ -33,10 +34,12 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildPromptEnhancementPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeEnhancedPrompt,
   sanitizeThreadRecap,
   sanitizePrTitle,
   toJsonSchemaObject,
@@ -631,6 +634,31 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     });
   };
 
+  const generatePromptEnhancement: TextGenerationShape["generatePromptEnhancement"] = (input) => {
+    const { prompt, outputSchemaJson } = buildPromptEnhancementPrompt({
+      systemPrompt: input.systemPrompt,
+      prompt: input.prompt,
+    });
+
+    return runCodexJson({
+      operation: "generatePromptEnhancement",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      ...(input.codexHomePath ? { codexHomePath: input.codexHomePath } : {}),
+      ...(input.model ? { model: input.model } : {}),
+      ...(input.modelSelection ? { modelSelection: input.modelSelection } : {}),
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    }).pipe(
+      Effect.map(
+        (generated) =>
+          ({
+            enhancedPrompt: sanitizeEnhancedPrompt(generated.enhancedPrompt, input.prompt),
+          }) satisfies PromptEnhancementGenerationResult,
+      ),
+    );
+  };
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -640,6 +668,7 @@ const makeCodexTextGeneration = Effect.gen(function* () {
     generateThreadRecap,
     generateAutomationIntent,
     evaluateAutomationCompletion,
+    generatePromptEnhancement,
   } satisfies TextGenerationShape;
 });
 

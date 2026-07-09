@@ -9,7 +9,9 @@ import { describe, expect, it } from "vitest";
 import {
   buildAutomationCompletionEvaluationPrompt,
   buildAutomationIntentPrompt,
+  buildPromptEnhancementPrompt,
   decodeStructuredTextGenerationOutput,
+  sanitizeEnhancedPrompt,
 } from "./textGenerationShared.ts";
 
 describe("textGenerationShared", () => {
@@ -40,6 +42,22 @@ describe("textGenerationShared", () => {
       confidence: 1.2,
       reason: "The run says the PR is ready.",
     });
+  });
+
+  it("builds a prompt enhancement request that includes the system prompt and draft", () => {
+    const { prompt } = buildPromptEnhancementPrompt({
+      systemPrompt: "Rewrite for coding agents.",
+      prompt: "fix login",
+    });
+
+    expect(prompt).toContain("Rewrite for coding agents.");
+    expect(prompt).toContain("enhancedPrompt");
+    expect(prompt).toContain("fix login");
+  });
+
+  it("sanitizes enhanced prompts and falls back to the original draft", () => {
+    expect(sanitizeEnhancedPrompt("```\nImproved prompt\n```", "original")).toBe("Improved prompt");
+    expect(sanitizeEnhancedPrompt("   ", "original draft")).toBe("original draft");
   });
 
   it("asks automation intent generation for detailed prompts without invented context", () => {

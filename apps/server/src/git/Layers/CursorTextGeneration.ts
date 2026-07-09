@@ -24,12 +24,14 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildPromptEnhancementPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeEnhancedPrompt,
   sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
@@ -429,6 +431,36 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       });
     });
 
+  const generatePromptEnhancement: TextGenerationShape["generatePromptEnhancement"] = Effect.fn(
+    "CursorTextGeneration.generatePromptEnhancement",
+  )(function* (input) {
+    const modelSelection = resolveCursorModelSelection(input);
+    if (!modelSelection) {
+      return yield* new TextGenerationError({
+        operation: "generatePromptEnhancement",
+        detail: "Invalid Cursor model selection.",
+      });
+    }
+
+    const { prompt, outputSchemaJson, rawTextFallback } = buildPromptEnhancementPrompt({
+      systemPrompt: input.systemPrompt,
+      prompt: input.prompt,
+    });
+    const generated = yield* runCursorJson({
+      operation: "generatePromptEnhancement",
+      cwd: input.cwd,
+      prompt,
+      outputSchemaJson,
+      rawTextFallback,
+      modelSelection,
+      ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+    });
+
+    return {
+      enhancedPrompt: sanitizeEnhancedPrompt(generated.enhancedPrompt, input.prompt),
+    };
+  });
+
   return {
     generateCommitMessage,
     generatePrContent,
@@ -438,6 +470,7 @@ const makeCursorTextGeneration = Effect.gen(function* () {
     generateThreadRecap,
     generateAutomationIntent,
     evaluateAutomationCompletion,
+    generatePromptEnhancement,
   } satisfies TextGenerationShape;
 });
 

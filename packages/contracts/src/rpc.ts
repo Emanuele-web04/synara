@@ -118,6 +118,8 @@ import {
   ServerConfig,
   ServerConfigStreamEvent,
   ServerDiagnosticsResult,
+  ServerEnhancePromptInput,
+  ServerEnhancePromptResult,
   ServerGenerateAutomationIntentInput,
   ServerGenerateAutomationIntentResult,
   ServerGenerateThreadRecapInput,
@@ -656,6 +658,12 @@ export const WsServerGenerateAutomationIntentRpc = Rpc.make(
   },
 );
 
+export const WsServerEnhancePromptRpc = Rpc.make(WS_METHODS.serverEnhancePrompt, {
+  payload: ServerEnhancePromptInput,
+  success: ServerEnhancePromptResult,
+  error: WsRpcError,
+});
+
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: KeybindingRule,
   success: ServerUpsertKeybindingResult,
@@ -881,6 +889,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerTranscribeVoiceRpc,
   WsServerGenerateThreadRecapRpc,
   WsServerGenerateAutomationIntentRpc,
+  WsServerEnhancePromptRpc,
   WsServerUpsertKeybindingRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeServerConfigRpc,

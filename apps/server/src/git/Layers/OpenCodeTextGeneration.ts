@@ -45,12 +45,14 @@ import {
   buildCommitMessagePrompt,
   buildDiffSummaryPrompt,
   buildPrContentPrompt,
+  buildPromptEnhancementPrompt,
   buildThreadRecapPrompt,
   buildThreadTitlePrompt,
   decodeStructuredTextGenerationOutput,
   type RawTextFallback,
   sanitizeCommitSubject,
   sanitizeDiffSummary,
+  sanitizeEnhancedPrompt,
   sanitizeThreadRecap,
   sanitizePrTitle,
 } from "../textGenerationShared.ts";
@@ -702,6 +704,36 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
         });
       });
 
+    const generatePromptEnhancement: TextGenerationShape["generatePromptEnhancement"] = Effect.fn(
+      `${config.serviceName}.generatePromptEnhancement`,
+    )(function* (input) {
+      const modelSelection = resolveOpenCodeCompatibleModelSelection(config, input);
+      if (!modelSelection) {
+        return yield* new TextGenerationError({
+          operation: "generatePromptEnhancement",
+          detail: `Invalid ${config.displayName} model selection.`,
+        });
+      }
+
+      const { prompt, outputSchemaJson, rawTextFallback } = buildPromptEnhancementPrompt({
+        systemPrompt: input.systemPrompt,
+        prompt: input.prompt,
+      });
+      const generated = yield* runOpenCodeJson({
+        operation: "generatePromptEnhancement",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson,
+        rawTextFallback,
+        modelSelection,
+        ...(input.providerOptions ? { providerOptions: input.providerOptions } : {}),
+      });
+
+      return {
+        enhancedPrompt: sanitizeEnhancedPrompt(generated.enhancedPrompt, input.prompt),
+      };
+    });
+
     return {
       generateCommitMessage,
       generatePrContent,
@@ -711,6 +743,7 @@ const makeOpenCodeCompatibleTextGeneration = (config: OpenCodeCompatibleTextGene
       generateThreadRecap,
       generateAutomationIntent,
       evaluateAutomationCompletion,
+      generatePromptEnhancement,
     } satisfies TextGenerationShape;
   });
 

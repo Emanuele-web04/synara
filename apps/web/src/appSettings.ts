@@ -9,6 +9,7 @@ import { Option, Schema } from "effect";
 import {
   type AssistantDeliveryMode,
   DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT,
   DEFAULT_SERVER_SETTINGS,
   TrimmedNonEmptyString,
   ProviderKind,
@@ -203,6 +204,9 @@ export const AppSettingsSchema = Schema.Struct({
   customPiModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   textGenerationProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  promptEnhancerSystemPrompt: Schema.String.check(Schema.isMaxLength(16_000)).pipe(
+    withDefaults(() => DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT),
+  ),
   uiFontFamily: Schema.String.check(Schema.isMaxLength(256)).pipe(withDefaults(() => "")),
   defaultProvider: ProviderKind.pipe(withDefaults(() => "codex" as const)),
   // Local-only UI preference: providers explicitly hidden from the composer picker.
@@ -467,6 +471,7 @@ function serverSettingsToAppSettings(settings: ServerSettings): Partial<AppSetti
     customPiModels: settings.providers.pi.customModels,
     textGenerationProvider: settings.textGenerationModelSelection.provider,
     textGenerationModel: settings.textGenerationModelSelection.model,
+    promptEnhancerSystemPrompt: settings.promptEnhancerSystemPrompt,
   };
 }
 
@@ -522,6 +527,10 @@ function appSettingsPatchToServerSettingsPatch(patch: Partial<AppSettings>): Ser
       }),
       model,
     };
+  }
+  if (hasOwn(patch, "promptEnhancerSystemPrompt")) {
+    serverPatch.promptEnhancerSystemPrompt =
+      patch.promptEnhancerSystemPrompt ?? DEFAULT_PROMPT_ENHANCER_SYSTEM_PROMPT;
   }
 
   if (
@@ -659,6 +668,7 @@ function buildInitialServerSettingsMigrationPatch(settings: AppSettings): Server
     "piBinaryPath",
     "textGenerationModel",
     "textGenerationProvider",
+    "promptEnhancerSystemPrompt",
   ] as const) {
     if (normalizedSettings[key] !== defaults[key]) {
       patch[key] = normalizedSettings[key] as never;

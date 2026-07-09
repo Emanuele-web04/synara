@@ -220,6 +220,19 @@ export function sanitizeThreadRecap(raw: string, previousRecap?: string): string
   return `${clipped}...`;
 }
 
+export function sanitizeEnhancedPrompt(raw: string, fallbackPrompt: string): string {
+  const candidate = raw
+    .trim()
+    .replace(/^```(?:\w+)?\s*/u, "")
+    .replace(/\s*```$/u, "")
+    .trim();
+  if (candidate.length > 0) {
+    return candidate.slice(0, 64_000);
+  }
+  const fallback = fallbackPrompt.trim();
+  return fallback.length > 0 ? fallback.slice(0, 64_000) : "Improve this prompt.";
+}
+
 function attachmentMetadataLines(attachments: ReadonlyArray<ChatAttachment> | undefined): string[] {
   return (attachments ?? [])
     .filter((attachment) => attachment.type === "image")
@@ -573,5 +586,30 @@ export function buildThreadTitlePrompt(input: {
       key: "title",
       maxWords: MAX_CHAT_THREAD_TITLE_WORDS + 4,
     } satisfies RawTextFallback,
+  };
+}
+
+export function buildPromptEnhancementPrompt(input: {
+  readonly systemPrompt: string;
+  readonly prompt: string;
+}) {
+  return {
+    prompt: [
+      input.systemPrompt.trim(),
+      "",
+      "Return a JSON object with key: enhancedPrompt.",
+      "Respond with only the JSON object, no prose and no code fences.",
+      "Rules:",
+      "- enhancedPrompt must contain only the rewritten user prompt",
+      "- preserve the user's language",
+      "- do not wrap the result in quotes or markdown fences",
+      "",
+      "User prompt:",
+      limitSection(input.prompt, 32_000),
+    ].join("\n"),
+    outputSchemaJson: Schema.Struct({
+      enhancedPrompt: Schema.String,
+    }),
+    rawTextFallback: { key: "enhancedPrompt" } satisfies RawTextFallback,
   };
 }

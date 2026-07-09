@@ -85,6 +85,7 @@ import { FilesystemBrowseInput } from "./filesystem";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerEnhancePromptInput,
   ServerGenerateAutomationIntentInput,
   ServerGenerateThreadRecapInput,
   ServerLifecycleStreamEvent,
@@ -190,6 +191,7 @@ export const WS_METHODS = {
   serverTranscribeVoice: "server.transcribeVoice",
   serverGenerateThreadRecap: "server.generateThreadRecap",
   serverGenerateAutomationIntent: "server.generateAutomationIntent",
+  serverEnhancePrompt: "server.enhancePrompt",
   serverUpsertKeybinding: "server.upsertKeybinding",
   subscribeServerLifecycle: "server.subscribeLifecycle",
   subscribeServerConfig: "server.subscribeConfig",
@@ -345,6 +347,7 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.serverTranscribeVoice, ServerVoiceTranscriptionInput),
   tagRequestBody(WS_METHODS.serverGenerateThreadRecap, ServerGenerateThreadRecapInput),
   tagRequestBody(WS_METHODS.serverGenerateAutomationIntent, ServerGenerateAutomationIntentInput),
+  tagRequestBody(WS_METHODS.serverEnhancePrompt, ServerEnhancePromptInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 
   // Provider discovery

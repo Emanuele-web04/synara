@@ -330,6 +330,22 @@ export const ServerGenerateAutomationIntentResult = Schema.Struct({
 });
 export type ServerGenerateAutomationIntentResult = typeof ServerGenerateAutomationIntentResult.Type;
 
+export const ServerEnhancePromptInput = Schema.Struct({
+  cwd: TrimmedNonEmptyString,
+  prompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+  systemPrompt: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(16_000))),
+  codexHomePath: Schema.optional(TrimmedNonEmptyString),
+  providerOptions: Schema.optional(ProviderStartOptions),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  textGenerationModelSelection: Schema.optional(ModelSelection),
+});
+export type ServerEnhancePromptInput = typeof ServerEnhancePromptInput.Type;
+
+export const ServerEnhancePromptResult = Schema.Struct({
+  enhancedPrompt: TrimmedNonEmptyString.check(Schema.isMaxLength(64_000)),
+});
+export type ServerEnhancePromptResult = typeof ServerEnhancePromptResult.Type;
+
 export const ServerUpsertKeybindingInput = KeybindingRule;
 export type ServerUpsertKeybindingInput = typeof ServerUpsertKeybindingInput.Type;
 

@@ -67,6 +67,11 @@ function createTextGenerationDouble(label: string) {
         reason: `${label} completion`,
       }),
   );
+  const generatePromptEnhancement = vi.fn<TextGenerationShape["generatePromptEnhancement"]>(() =>
+    Effect.succeed({
+      enhancedPrompt: `${label} enhanced prompt`,
+    }),
+  );
 
   return {
     service: {
@@ -78,6 +83,7 @@ function createTextGenerationDouble(label: string) {
       generateThreadRecap,
       generateAutomationIntent,
       evaluateAutomationCompletion,
+      generatePromptEnhancement,
     } satisfies TextGenerationShape,
     generateCommitMessage,
     generatePrContent,
@@ -87,6 +93,7 @@ function createTextGenerationDouble(label: string) {
     generateThreadRecap,
     generateAutomationIntent,
     evaluateAutomationCompletion,
+    generatePromptEnhancement,
   };
 }
 

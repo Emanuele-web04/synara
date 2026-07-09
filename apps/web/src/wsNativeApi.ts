@@ -640,6 +640,10 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverGenerateAutomationIntent, input, {
           timeoutMs: null,
         }),
+      enhancePrompt: (input) =>
+        transport.request(WS_METHODS.serverEnhancePrompt, input, {
+          timeoutMs: null,
+        }),
       transcribeVoice: (input) => {
         if (window.desktopBridge?.server?.transcribeVoice) {
           return window.desktopBridge.server.transcribeVoice(input);
