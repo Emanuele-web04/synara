@@ -43,6 +43,7 @@ import { getMacTrafficLightPosition } from "@synara/shared/desktopChrome";
 import {
   SYNARA_DESKTOP_ENTRY_URL,
   SYNARA_DESKTOP_SCHEME,
+  SYNARA_DESKTOP_UPDATE_CHANNEL,
   synaraBundleId,
 } from "@synara/shared/desktopIdentity";
 import { NetService } from "@synara/shared/Net";
@@ -186,7 +187,6 @@ const AUTO_UPDATE_INSTALL_WATCHDOG_MS = 15 * 1000;
 const BACKEND_FORCE_KILL_DELAY_MS = 8_000;
 const BACKEND_SHUTDOWN_TIMEOUT_MS = 10_000;
 const BACKEND_MAX_OLD_SPACE_ENV_KEYS = ["SYNARA_BACKEND_MAX_OLD_SPACE_MB"] as const;
-const DESKTOP_UPDATE_CHANNEL = "latest";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
@@ -1777,8 +1777,9 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
+  // The dedicated channel keeps the permanent compatibility release on the
+  // default feed while Synara versions advance independently.
+  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged

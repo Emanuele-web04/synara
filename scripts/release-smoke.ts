@@ -9,9 +9,16 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SYNARA_PRODUCTION_BUNDLE_ID } from "@synara/shared/desktopIdentity";
+import {
+  SYNARA_DESKTOP_UPDATE_CHANNEL,
+  SYNARA_PRODUCTION_BUNDLE_ID,
+} from "@synara/shared/desktopIdentity";
 
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+import {
+  readReleaseUpdatePolicyConfig,
+  resolveReleaseUpdatePolicy,
+} from "./lib/release-update-policy.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -104,6 +111,15 @@ function verifyCanonicalIdentity(): void {
   }
   if (SYNARA_PRODUCTION_BUNDLE_ID !== "com.emanueledipietro.synara") {
     throw new Error(`Unexpected production bundle ID: ${SYNARA_PRODUCTION_BUNDLE_ID}.`);
+  }
+  if (SYNARA_DESKTOP_UPDATE_CHANNEL !== "synara") {
+    throw new Error(`Unexpected desktop update channel: ${SYNARA_DESKTOP_UPDATE_CHANNEL}.`);
+  }
+
+  const releasePolicy = readReleaseUpdatePolicyConfig(repoRoot);
+  const resolvedPolicy = resolveReleaseUpdatePolicy("9.9.9-smoke.0", releasePolicy);
+  if (resolvedPolicy.lane !== "clean" || resolvedPolicy.makeLatest) {
+    throw new Error("Expected clean Synara releases to preserve the pinned compatibility feed.");
   }
 }
 

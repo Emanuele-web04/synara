@@ -11,10 +11,10 @@ This document covers how to run desktop releases from one tag, first without sig
   - macOS `x64` DMG
   - Linux `x64` AppImage
   - Windows `x64` NSIS installer
-- Publishes one GitHub Release with all produced files.
+- Publishes one versioned GitHub Release with all produced files.
   - Versions with a suffix after `X.Y.Z` (for example `1.2.3-alpha.1`) are published as GitHub prereleases.
-  - Only plain `X.Y.Z` releases are marked as the repository's latest release.
-- Includes Electron auto-update metadata (for example `latest*.yml` and `*.blockmap`) in release assets.
+  - Synara releases never replace the permanent compatibility release as the repository's GitHub Latest release.
+- Mirrors versioned desktop payloads and dedicated `synara*.yml` metadata onto that pinned compatibility release.
 - Publishes the CLI package (`apps/server`, npm package `@synara/cli`) with OIDC trusted publishing.
 - Signing is optional and auto-detected per platform from secrets.
 
@@ -26,17 +26,25 @@ This document covers how to run desktop releases from one tag, first without sig
   - New updates are prepared/downloaded in the background after detection; install/restart stays manual.
   - The desktop UI shows a rocket update button while preparing and switches to an install action once the update is ready.
 - Provider: GitHub Releases (`provider: github`) configured at build time.
+- Repository visibility: public. The authenticated private-repository provider does not honor custom channel filenames.
+- Runtime channel: `synara`. The default `latest` channel is reserved for the permanent compatibility hop.
 - Repository slug source:
   - `SYNARA_DESKTOP_UPDATE_REPOSITORY` (format `owner/repo`), if set.
   - otherwise `GITHUB_REPOSITORY` from GitHub Actions.
-- Required release assets for updater:
+- Required Synara release assets for updater:
   - platform installers (`.exe`, `.dmg`, `.AppImage`, plus macOS `.zip` for Squirrel.Mac update payloads)
-  - `latest*.yml` metadata
+  - `synara-mac.yml`, `synara.yml`, and `synara-linux.yml` metadata
   - `*.blockmap` files, except the macOS update `.zip.blockmap` removed after zip repack
+- Enforced upgrade path:
+  - The compatibility version from `scripts/release-update-policy.json` remains GitHub Latest permanently and owns `latest*.yml`.
+  - Predecessor installations can therefore see only that compatibility version on their default channel.
+  - The compatibility build migrates local state and then checks the dedicated `synara` channel.
+  - Every clean Synara release is created with `make_latest=false`. Its payloads are uploaded to the pinned compatibility release first, and its three channel manifests are uploaded last.
+  - Both preflight and publication fail closed if GitHub Latest is not the configured compatibility tag.
 - Production desktop builds omit web/server/desktop source maps by default to keep update payloads small. Set `SYNARA_WEB_SOURCEMAP=1`, `SYNARA_SERVER_SOURCEMAP=1`, or `SYNARA_DESKTOP_SOURCEMAP=1` only for a diagnostic release that needs them.
 - macOS metadata note:
-  - `electron-updater` reads `latest-mac.yml` for both Intel and Apple Silicon.
-  - The workflow merges the per-arch mac manifests into one `latest-mac.yml` before publishing the GitHub Release.
+  - The build initially emits `latest-mac.yml` for both Intel and Apple Silicon.
+  - The workflow merges the per-arch manifests and then renames the merged file to `synara-mac.yml` before publication.
   - The desktop build script repacks the macOS update `.zip` with `ditto`, verifies Electron framework symlinks, extracts the zip, validates the extracted app signature, patches the matching `latest-mac*.yml` hash/size, and removes the stale `.zip.blockmap`.
   - macOS updater downloads intentionally use the full zip payload so Squirrel.Mac installs the exact signed archive validated by release build.
 - Local smoke test:
@@ -65,8 +73,7 @@ Checklist:
 
 ## Synara notes
 
-- `Synara` keeps the same release architecture as upstream `Synara`, but publishes desktop artifacts under the Synara branding.
-- The desktop updater expects the GitHub Release in this repository to include the generated updater metadata files, not just the installers.
+- The desktop updater expects the pinned compatibility release in this repository to include the generated updater metadata files, not just the installers.
 - The published release title should read `Synara vX.Y.Z`.
 - By default, the first-party desktop release path does not require CLI publish or post-release version-bump automation.
 - Optional jobs stay disabled unless repository variables enable them:
@@ -145,13 +152,15 @@ Checklist:
 
 1. Ensure `main` is green in CI.
 2. Bump app version as needed.
-3. Create release tag: `vX.Y.Z`.
-4. Push tag.
-5. Verify workflow steps:
+3. Confirm `gh api repos/OWNER/REPO/releases/latest --jq .tag_name` returns the compatibility tag configured in `scripts/release-update-policy.json`.
+4. Create release tag: `vX.Y.Z`.
+5. Push tag.
+6. Verify workflow steps:
    - preflight passes
    - all matrix builds pass
    - release job uploads expected files
-6. Smoke test downloaded artifacts.
+7. Confirm the new versioned release is not GitHub Latest and the pinned compatibility release contains the new payloads plus all three `synara` manifests.
+8. Smoke test downloaded artifacts.
 
 ## 5) Troubleshooting
 

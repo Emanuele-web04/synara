@@ -15,6 +15,10 @@ permissions:
   contents: write
   id-token: write
 
+concurrency:
+  group: synara-desktop-release
+  cancel-in-progress: false
+
 jobs:
   preflight:
     name: Preflight
@@ -25,46 +29,59 @@ jobs:
       tag: ${{ steps.release_meta.outputs.tag }}
       is_prerelease: ${{ steps.release_meta.outputs.is_prerelease }}
       make_latest: ${{ steps.release_meta.outputs.make_latest }}
+      release_lane: ${{ steps.release_meta.outputs.release_lane }}
+      bridge_tag: ${{ steps.release_meta.outputs.bridge_tag }}
+      update_channel: ${{ steps.release_meta.outputs.update_channel }}
       ref: ${{ github.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - id: release_meta
-        name: Resolve release version
-        shell: bash
-        run: |
-          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            raw="${{ github.event.inputs.version }}"
-          else
-            raw="${GITHUB_REF_NAME}"
-          fi
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: package.json
 
-          version="${raw#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version: $raw" >&2
+      - id: release_meta
+        name: Resolve release policy
+        env:
+          RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+        run: node scripts/resolve-release-update-policy.ts "$RELEASE_VERSION"
+
+      - name: Verify public updater repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          visibility="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .visibility)"
+          if [[ "$visibility" != "public" ]]; then
+            echo "The dedicated updater channel requires the public GitHub provider; repository visibility is $visibility." >&2
             exit 1
           fi
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
-            echo "make_latest=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
-            echo "make_latest=false" >> "$GITHUB_OUTPUT"
+      - name: Verify pinned compatibility feed
+        if: ${{ steps.release_meta.outputs.release_lane == 'clean' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ steps.release_meta.outputs.bridge_tag }}
+        run: |
+          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
+            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
+            exit 1
           fi
+
+          bridge_assets="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${BRIDGE_TAG}" --jq '.assets[].name')"
+          for required_asset in latest-mac.yml latest.yml latest-linux.yml; do
+            if ! grep -Fxq "$required_asset" <<< "$bridge_assets"; then
+              echo "Pinned compatibility feed is missing $required_asset." >&2
+              exit 1
+            fi
+          done
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
           bun-version-file: package.json
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version-file: package.json
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -317,6 +334,21 @@ jobs:
             release-assets/latest-mac-x64.yml
           rm -f release-assets/latest-mac-x64.yml
 
+      - name: Prepare updater feed metadata
+        run: node scripts/prepare-release-update-feed.ts release-assets
+
+      - name: Recheck pinned compatibility feed
+        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
+        run: |
+          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
+            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
+            exit 1
+          fi
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -332,8 +364,60 @@ jobs:
             release-assets/*.AppImage
             release-assets/*.exe
             release-assets/*.blockmap
-            release-assets/latest*.yml
+            release-assets/*.yml
           fail_on_unmatched_files: true
+
+      - name: Mirror Synara artifacts onto the pinned updater feed
+        if: ${{ needs.preflight.outputs.release_lane == 'clean' }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_TAG: ${{ needs.preflight.outputs.bridge_tag }}
+          UPDATE_CHANNEL: ${{ needs.preflight.outputs.update_channel }}
+        run: |
+          set -euo pipefail
+
+          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
+            echo "Expected GitHub Latest to remain pinned to $BRIDGE_TAG, got $actual_latest." >&2
+            exit 1
+          fi
+
+          shopt -s nullglob
+          payloads=(
+            release-assets/*.dmg
+            release-assets/*.zip
+            release-assets/*.AppImage
+            release-assets/*.exe
+            release-assets/*.blockmap
+          )
+          manifests=(
+            "release-assets/${UPDATE_CHANNEL}-mac.yml"
+            "release-assets/${UPDATE_CHANNEL}.yml"
+            "release-assets/${UPDATE_CHANNEL}-linux.yml"
+          )
+
+          if [[ "${#payloads[@]}" -eq 0 ]]; then
+            echo "No desktop payloads found for the pinned updater feed." >&2
+            exit 1
+          fi
+          for manifest in "${manifests[@]}"; do
+            if [[ ! -f "$manifest" ]]; then
+              echo "Missing updater manifest: $manifest" >&2
+              exit 1
+            fi
+          done
+
+          # Payloads must exist before a manifest is visible, otherwise an
+          # updater can observe a version whose installer is not uploaded yet.
+          gh release upload "$BRIDGE_TAG" "${payloads[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          gh release upload "$BRIDGE_TAG" "${manifests[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+
+          actual_latest="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
+          if [[ "$actual_latest" != "$BRIDGE_TAG" ]]; then
+            echo "Pinned updater feed moved during publication: $actual_latest." >&2
+            exit 1
+          fi
 
   finalize:
     name: Finalize release
