@@ -227,14 +227,13 @@ describe("ProviderCommandReactor", () => {
     const forkThread = vi.fn<NonNullable<ProviderServiceShape["forkThread"]>>((forkInput) =>
       Effect.sync(() => {
         const result = input?.forkThreadResult ?? null;
+        const forkModelSelection = forkInput.modelSelection ?? modelSelection;
         if (result && !runtimeSessions.some((session) => session.threadId === forkInput.threadId)) {
           runtimeSessions.push({
-            provider: forkInput.modelSelection.provider,
+            provider: forkModelSelection.provider,
             status: "ready",
             runtimeMode: forkInput.runtimeMode,
-            ...(forkInput.modelSelection.model !== undefined
-              ? { model: forkInput.modelSelection.model }
-              : {}),
+            ...(forkModelSelection.model !== undefined ? { model: forkModelSelection.model } : {}),
             threadId: forkInput.threadId,
             ...(result.resumeCursor !== undefined ? { resumeCursor: result.resumeCursor } : {}),
             createdAt: now,
@@ -707,7 +706,9 @@ describe("ProviderCommandReactor", () => {
     expect(input?.input).toContain("Imported Droid sidechat question");
     expect(input?.input).toContain("Imported Droid sidechat answer");
     expect(input?.input).toContain("Continue the native Droid sidechat");
-    expect(input?.input.length).toBeLessThanOrEqual(PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+    expect(input?.input?.length ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(
+      PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+    );
   });
 
   it("preserves pending sidechat context when the first turn is a provider review", async () => {
