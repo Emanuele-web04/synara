@@ -80,6 +80,27 @@ layer("reconcileMigrationLineage", (it) => {
     }),
   );
 
+  it.effect("canonicalizes the previous migration 32 tracker name in place", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* runMigrations();
+      yield* sql`
+        UPDATE effect_sql_migrations
+        SET name = 'ReconcileLegacyT3SchemaImport'
+        WHERE migration_id = 32
+      `;
+
+      const executed = yield* runMigrations();
+      assert.lengthOf(executed, 0);
+      const rows = yield* trackerRows(sql);
+      assert.strictEqual(
+        rows.find((row) => row.migration_id === 32)?.name,
+        "ReconcileImportedSchemaLineage",
+      );
+    }),
+  );
+
   it.effect("preserves tracker rows written by a newer Synara build", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

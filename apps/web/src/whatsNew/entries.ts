@@ -22,6 +22,20 @@ import type { WhatsNewEntry } from "./logic";
 
 export const WHATS_NEW_ENTRIES: readonly WhatsNewEntry[] = [
   {
+    version: "0.4.2",
+    date: "Jul 9",
+    features: [
+      {
+        id: "synara-identity-bridge",
+        title: "Synara is preparing a seamless identity upgrade",
+        description:
+          "Launch this version at least once before installing the next Synara release so your drafts, pins, theme, browser state, and other local interface preferences move with you.",
+        details:
+          "This bridge writes a validated Synara-only snapshot of renderer state, keeps existing project and thread data intact, and prepares database and checkpoint metadata for the final identity cutover. Earlier command and environment aliases are accepted by this bridge release only and will be removed next.",
+      },
+    ],
+  },
+  {
     version: "0.4.1",
     date: "Jul 9",
     features: [

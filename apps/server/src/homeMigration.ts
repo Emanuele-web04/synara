@@ -31,7 +31,13 @@ export interface LegacyHomeMigrationResult {
     | "marker-already-present"
     | "migrated";
   readonly importedArtifacts: ReadonlyArray<
-    "database" | "keybindings" | "attachments" | "anonymousId"
+    | "database"
+    | "settings"
+    | "keybindings"
+    | "attachments"
+    | "secrets"
+    | "anonymousId"
+    | "environmentId"
   >;
 }
 
@@ -53,7 +59,15 @@ interface MigrationMarker {
   readonly notes: ReadonlyArray<string>;
 }
 
-const IMPORTABLE_ARTIFACTS = ["database", "keybindings", "attachments", "anonymousId"] as const;
+const IMPORTABLE_ARTIFACTS = [
+  "database",
+  "settings",
+  "keybindings",
+  "attachments",
+  "secrets",
+  "anonymousId",
+  "environmentId",
+] as const;
 const LEGACY_HOME_DIRNAMES = [LEGACY_DPCODE_HOME_DIRNAME, LEGACY_T3_HOME_DIRNAME] as const;
 type ImportableArtifact = (typeof IMPORTABLE_ARTIFACTS)[number];
 type LegacyHomeSnapshot = {
@@ -176,6 +190,42 @@ const directoryHasEntries = (directoryPath: string) =>
     return (yield* fs.readDirectory(directoryPath)).length > 0;
   });
 
+const directoryHasMissingEntries = (sourceDirectory: string, targetDirectory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    if (!(yield* fs.exists(sourceDirectory))) {
+      return false;
+    }
+    if (!(yield* fs.exists(targetDirectory))) {
+      return (yield* fs.readDirectory(sourceDirectory)).length > 0;
+    }
+
+    const pendingDirectories = [[sourceDirectory, targetDirectory] as const];
+    while (pendingDirectories.length > 0) {
+      const current = pendingDirectories.pop();
+      if (!current) {
+        break;
+      }
+      const [currentSourceDirectory, currentTargetDirectory] = current;
+      for (const entry of yield* fs.readDirectory(currentSourceDirectory)) {
+        const sourcePath = path.join(currentSourceDirectory, entry);
+        const targetPath = path.join(currentTargetDirectory, entry);
+        if (!(yield* fs.exists(targetPath))) {
+          return true;
+        }
+
+        const sourceInfo = yield* fs.stat(sourcePath);
+        const targetInfo = yield* fs.stat(targetPath);
+        if (sourceInfo.type === "Directory" && targetInfo.type === "Directory") {
+          pendingDirectories.push([sourcePath, targetPath]);
+        }
+      }
+    }
+
+    return false;
+  });
+
 export const getLegacyImportMarkerPath = Effect.fn(function* (stateDir: string) {
   const path = yield* Path.Path;
   return path.join(stateDir, MIGRATIONS_DIRNAME, LEGACY_IMPORT_MARKER_BASENAME);
@@ -202,6 +252,52 @@ const moveStagedArtifact = (sourcePath: string, targetPath: string) =>
     yield* fs.rename(sourcePath, targetPath);
   });
 
+const replaceStagedArtifact = (sourcePath: string, targetPath: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(path.dirname(targetPath), { recursive: true });
+    if (yield* fs.exists(targetPath)) {
+      yield* fs.remove(targetPath);
+    }
+    yield* fs.rename(sourcePath, targetPath);
+  });
+
+// On retries, fills directory entries that an earlier importer omitted without
+// replacing credentials or attachments already created in the Synara home.
+const mergeMissingDirectoryEntries = (sourceDirectory: string, targetDirectory: string) =>
+  Effect.gen(function* () {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(targetDirectory, { recursive: true });
+
+    const pendingDirectories = [[sourceDirectory, targetDirectory] as const];
+    while (pendingDirectories.length > 0) {
+      const current = pendingDirectories.pop();
+      if (!current) {
+        break;
+      }
+      const [currentSourceDirectory, currentTargetDirectory] = current;
+      for (const entry of yield* fs.readDirectory(currentSourceDirectory)) {
+        const sourcePath = path.join(currentSourceDirectory, entry);
+        const targetPath = path.join(currentTargetDirectory, entry);
+        if (!(yield* fs.exists(targetPath))) {
+          yield* fs.copy(sourcePath, targetPath, {
+            overwrite: false,
+            preserveTimestamps: true,
+          });
+          continue;
+        }
+
+        const sourceInfo = yield* fs.stat(sourcePath);
+        const targetInfo = yield* fs.stat(targetPath);
+        if (sourceInfo.type === "Directory" && targetInfo.type === "Directory") {
+          pendingDirectories.push([sourcePath, targetPath]);
+        }
+      }
+    }
+  });
+
 const cleanUpStagingDir = (stagingBaseDir: string) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
@@ -223,13 +319,6 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
   const targetPaths = yield* deriveServerPaths(canonicalTargetBaseDir, input.devUrl);
   const markerPath = yield* getLegacyImportMarkerPath(targetPaths.stateDir);
   const marker: MigrationMarker | undefined = yield* readMigrationMarker(markerPath);
-  if (marker?.status === "completed") {
-    return {
-      status: "skipped",
-      reason: "marker-already-present",
-      importedArtifacts: [],
-    };
-  }
 
   const legacyHomes: LegacyHomeSnapshot[] = [];
   let sawLegacyHome = false;
@@ -243,9 +332,12 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     const sourcePaths = yield* deriveServerPaths(legacyBaseDir, input.devUrl);
     const sourceArtifacts = {
       database: yield* fs.exists(sourcePaths.dbPath),
+      settings: yield* fs.exists(sourcePaths.settingsPath),
       keybindings: yield* fs.exists(sourcePaths.keybindingsConfigPath),
       attachments: yield* directoryHasEntries(sourcePaths.attachmentsDir),
+      secrets: yield* directoryHasEntries(sourcePaths.secretsDir),
       anonymousId: yield* fs.exists(sourcePaths.anonymousIdPath),
+      environmentId: yield* fs.exists(sourcePaths.environmentIdPath),
     } satisfies Record<ImportableArtifact, boolean>;
     if (IMPORTABLE_ARTIFACTS.some((artifact) => sourceArtifacts[artifact])) {
       legacyHomes.push({
@@ -258,6 +350,13 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
   }
 
   if (legacyHomes.length === 0) {
+    if (marker?.status === "completed") {
+      return {
+        status: "skipped",
+        reason: "marker-already-present",
+        importedArtifacts: [],
+      };
+    }
     return {
       status: "skipped",
       reason: sawLegacyHome ? "legacy-state-missing" : "legacy-home-missing",
@@ -288,15 +387,64 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
 
   const targetArtifacts = {
     database: yield* fs.exists(targetPaths.dbPath),
+    settings: yield* fs.exists(targetPaths.settingsPath),
     keybindings: yield* fs.exists(targetPaths.keybindingsConfigPath),
     attachments: yield* directoryHasEntries(targetPaths.attachmentsDir),
+    secrets: yield* directoryHasEntries(targetPaths.secretsDir),
     anonymousId: yield* fs.exists(targetPaths.anonymousIdPath),
+    environmentId: yield* fs.exists(targetPaths.environmentIdPath),
   } satisfies Record<ImportableArtifact, boolean>;
 
-  const targetAlreadyInitialized = IMPORTABLE_ARTIFACTS.some(
-    (artifact) => targetArtifacts[artifact],
-  );
-  if (targetAlreadyInitialized && marker?.status !== "in-progress") {
+  // The published 0.4.1 importer omitted the legacy environment ID, then
+  // generated a replacement before the bridge could run. Its completed marker
+  // tells us the existing target value is not the imported user identity.
+  const shouldRestoreLegacyEnvironmentId =
+    marker?.status === "completed" &&
+    !marker.importedArtifacts.includes("environmentId") &&
+    sourceByArtifact.has("environmentId");
+
+  const pendingArtifacts = new Set<ImportableArtifact>();
+  for (const artifact of importedArtifacts) {
+    const source = sourceByArtifact.get(artifact);
+    if (!source) {
+      continue;
+    }
+    if (artifact === "attachments") {
+      if (
+        yield* directoryHasMissingEntries(source.paths.attachmentsDir, targetPaths.attachmentsDir)
+      ) {
+        pendingArtifacts.add(artifact);
+      }
+      continue;
+    }
+    if (artifact === "secrets") {
+      if (yield* directoryHasMissingEntries(source.paths.secretsDir, targetPaths.secretsDir)) {
+        pendingArtifacts.add(artifact);
+      }
+      continue;
+    }
+    if (artifact === "environmentId" && shouldRestoreLegacyEnvironmentId) {
+      pendingArtifacts.add(artifact);
+      continue;
+    }
+    if (!targetArtifacts[artifact]) {
+      pendingArtifacts.add(artifact);
+    }
+  }
+
+  if (marker?.status === "completed" && pendingArtifacts.size === 0) {
+    return {
+      status: "skipped",
+      reason: "marker-already-present",
+      importedArtifacts: [],
+    };
+  }
+
+  // A database or attachment set represents an authoritative initialized home.
+  // Identity/credential files can be created before meaningful state exists, so
+  // they must not prevent the bridge from importing the remaining user data.
+  const targetAlreadyInitialized = targetArtifacts.database || targetArtifacts.attachments;
+  if (targetAlreadyInitialized && marker === undefined) {
     return {
       status: "skipped",
       reason: "target-already-initialized",
@@ -346,16 +494,16 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       ],
     });
 
-    const pendingArtifacts = new Set(
-      IMPORTABLE_ARTIFACTS.filter(
-        (artifact) => sourceByArtifact.has(artifact) && !targetArtifacts[artifact],
-      ),
-    );
-
     if (pendingArtifacts.has("database")) {
       const source = sourceByArtifact.get("database");
       if (source) {
         yield* snapshotSqliteDatabase(source.paths.dbPath, stagingPaths.dbPath);
+      }
+    }
+    if (pendingArtifacts.has("settings")) {
+      const source = sourceByArtifact.get("settings");
+      if (source) {
+        yield* stageFileCopy(source.paths.settingsPath, stagingPaths.settingsPath);
       }
     }
     if (pendingArtifacts.has("keybindings")) {
@@ -373,10 +521,22 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
         yield* fs.copy(source.paths.attachmentsDir, stagingPaths.attachmentsDir);
       }
     }
+    if (pendingArtifacts.has("secrets")) {
+      const source = sourceByArtifact.get("secrets");
+      if (source) {
+        yield* fs.copy(source.paths.secretsDir, stagingPaths.secretsDir);
+      }
+    }
     if (pendingArtifacts.has("anonymousId")) {
       const source = sourceByArtifact.get("anonymousId");
       if (source) {
         yield* stageFileCopy(source.paths.anonymousIdPath, stagingPaths.anonymousIdPath);
+      }
+    }
+    if (pendingArtifacts.has("environmentId")) {
+      const source = sourceByArtifact.get("environmentId");
+      if (source) {
+        yield* stageFileCopy(source.paths.environmentIdPath, stagingPaths.environmentIdPath);
       }
     }
 
@@ -385,6 +545,9 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     if (pendingArtifacts.has("database")) {
       yield* moveStagedArtifact(stagingPaths.dbPath, targetPaths.dbPath);
     }
+    if (pendingArtifacts.has("settings")) {
+      yield* moveStagedArtifact(stagingPaths.settingsPath, targetPaths.settingsPath);
+    }
     if (pendingArtifacts.has("keybindings")) {
       yield* moveStagedArtifact(
         stagingPaths.keybindingsConfigPath,
@@ -392,10 +555,20 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
       );
     }
     if (pendingArtifacts.has("attachments")) {
-      yield* moveStagedArtifact(stagingPaths.attachmentsDir, targetPaths.attachmentsDir);
+      yield* mergeMissingDirectoryEntries(stagingPaths.attachmentsDir, targetPaths.attachmentsDir);
+    }
+    if (pendingArtifacts.has("secrets")) {
+      yield* mergeMissingDirectoryEntries(stagingPaths.secretsDir, targetPaths.secretsDir);
     }
     if (pendingArtifacts.has("anonymousId")) {
       yield* moveStagedArtifact(stagingPaths.anonymousIdPath, targetPaths.anonymousIdPath);
+    }
+    if (pendingArtifacts.has("environmentId")) {
+      if (shouldRestoreLegacyEnvironmentId && targetArtifacts.environmentId) {
+        yield* replaceStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
+      } else {
+        yield* moveStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
+      }
     }
 
     yield* writeMigrationMarker(markerPath, {

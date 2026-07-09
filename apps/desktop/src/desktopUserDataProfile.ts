@@ -15,10 +15,37 @@ const PROFILE_SEED_ENTRY_NAMES = [
   "IndexedDB",
   "Session Storage",
   "Preferences",
+  "Cookies",
+  "Cookies-journal",
+  "Network Persistent State",
+] as const;
+const CANONICAL_BROWSER_PARTITION_NAME = "synara-browser";
+const LEGACY_BROWSER_PARTITION_NAMES = ["dpcode-browser", "t3code-browser"] as const;
+const BROWSER_PARTITION_SEED_ENTRY_NAMES = [
+  "Cookies",
+  "Cookies-journal",
+  "Local Storage",
+  "IndexedDB",
+  "Session Storage",
+  "WebStorage",
+  "Service Worker",
+  "Preferences",
+  "Network Persistent State",
+  "TransportSecurity",
+  "Trust Tokens",
+  "Trust Tokens-journal",
+  "SharedStorage",
+  "SharedStorage-wal",
+  "shared_proto_db",
 ] as const;
 
 export interface DesktopUserDataProfileSeedResult {
-  readonly status: "seeded" | "target-exists" | "legacy-missing" | "seed-failed";
+  readonly status:
+    | "seeded"
+    | "repaired-browser-partition"
+    | "target-exists"
+    | "legacy-missing"
+    | "seed-failed";
   readonly sourcePath: string | null;
   readonly targetPath: string;
   readonly error?: unknown;
@@ -67,11 +94,26 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
   readonly legacyPaths: readonly string[];
 }): DesktopUserDataProfileSeedResult {
   if (FS.existsSync(input.targetPath)) {
-    return {
-      status: "target-exists",
-      sourcePath: null,
-      targetPath: input.targetPath,
-    };
+    const sourcePath = input.legacyPaths.find(
+      (candidate) => resolveLegacyBrowserPartitionPath(candidate) !== null,
+    );
+    try {
+      const copiedEntries = sourcePath
+        ? seedCanonicalBrowserPartition(sourcePath, input.targetPath)
+        : [];
+      return {
+        status: copiedEntries.length > 0 ? "repaired-browser-partition" : "target-exists",
+        sourcePath: copiedEntries.length > 0 ? (sourcePath ?? null) : null,
+        targetPath: input.targetPath,
+      };
+    } catch (error) {
+      return {
+        status: "seed-failed",
+        sourcePath: sourcePath ?? null,
+        targetPath: input.targetPath,
+        error,
+      };
+    }
   }
 
   const sourcePath =
@@ -99,13 +141,22 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
         force: false,
       });
     }
+    const copiedBrowserPartitionEntries = seedCanonicalBrowserPartition(
+      sourcePath,
+      input.targetPath,
+    );
     FS.writeFileSync(
       Path.join(input.targetPath, "synara-profile-seed.json"),
       `${JSON.stringify(
         {
           sourcePath,
           seededAt: new Date().toISOString(),
-          entries: PROFILE_SEED_ENTRY_NAMES,
+          entries: [
+            ...PROFILE_SEED_ENTRY_NAMES,
+            ...(copiedBrowserPartitionEntries.length > 0
+              ? [`Partitions/${CANONICAL_BROWSER_PARTITION_NAME}`]
+              : []),
+          ],
         },
         null,
         2,
@@ -127,7 +178,42 @@ export function seedDesktopUserDataProfileFromLegacy(input: {
 }
 
 function hasSeedableProfileData(profilePath: string): boolean {
-  return PROFILE_SEED_ENTRY_NAMES.some((entryName) =>
-    FS.existsSync(Path.join(profilePath, entryName)),
+  return (
+    PROFILE_SEED_ENTRY_NAMES.some((entryName) =>
+      FS.existsSync(Path.join(profilePath, entryName)),
+    ) || resolveLegacyBrowserPartitionPath(profilePath) !== null
   );
+}
+
+function resolveLegacyBrowserPartitionPath(profilePath: string): string | null {
+  for (const partitionName of LEGACY_BROWSER_PARTITION_NAMES) {
+    const partitionPath = Path.join(profilePath, "Partitions", partitionName);
+    if (FS.existsSync(partitionPath)) return partitionPath;
+  }
+  return null;
+}
+
+function seedCanonicalBrowserPartition(sourceProfilePath: string, targetProfilePath: string) {
+  const sourcePartitionPath = resolveLegacyBrowserPartitionPath(sourceProfilePath);
+  if (!sourcePartitionPath) return [];
+
+  const targetPartitionPath = Path.join(
+    targetProfilePath,
+    "Partitions",
+    CANONICAL_BROWSER_PARTITION_NAME,
+  );
+  const copiedEntries: string[] = [];
+  for (const entryName of BROWSER_PARTITION_SEED_ENTRY_NAMES) {
+    const sourceEntryPath = Path.join(sourcePartitionPath, entryName);
+    const targetEntryPath = Path.join(targetPartitionPath, entryName);
+    if (!FS.existsSync(sourceEntryPath) || FS.existsSync(targetEntryPath)) continue;
+    FS.mkdirSync(targetPartitionPath, { recursive: true });
+    FS.cpSync(sourceEntryPath, targetEntryPath, {
+      recursive: true,
+      errorOnExist: false,
+      force: false,
+    });
+    copiedEntries.push(entryName);
+  }
+  return copiedEntries;
 }

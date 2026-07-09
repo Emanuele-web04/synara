@@ -124,6 +124,13 @@ import {
   seedDesktopUserDataProfileFromLegacy,
 } from "./desktopUserDataProfile";
 import { isBrokenPipeError } from "./desktopProcessErrors";
+import {
+  acknowledgeSynaraStorageSnapshot,
+  readSynaraStorageSnapshot,
+  resolveSynaraStorageSnapshotPath,
+  saveSynaraStorageSnapshot,
+  STORAGE_MIGRATION_IPC_CHANNELS,
+} from "./desktopStorageMigration";
 
 syncShellEnvironment();
 
@@ -190,7 +197,7 @@ const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
   "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
   "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
 ] as const;
-const DESKTOP_UPDATE_CHANNEL = "latest";
+const SYNARA_DESKTOP_UPDATE_CHANNEL = "synara";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
@@ -1274,6 +1281,11 @@ function resolveUserDataPath(): string {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
     });
+  } else if (seedResult.status === "repaired-browser-partition") {
+    console.info("[desktop] Restored Synara browser session from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+    });
   } else if (seedResult.status === "seed-failed") {
     console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
@@ -1804,8 +1816,9 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
+  // The dedicated channel keeps the permanent compatibility release on the
+  // default feed while Synara versions advance independently.
+  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged
@@ -2205,6 +2218,23 @@ function requestGracefulAppQuit(reason: string): void {
 }
 
 function registerIpcHandlers(): void {
+  const storageSnapshotPath = resolveSynaraStorageSnapshotPath(app.getPath("userData"));
+
+  ipcMain.removeAllListeners(STORAGE_MIGRATION_IPC_CHANNELS.read);
+  ipcMain.on(STORAGE_MIGRATION_IPC_CHANNELS.read, (event: IpcMainEvent) => {
+    event.returnValue = readSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.save);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.save, async (_event, snapshot: unknown) =>
+    saveSynaraStorageSnapshot(storageSnapshotPath, snapshot),
+  );
+
+  ipcMain.removeHandler(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge);
+  ipcMain.handle(STORAGE_MIGRATION_IPC_CHANNELS.acknowledge, async () => {
+    await acknowledgeSynaraStorageSnapshot(storageSnapshotPath);
+  });
+
   ipcMain.removeAllListeners(DESKTOP_WS_URL_CHANNEL);
   ipcMain.on(DESKTOP_WS_URL_CHANNEL, (event: IpcMainEvent) => {
     // The backend port is reserved at runtime, so preload asks main for the

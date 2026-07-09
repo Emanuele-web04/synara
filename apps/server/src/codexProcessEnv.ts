@@ -12,6 +12,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -35,6 +36,9 @@ const CODEX_PROCESS_SHELL_ENV_NAMES = ["PATH", "SSH_AUTH_SOCK"] as const;
 const NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS = "NODE_REPL_SANDBOX_ALLOWED_UNIX_SOCKETS";
 const DPCODE_BROWSER_PLUGIN_CONFIG_HEADER = '[plugins."dpcode-browser@local"]';
 const CODEX_OVERLAY_SHARED_STATE_FILES = new Set(["auth.json"]);
+const SYNARA_CONFIG_SUPPRESSIONS_FILE = "synara-config-suppressions-v1.json";
+const MAX_CONFIG_SUPPRESSION_SECTIONS = 32;
+const MAX_CONFIG_SUPPRESSION_HEADER_LENGTH = 256;
 
 interface CodexOverlayEntryLinker {
   readonly symlink: typeof symlinkSync;
@@ -60,11 +64,37 @@ export function resolveCodexBrowserUsePipePath(
     : "/tmp/codex-browser-use.sock";
 }
 
-export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
+function isSafePluginSectionHeader(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_CONFIG_SUPPRESSION_HEADER_LENGTH &&
+    /^\[plugins\."[^"\r\n]+"\]$/.test(value)
+  );
+}
+
+export function readSynaraConfigSuppressions(markerPath: string): readonly string[] {
+  try {
+    const parsed = JSON.parse(readFileSync(markerPath, "utf8")) as unknown;
+    if (typeof parsed !== "object" || parsed === null) return [];
+    const marker = parsed as { version?: unknown; sectionHeaders?: unknown };
+    if (marker.version !== 1 || !Array.isArray(marker.sectionHeaders)) return [];
+    if (marker.sectionHeaders.length > MAX_CONFIG_SUPPRESSION_SECTIONS) return [];
+    return [...new Set(marker.sectionHeaders.filter(isSafePluginSectionHeader))];
+  } catch {
+    return [];
+  }
+}
+
+export function disableCodexConfigSections(
+  config: string,
+  sectionHeaders: readonly string[],
+  appendMissing = false,
+): string {
+  const targets = new Set(sectionHeaders.filter(isSafePluginSectionHeader));
   const lines = config.split(/\r?\n/);
   const output: string[] = [];
   let inTargetSection = false;
-  let sawTargetSection = false;
+  const seenTargetSections = new Set<string>();
   let targetSectionHasEnabled = false;
 
   const closeTargetSection = () => {
@@ -77,8 +107,8 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
     const trimmed = line.trim();
     if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
       closeTargetSection();
-      inTargetSection = trimmed === DPCODE_BROWSER_PLUGIN_CONFIG_HEADER;
-      sawTargetSection ||= inTargetSection;
+      inTargetSection = targets.has(trimmed);
+      if (inTargetSection) seenTargetSections.add(trimmed);
       targetSectionHasEnabled = false;
       output.push(line);
       continue;
@@ -95,14 +125,38 @@ export function disableDpCodeBrowserPluginInCodexConfig(config: string): string 
 
   closeTargetSection();
 
-  if (!sawTargetSection) {
-    if (output.length > 0 && output.at(-1)?.trim()) {
-      output.push("");
+  if (appendMissing) {
+    for (const header of targets) {
+      if (seenTargetSections.has(header)) continue;
+      if (output.length > 0 && output.at(-1)?.trim()) {
+        output.push("");
+      }
+      output.push(header, "enabled = false");
     }
-    output.push(DPCODE_BROWSER_PLUGIN_CONFIG_HEADER, "enabled = false");
   }
 
   return output.join("\n");
+}
+
+export function disableDpCodeBrowserPluginInCodexConfig(config: string): string {
+  return disableCodexConfigSections(config, [DPCODE_BROWSER_PLUGIN_CONFIG_HEADER], true);
+}
+
+function writeSynaraConfigSuppressions(
+  markerPath: string,
+  sectionHeaders: readonly string[],
+): void {
+  const normalized = [...new Set(sectionHeaders.filter(isSafePluginSectionHeader))].slice(
+    0,
+    MAX_CONFIG_SUPPRESSION_SECTIONS,
+  );
+  const temporaryPath = `${markerPath}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    `${JSON.stringify({ version: 1, sectionHeaders: normalized }, null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
+  renameSync(temporaryPath, markerPath);
 }
 
 export function linkOrCopyCodexOverlayEntry(
@@ -213,11 +267,17 @@ function prepareDpCodeCodexHomeOverlay(input: {
 
   const sourceConfigPath = path.join(sourceHomePath, "config.toml");
   const sourceConfig = existsSync(sourceConfigPath) ? readFileSync(sourceConfigPath, "utf8") : "";
+  const suppressionMarkerPath = path.join(overlayHomePath, SYNARA_CONFIG_SUPPRESSIONS_FILE);
+  const suppressedSections = [
+    ...readSynaraConfigSuppressions(suppressionMarkerPath),
+    DPCODE_BROWSER_PLUGIN_CONFIG_HEADER,
+  ];
   writeFileSync(
     path.join(overlayHomePath, "config.toml"),
-    disableDpCodeBrowserPluginInCodexConfig(sourceConfig),
+    disableCodexConfigSections(sourceConfig, suppressedSections, true),
     "utf8",
   );
+  writeSynaraConfigSuppressions(suppressionMarkerPath, suppressedSections);
 
   return overlayHomePath;
 }

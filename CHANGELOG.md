@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 - 2026-07-09
+
+### Changed
+
+- Added the Synara identity bridge that exports canonical renderer storage before the packaged origin changes.
+- Canonicalized migration and checkpoint metadata while keeping existing persisted refs readable.
+- Added a durable, bounded Codex-overlay suppression marker without modifying the user's source configuration.
+
+### Upgrade note
+
+- Launch Synara 0.4.2 at least once before installing the next release. This preserves drafts, pins, theme, browser state, and other local UI state through the identity cutover.
+- Earlier command and environment aliases are accepted by 0.4.2 only and are removed by the following release.
+
 ## 0.4.1 - 2026-07-09
 
 ### Added

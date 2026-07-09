@@ -132,4 +132,94 @@ describe("storageKeyMigration", () => {
 
     await expect(importMigrationFresh()).resolves.toBeDefined();
   });
+
+  it("exports canonical keys only", async () => {
+    globalThis.localStorage.setItem("synara:theme", "dark");
+    globalThis.localStorage.setItem("foreign:theme", "light");
+    const { createSynaraStorageSnapshot } = await importMigrationFresh();
+
+    expect(
+      createSynaraStorageSnapshot(globalThis.localStorage, "2026-07-09T00:00:00.000Z"),
+    ).toEqual({
+      version: 1,
+      exportedAt: "2026-07-09T00:00:00.000Z",
+      entries: { "synara:theme": "dark" },
+    });
+  });
+
+  it("exports large composer drafts without dropping the renderer handoff", async () => {
+    const largeDraft = "x".repeat(2 * 1024 * 1024);
+    globalThis.localStorage.setItem("synara:composer-drafts:v1", largeDraft);
+    const { createSynaraStorageSnapshot } = await importMigrationFresh();
+
+    expect(
+      createSynaraStorageSnapshot(globalThis.localStorage, "2026-07-09T00:00:00.000Z")?.entries[
+        "synara:composer-drafts:v1"
+      ],
+    ).toBe(largeDraft);
+  });
+
+  it("does not acknowledge the handoff while the bridge still runs at the old origin", async () => {
+    const { importSynaraDesktopStorageSnapshot } = await importMigrationFresh();
+    const readSnapshot = vi.fn(() => ({
+      version: 1 as const,
+      exportedAt: "2026-07-09T00:00:00.000Z",
+      entries: { "synara:theme": "dark" },
+    }));
+    const acknowledgeSnapshot = vi.fn(async () => undefined);
+
+    expect(
+      importSynaraDesktopStorageSnapshot({
+        protocol: "t3:",
+        bridge: {
+          readSnapshot,
+          saveSnapshot: vi.fn(async () => true),
+          acknowledgeSnapshot,
+        },
+        storage: globalThis.localStorage,
+      }),
+    ).toBe(false);
+    expect(readSnapshot).not.toHaveBeenCalled();
+    expect(acknowledgeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("imports missing keys without overwriting current-origin state", async () => {
+    globalThis.localStorage.setItem("synara:theme", "current");
+    const { importSynaraStorageSnapshot } = await importMigrationFresh();
+
+    expect(
+      importSynaraStorageSnapshot(
+        {
+          version: 1,
+          exportedAt: "2026-07-09T00:00:00.000Z",
+          entries: {
+            "synara:theme": "snapshot",
+            "synara:composer-drafts:v1": "draft",
+          },
+        },
+        globalThis.localStorage,
+      ),
+    ).toBe(true);
+    expect(globalThis.localStorage.getItem("synara:theme")).toBe("current");
+    expect(globalThis.localStorage.getItem("synara:composer-drafts:v1")).toBe("draft");
+  });
+
+  it("rejects a snapshot before writing any entry when validation fails", async () => {
+    const { importSynaraStorageSnapshot } = await importMigrationFresh();
+
+    expect(
+      importSynaraStorageSnapshot(
+        {
+          version: 1,
+          exportedAt: "2026-07-09T00:00:00.000Z",
+          entries: {
+            "synara:theme": "dark",
+            "foreign:theme": "light",
+          },
+        },
+        globalThis.localStorage,
+      ),
+    ).toBe(false);
+    expect(globalThis.localStorage.getItem("synara:theme")).toBeNull();
+  });
 });
