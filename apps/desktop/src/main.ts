@@ -197,7 +197,7 @@ const BACKEND_MAX_OLD_SPACE_ENV_KEYS = [
   "T3CODE_BACKEND_MAX_OLD_SPACE_MB",
   "DPCODE_BACKEND_MAX_OLD_SPACE_MB",
 ] as const;
-const DESKTOP_UPDATE_CHANNEL = "latest";
+const SYNARA_DESKTOP_UPDATE_CHANNEL = "synara";
 const DESKTOP_UPDATE_ALLOW_PRERELEASE = false;
 const BROWSER_PERF_SAMPLE_INTERVAL_MS = 5_000;
 const DESKTOP_MENU_ZOOM_FACTOR_STEP = 1.1;
@@ -1816,8 +1816,9 @@ function configureAutoUpdater(): void {
 
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
-  // Keep alpha branding, but force all installs onto the stable update track.
-  autoUpdater.channel = DESKTOP_UPDATE_CHANNEL;
+  // The dedicated channel keeps the permanent compatibility release on the
+  // default feed while Synara versions advance independently.
+  autoUpdater.channel = SYNARA_DESKTOP_UPDATE_CHANNEL;
   autoUpdater.allowPrerelease = DESKTOP_UPDATE_ALLOW_PRERELEASE;
   autoUpdater.allowDowngrade = false;
   // Match electron-updater's native GitHub provider path; the packaged

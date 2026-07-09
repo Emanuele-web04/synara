@@ -10,6 +10,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { DESKTOP_STAGE_DEPENDENCY_OVERRIDES } from "./lib/desktop-stage-dependency-overrides.ts";
+import {
+  readReleaseUpdatePolicyConfig,
+  resolveReleaseUpdatePolicy,
+} from "./lib/release-update-policy.ts";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -87,6 +91,18 @@ function writeJsonFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function verifyReleasePolicy(): void {
+  const releasePolicy = readReleaseUpdatePolicyConfig(repoRoot);
+  const resolvedPolicy = resolveReleaseUpdatePolicy(releasePolicy.bridgeVersion, releasePolicy);
+  if (
+    resolvedPolicy.lane !== "bridge" ||
+    !resolvedPolicy.makeLatest ||
+    resolvedPolicy.tag !== resolvedPolicy.bridgeTag ||
+    resolvedPolicy.channel !== "synara"
+  ) {
+    throw new Error("Expected the compatibility release to own the pinned default feed.");
+  }
+}
 function verifyDesktopStageProductionInstall(targetRoot: string): void {
   const stageInstallRoot = resolve(targetRoot, "desktop-stage-install");
   mkdirSync(stageInstallRoot, { recursive: true });
@@ -121,6 +137,7 @@ function verifyDesktopStageProductionInstall(targetRoot: string): void {
 const tempRoot = mkdtempSync(join(tmpdir(), "t3-release-smoke-"));
 
 try {
+  verifyReleasePolicy();
   copyWorkspaceManifestFixture(tempRoot);
 
   execFileSync(
