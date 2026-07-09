@@ -31,7 +31,13 @@ export interface LegacyHomeMigrationResult {
     | "marker-already-present"
     | "migrated";
   readonly importedArtifacts: ReadonlyArray<
-    "database" | "keybindings" | "attachments" | "anonymousId"
+    | "database"
+    | "settings"
+    | "keybindings"
+    | "attachments"
+    | "secrets"
+    | "anonymousId"
+    | "environmentId"
   >;
 }
 
@@ -53,7 +59,15 @@ interface MigrationMarker {
   readonly notes: ReadonlyArray<string>;
 }
 
-const IMPORTABLE_ARTIFACTS = ["database", "keybindings", "attachments", "anonymousId"] as const;
+const IMPORTABLE_ARTIFACTS = [
+  "database",
+  "settings",
+  "keybindings",
+  "attachments",
+  "secrets",
+  "anonymousId",
+  "environmentId",
+] as const;
 const LEGACY_HOME_DIRNAMES = [LEGACY_DPCODE_HOME_DIRNAME, LEGACY_T3_HOME_DIRNAME] as const;
 type ImportableArtifact = (typeof IMPORTABLE_ARTIFACTS)[number];
 type LegacyHomeSnapshot = {
@@ -243,9 +257,12 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     const sourcePaths = yield* deriveServerPaths(legacyBaseDir, input.devUrl);
     const sourceArtifacts = {
       database: yield* fs.exists(sourcePaths.dbPath),
+      settings: yield* fs.exists(sourcePaths.settingsPath),
       keybindings: yield* fs.exists(sourcePaths.keybindingsConfigPath),
       attachments: yield* directoryHasEntries(sourcePaths.attachmentsDir),
+      secrets: yield* directoryHasEntries(sourcePaths.secretsDir),
       anonymousId: yield* fs.exists(sourcePaths.anonymousIdPath),
+      environmentId: yield* fs.exists(sourcePaths.environmentIdPath),
     } satisfies Record<ImportableArtifact, boolean>;
     if (IMPORTABLE_ARTIFACTS.some((artifact) => sourceArtifacts[artifact])) {
       legacyHomes.push({
@@ -288,14 +305,18 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
 
   const targetArtifacts = {
     database: yield* fs.exists(targetPaths.dbPath),
+    settings: yield* fs.exists(targetPaths.settingsPath),
     keybindings: yield* fs.exists(targetPaths.keybindingsConfigPath),
     attachments: yield* directoryHasEntries(targetPaths.attachmentsDir),
+    secrets: yield* directoryHasEntries(targetPaths.secretsDir),
     anonymousId: yield* fs.exists(targetPaths.anonymousIdPath),
+    environmentId: yield* fs.exists(targetPaths.environmentIdPath),
   } satisfies Record<ImportableArtifact, boolean>;
 
-  const targetAlreadyInitialized = IMPORTABLE_ARTIFACTS.some(
-    (artifact) => targetArtifacts[artifact],
-  );
+  // A database or attachment set represents an authoritative initialized home.
+  // Identity/credential files can be created before meaningful state exists, so
+  // they must not prevent the bridge from importing the remaining user data.
+  const targetAlreadyInitialized = targetArtifacts.database || targetArtifacts.attachments;
   if (targetAlreadyInitialized && marker?.status !== "in-progress") {
     return {
       status: "skipped",
@@ -358,6 +379,12 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
         yield* snapshotSqliteDatabase(source.paths.dbPath, stagingPaths.dbPath);
       }
     }
+    if (pendingArtifacts.has("settings")) {
+      const source = sourceByArtifact.get("settings");
+      if (source) {
+        yield* stageFileCopy(source.paths.settingsPath, stagingPaths.settingsPath);
+      }
+    }
     if (pendingArtifacts.has("keybindings")) {
       const source = sourceByArtifact.get("keybindings");
       if (source) {
@@ -373,10 +400,22 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
         yield* fs.copy(source.paths.attachmentsDir, stagingPaths.attachmentsDir);
       }
     }
+    if (pendingArtifacts.has("secrets")) {
+      const source = sourceByArtifact.get("secrets");
+      if (source) {
+        yield* fs.copy(source.paths.secretsDir, stagingPaths.secretsDir);
+      }
+    }
     if (pendingArtifacts.has("anonymousId")) {
       const source = sourceByArtifact.get("anonymousId");
       if (source) {
         yield* stageFileCopy(source.paths.anonymousIdPath, stagingPaths.anonymousIdPath);
+      }
+    }
+    if (pendingArtifacts.has("environmentId")) {
+      const source = sourceByArtifact.get("environmentId");
+      if (source) {
+        yield* stageFileCopy(source.paths.environmentIdPath, stagingPaths.environmentIdPath);
       }
     }
 
@@ -384,6 +423,9 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     yield* fs.makeDirectory(targetPaths.stateDir, { recursive: true });
     if (pendingArtifacts.has("database")) {
       yield* moveStagedArtifact(stagingPaths.dbPath, targetPaths.dbPath);
+    }
+    if (pendingArtifacts.has("settings")) {
+      yield* moveStagedArtifact(stagingPaths.settingsPath, targetPaths.settingsPath);
     }
     if (pendingArtifacts.has("keybindings")) {
       yield* moveStagedArtifact(
@@ -394,8 +436,14 @@ export const migrateLegacyHomeIfNeeded = Effect.fn(function* (input: LegacyHomeM
     if (pendingArtifacts.has("attachments")) {
       yield* moveStagedArtifact(stagingPaths.attachmentsDir, targetPaths.attachmentsDir);
     }
+    if (pendingArtifacts.has("secrets")) {
+      yield* moveStagedArtifact(stagingPaths.secretsDir, targetPaths.secretsDir);
+    }
     if (pendingArtifacts.has("anonymousId")) {
       yield* moveStagedArtifact(stagingPaths.anonymousIdPath, targetPaths.anonymousIdPath);
+    }
+    if (pendingArtifacts.has("environmentId")) {
+      yield* moveStagedArtifact(stagingPaths.environmentIdPath, targetPaths.environmentIdPath);
     }
 
     yield* writeMigrationMarker(markerPath, {

@@ -179,6 +179,90 @@ it.layer(NodeServices.layer)("homeMigration", (it) => {
     }),
   );
 
+  it.effect("preserves settings, credentials, and environment identity", () =>
+    Effect.gen(function* () {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
+      );
+
+      const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
+      const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
+      const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
+
+      fs.mkdirSync(legacyPaths.secretsDir, { recursive: true });
+      fs.writeFileSync(legacyPaths.settingsPath, '{"voiceTranscription":{"provider":"local"}}\n');
+      fs.writeFileSync(path.join(legacyPaths.secretsDir, "session-signing.bin"), "secret-bytes");
+      fs.writeFileSync(legacyPaths.anonymousIdPath, "existing-anonymous-id");
+      fs.writeFileSync(legacyPaths.environmentIdPath, "existing-environment-id\n");
+
+      const result = yield* migrateLegacyHomeIfNeeded({
+        baseDir: targetBaseDir,
+        homeDir: tempHome,
+        devUrl: undefined,
+      });
+
+      assert.deepStrictEqual(result, {
+        status: "migrated",
+        reason: "migrated",
+        importedArtifacts: ["settings", "secrets", "anonymousId", "environmentId"],
+      });
+      assert.equal(
+        fs.readFileSync(targetPaths.settingsPath, "utf8"),
+        '{"voiceTranscription":{"provider":"local"}}\n',
+      );
+      assert.equal(
+        fs.readFileSync(path.join(targetPaths.secretsDir, "session-signing.bin"), "utf8"),
+        "secret-bytes",
+      );
+      assert.equal(fs.readFileSync(targetPaths.anonymousIdPath, "utf8"), "existing-anonymous-id");
+      assert.equal(
+        fs.readFileSync(targetPaths.environmentIdPath, "utf8"),
+        "existing-environment-id\n",
+      );
+    }),
+  );
+
+  it.effect("does not let generated identity files block meaningful state import", () =>
+    Effect.gen(function* () {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => fs.rmSync(tempHome, { recursive: true, force: true })),
+      );
+
+      const legacyBaseDir = path.join(tempHome, LEGACY_T3_HOME_DIRNAME);
+      const targetBaseDir = path.join(tempHome, SYNARA_HOME_DIRNAME);
+      const legacyPaths = yield* deriveServerPaths(legacyBaseDir, undefined);
+      const targetPaths = yield* deriveServerPaths(targetBaseDir, undefined);
+
+      fs.mkdirSync(path.dirname(legacyPaths.dbPath), { recursive: true });
+      createProjectDb(legacyPaths.dbPath, "Legacy project");
+      fs.mkdirSync(targetPaths.secretsDir, { recursive: true });
+      fs.writeFileSync(path.join(targetPaths.secretsDir, "session-signing.bin"), "newer-secret");
+      fs.writeFileSync(targetPaths.anonymousIdPath, "newer-anonymous-id");
+      fs.writeFileSync(targetPaths.environmentIdPath, "newer-environment-id\n");
+
+      const result = yield* migrateLegacyHomeIfNeeded({
+        baseDir: targetBaseDir,
+        homeDir: tempHome,
+        devUrl: undefined,
+      });
+
+      assert.equal(result.status, "migrated");
+      assert.equal(readProjectTitle(targetPaths.dbPath), "Legacy project");
+      assert.equal(
+        fs.readFileSync(path.join(targetPaths.secretsDir, "session-signing.bin"), "utf8"),
+        "newer-secret",
+      );
+      assert.equal(fs.readFileSync(targetPaths.anonymousIdPath, "utf8"), "newer-anonymous-id");
+      assert.equal(
+        fs.readFileSync(targetPaths.environmentIdPath, "utf8"),
+        "newer-environment-id\n",
+      );
+    }),
+  );
+
   it.effect("preserves target logs while importing legacy state", () =>
     Effect.gen(function* () {
       const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "synara-home-migration-"));

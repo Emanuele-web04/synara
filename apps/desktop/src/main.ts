@@ -1281,6 +1281,11 @@ function resolveUserDataPath(): string {
       sourcePath: seedResult.sourcePath,
       targetPath: seedResult.targetPath,
     });
+  } else if (seedResult.status === "repaired-browser-partition") {
+    console.info("[desktop] Restored Synara browser session from legacy profile", {
+      sourcePath: seedResult.sourcePath,
+      targetPath: seedResult.targetPath,
+    });
   } else if (seedResult.status === "seed-failed") {
     console.warn("[desktop] Failed to seed Synara Electron profile from legacy profile", {
       sourcePath: seedResult.sourcePath,
