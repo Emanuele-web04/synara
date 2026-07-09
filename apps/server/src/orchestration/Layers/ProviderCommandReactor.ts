@@ -62,6 +62,7 @@ import {
   buildForkBootstrapText,
   buildHandoffBootstrapText,
   hasNativeAssistantMessagesBefore,
+  listImportedForkMessages,
   listPriorTranscriptMessages,
 } from "../handoff.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -955,6 +956,11 @@ const make = Effect.gen(function* () {
       shouldBootstrapHandoff && availableBootstrapChars > 0
         ? buildHandoffBootstrapText(thread, availableBootstrapChars)
         : null;
+    const selectedProvider =
+      input.modelSelection?.provider ??
+      threadSessionModelSelections.get(input.threadId)?.provider ??
+      thread.session?.providerName ??
+      thread.modelSelection.provider;
     const shouldBootstrapSidechatContext =
       thread.sidechatSourceThreadId !== null &&
       sidechatContextBootstrapThreadIds.has(input.threadId) &&
@@ -963,11 +969,16 @@ const make = Effect.gen(function* () {
       shouldBootstrapSidechatContext && availableBootstrapChars > 0
         ? buildForkBootstrapText(thread, availableBootstrapChars)
         : null;
-    const selectedProvider =
-      input.modelSelection?.provider ??
-      threadSessionModelSelections.get(input.threadId)?.provider ??
-      thread.session?.providerName ??
-      thread.modelSelection.provider;
+    const hasSidechatBootstrapContent =
+      shouldBootstrapSidechatContext && listImportedForkMessages(thread).length > 0;
+    if (hasSidechatBootstrapContent && availableBootstrapChars === 0) {
+      return yield* new ProviderAdapterRequestError({
+        provider: selectedProvider as ProviderKind,
+        method: "thread.turn.start",
+        detail:
+          "The latest message is too long to include the sidechat context required by this provider session. Shorten the message and retry.",
+      });
+    }
     const hasPendingPriorTranscriptBootstrap =
       freshSessionContextBootstrapThreadIds.has(input.threadId) ||
       rollbackContextBootstrapThreadIds.has(input.threadId);
