@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { findBrandIdentityViolations } from "./check-brand-identity";
+import {
+  findBrandIdentityViolations,
+  findVisualBrandAssetViolations,
+} from "./check-brand-identity";
 
 const characters = (...codes: number[]): string => String.fromCharCode(...codes);
 const shortName = characters(116, 51);
@@ -36,5 +39,25 @@ describe("brand identity guard", () => {
     expect(
       findBrandIdentityViolations([{ path: "docs/license-copy.md", contents: notice }]),
     ).toHaveLength(1);
+  });
+
+  it("requires user-facing raster assets to match a visually approved digest", () => {
+    const approvedContents = new TextEncoder().encode("approved Synara screenshot");
+    const approvedDigest = "a553296ca5a2d3ad7b64a6bc1b36c2834da750eae6611642177482b99ba85bd8";
+    const approvedDigests = new Map([["screenshot.jpeg", approvedDigest]]);
+
+    expect(
+      findVisualBrandAssetViolations(
+        [{ path: "screenshot.jpeg", contents: approvedContents }],
+        approvedDigests,
+      ),
+    ).toEqual([]);
+    expect(
+      findVisualBrandAssetViolations(
+        [{ path: "screenshot.jpeg", contents: new TextEncoder().encode("changed") }],
+        approvedDigests,
+      ),
+    ).toHaveLength(1);
+    expect(findVisualBrandAssetViolations([], approvedDigests)).toHaveLength(1);
   });
 });
